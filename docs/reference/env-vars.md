@@ -20,8 +20,9 @@ credentials in source code or commit them to version control.**
 | `VCS_PROVIDER` | `bitbucket` | Which VCS adapter to use. Only `bitbucket` is implemented. |
 | `BITBUCKET_BASE_URL` | `https://api.bitbucket.org/2.0` | Bitbucket API base URL (use your self-hosted URL if applicable) |
 | `BITBUCKET_WORKSPACE` | `my-workspace` | Bitbucket workspace slug |
-| `BITBUCKET_TOKEN` | `your-app-password` | Bitbucket app password or access token |
-| `ANTHROPIC_API_KEY` | `sk-ant-...` | Anthropic API key |
+| `BITBUCKET_USERNAME` | `you@company.com` | Your Atlassian account email (used for HTTP Basic Auth) |
+| `BITBUCKET_TOKEN` | `ATATT3x...` | Atlassian API token with Bitbucket scopes (replaces deprecated app passwords) |
+| `ANTHROPIC_API_KEY` | `sk-ant-...` | Anthropic API key (billed separately from Claude.ai subscriptions) |
 | `CLAUDE_MODEL` | `claude-sonnet-4-6` | Claude model ID to use for reviews |
 | `MAX_CONTEXT_FILES` | `20` | Max number of files to fetch full content for |
 | `MAX_FILE_LINES` | `500` | Files over this line count get diff-only (no full content) |
@@ -64,6 +65,7 @@ credentials in source code or commit them to version control.**
 VCS_PROVIDER=bitbucket
 BITBUCKET_BASE_URL=https://api.bitbucket.org/2.0
 BITBUCKET_WORKSPACE=
+BITBUCKET_USERNAME=
 BITBUCKET_TOKEN=
 
 # Claude

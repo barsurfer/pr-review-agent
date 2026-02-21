@@ -43,20 +43,35 @@ node --version   # should print v20.x.x
 npm --version    # should print 10.x or higher
 ```
 
-### 2. A Bitbucket App Password
+### 2. A Bitbucket API Token
 
-You need a Bitbucket account with access to the target repo and an app password
-that has the following permissions:
+> **Note:** Bitbucket App Passwords were deprecated in September 2025 and replaced
+> by Atlassian API Tokens.
 
-- **Repositories:** Read
-- **Pull requests:** Read + Write (Write is needed to post the review comment)
+Create a scoped API token:
 
-Create one at: Bitbucket → Personal Settings → App passwords
+1. Go to [id.atlassian.com](https://id.atlassian.com) → **Security** → **Create and manage API tokens**
+2. Click **Create API token with scopes**
+3. Give it a name (e.g. `pr-review-agent`) and set an expiry
+4. Select **Bitbucket** as the app
+5. Select these scopes:
+   - `read:repository:bitbucket` — read diffs, source files, commits
+   - `read:pullrequest:bitbucket` — read PR metadata and comments
+   - `write:pullrequest:bitbucket` — post review comments
+6. Confirm and copy the token (starts with `ATATT3x...`)
+
+Authentication uses **HTTP Basic Auth** with your Atlassian account email as the
+username and the API token as the password. You'll need both `BITBUCKET_USERNAME`
+(your email) and `BITBUCKET_TOKEN` in your `.env`.
 
 ### 3. An Anthropic API Key
 
 Get one at [console.anthropic.com](https://console.anthropic.com).
-Make sure the key has access to `claude-sonnet-4-6`.
+
+> **Important:** The Anthropic API is billed separately from a Claude.ai / Claude Code
+> subscription. You need to add credits at
+> [console.anthropic.com/settings/billing](https://console.anthropic.com/settings/billing)
+> for API calls to work.
 
 ---
 
@@ -104,7 +119,8 @@ VCS_PROVIDER=bitbucket
 # Self-hosted (Bitbucket Server/DC): https://bitbucket.yourcompany.com/rest/api/1.0
 BITBUCKET_BASE_URL=https://api.bitbucket.org/2.0
 BITBUCKET_WORKSPACE=your-workspace-slug
-BITBUCKET_TOKEN=your-app-password
+BITBUCKET_USERNAME=your-atlassian-email@company.com
+BITBUCKET_TOKEN=ATATT3x...
 
 # Anthropic
 ANTHROPIC_API_KEY=sk-ant-...
@@ -136,7 +152,7 @@ Within ~30 seconds a review comment should appear on the PR in Bitbucket.
 
 ```bash
 --vcs bitbucket        # VCS provider (default: bitbucket, matches VCS_PROVIDER env var)
---dry-run              # Assemble and print the prompt without calling Claude or posting
+--dry-run              # Run the full review but print output to stdout instead of posting to the PR
 ```
 
 ---
@@ -177,7 +193,8 @@ stage('AI PR Review') {
   steps {
     withCredentials([
       string(credentialsId: 'anthropic-api-key', variable: 'ANTHROPIC_API_KEY'),
-      string(credentialsId: 'bitbucket-token', variable: 'BITBUCKET_TOKEN')
+      string(credentialsId: 'bitbucket-token', variable: 'BITBUCKET_TOKEN'),
+      string(credentialsId: 'bitbucket-username', variable: 'BITBUCKET_USERNAME')
     ]) {
       sh '''
         cd /opt/pr-review-agent
@@ -195,7 +212,7 @@ Requirements on the Jenkins agent node:
 - Node.js v18+ installed
 - This repo checked out or deployed to a fixed path (e.g. `/opt/pr-review-agent`)
 - `npm install` run on that path
-- `BITBUCKET_TOKEN` and `ANTHROPIC_API_KEY` stored as **masked** Jenkins credentials
+- `BITBUCKET_TOKEN`, `BITBUCKET_USERNAME`, and `ANTHROPIC_API_KEY` stored as **masked** Jenkins credentials
 
 See [docs/phases/phase-2-jenkins.md](docs/phases/phase-2-jenkins.md) for the full guide.
 
@@ -212,6 +229,37 @@ All design decisions, architecture, and per-phase plans live in [`docs/`](docs/)
 | [docs/architecture/prompt-convention.md](docs/architecture/prompt-convention.md) | How `.claude-review-prompt.md` works |
 | [docs/reference/env-vars.md](docs/reference/env-vars.md) | All environment variables |
 | [docs/reference/local-testing.md](docs/reference/local-testing.md) | Local test guide + troubleshooting |
+
+---
+
+## Troubleshooting
+
+### 401 Unauthorized from Bitbucket
+
+- **Wrong token type:** You need an Atlassian API token created at
+  [id.atlassian.com](https://id.atlassian.com), not a Jira/Confluence-only token.
+  When creating, make sure you select **Bitbucket** as the app and pick the right scopes.
+- **Missing scopes:** The token must have `read:repository:bitbucket`,
+  `read:pullrequest:bitbucket`, and `write:pullrequest:bitbucket`. Without
+  `read:repository`, diffs and source files will return 401 even if PR metadata works.
+- **Wrong email:** `BITBUCKET_USERNAME` must be the email you log into Atlassian with
+  (check under Bitbucket → Personal Settings → Email Aliases).
+- **Token has `=` in it:** If you test with `source .env` in bash, the `=` characters
+  inside the token value will break shell parsing. The agent uses `dotenv` which handles
+  this correctly, so always test via `npx tsx src/index.ts`, not by sourcing `.env`.
+
+### 404 on diff/diffstat endpoints
+
+Bitbucket's PR diff and diffstat endpoints return a **302 redirect**. Some HTTP clients
+(including axios by default) strip auth headers on redirect. The agent handles this
+automatically — if you see 404s, make sure you're running the latest code.
+
+### Anthropic API errors
+
+- **401 / "Invalid API key":** Double-check `ANTHROPIC_API_KEY` in your `.env`.
+- **402 / "Insufficient credits":** The Anthropic API is pay-per-use, separate from
+  any Claude.ai subscription. Add credits at
+  [console.anthropic.com/settings/billing](https://console.anthropic.com/settings/billing).
 
 ---
 
