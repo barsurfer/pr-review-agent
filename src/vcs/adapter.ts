@@ -12,6 +12,12 @@ export interface ChangedFile {
   status: 'added' | 'modified' | 'deleted' | 'renamed'
 }
 
+export interface ReviewComment {
+  id: string
+  body: string
+  createdOn: string
+}
+
 export interface VCSAdapter {
   getPullRequestInfo(prId: string): Promise<PRInfo>
   getDiff(prId: string): Promise<string>
@@ -20,4 +26,6 @@ export interface VCSAdapter {
   /** Fetch a file from the repo root — used to load .claude-review-prompt.md. Returns null if not found. */
   getRepoFileContent(filePath: string): Promise<string | null>
   postComment(prId: string, body: string): Promise<void>
+  /** Fetch previous review comments posted by this agent on the PR. */
+  getPreviousReviewComments(prId: string): Promise<ReviewComment[]>
 }

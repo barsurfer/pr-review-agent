@@ -1,19 +1,33 @@
-import axios, { AxiosInstance } from 'axios'
-import type { VCSAdapter, PRInfo, ChangedFile } from './adapter.js'
+import axios, { AxiosInstance, AxiosRequestConfig } from 'axios'
+import type { VCSAdapter, PRInfo, ChangedFile, ReviewComment } from './adapter.js'
 
 export class BitbucketAdapter implements VCSAdapter {
   private readonly client: AxiosInstance
   private readonly workspace: string
+  private readonly authHeader: string
 
-  constructor(baseUrl: string, workspace: string, token: string) {
+  constructor(baseUrl: string, workspace: string, username: string, token: string) {
     this.workspace = workspace
+    this.authHeader = 'Basic ' + Buffer.from(`${username}:${token}`).toString('base64')
     this.client = axios.create({
       baseURL: baseUrl,
       headers: {
-        Authorization: `Bearer ${token}`,
+        Authorization: this.authHeader,
         'Content-Type': 'application/json',
       },
     })
+  }
+
+  /** Follow 302 redirects while preserving auth (axios strips auth on redirect). */
+  private async getFollowingRedirects(url: string, config: AxiosRequestConfig = {}): Promise<any> {
+    const res = await this.client.get(url, { ...config, maxRedirects: 0, validateStatus: s => s < 400 || s === 302 })
+    if (res.status === 302 && res.headers.location) {
+      return axios.get(res.headers.location, {
+        ...config,
+        headers: { ...config.headers, Authorization: this.authHeader },
+      })
+    }
+    return res
   }
 
   async getPullRequestInfo(prId: string): Promise<PRInfo> {
@@ -33,7 +47,7 @@ export class BitbucketAdapter implements VCSAdapter {
 
   async getDiff(prId: string): Promise<string> {
     const repoSlug = this.getRepoSlug()
-    const { data } = await this.client.get(
+    const { data } = await this.getFollowingRedirects(
       `/repositories/${this.workspace}/${repoSlug}/pullrequests/${prId}/diff`,
       { headers: { Accept: 'text/plain' }, responseType: 'text' }
     )
@@ -43,16 +57,27 @@ export class BitbucketAdapter implements VCSAdapter {
   async getChangedFiles(prId: string): Promise<ChangedFile[]> {
     const repoSlug = this.getRepoSlug()
     const files: ChangedFile[] = []
-    let url = `/repositories/${this.workspace}/${repoSlug}/pullrequests/${prId}/diffstat`
 
-    while (url) {
-      const { data } = await this.client.get(url)
+    // First request may redirect — use redirect-safe helper
+    const first = await this.getFollowingRedirects(
+      `/repositories/${this.workspace}/${repoSlug}/pullrequests/${prId}/diffstat`
+    )
+    for (const entry of first.data.values) {
+      const path: string = entry.new?.path ?? entry.old?.path
+      const status = this.mapStatus(entry.status)
+      if (path) files.push({ path, status })
+    }
+
+    // Pagination pages are direct URLs, no redirect
+    let next = first.data.next ?? null
+    while (next) {
+      const { data } = await this.client.get(next)
       for (const entry of data.values) {
         const path: string = entry.new?.path ?? entry.old?.path
         const status = this.mapStatus(entry.status)
         if (path) files.push({ path, status })
       }
-      url = data.next ?? null
+      next = data.next ?? null
     }
 
     return files
@@ -87,6 +112,30 @@ export class BitbucketAdapter implements VCSAdapter {
       `/repositories/${this.workspace}/${repoSlug}/pullrequests/${prId}/comments`,
       { content: { raw: body } }
     )
+  }
+
+  async getPreviousReviewComments(prId: string): Promise<ReviewComment[]> {
+    const repoSlug = this.getRepoSlug()
+    const comments: ReviewComment[] = []
+    let url: string | null = `/repositories/${this.workspace}/${repoSlug}/pullrequests/${prId}/comments`
+
+    while (url) {
+      const { data } = await this.client.get(url)
+      for (const c of data.values) {
+        const body: string = c.content?.raw ?? ''
+        // Only include comments posted by this agent (footer always contains this marker)
+        if (body.includes('Reviewed by Claude')) {
+          comments.push({
+            id: String(c.id),
+            body,
+            createdOn: c.created_on,
+          })
+        }
+      }
+      url = data.next ?? null
+    }
+
+    return comments
   }
 
   // repo slug is passed in at call sites via CLI — store it after construction

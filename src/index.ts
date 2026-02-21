@@ -15,6 +15,7 @@ program
   .option('--workspace <workspace>', 'VCS workspace / org (overrides BITBUCKET_WORKSPACE)')
   .option('--repo-slug <slug>', 'Repository slug')
   .option('--vcs <provider>', 'VCS provider: bitbucket | github | gitlab (overrides VCS_PROVIDER)')
+  .option('--dry-run', 'Print the review to stdout without posting to the PR')
   .parse(process.argv)
 
 const opts = program.opts<{
@@ -22,6 +23,7 @@ const opts = program.opts<{
   workspace?: string
   repoSlug?: string
   vcs?: string
+  dryRun?: boolean
 }>()
 
 async function main(): Promise<void> {
@@ -37,6 +39,7 @@ async function main(): Promise<void> {
     const bb = new BitbucketAdapter(
       config.bitbucket.baseUrl,
       config.bitbucket.workspace,
+      config.bitbucket.username,
       config.bitbucket.token
     )
 
@@ -55,7 +58,7 @@ async function main(): Promise<void> {
     process.exit(1)
   }
 
-  await review(adapter, opts.prId)
+  await review(adapter, opts.prId, opts.dryRun ?? false)
 }
 
 main().catch((err: unknown) => {

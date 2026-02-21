@@ -22,6 +22,7 @@ interface VCSAdapter {
   getChangedFiles(prId: string): Promise<ChangedFile[]>
   getRepoFileContent(filePath: string): Promise<string | null>  // for .claude-review-prompt.md
   postComment(prId: string, body: string): Promise<void>
+  getPreviousReviewComments(prId: string): Promise<ReviewComment[]>  // for delta reviews
 }
 ```
 
@@ -76,6 +77,12 @@ interface PRInfo {
 interface ChangedFile {
   path: string
   status: 'added' | 'modified' | 'deleted' | 'renamed'
+}
+
+interface ReviewComment {
+  id: string
+  body: string
+  createdOn: string
 }
 
 interface Finding {

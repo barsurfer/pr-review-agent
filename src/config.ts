@@ -16,6 +16,7 @@ export const config = {
   bitbucket: {
     baseUrl: optional('BITBUCKET_BASE_URL', 'https://api.bitbucket.org/2.0'),
     workspace: optional('BITBUCKET_WORKSPACE', ''),
+    username: optional('BITBUCKET_USERNAME', ''),
     token: optional('BITBUCKET_TOKEN', ''),
   },
 
@@ -32,5 +33,6 @@ export const config = {
 
 export function validateBitbucketConfig(): void {
   if (!config.bitbucket.workspace) throw new Error('Missing required environment variable: BITBUCKET_WORKSPACE')
+  if (!config.bitbucket.username) throw new Error('Missing required environment variable: BITBUCKET_USERNAME')
   if (!config.bitbucket.token) throw new Error('Missing required environment variable: BITBUCKET_TOKEN')
 }

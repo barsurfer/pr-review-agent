@@ -1,4 +1,4 @@
-import type { VCSAdapter, PRInfo, ChangedFile } from './adapter.js'
+import type { VCSAdapter, PRInfo, ChangedFile, ReviewComment } from './adapter.js'
 
 export class GitLabAdapter implements VCSAdapter {
   getPullRequestInfo(_prId: string): Promise<PRInfo> {
@@ -17,6 +17,9 @@ export class GitLabAdapter implements VCSAdapter {
     throw new Error('GitLabAdapter not implemented — deferred to Phase 3')
   }
   postComment(_prId: string, _body: string): Promise<void> {
+    throw new Error('GitLabAdapter not implemented — deferred to Phase 3')
+  }
+  getPreviousReviewComments(_prId: string): Promise<ReviewComment[]> {
     throw new Error('GitLabAdapter not implemented — deferred to Phase 3')
   }
 }

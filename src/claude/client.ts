@@ -1,5 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk'
-import type { PRInfo } from '../vcs/adapter.js'
+import type { PRInfo, ReviewComment } from '../vcs/adapter.js'
 import type { FileContext } from '../context/fetcher.js'
 import type { LoadedPrompt } from '../prompt/loader.js'
 
@@ -11,11 +11,12 @@ export async function runReview(
   prInfo: PRInfo,
   diff: string,
   fileContexts: FileContext[],
-  prompt: LoadedPrompt
+  prompt: LoadedPrompt,
+  previousReviews: ReviewComment[]
 ): Promise<string> {
   const client = new Anthropic({ apiKey })
 
-  const userMessage = buildUserMessage(prInfo, diff, fileContexts)
+  const userMessage = buildUserMessage(prInfo, diff, fileContexts, previousReviews)
 
   console.log(`Sending request to Claude (${model})...`)
 
@@ -34,7 +35,12 @@ export async function runReview(
   return block.text
 }
 
-function buildUserMessage(prInfo: PRInfo, diff: string, fileContexts: FileContext[]): string {
+function buildUserMessage(
+  prInfo: PRInfo,
+  diff: string,
+  fileContexts: FileContext[],
+  previousReviews: ReviewComment[]
+): string {
   const parts: string[] = []
 
   parts.push(`## Pull Request: ${prInfo.title}`)
@@ -42,6 +48,14 @@ function buildUserMessage(prInfo: PRInfo, diff: string, fileContexts: FileContex
 
   if (prInfo.description) {
     parts.push(`## Description:\n${prInfo.description}`)
+  }
+
+  if (previousReviews.length > 0) {
+    parts.push(`## Previous Review(s) by This Agent (${previousReviews.length} total):`)
+    parts.push('The following reviews were posted on earlier revisions of this PR. Acknowledge what was fixed, do not repeat issues that are now resolved, and call out anything still unaddressed.')
+    for (const review of previousReviews) {
+      parts.push(`### Review from ${review.createdOn}:\n${review.body}`)
+    }
   }
 
   parts.push(`## Diff:\n\`\`\`diff\n${diff}\n\`\`\``)

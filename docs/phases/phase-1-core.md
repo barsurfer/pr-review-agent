@@ -16,7 +16,7 @@ No Jenkins. No CI. Just a CLI you can run from your terminal.
 - [ ] `src/prompt/loader.ts` — fetch `.claude-review-prompt.md` from repo root via API, fallback chain
 - [ ] `src/context/fetcher.ts` — fetch full file contents for changed files with exclusion rules
 - [ ] `src/claude/client.ts` — send assembled payload to `claude-sonnet-4-6`, return review text
-- [ ] `src/review.ts` — orchestrate: fetch info → load prompt → fetch context → call Claude → post comment
+- [ ] `src/review.ts` — orchestrate: fetch info → check previous reviews → load prompt → fetch context → call Claude → post comment
 - [ ] `src/index.ts` — CLI: `--workspace`, `--repo-slug`, `--pr-id`, `--vcs` (default: `bitbucket`)
 - [ ] `.env.example` with all required vars
 - [ ] Local test: run against a real open PR, verify comment appears in Bitbucket
@@ -56,6 +56,7 @@ npx tsx src/index.ts \
 - Exclusion rules correctly skip lockfiles and generated files
 - Prompt resolution falls back correctly through the chain
 - No errors on a PR with >10 changed files
+- Re-running against a PR that already has a review produces a delta review (no duplicated issues, fixed items acknowledged)
 
 ---
 
