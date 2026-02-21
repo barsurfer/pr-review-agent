@@ -5,21 +5,21 @@
 Working end-to-end locally with a real PR, real Bitbucket, real Claude.
 No Jenkins. No CI. Just a CLI you can run from your terminal.
 
-## Status: 🔲 Not started
+## Status: ✅ Complete
 
 ---
 
 ## Tasks
 
-- [ ] Project scaffold: `ts-node`, `tsx`, `@anthropic-ai/sdk`, `axios`, `commander`
-- [ ] `src/vcs/bitbucket.ts` — implement all `VCSAdapter` interface methods using Bitbucket REST API v2
-- [ ] `src/prompt/loader.ts` — fetch `.claude-review-prompt.md` from repo root via API, fallback chain
-- [ ] `src/context/fetcher.ts` — fetch full file contents for changed files with exclusion rules
-- [ ] `src/claude/client.ts` — send assembled payload to `claude-sonnet-4-6`, return review text
-- [ ] `src/review.ts` — orchestrate: fetch info → check previous reviews → load prompt → fetch context → call Claude → post comment
-- [ ] `src/index.ts` — CLI: `--workspace`, `--repo-slug`, `--pr-id`, `--vcs` (default: `bitbucket`)
-- [ ] `.env.example` with all required vars
-- [ ] Local test: run against a real open PR, verify comment appears in Bitbucket
+- [x] Project scaffold: `ts-node`, `tsx`, `@anthropic-ai/sdk`, `axios`, `commander`
+- [x] `src/vcs/bitbucket.ts` — implement all `VCSAdapter` interface methods using Bitbucket REST API v2
+- [x] `src/prompt/loader.ts` — fetch `.claude-review-prompt.md` from repo root via API, fallback chain
+- [x] `src/context/fetcher.ts` — fetch full file contents for changed files with exclusion rules
+- [x] `src/claude/client.ts` — send assembled payload to `claude-sonnet-4-6`, return review text
+- [x] `src/review.ts` — orchestrate: fetch info → check previous reviews → load prompt → fetch context → call Claude → post comment
+- [x] `src/index.ts` — CLI: `--workspace`, `--repo-slug`, `--pr-id`, `--vcs` (default: `bitbucket`), `--dry-run`
+- [x] `.env.example` with all required vars
+- [x] Local test: run against a real open PR, verify comment appears in Bitbucket
 
 ---
 

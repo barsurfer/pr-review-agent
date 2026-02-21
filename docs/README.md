@@ -10,15 +10,14 @@ structured review as a PR comment.
 
 | Phase | Name | Status |
 |-------|------|--------|
-| [Phase 1](phases/phase-1-core.md) | Core Script (Local Testable) | 🔲 Not started |
+| [Phase 1](phases/phase-1-core.md) | Core Script (Local Testable) | ✅ Complete |
 | [Phase 2](phases/phase-2-jenkins.md) | Jenkins Integration | 🔲 Not started |
 | [Phase 3](phases/phase-3-multi-vcs.md) | Multi-VCS Support | ⏸ Deferred |
 | [Phase 4](phases/phase-4-inline-comments.md) | Inline Line-Level Comments | ⏸ Deferred |
 | [Phase 5](phases/phase-5-backlog.md) | Further Backlog | ⏸ Deferred |
 
-> **Active focus:** Phase 1. Do not start Phase 2 until Phase 1 is locally tested
-> against a real Bitbucket PR. Do not implement GitHub/GitLab adapters until Phase 2
-> is stable in production.
+> **Active focus:** Phase 2. Phase 1 is complete and tested against a live Bitbucket PR.
+> Do not implement GitHub/GitLab adapters until Phase 2 is stable in production.
 
 ---
 
