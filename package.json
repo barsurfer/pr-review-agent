@@ -2,6 +2,7 @@
   "name": "pr-review-agent",
   "version": "1.0.0",
   "description": "Automated PR code review agent powered by Claude",
+  "license": "MIT",
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
