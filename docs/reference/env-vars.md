@@ -26,10 +26,17 @@ credentials in source code or commit them to version control.**
 | `CLAUDE_MODEL` | `claude-sonnet-4-6` | Claude model ID to use for reviews |
 | `MAX_CONTEXT_FILES` | `20` | Max number of files to fetch full content for |
 | `MAX_FILE_LINES` | `500` | Files over this line count get diff-only (no full content) |
+| `MIN_CHANGED_FILES` | `0` | Skip review if PR has fewer changed files (0 = disabled) |
+| `MAX_CHANGED_FILES` | `0` | Skip review if PR has more changed files (0 = disabled) |
+| `MIN_CHANGED_LINES` | `0` | Skip review if PR has fewer changed lines (0 = disabled) |
+| `MAX_CHANGED_LINES` | `0` | Skip review if PR has more changed lines (0 = disabled) |
+
+> Threshold variables can also be set via CLI flags (`--min-changed-files`, etc.)
+> which override the env var values.
 
 ---
 
-## Phase 4 — Inline Comments
+## Phase 3 — Inline Comments
 
 | Variable | Example | Description |
 |----------|---------|-------------|
@@ -38,27 +45,14 @@ credentials in source code or commit them to version control.**
 
 ---
 
-## Phase 3 — GitHub Adapter
+## Backlog — GitHub / GitLab Adapters
 
-| Variable | Example | Description |
-|----------|---------|-------------|
-| `GITHUB_BASE_URL` | `https://api.github.com` | GitHub API base URL |
-| `GITHUB_TOKEN` | `ghp_...` | GitHub personal access token |
-| `GITHUB_OWNER` | `my-org` | GitHub org or username |
+See [phases/phase-3-multi-vcs.md](../phases/phase-3-multi-vcs.md) for env vars
+needed when GitHub/GitLab adapters are implemented.
 
 ---
 
-## Phase 3 — GitLab Adapter
-
-| Variable | Example | Description |
-|----------|---------|-------------|
-| `GITLAB_BASE_URL` | `https://gitlab.com/api/v4` | GitLab API base URL |
-| `GITLAB_TOKEN` | `glpat-...` | GitLab personal access token |
-| `GITLAB_PROJECT_ID` | `12345` | GitLab numeric project ID |
-
----
-
-## `.env.example` (Phase 1)
+## `.env.example`
 
 ```env
 # VCS
@@ -75,4 +69,10 @@ CLAUDE_MODEL=claude-sonnet-4-6
 # Context limits
 MAX_CONTEXT_FILES=20
 MAX_FILE_LINES=500
+
+# PR size thresholds (0 = disabled)
+MIN_CHANGED_FILES=0
+MAX_CHANGED_FILES=0
+MIN_CHANGED_LINES=0
+MAX_CHANGED_LINES=0
 ```

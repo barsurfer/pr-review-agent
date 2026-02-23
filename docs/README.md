@@ -36,9 +36,7 @@ structured review as a PR comment.
 | Doc | Contents |
 |-----|----------|
 | [reference/env-vars.md](reference/env-vars.md) | All environment variables across phases |
-| [reference/comment-format.md](reference/comment-format.md) | Claude output format / comment structure |
 | [reference/token-budget.md](reference/token-budget.md) | Token cost estimates and mitigation strategies |
-| [reference/local-testing.md](reference/local-testing.md) | How to run the agent locally before Jenkins |
 
 ---
 

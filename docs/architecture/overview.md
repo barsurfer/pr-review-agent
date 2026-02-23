@@ -19,31 +19,33 @@ No code is checked out. No data is stored. One run = one review.
 pr-review-agent/
 ├── src/
 │   ├── index.ts                  # Entry point, CLI arg parsing
-│   ├── config.ts                 # Config loading, env vars
-│   ├── review.ts                 # Orchestration logic
+│   ├── config.ts                 # Config loading, env vars, thresholds
+│   ├── review.ts                 # Orchestration logic + PR size gate
 │   ├── claude/
 │   │   └── client.ts             # Anthropic API wrapper
 │   ├── vcs/
 │   │   ├── adapter.ts            # VCS interface (abstract)
 │   │   ├── bitbucket.ts          # Bitbucket implementation
-│   │   ├── github.ts             # GitHub implementation (stub — Phase 3)
-│   │   └── gitlab.ts             # GitLab implementation (stub — Phase 3)
+│   │   ├── github.ts             # GitHub stub (backlog)
+│   │   └── gitlab.ts             # GitLab stub (backlog)
 │   ├── prompt/
-│   │   ├── loader.ts             # Loads system prompt (repo-specific or default)
-│   │   └── default-prompt.txt    # Fallback prompt
+│   │   ├── loader.ts             # Loads base template, parses repo sections, fills placeholders
+│   │   ├── base-prompt.txt       # Shared template (SCOPE, RULES, OUTPUT FORMAT)
+│   │   └── defaults.ts           # Default values for ROLE, REVIEW PRIORITIES, MENTAL MODEL
 │   └── context/
 │       ├── fetcher.ts            # Fetches additional context files beyond diff
 │       └── diffParser.ts         # Unified diff parser for line mapping (Phase 4)
-├── prompts/                      # Optional: versioned prompts per tech stack
+├── prompts/                      # Example repo-specific prompts (ROLE + PRIORITIES + MENTAL MODEL)
 │   ├── java-spring.txt
-│   ├── groovy-grails.txt
-│   ├── angular-typescript.txt
-│   └── dotnet.txt
+│   └── angular-ionic.txt
+├── scripts/
+│   └── bundle.mjs                # esbuild config — single-file CJS bundle
+├── dist/
+│   └── pr-review-agent.cjs       # Pre-built bundle (committed, no npm install needed)
 ├── docs/                         # This directory
 ├── package.json
 ├── tsconfig.json
-├── .env.example
-└── Jenkinsfile.shared            # Reference pipeline snippet
+└── .env.example
 ```
 
 ---
