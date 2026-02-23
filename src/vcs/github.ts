@@ -1,4 +1,4 @@
-import type { VCSAdapter, PRInfo, ChangedFile, ReviewComment } from './adapter.js'
+import type { VCSAdapter, PRInfo, ChangedFile, ReviewComment, CommentReply } from './adapter.js'
 
 export class GitHubAdapter implements VCSAdapter {
   getPullRequestInfo(_prId: string): Promise<PRInfo> {
@@ -20,6 +20,12 @@ export class GitHubAdapter implements VCSAdapter {
     throw new Error('GitHubAdapter not implemented — deferred to Phase 3')
   }
   getPreviousReviewComments(_prId: string): Promise<ReviewComment[]> {
+    throw new Error('GitHubAdapter not implemented — deferred to Phase 3')
+  }
+  getRepliesToReviewComments(_prId: string, _reviewCommentIds: string[]): Promise<CommentReply[]> {
+    throw new Error('GitHubAdapter not implemented — deferred to Phase 3')
+  }
+  postReply(_prId: string, _parentId: string, _body: string): Promise<void> {
     throw new Error('GitHubAdapter not implemented — deferred to Phase 3')
   }
 }

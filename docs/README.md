@@ -11,6 +11,7 @@ structured review as a PR comment.
 | Phase | Name | Status |
 |-------|------|--------|
 | [Phase 1](phases/phase-1-core.md) | Core Script (Local Testable) | ✅ Complete |
+| [Phase 1b](phases/phase-1b-comment-replies.md) | Comment Reply Handling | 🔧 In progress |
 | [Phase 2](phases/phase-2-jenkins.md) | Jenkins Integration | 🔲 Not started |
 | [Phase 3](phases/phase-4-inline-comments.md) | Inline Line-Level Comments | ⏸ Deferred |
 | [Backlog](phases/phase-5-backlog.md) | Further Backlog | ⏸ Deferred |

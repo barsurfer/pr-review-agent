@@ -24524,6 +24524,42 @@ var BitbucketAdapter = class {
     }
     return comments;
   }
+  async getRepliesToReviewComments(prId, reviewCommentIds) {
+    const repoSlug = this.getRepoSlug();
+    const idSet = new Set(reviewCommentIds);
+    const humanReplies = [];
+    let latestAgentReply = "";
+    let url2 = `/repositories/${this.workspace}/${repoSlug}/pullrequests/${prId}/comments`;
+    while (url2) {
+      const { data } = await this.client.get(url2);
+      for (const c2 of data.values) {
+        const parentId = c2.parent?.id ? String(c2.parent.id) : null;
+        if (!parentId || !idSet.has(parentId)) continue;
+        const body = c2.content?.raw ?? "";
+        if (body.includes("Reply by Claude")) {
+          if (c2.created_on > latestAgentReply) latestAgentReply = c2.created_on;
+          continue;
+        }
+        humanReplies.push({
+          id: String(c2.id),
+          parentId,
+          author: c2.user?.display_name ?? "Unknown",
+          body,
+          createdOn: c2.created_on
+        });
+      }
+      url2 = data.next ?? null;
+    }
+    if (!latestAgentReply) return humanReplies;
+    return humanReplies.filter((r2) => r2.createdOn > latestAgentReply);
+  }
+  async postReply(prId, parentId, body) {
+    const repoSlug = this.getRepoSlug();
+    await this.client.post(
+      `/repositories/${this.workspace}/${repoSlug}/pullrequests/${prId}/comments`,
+      { parent: { id: Number(parentId) }, content: { raw: body } }
+    );
+  }
   // repo slug is passed in at call sites via CLI — store it after construction
   repoSlug = "";
   setRepoSlug(slug) {
@@ -24570,6 +24606,12 @@ var GitHubAdapter = class {
   getPreviousReviewComments(_prId) {
     throw new Error("GitHubAdapter not implemented \u2014 deferred to Phase 3");
   }
+  getRepliesToReviewComments(_prId, _reviewCommentIds) {
+    throw new Error("GitHubAdapter not implemented \u2014 deferred to Phase 3");
+  }
+  postReply(_prId, _parentId, _body) {
+    throw new Error("GitHubAdapter not implemented \u2014 deferred to Phase 3");
+  }
 };
 
 // src/vcs/gitlab.ts
@@ -24593,6 +24635,12 @@ var GitLabAdapter = class {
     throw new Error("GitLabAdapter not implemented \u2014 deferred to Phase 3");
   }
   getPreviousReviewComments(_prId) {
+    throw new Error("GitLabAdapter not implemented \u2014 deferred to Phase 3");
+  }
+  getRepliesToReviewComments(_prId, _reviewCommentIds) {
+    throw new Error("GitLabAdapter not implemented \u2014 deferred to Phase 3");
+  }
+  postReply(_prId, _parentId, _body) {
     throw new Error("GitLabAdapter not implemented \u2014 deferred to Phase 3");
   }
 };
@@ -24654,7 +24702,7 @@ function getBaseTemplate() {
     const __dir = (0, import_path.dirname)((0, import_url2.fileURLToPath)(import_meta.url));
     return (0, import_fs.readFileSync)((0, import_path.join)(__dir, "base-prompt.txt"), "utf-8");
   } catch {
-    if (true) return '{{ROLE}}\n\nYour responsibility is to prevent production incidents.\nYou review only what this branch introduced \u2014 the diff provided below.\nYou are the last gate before production.\n\nIf anything you approve breaks production, you will be the one debugging it at 3am.\n\n## SCOPE\n\n- Review only added or modified code in the diff.\n- Do not speculate about untouched code unless directly impacted by the change.\n- Do not review files outside the diff.\n\n## REVIEW PRIORITIES (STRICT ORDER)\n\n{{REVIEW_PRIORITIES}}\n\n## MANDATORY RULES\n\n- Be extremely concise.\n- Prefer bullets over paragraphs.\n- Prioritize runtime impact over grammar.\n- Review only the diff.\n- Do not assume behavior \u2014 verify.\n- Always list Unresolved Questions.\n- If unsure: explicitly warn about uncertainty.\n\n## FORBIDDEN\n\n- Do not focus on formatting or style.\n- Do not refactor unless explicitly asked.\n- Do not review unchanged code.\n- Do not praise code.\n- Do not skip unresolved questions.\n- Do not give uncertain answers silently.\n- Do not add a footer, signature, or "Reviewed by" line \u2014 the system adds one automatically.\n\n## MENTAL MODEL\n\nAssume:\n{{MENTAL_MODEL}}\n\nIf risk increases \u2014 block it.\n\nIf previous reviews by this agent are included, this is a re-review after new commits.\nIn that case:\n- Acknowledge issues from previous reviews that have been fixed (briefly, under Summary).\n- Do not repeat issues that are now resolved.\n- Call out any issues from previous reviews that are still present.\n- Focus your review on the new or changed code since the last review.\n\n## OUTPUT STRUCTURE (ALWAYS)\n\n### Summary\nOne-line production risk assessment.\n\n### Findings\nBullet list. Each finding must include severity: `LOW` / `MEDIUM` / `HIGH`.\n\n### Behavioral Diff\n- What changed vs the target branch.\n- Why it matters.\n\n### Production Risk\n- Concrete failure modes.\n- Realistic outage scenarios.\n\n### Unresolved Questions\nBullet list. This section must always exist (empty is allowed).\nIf you cannot verify a behavioral change is safe \u2014 it MUST appear here.\nIf a finding is HIGH severity and you lack context to confirm correctness \u2014 it MUST appear here.\nDo not silently assume critical behavior is correct. When in doubt, escalate to this section.\n';
+    if (true) return '{{ROLE}}\n\nYour responsibility is to prevent production incidents.\nYou review only what this branch introduced \u2014 the diff provided below.\nYou are the last gate before production.\n\nIf anything you approve breaks production, you will be the one debugging it at 3am.\n\n## SCOPE\n\n- Review only added or modified code in the diff.\n- Do not speculate about untouched code unless directly impacted by the change.\n- Do not review files outside the diff.\n\n## REVIEW PRIORITIES (STRICT ORDER)\n\n{{REVIEW_PRIORITIES}}\n\n## MANDATORY RULES\n\n- Be extremely concise.\n- Prefer bullets over paragraphs.\n- Prioritize runtime impact over grammar.\n- Review only the diff.\n- Do not assume behavior \u2014 verify.\n- Always list Unresolved Questions.\n- If unsure: explicitly warn about uncertainty.\n\n## FORBIDDEN\n\n- Do not focus on formatting or style.\n- Do not refactor unless explicitly asked.\n- Do not review unchanged code.\n- Do not praise code.\n- Do not skip unresolved questions.\n- Do not give uncertain answers silently.\n- Do not mark a finding as resolved if you still have doubts about it \u2014 keep it as unresolved.\n- Never contradict yourself: if a finding appears in Unresolved Questions, it MUST NOT be marked as resolved in Findings.\n- Do not add a footer, signature, or "Reviewed by" line \u2014 the system adds one automatically.\n\n## MENTAL MODEL\n\nAssume:\n{{MENTAL_MODEL}}\n\nIf risk increases \u2014 block it.\n\nIf previous reviews by this agent are included, this is a re-review after new commits.\nIn that case:\n- Acknowledge issues from previous reviews that have been fixed (briefly, under Summary).\n- Do not repeat issues that are now resolved.\n- Call out any issues from previous reviews that are still present.\n- Focus your review on the new or changed code since the last review.\n- Before writing the review, compare your findings against the previous review.\n  Respond with ONLY the exact text NO_CHANGE (no other output) if ALL of these are true:\n  1. No previous findings have been resolved by the new commits.\n  2. No new findings (LOW, MEDIUM, or HIGH) are introduced by the new commits.\n  3. The new commits only contain cosmetic changes (typos, formatting, comments, renames)\n     that do not affect runtime behavior.\n  If ANY finding was resolved, introduced, or changed in severity \u2014 produce the full review.\n\n## OUTPUT STRUCTURE (ALWAYS)\n\n### Summary\nOne-line production risk assessment.\n\n### Findings\nBullet list. Each finding must include severity: `LOW` / `MEDIUM` / `HIGH`.\n\n### Behavioral Diff\n- What changed vs the target branch.\n- Why it matters.\n\n### Production Risk\n- Concrete failure modes.\n- Realistic outage scenarios.\n\n### Unresolved Questions\nBullet list. This section must always exist (empty is allowed).\nIf you cannot verify a behavioral change is safe \u2014 it MUST appear here.\nIf a finding is HIGH severity and you lack context to confirm correctness \u2014 it MUST appear here.\nDo not silently assume critical behavior is correct. When in doubt, escalate to this section.\n';
     throw new Error("Cannot load base prompt: file not found and no embedded copy");
   }
 }
@@ -24763,6 +24811,11 @@ async function fetchContext(adapter2, changedFiles, sourceCommit, diff, maxFiles
   }
   return results;
 }
+
+// src/claude/client.ts
+var import_fs3 = require("fs");
+var import_path3 = require("path");
+var import_url3 = require("url");
 
 // node_modules/@anthropic-ai/sdk/version.mjs
 var VERSION3 = "0.36.3";
@@ -28241,6 +28294,7 @@ var { HUMAN_PROMPT, AI_PROMPT } = Anthropic;
 var sdk_default = Anthropic;
 
 // src/claude/client.ts
+var import_meta2 = {};
 var MAX_TOKENS = 4096;
 async function runReview(apiKey, model, prInfo, diff, fileContexts, prompt, previousReviews) {
   const client = new sdk_default({ apiKey });
@@ -28287,6 +28341,42 @@ ${file.content}
     }
   }
   return parts.join("\n\n");
+}
+function getReplyPrompt() {
+  try {
+    const __dir = (0, import_path3.dirname)((0, import_url3.fileURLToPath)(import_meta2.url));
+    return (0, import_fs3.readFileSync)((0, import_path3.join)(__dir, "..", "prompt", "reply-prompt.txt"), "utf-8");
+  } catch {
+    if (true) return "You are the same code reviewer who posted the review below.\nA developer has replied to your review with questions or comments.\n\nYour job:\n- Answer their questions concisely based on the diff and your original analysis.\n- If they provide context that changes your assessment, acknowledge it clearly.\n- If you lack context to answer confidently, say so explicitly.\n- Keep answers short and direct \u2014 this is a conversation, not a full review.\n- Do not repeat the full review structure (no Summary, Findings, etc.).\n- Do not ask open-ended questions back. Give definitive recommendations instead.\n  You are an automated agent, not a chat partner. State your position clearly.\n- Do not add a footer or signature \u2014 the system adds one automatically.\n";
+    throw new Error("Cannot load reply prompt: file not found and no embedded copy");
+  }
+}
+async function runCommentResponse(apiKey, model, diff, originalReview, replies) {
+  const client = new sdk_default({ apiKey });
+  const parts = [];
+  parts.push(`## Your Original Review:
+${originalReview}`);
+  parts.push(`## Diff:
+\`\`\`diff
+${diff}
+\`\`\``);
+  parts.push(`## Developer Replies (answer all of these):`);
+  for (const r2 of replies) {
+    parts.push(`**${r2.author}** (${r2.createdOn}):
+> ${r2.body}`);
+  }
+  const userMessage = parts.join("\n\n");
+  console.log(`Sending reply request to Claude (${model})...`);
+  const response = await client.messages.create({
+    model,
+    max_tokens: 2048,
+    system: getReplyPrompt(),
+    messages: [{ role: "user", content: userMessage }]
+  });
+  const block = response.content[0];
+  if (block.type !== "text") throw new Error("Unexpected response type from Claude");
+  console.log(`Reply received (${response.usage.input_tokens} in / ${response.usage.output_tokens} out tokens)`);
+  return block.text;
 }
 
 // src/review.ts
@@ -28338,6 +28428,40 @@ Skipping: PR has ${lineCount} changed line(s), maximum is ${maxChangedLines}`);
   const previousReviews = await adapter2.getPreviousReviewComments(prId);
   if (previousReviews.length > 0) {
     console.log(`  Found ${previousReviews.length} previous review(s) \u2014 will produce delta review`);
+    const lastReview = previousReviews[previousReviews.length - 1];
+    const commitMatch = lastReview.body.match(/Commit: ([a-f0-9]+)/);
+    if (commitMatch && commitMatch[1] === prInfo.sourceCommit.slice(0, 12)) {
+      console.log(`  Source commit ${prInfo.sourceCommit.slice(0, 12)} already reviewed \u2014 checking for unanswered replies...`);
+      const reviewIds = previousReviews.map((r2) => r2.id);
+      const replies = await adapter2.getRepliesToReviewComments(prId, reviewIds);
+      if (replies.length > 0) {
+        console.log(`  Found ${replies.length} unanswered reply comment(s) \u2014 responding...`);
+        const responseText = await runCommentResponse(
+          config.anthropic.apiKey,
+          config.anthropic.model,
+          diff,
+          lastReview.body,
+          replies
+        );
+        const replyFooter = `
+
+---
+*Reply by Claude (${config.anthropic.model})*`;
+        const replyBody = responseText.trimEnd() + replyFooter;
+        if (dryRun) {
+          console.log("\n=== DRY RUN \u2014 Reply output (not posted) ===\n");
+          console.log(replyBody);
+          console.log("\n=== End of reply ===\n");
+        } else {
+          const targetParentId = replies[replies.length - 1].parentId;
+          await adapter2.postReply(prId, targetParentId, replyBody);
+          console.log("Done. Reply posted to PR.\n");
+        }
+      } else {
+        console.log("\nSkipping: no new commits and no unanswered questions.");
+      }
+      return;
+    }
   } else {
     console.log("  No previous reviews \u2014 first review for this PR");
   }
@@ -28363,12 +28487,17 @@ Skipping: PR has ${lineCount} changed line(s), maximum is ${maxChangedLines}`);
     prompt,
     previousReviews
   );
+  if (reviewText.trim() === "NO_CHANGE") {
+    console.log("\nNo changes since last review \u2014 skipping comment.");
+    return;
+  }
   const cleaned = reviewText.replace(/\n---\n\*Reviewed by Claude.*?\*\s*/g, "").trimEnd();
   const reviewNumber = previousReviews.length + 1;
+  const commitShort = prInfo.sourceCommit.slice(0, 12);
   const footer = `
 
 ---
-*Reviewed by Claude (${config.anthropic.model}) | Prompt: ${prompt.source} | Review #${reviewNumber}*`;
+*Reviewed by Claude (${config.anthropic.model}) | Prompt: ${prompt.source} | Review #${reviewNumber} | Commit: ${commitShort}*`;
   const comment = cleaned + footer;
   if (dryRun) {
     console.log("\n=== DRY RUN \u2014 Review output (not posted) ===\n");

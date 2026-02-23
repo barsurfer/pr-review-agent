@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "tsx src/index.ts",
     "build": "tsc && npm run copy-assets",
-    "copy-assets": "node --input-type=module -e \"import{cpSync,mkdirSync}from'node:fs';mkdirSync('dist/prompt',{recursive:true});cpSync('src/prompt/base-prompt.txt','dist/prompt/base-prompt.txt');\"",
+    "copy-assets": "node --input-type=module -e \"import{cpSync,mkdirSync}from'node:fs';mkdirSync('dist/prompt',{recursive:true});cpSync('src/prompt/base-prompt.txt','dist/prompt/base-prompt.txt');cpSync('src/prompt/reply-prompt.txt','dist/prompt/reply-prompt.txt');\"",
     "bundle": "node scripts/bundle.mjs",
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit"

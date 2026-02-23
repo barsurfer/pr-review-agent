@@ -1,7 +1,7 @@
 import { config } from './config.js'
 import { loadPrompt } from './prompt/loader.js'
 import { fetchContext } from './context/fetcher.js'
-import { runReview } from './claude/client.js'
+import { runReview, runCommentResponse } from './claude/client.js'
 import type { VCSAdapter } from './vcs/adapter.js'
 
 /** Count added/removed lines in a unified diff (excludes --- and +++ headers). */
@@ -61,6 +61,40 @@ export async function review(adapter: VCSAdapter, prId: string, dryRun = false, 
   const previousReviews = await adapter.getPreviousReviewComments(prId)
   if (previousReviews.length > 0) {
     console.log(`  Found ${previousReviews.length} previous review(s) — will produce delta review`)
+
+    // 4a. If source commit hasn't changed, check for unanswered reply comments
+    const lastReview = previousReviews[previousReviews.length - 1]
+    const commitMatch = lastReview.body.match(/Commit: ([a-f0-9]+)/)
+    if (commitMatch && commitMatch[1] === prInfo.sourceCommit.slice(0, 12)) {
+      console.log(`  Source commit ${prInfo.sourceCommit.slice(0, 12)} already reviewed — checking for unanswered replies...`)
+      const reviewIds = previousReviews.map(r => r.id)
+      const replies = await adapter.getRepliesToReviewComments(prId, reviewIds)
+      if (replies.length > 0) {
+        console.log(`  Found ${replies.length} unanswered reply comment(s) — responding...`)
+        const responseText = await runCommentResponse(
+          config.anthropic.apiKey,
+          config.anthropic.model,
+          diff,
+          lastReview.body,
+          replies
+        )
+        const replyFooter = `\n\n---\n*Reply by Claude (${config.anthropic.model})*`
+        const replyBody = responseText.trimEnd() + replyFooter
+        if (dryRun) {
+          console.log('\n=== DRY RUN — Reply output (not posted) ===\n')
+          console.log(replyBody)
+          console.log('\n=== End of reply ===\n')
+        } else {
+          // Reply to the most recent review comment that has unanswered replies
+          const targetParentId = replies[replies.length - 1].parentId
+          await adapter.postReply(prId, targetParentId, replyBody)
+          console.log('Done. Reply posted to PR.\n')
+        }
+      } else {
+        console.log('\nSkipping: no new commits and no unanswered questions.')
+      }
+      return
+    }
   } else {
     console.log('  No previous reviews — first review for this PR')
   }
@@ -93,10 +127,17 @@ export async function review(adapter: VCSAdapter, prId: string, dryRun = false, 
     previousReviews
   )
 
-  // 8. Strip any hallucinated footer from Claude's output, then append the real one
+  // 8. Check for NO_CHANGE stop word — skip posting if nothing new
+  if (reviewText.trim() === 'NO_CHANGE') {
+    console.log('\nNo changes since last review — skipping comment.')
+    return
+  }
+
+  // 9. Strip any hallucinated footer from Claude's output, then append the real one
   const cleaned = reviewText.replace(/\n---\n\*Reviewed by Claude.*?\*\s*/g, '').trimEnd()
   const reviewNumber = previousReviews.length + 1
-  const footer = `\n\n---\n*Reviewed by Claude (${config.anthropic.model}) | Prompt: ${prompt.source} | Review #${reviewNumber}*`
+  const commitShort = prInfo.sourceCommit.slice(0, 12)
+  const footer = `\n\n---\n*Reviewed by Claude (${config.anthropic.model}) | Prompt: ${prompt.source} | Review #${reviewNumber} | Commit: ${commitShort}*`
   const comment = cleaned + footer
 
   if (dryRun) {

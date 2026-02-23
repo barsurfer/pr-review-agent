@@ -1,5 +1,5 @@
 import axios, { AxiosInstance, AxiosRequestConfig } from 'axios'
-import type { VCSAdapter, PRInfo, ChangedFile, ReviewComment } from './adapter.js'
+import type { VCSAdapter, PRInfo, ChangedFile, ReviewComment, CommentReply } from './adapter.js'
 
 export class BitbucketAdapter implements VCSAdapter {
   private readonly client: AxiosInstance
@@ -136,6 +136,48 @@ export class BitbucketAdapter implements VCSAdapter {
     }
 
     return comments
+  }
+
+  async getRepliesToReviewComments(prId: string, reviewCommentIds: string[]): Promise<CommentReply[]> {
+    const repoSlug = this.getRepoSlug()
+    const idSet = new Set(reviewCommentIds)
+    const humanReplies: CommentReply[] = []
+    let latestAgentReply = ''   // ISO timestamp of our most recent reply
+    let url: string | null = `/repositories/${this.workspace}/${repoSlug}/pullrequests/${prId}/comments`
+
+    while (url) {
+      const { data }: { data: any } = await this.client.get(url)
+      for (const c of data.values) {
+        const parentId = c.parent?.id ? String(c.parent.id) : null
+        if (!parentId || !idSet.has(parentId)) continue
+        const body: string = c.content?.raw ?? ''
+        if (body.includes('Reply by Claude')) {
+          // Track the latest agent reply timestamp
+          if (c.created_on > latestAgentReply) latestAgentReply = c.created_on
+          continue
+        }
+        humanReplies.push({
+          id: String(c.id),
+          parentId,
+          author: c.user?.display_name ?? 'Unknown',
+          body,
+          createdOn: c.created_on,
+        })
+      }
+      url = data.next ?? null
+    }
+
+    // Only return human replies that came AFTER our last agent reply
+    if (!latestAgentReply) return humanReplies
+    return humanReplies.filter(r => r.createdOn > latestAgentReply)
+  }
+
+  async postReply(prId: string, parentId: string, body: string): Promise<void> {
+    const repoSlug = this.getRepoSlug()
+    await this.client.post(
+      `/repositories/${this.workspace}/${repoSlug}/pullrequests/${prId}/comments`,
+      { parent: { id: Number(parentId) }, content: { raw: body } }
+    )
   }
 
   // repo slug is passed in at call sites via CLI — store it after construction

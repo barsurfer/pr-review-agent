@@ -18,6 +18,14 @@ export interface ReviewComment {
   createdOn: string
 }
 
+export interface CommentReply {
+  id: string
+  parentId: string
+  author: string
+  body: string
+  createdOn: string
+}
+
 export interface VCSAdapter {
   getPullRequestInfo(prId: string): Promise<PRInfo>
   getDiff(prId: string): Promise<string>
@@ -28,4 +36,8 @@ export interface VCSAdapter {
   postComment(prId: string, body: string): Promise<void>
   /** Fetch previous review comments posted by this agent on the PR. */
   getPreviousReviewComments(prId: string): Promise<ReviewComment[]>
+  /** Fetch human replies to the agent's review comments. */
+  getRepliesToReviewComments(prId: string, reviewCommentIds: string[]): Promise<CommentReply[]>
+  /** Post a threaded reply to an existing comment. */
+  postReply(prId: string, parentId: string, body: string): Promise<void>
 }
