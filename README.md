@@ -135,6 +135,31 @@ MAX_FILE_LINES=500
 
 ---
 
+## How It Works
+
+The agent sends Claude **two things** for every review:
+
+1. **The full unified diff** — all changed hunks across all files in the PR
+2. **Full file content** — for up to `MAX_CONTEXT_FILES` changed files (default: 20),
+   fetched from the source branch. This gives Claude surrounding context beyond just
+   the changed lines.
+
+The context fetcher is selective about which files get full content:
+- **Excluded:** lockfiles, `.min.js`, `.map`, snapshots, migrations, generated files
+- **Skipped:** files over `MAX_FILE_LINES` (default: 500) unless they have high churn
+  (>30% of lines changed)
+- **Prioritized:** high-churn files are fetched first since they benefit most from
+  full context
+
+On re-reviews (PR updated after a previous review), the agent also sends its earlier
+review comments so Claude can produce a delta review — acknowledging fixes and only
+flagging new or unresolved issues.
+
+See [docs/architecture/context-strategy.md](docs/architecture/context-strategy.md) for
+the full payload format and exclusion rules.
+
+---
+
 ## Running Locally
 
 Point the agent at any open PR:
