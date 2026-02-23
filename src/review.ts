@@ -4,6 +4,18 @@ import { fetchContext } from './context/fetcher.js'
 import { runReview } from './claude/client.js'
 import type { VCSAdapter } from './vcs/adapter.js'
 
+/** Count added/removed lines in a unified diff (excludes --- and +++ headers). */
+function countChangedLines(diff: string): number {
+  let count = 0
+  for (const line of diff.split('\n')) {
+    if ((line.startsWith('+') && !line.startsWith('+++')) ||
+        (line.startsWith('-') && !line.startsWith('---'))) {
+      count++
+    }
+  }
+  return count
+}
+
 export async function review(adapter: VCSAdapter, prId: string, dryRun = false): Promise<void> {
   console.log(`\nStarting review for PR #${prId}`)
 
@@ -20,6 +32,29 @@ export async function review(adapter: VCSAdapter, prId: string, dryRun = false):
   console.log('Fetching changed files...')
   const changedFiles = await adapter.getChangedFiles(prId)
   console.log(`  ${changedFiles.length} changed file(s)`)
+
+  // 3a. Check PR size thresholds
+  const { minChangedFiles, maxChangedFiles, minChangedLines, maxChangedLines } = config.thresholds
+  const fileCount = changedFiles.length
+  const lineCount = countChangedLines(diff)
+  console.log(`  ${lineCount} changed line(s)`)
+
+  if (minChangedFiles > 0 && fileCount < minChangedFiles) {
+    console.log(`\nSkipping: PR has ${fileCount} changed file(s), minimum is ${minChangedFiles}`)
+    return
+  }
+  if (maxChangedFiles > 0 && fileCount > maxChangedFiles) {
+    console.log(`\nSkipping: PR has ${fileCount} changed file(s), maximum is ${maxChangedFiles}`)
+    return
+  }
+  if (minChangedLines > 0 && lineCount < minChangedLines) {
+    console.log(`\nSkipping: PR has ${lineCount} changed line(s), minimum is ${minChangedLines}`)
+    return
+  }
+  if (maxChangedLines > 0 && lineCount > maxChangedLines) {
+    console.log(`\nSkipping: PR has ${lineCount} changed line(s), maximum is ${maxChangedLines}`)
+    return
+  }
 
   // 4. Check for previous review comments
   console.log('Checking for previous reviews...')

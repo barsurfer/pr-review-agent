@@ -2,10 +2,71 @@ import { readFileSync } from 'fs'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import type { VCSAdapter } from '../vcs/adapter.js'
-
-const __dirname = dirname(fileURLToPath(import.meta.url))
+import { DEFAULT_ROLE, DEFAULT_REVIEW_PRIORITIES, DEFAULT_MENTAL_MODEL } from './defaults.js'
 
 const REPO_PROMPT_FILE = '.claude-review-prompt.md'
+
+// Load base template — works both from source (tsc) and bundle (esbuild)
+function getBaseTemplate(): string {
+  try {
+    const __dir = dirname(fileURLToPath(import.meta.url))
+    return readFileSync(join(__dir, 'base-prompt.txt'), 'utf-8')
+  } catch {
+    // When running as a single-file bundle, fall back to the embedded copy.
+    // esbuild replaces __BASE_PROMPT__ at build time via --define.
+    // @ts-ignore — injected at bundle time
+    if (typeof __BASE_PROMPT__ !== 'undefined') return __BASE_PROMPT__ as string
+    throw new Error('Cannot load base prompt: file not found and no embedded copy')
+  }
+}
+
+interface RepoPromptSections {
+  role?: string
+  reviewPriorities?: string
+  mentalModel?: string
+}
+
+/**
+ * Parse a repo-specific prompt into sections.
+ * Looks for ## ROLE, ## REVIEW PRIORITIES, and ## MENTAL MODEL headers.
+ * Content between headers belongs to the preceding section.
+ */
+function parseRepoPrompt(content: string): RepoPromptSections {
+  const sections: RepoPromptSections = {}
+
+  // Split on ## headers, keeping the header text
+  const sectionPattern = /^## (.+)/gm
+  const headers: { name: string; start: number }[] = []
+  let match: RegExpExecArray | null
+
+  while ((match = sectionPattern.exec(content)) !== null) {
+    headers.push({ name: match[1].trim().toUpperCase(), start: match.index + match[0].length })
+  }
+
+  for (let i = 0; i < headers.length; i++) {
+    const end = i + 1 < headers.length ? headers[i + 1].start - headers[i + 1].name.length - 3 : content.length
+    const body = content.slice(headers[i].start, end).trim()
+    if (!body) continue
+
+    const name = headers[i].name
+    if (name === 'ROLE') {
+      sections.role = body
+    } else if (name.startsWith('REVIEW PRIORITIES')) {
+      sections.reviewPriorities = body
+    } else if (name.startsWith('MENTAL MODEL')) {
+      sections.mentalModel = body
+    }
+  }
+
+  return sections
+}
+
+function fillTemplate(template: string, sections: RepoPromptSections): string {
+  return template
+    .replace('{{ROLE}}', sections.role ?? DEFAULT_ROLE)
+    .replace('{{REVIEW_PRIORITIES}}', sections.reviewPriorities ?? DEFAULT_REVIEW_PRIORITIES)
+    .replace('{{MENTAL_MODEL}}', sections.mentalModel ?? DEFAULT_MENTAL_MODEL)
+}
 
 export type PromptSource = 'repo' | 'default'
 
@@ -15,15 +76,20 @@ export interface LoadedPrompt {
 }
 
 export async function loadPrompt(adapter: VCSAdapter): Promise<LoadedPrompt> {
-  // 1. Try repo-specific prompt via VCS API
+  const template = getBaseTemplate()
+
+  // Try repo-specific prompt via VCS API
   const repoPrompt = await adapter.getRepoFileContent(REPO_PROMPT_FILE)
+
   if (repoPrompt) {
     console.log(`Using repo-specific prompt from ${REPO_PROMPT_FILE}`)
-    return { content: repoPrompt, source: 'repo' }
+    const sections = parseRepoPrompt(repoPrompt)
+    const filled = fillTemplate(template, sections)
+    return { content: filled, source: 'repo' }
   }
 
-  // 2. Fall back to default prompt
+  // Fall back to all defaults
   console.log(`No ${REPO_PROMPT_FILE} found in target repo — using default prompt`)
-  const defaultPrompt = readFileSync(join(__dirname, 'default-prompt.txt'), 'utf-8')
-  return { content: defaultPrompt, source: 'default' }
+  const filled = fillTemplate(template, {})
+  return { content: filled, source: 'default' }
 }

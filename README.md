@@ -160,57 +160,191 @@ the full payload format and exclusion rules.
 
 ---
 
-## Running Locally
+## Running
 
-Point the agent at any open PR:
+### From source (development)
 
 ```bash
-npx tsx src/index.ts \
-  --workspace your-workspace \
+npm run dev -- \
+  --repo-slug your-repo \
+  --pr-id 42
+```
+
+### From the bundle (production — no npm install needed)
+
+The repo includes a pre-built single-file bundle at `dist/pr-review-agent.cjs`.
+It has all dependencies baked in — only Node.js 20+ is required.
+
+```bash
+node dist/pr-review-agent.cjs \
   --repo-slug your-repo \
   --pr-id 42
 ```
 
 Within ~30 seconds a review comment should appear on the PR in Bitbucket.
 
-### Optional flags
+### Rebuilding the bundle
+
+After making source changes, rebuild with:
 
 ```bash
---vcs bitbucket        # VCS provider (default: bitbucket, matches VCS_PROVIDER env var)
---dry-run              # Run the full review but print output to stdout instead of posting to the PR
+npm run bundle
 ```
+
+---
+
+## CLI Flags
+
+| Flag | Required | Description |
+|------|----------|-------------|
+| `--pr-id <id>` | **Yes** | Pull request ID to review |
+| `--repo-slug <slug>` | **Yes** (Bitbucket) | Repository slug |
+| `--workspace <workspace>` | No | Overrides `BITBUCKET_WORKSPACE` env var |
+| `--vcs <provider>` | No | `bitbucket` \| `github` \| `gitlab` — overrides `VCS_PROVIDER` env var (default: `bitbucket`) |
+| `--dry-run` | No | Print the review to stdout instead of posting to the PR |
+| `--min-changed-files <n>` | No | Skip review if PR has fewer changed files (overrides `MIN_CHANGED_FILES`) |
+| `--max-changed-files <n>` | No | Skip review if PR has more changed files (overrides `MAX_CHANGED_FILES`) |
+| `--min-changed-lines <n>` | No | Skip review if PR has fewer changed lines (overrides `MIN_CHANGED_LINES`) |
+| `--max-changed-lines <n>` | No | Skip review if PR has more changed lines (overrides `MAX_CHANGED_LINES`) |
+
+---
+
+## Environment Variables
+
+All credentials and settings are provided via environment variables.
+**Never pass secrets as CLI arguments** — they appear in process lists and logs.
+
+### Required
+
+| Variable | Example | Description |
+|----------|---------|-------------|
+| `ANTHROPIC_API_KEY` | `sk-ant-...` | Anthropic API key ([get one here](https://console.anthropic.com)) |
+| `BITBUCKET_USERNAME` | `you@company.com` | Your Atlassian account email (HTTP Basic Auth username) |
+| `BITBUCKET_TOKEN` | `ATATT3x...` | Atlassian API token with Bitbucket scopes |
+| `BITBUCKET_WORKSPACE` | `my-workspace` | Bitbucket workspace slug (can also use `--workspace` flag) |
+
+### Optional
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VCS_PROVIDER` | `bitbucket` | Which VCS adapter to use (`bitbucket` \| `github` \| `gitlab`) |
+| `BITBUCKET_BASE_URL` | `https://api.bitbucket.org/2.0` | Bitbucket API base URL (change for self-hosted) |
+| `CLAUDE_MODEL` | `claude-sonnet-4-6` | Claude model ID to use for reviews |
+| `MAX_CONTEXT_FILES` | `20` | Max files to fetch full content for |
+| `MAX_FILE_LINES` | `500` | Files over this line count get diff-only context |
+| `MIN_CHANGED_FILES` | `0` (disabled) | Skip review if PR has fewer changed files |
+| `MAX_CHANGED_FILES` | `0` (disabled) | Skip review if PR has more changed files |
+| `MIN_CHANGED_LINES` | `0` (disabled) | Skip review if PR has fewer changed lines |
+| `MAX_CHANGED_LINES` | `0` (disabled) | Skip review if PR has more changed lines |
+
+### How to Provide Environment Variables
+
+There are three ways to supply credentials, depending on your environment:
+
+**Option 1: `.env` file (local development)**
+
+Create a `.env` file in the directory where you run the agent. The agent uses
+`dotenv` to load it automatically.
+
+```bash
+cp .env.example .env
+# edit .env with your values
+npm run dev -- --repo-slug my-repo --pr-id 42
+```
+
+**Option 2: Inline environment variables (standalone / one-off runs)**
+
+Export them before running, or pass them inline:
+
+```bash
+ANTHROPIC_API_KEY=sk-ant-... \
+BITBUCKET_USERNAME=you@company.com \
+BITBUCKET_TOKEN=ATATT3x... \
+BITBUCKET_WORKSPACE=my-workspace \
+  node dist/pr-review-agent.cjs --repo-slug my-repo --pr-id 42
+```
+
+**Option 3: CI/CD secrets (Jenkins, GitHub Actions, etc.)**
+
+Use your CI platform's secret management. For Jenkins:
+
+```groovy
+withCredentials([
+  string(credentialsId: 'anthropic-api-key', variable: 'ANTHROPIC_API_KEY'),
+  string(credentialsId: 'bitbucket-token', variable: 'BITBUCKET_TOKEN'),
+  string(credentialsId: 'bitbucket-username', variable: 'BITBUCKET_USERNAME')
+]) {
+  sh 'node dist/pr-review-agent.cjs --repo-slug $REPO --pr-id $PR_ID'
+}
+```
+
+> **Note:** The `.env` file approach also works on CI — just create it as a
+> build step from secrets. But inline env vars or `withCredentials` are preferred
+> since they don't write secrets to disk.
 
 ---
 
 ## Customising the Review Prompt
 
-By default the agent uses a generic prompt. To customise how Claude reviews a specific repo,
-add a file called `.claude-review-prompt.md` to the **root of that target repo**
-(not this repo — the repo being reviewed).
+The agent uses a **base template** with shared rules (scope, mandatory rules, forbidden,
+output format) and fills in three customisable sections per repo. To customise, add a file
+called `.claude-review-prompt.md` to the **root of the target repo** (not this repo).
+
+The file can include any combination of these sections:
+
+| Section | Purpose | Default if missing |
+|---------|---------|-------------------|
+| `## ROLE` | Reviewer persona | "Senior Architect and Production Gatekeeper" |
+| `## REVIEW PRIORITIES` | Technology-specific checklist | Generic priorities (logic, safety, correctness) |
+| `## MENTAL MODEL` | Assumptions about the environment | Production load, real users, large dataset, 3am |
 
 Example for a Java/Spring Boot project:
 
 ```markdown
-You are a senior backend engineer reviewing Java + Spring Boot pull requests.
+## ROLE
+You are a Senior Backend Architect and Production Gatekeeper.
 
-Focus on:
-- Correctness of business logic and edge cases
-- Transaction boundaries and data consistency
-- Security: input validation, auth checks, SQL injection surface
-- Performance: N+1 queries, missing indexes, unbounded queries
+## REVIEW PRIORITIES (STRICT ORDER)
 
-Do not nitpick formatting or variable naming unless it causes ambiguity.
-Output a structured review with sections: Summary, Critical Issues, Warnings, Suggestions.
+### 1. Behavioral Differences (Highest Priority)
+- Logic changes
+- Query semantics (Hibernate / GORM / SQL)
+- Transaction boundary changes
+- API contract changes
+
+### 2. Production Safety
+- N+1 queries
+- Missing indexes
+- Deadlock risk
+- Unbounded loops / retries
+
+### 3. Correctness
+- Null handling
+- Concurrency issues
+- Transaction isolation assumptions
+
+## MENTAL MODEL
+- Production load
+- Real users
+- Real money
+- Large dataset
+- It is 3am
 ```
 
+Any section you omit uses the default. A file with only `## REVIEW PRIORITIES` is perfectly
+valid — the base role and mental model will be used automatically.
+
 The agent fetches this file via the Bitbucket API — no checkout required.
-See [docs/architecture/prompt-convention.md](docs/architecture/prompt-convention.md) for the full resolution order and more examples.
+See [docs/architecture/prompt-convention.md](docs/architecture/prompt-convention.md) for
+details and more examples. Full example prompts are in the [`prompts/`](prompts/) directory.
 
 ---
 
 ## Jenkins Integration (Phase 2)
 
-Once you've verified local runs work, integrate into your Jenkins pipeline:
+Once you've verified local runs work, integrate into your Jenkins pipeline.
+The pre-built bundle means **no `npm install` is needed** on the Jenkins agent — just
+Node.js and the single file.
 
 ```groovy
 stage('AI PR Review') {
@@ -222,8 +356,7 @@ stage('AI PR Review') {
       string(credentialsId: 'bitbucket-username', variable: 'BITBUCKET_USERNAME')
     ]) {
       sh '''
-        cd /opt/pr-review-agent
-        npx tsx src/index.ts \
+        node /opt/pr-review-agent/dist/pr-review-agent.cjs \
           --workspace $BITBUCKET_WORKSPACE \
           --repo-slug $BITBUCKET_REPO_SLUG \
           --pr-id $BITBUCKET_PULL_REQUEST_ID
@@ -233,11 +366,10 @@ stage('AI PR Review') {
 }
 ```
 
-Requirements on the Jenkins agent node:
-- Node.js v18+ installed
-- This repo checked out or deployed to a fixed path (e.g. `/opt/pr-review-agent`)
-- `npm install` run on that path
-- `BITBUCKET_TOKEN`, `BITBUCKET_USERNAME`, and `ANTHROPIC_API_KEY` stored as **masked** Jenkins credentials
+Requirements on the Jenkins agent:
+- Node.js v20+ installed
+- This repo cloned to a fixed path (e.g. `/opt/pr-review-agent`)
+- Secrets stored as **masked** Jenkins credentials (see [Environment Variables](#environment-variables) above)
 
 See [docs/phases/phase-2-jenkins.md](docs/phases/phase-2-jenkins.md) for the full guide.
 

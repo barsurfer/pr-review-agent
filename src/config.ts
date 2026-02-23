@@ -29,6 +29,13 @@ export const config = {
     maxFiles: parseInt(optional('MAX_CONTEXT_FILES', '20'), 10),
     maxFileLines: parseInt(optional('MAX_FILE_LINES', '500'), 10),
   },
+
+  thresholds: {
+    minChangedFiles: parseInt(optional('MIN_CHANGED_FILES', '0'), 10),
+    maxChangedFiles: parseInt(optional('MAX_CHANGED_FILES', '0'), 10),
+    minChangedLines: parseInt(optional('MIN_CHANGED_LINES', '0'), 10),
+    maxChangedLines: parseInt(optional('MAX_CHANGED_LINES', '0'), 10),
+  },
 }
 
 export function validateBitbucketConfig(): void {

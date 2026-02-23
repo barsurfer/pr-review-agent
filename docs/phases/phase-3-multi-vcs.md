@@ -5,11 +5,11 @@
 Drop-in support for GitHub and GitLab without changing orchestration logic.
 The adapter pattern established in Phase 1 makes this straightforward.
 
-## Status: ⏸ Deferred
+## Status: 📋 Backlog
 
-> **Do not start this phase until Phase 2 (Jenkins integration) is stable in production
-> with Bitbucket.** GitHub and GitLab adapters should exist as empty stubs implementing
-> the interface — throwing `NotImplementedError` — until this phase is actively worked.
+> Moved to backlog — not a priority. Bitbucket is the only VCS we need for now.
+> GitHub and GitLab adapters exist as empty stubs implementing the interface.
+> Revisit when there's a concrete need for another VCS provider.
 
 ---
 

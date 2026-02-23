@@ -2,9 +2,14 @@
   "name": "pr-review-agent",
   "version": "1.0.0",
   "description": "Automated PR code review agent powered by Claude",
-  "main": "src/index.ts",
+  "type": "module",
+  "main": "dist/index.js",
   "scripts": {
-    "start": "tsx src/index.ts",
+    "dev": "tsx src/index.ts",
+    "build": "tsc && npm run copy-assets",
+    "copy-assets": "node --input-type=module -e \"import{cpSync,mkdirSync}from'node:fs';mkdirSync('dist/prompt',{recursive:true});cpSync('src/prompt/base-prompt.txt','dist/prompt/base-prompt.txt');\"",
+    "bundle": "node scripts/bundle.mjs",
+    "start": "node dist/index.js",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -15,8 +20,9 @@
   },
   "devDependencies": {
     "@types/node": "^20.17.10",
-    "typescript": "^5.7.3",
-    "tsx": "^4.19.2"
+    "esbuild": "^0.27.3",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
   },
   "engines": {
     "node": ">=20"

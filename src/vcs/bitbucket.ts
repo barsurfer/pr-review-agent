@@ -120,7 +120,7 @@ export class BitbucketAdapter implements VCSAdapter {
     let url: string | null = `/repositories/${this.workspace}/${repoSlug}/pullrequests/${prId}/comments`
 
     while (url) {
-      const { data } = await this.client.get(url)
+      const { data }: { data: any } = await this.client.get(url)
       for (const c of data.values) {
         const body: string = c.content?.raw ?? ''
         // Only include comments posted by this agent (footer always contains this marker)
