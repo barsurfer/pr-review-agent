@@ -93,10 +93,11 @@ export async function review(adapter: VCSAdapter, prId: string, dryRun = false, 
     previousReviews
   )
 
-  // 8. Append footer and post comment
+  // 8. Strip any hallucinated footer from Claude's output, then append the real one
+  const cleaned = reviewText.replace(/\n---\n\*Reviewed by Claude.*?\*\s*/g, '').trimEnd()
   const reviewNumber = previousReviews.length + 1
   const footer = `\n\n---\n*Reviewed by Claude (${config.anthropic.model}) | Prompt: ${prompt.source} | Review #${reviewNumber}*`
-  const comment = reviewText + footer
+  const comment = cleaned + footer
 
   if (dryRun) {
     console.log('\n=== DRY RUN — Review output (not posted) ===\n')
