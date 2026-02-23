@@ -16,7 +16,7 @@ function countChangedLines(diff: string): number {
   return count
 }
 
-export async function review(adapter: VCSAdapter, prId: string, dryRun = false): Promise<void> {
+export async function review(adapter: VCSAdapter, prId: string, dryRun = false, promptPath?: string): Promise<void> {
   console.log(`\nStarting review for PR #${prId}`)
 
   // 1. Fetch PR metadata
@@ -67,7 +67,7 @@ export async function review(adapter: VCSAdapter, prId: string, dryRun = false):
 
   // 5. Load system prompt
   console.log('Loading prompt...')
-  const prompt = await loadPrompt(adapter)
+  const prompt = await loadPrompt(adapter, promptPath)
   console.log(`  Prompt source: ${prompt.source}`)
 
   // 6. Fetch full file context

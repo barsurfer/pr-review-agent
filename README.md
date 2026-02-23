@@ -202,6 +202,7 @@ npm run bundle
 | `--workspace <workspace>` | No | Overrides `BITBUCKET_WORKSPACE` env var |
 | `--vcs <provider>` | No | `bitbucket` \| `github` \| `gitlab` — overrides `VCS_PROVIDER` env var (default: `bitbucket`) |
 | `--dry-run` | No | Print the review to stdout instead of posting to the PR |
+| `--prompt <path>` | No | Path to a local prompt file (overrides repo `.claude-review-prompt.md`) |
 | `--min-changed-files <n>` | No | Skip review if PR has fewer changed files (overrides `MIN_CHANGED_FILES`) |
 | `--max-changed-files <n>` | No | Skip review if PR has more changed files (overrides `MAX_CHANGED_FILES`) |
 | `--min-changed-lines <n>` | No | Skip review if PR has fewer changed lines (overrides `MIN_CHANGED_LINES`) |

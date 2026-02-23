@@ -24654,7 +24654,7 @@ function getBaseTemplate() {
     const __dir = (0, import_path.dirname)((0, import_url2.fileURLToPath)(import_meta.url));
     return (0, import_fs.readFileSync)((0, import_path.join)(__dir, "base-prompt.txt"), "utf-8");
   } catch {
-    if (true) return "{{ROLE}}\n\nYour responsibility is to prevent production incidents.\nYou review only what this branch introduced \u2014 the diff provided below.\nYou are the last gate before production.\n\nIf anything you approve breaks production, you will be the one debugging it at 3am.\n\n## SCOPE\n\n- Review only added or modified code in the diff.\n- Do not speculate about untouched code unless directly impacted by the change.\n- Do not review files outside the diff.\n\n## REVIEW PRIORITIES (STRICT ORDER)\n\n{{REVIEW_PRIORITIES}}\n\n## MANDATORY RULES\n\n- Be extremely concise.\n- Prefer bullets over paragraphs.\n- Prioritize runtime impact over grammar.\n- Review only the diff.\n- Do not assume behavior \u2014 verify.\n- Always list Unresolved Questions.\n- If unsure: explicitly warn about uncertainty.\n\n## FORBIDDEN\n\n- Do not focus on formatting or style.\n- Do not refactor unless explicitly asked.\n- Do not review unchanged code.\n- Do not praise code.\n- Do not skip unresolved questions.\n- Do not give uncertain answers silently.\n\n## MENTAL MODEL\n\nAssume:\n{{MENTAL_MODEL}}\n\nIf risk increases \u2014 block it.\n\nIf previous reviews by this agent are included, this is a re-review after new commits.\nIn that case:\n- Acknowledge issues from previous reviews that have been fixed (briefly, under Summary).\n- Do not repeat issues that are now resolved.\n- Call out any issues from previous reviews that are still present.\n- Focus your review on the new or changed code since the last review.\n\n## OUTPUT STRUCTURE (ALWAYS)\n\n### Summary\nOne-line production risk assessment.\n\n### Findings\nBullet list. Each finding must include severity: `LOW` / `MEDIUM` / `HIGH`.\n\n### Behavioral Diff\n- What changed vs the target branch.\n- Why it matters.\n\n### Production Risk\n- Concrete failure modes.\n- Realistic outage scenarios.\n\n### Unresolved Questions\nBullet list. This section must always exist (empty is allowed).\n";
+    if (true) return "{{ROLE}}\n\nYour responsibility is to prevent production incidents.\nYou review only what this branch introduced \u2014 the diff provided below.\nYou are the last gate before production.\n\nIf anything you approve breaks production, you will be the one debugging it at 3am.\n\n## SCOPE\n\n- Review only added or modified code in the diff.\n- Do not speculate about untouched code unless directly impacted by the change.\n- Do not review files outside the diff.\n\n## REVIEW PRIORITIES (STRICT ORDER)\n\n{{REVIEW_PRIORITIES}}\n\n## MANDATORY RULES\n\n- Be extremely concise.\n- Prefer bullets over paragraphs.\n- Prioritize runtime impact over grammar.\n- Review only the diff.\n- Do not assume behavior \u2014 verify.\n- Always list Unresolved Questions.\n- If unsure: explicitly warn about uncertainty.\n\n## FORBIDDEN\n\n- Do not focus on formatting or style.\n- Do not refactor unless explicitly asked.\n- Do not review unchanged code.\n- Do not praise code.\n- Do not skip unresolved questions.\n- Do not give uncertain answers silently.\n\n## MENTAL MODEL\n\nAssume:\n{{MENTAL_MODEL}}\n\nIf risk increases \u2014 block it.\n\nIf previous reviews by this agent are included, this is a re-review after new commits.\nIn that case:\n- Acknowledge issues from previous reviews that have been fixed (briefly, under Summary).\n- Do not repeat issues that are now resolved.\n- Call out any issues from previous reviews that are still present.\n- Focus your review on the new or changed code since the last review.\n\n## OUTPUT STRUCTURE (ALWAYS)\n\n### Summary\nOne-line production risk assessment.\n\n### Findings\nBullet list. Each finding must include severity: `LOW` / `MEDIUM` / `HIGH`.\n\n### Behavioral Diff\n- What changed vs the target branch.\n- Why it matters.\n\n### Production Risk\n- Concrete failure modes.\n- Realistic outage scenarios.\n\n### Unresolved Questions\nBullet list. This section must always exist (empty is allowed).\nIf you cannot verify a behavioral change is safe \u2014 it MUST appear here.\nIf a finding is HIGH severity and you lack context to confirm correctness \u2014 it MUST appear here.\nDo not silently assume critical behavior is correct. When in doubt, escalate to this section.\n";
     throw new Error("Cannot load base prompt: file not found and no embedded copy");
   }
 }
@@ -24684,8 +24684,15 @@ function parseRepoPrompt(content) {
 function fillTemplate(template, sections) {
   return template.replace("{{ROLE}}", sections.role ?? DEFAULT_ROLE).replace("{{REVIEW_PRIORITIES}}", sections.reviewPriorities ?? DEFAULT_REVIEW_PRIORITIES).replace("{{MENTAL_MODEL}}", sections.mentalModel ?? DEFAULT_MENTAL_MODEL);
 }
-async function loadPrompt(adapter2) {
+async function loadPrompt(adapter2, localPromptPath) {
   const template = getBaseTemplate();
+  if (localPromptPath) {
+    const content = (0, import_fs.readFileSync)(localPromptPath, "utf-8");
+    console.log(`Using local prompt from ${localPromptPath}`);
+    const sections = parseRepoPrompt(content);
+    const filled2 = fillTemplate(template, sections);
+    return { content: filled2, source: localPromptPath };
+  }
   const repoPrompt = await adapter2.getRepoFileContent(REPO_PROMPT_FILE);
   if (repoPrompt) {
     console.log(`Using repo-specific prompt from ${REPO_PROMPT_FILE}`);
@@ -28292,7 +28299,7 @@ function countChangedLines(diff) {
   }
   return count;
 }
-async function review(adapter2, prId, dryRun = false) {
+async function review(adapter2, prId, dryRun = false, promptPath) {
   console.log(`
 Starting review for PR #${prId}`);
   console.log("Fetching PR info...");
@@ -28335,7 +28342,7 @@ Skipping: PR has ${lineCount} changed line(s), maximum is ${maxChangedLines}`);
     console.log("  No previous reviews \u2014 first review for this PR");
   }
   console.log("Loading prompt...");
-  const prompt = await loadPrompt(adapter2);
+  const prompt = await loadPrompt(adapter2, promptPath);
   console.log(`  Prompt source: ${prompt.source}`);
   console.log("Fetching file context...");
   const fileContexts = await fetchContext(
@@ -28375,7 +28382,7 @@ Skipping: PR has ${lineCount} changed line(s), maximum is ${maxChangedLines}`);
 
 // src/index.ts
 var program2 = new Command();
-program2.name("pr-review-agent").description("Automated PR code review powered by Claude").requiredOption("--pr-id <id>", "Pull request ID").option("--workspace <workspace>", "VCS workspace / org (overrides BITBUCKET_WORKSPACE)").option("--repo-slug <slug>", "Repository slug").option("--vcs <provider>", "VCS provider: bitbucket | github | gitlab (overrides VCS_PROVIDER)").option("--dry-run", "Print the review to stdout without posting to the PR").option("--min-changed-files <n>", "Skip review if fewer files changed (overrides MIN_CHANGED_FILES)").option("--max-changed-files <n>", "Skip review if more files changed (overrides MAX_CHANGED_FILES)").option("--min-changed-lines <n>", "Skip review if fewer lines changed (overrides MIN_CHANGED_LINES)").option("--max-changed-lines <n>", "Skip review if more lines changed (overrides MAX_CHANGED_LINES)").parse(process.argv);
+program2.name("pr-review-agent").description("Automated PR code review powered by Claude").requiredOption("--pr-id <id>", "Pull request ID").option("--workspace <workspace>", "VCS workspace / org (overrides BITBUCKET_WORKSPACE)").option("--repo-slug <slug>", "Repository slug").option("--vcs <provider>", "VCS provider: bitbucket | github | gitlab (overrides VCS_PROVIDER)").option("--dry-run", "Print the review to stdout without posting to the PR").option("--prompt <path>", "Path to a local prompt file (overrides repo .claude-review-prompt.md)").option("--min-changed-files <n>", "Skip review if fewer files changed (overrides MIN_CHANGED_FILES)").option("--max-changed-files <n>", "Skip review if more files changed (overrides MAX_CHANGED_FILES)").option("--min-changed-lines <n>", "Skip review if fewer lines changed (overrides MIN_CHANGED_LINES)").option("--max-changed-lines <n>", "Skip review if more lines changed (overrides MAX_CHANGED_LINES)").parse(process.argv);
 var opts = program2.opts();
 async function main() {
   const provider = opts.vcs ?? config.vcsProvider;
@@ -28407,7 +28414,7 @@ async function main() {
   if (opts.maxChangedFiles) config.thresholds.maxChangedFiles = parseInt(opts.maxChangedFiles, 10);
   if (opts.minChangedLines) config.thresholds.minChangedLines = parseInt(opts.minChangedLines, 10);
   if (opts.maxChangedLines) config.thresholds.maxChangedLines = parseInt(opts.maxChangedLines, 10);
-  await review(adapter2, opts.prId, opts.dryRun ?? false);
+  await review(adapter2, opts.prId, opts.dryRun ?? false, opts.prompt);
 }
 main().catch((err) => {
   console.error("Fatal error:", err.message);

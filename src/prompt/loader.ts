@@ -68,17 +68,26 @@ function fillTemplate(template: string, sections: RepoPromptSections): string {
     .replace('{{MENTAL_MODEL}}', sections.mentalModel ?? DEFAULT_MENTAL_MODEL)
 }
 
-export type PromptSource = 'repo' | 'default'
+export type PromptSource = 'repo' | 'default' | string
 
 export interface LoadedPrompt {
   content: string
   source: PromptSource
 }
 
-export async function loadPrompt(adapter: VCSAdapter): Promise<LoadedPrompt> {
+export async function loadPrompt(adapter: VCSAdapter, localPromptPath?: string): Promise<LoadedPrompt> {
   const template = getBaseTemplate()
 
-  // Try repo-specific prompt via VCS API
+  // 1. If a local prompt file was provided via --prompt, use it
+  if (localPromptPath) {
+    const content = readFileSync(localPromptPath, 'utf-8')
+    console.log(`Using local prompt from ${localPromptPath}`)
+    const sections = parseRepoPrompt(content)
+    const filled = fillTemplate(template, sections)
+    return { content: filled, source: localPromptPath }
+  }
+
+  // 2. Try repo-specific prompt via VCS API
   const repoPrompt = await adapter.getRepoFileContent(REPO_PROMPT_FILE)
 
   if (repoPrompt) {
@@ -88,7 +97,7 @@ export async function loadPrompt(adapter: VCSAdapter): Promise<LoadedPrompt> {
     return { content: filled, source: 'repo' }
   }
 
-  // Fall back to all defaults
+  // 3. Fall back to all defaults
   console.log(`No ${REPO_PROMPT_FILE} found in target repo — using default prompt`)
   const filled = fillTemplate(template, {})
   return { content: filled, source: 'default' }
