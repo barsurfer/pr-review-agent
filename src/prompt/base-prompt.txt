@@ -67,3 +67,6 @@ Bullet list. Each finding must include severity: `LOW` / `MEDIUM` / `HIGH`.
 
 ### Unresolved Questions
 Bullet list. This section must always exist (empty is allowed).
+If you cannot verify a behavioral change is safe — it MUST appear here.
+If a finding is HIGH severity and you lack context to confirm correctness — it MUST appear here.
+Do not silently assume critical behavior is correct. When in doubt, escalate to this section.
