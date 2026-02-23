@@ -28389,124 +28389,183 @@ function countChangedLines(diff) {
   }
   return count;
 }
-async function review(adapter2, prId, dryRun = false, promptPath) {
-  console.log(`
-Starting review for PR #${prId}`);
-  console.log("Fetching PR info...");
-  const prInfo = await adapter2.getPullRequestInfo(prId);
-  console.log(`  "${prInfo.title}" (${prInfo.sourceBranch} \u2192 ${prInfo.targetBranch})`);
-  console.log("Fetching diff...");
-  const diff = await adapter2.getDiff(prId);
-  console.log("Fetching changed files...");
-  const changedFiles = await adapter2.getChangedFiles(prId);
-  console.log(`  ${changedFiles.length} changed file(s)`);
-  const { minChangedFiles, maxChangedFiles, minChangedLines, maxChangedLines } = config.thresholds;
-  const fileCount = changedFiles.length;
-  const lineCount = countChangedLines(diff);
-  console.log(`  ${lineCount} changed line(s)`);
-  if (minChangedFiles > 0 && fileCount < minChangedFiles) {
-    console.log(`
-Skipping: PR has ${fileCount} changed file(s), minimum is ${minChangedFiles}`);
-    return;
-  }
-  if (maxChangedFiles > 0 && fileCount > maxChangedFiles) {
-    console.log(`
-Skipping: PR has ${fileCount} changed file(s), maximum is ${maxChangedFiles}`);
-    return;
-  }
-  if (minChangedLines > 0 && lineCount < minChangedLines) {
-    console.log(`
-Skipping: PR has ${lineCount} changed line(s), minimum is ${minChangedLines}`);
-    return;
-  }
-  if (maxChangedLines > 0 && lineCount > maxChangedLines) {
-    console.log(`
-Skipping: PR has ${lineCount} changed line(s), maximum is ${maxChangedLines}`);
-    return;
-  }
-  console.log("Checking for previous reviews...");
-  const previousReviews = await adapter2.getPreviousReviewComments(prId);
-  if (previousReviews.length > 0) {
-    console.log(`  Found ${previousReviews.length} previous review(s) \u2014 will produce delta review`);
-    const lastReview = previousReviews[previousReviews.length - 1];
-    const commitMatch = lastReview.body.match(/Commit: ([a-f0-9]+)/);
-    if (commitMatch && commitMatch[1] === prInfo.sourceCommit.slice(0, 12)) {
-      console.log(`  Source commit ${prInfo.sourceCommit.slice(0, 12)} already reviewed \u2014 checking for unanswered replies...`);
-      const reviewIds = previousReviews.map((r2) => r2.id);
-      const replies = await adapter2.getRepliesToReviewComments(prId, reviewIds);
-      if (replies.length > 0) {
-        console.log(`  Found ${replies.length} unanswered reply comment(s) \u2014 responding...`);
-        const responseText = await runCommentResponse(
-          config.anthropic.apiKey,
-          config.anthropic.model,
-          diff,
-          lastReview.body,
-          replies
-        );
-        const replyFooter = `
+async function transition(state, ctx) {
+  switch (state) {
+    // ── Fetch PR metadata ──────────────────────────────────────────────
+    case 0 /* FETCH_PR_INFO */: {
+      console.log("Fetching PR info...");
+      ctx.prInfo = await ctx.adapter.getPullRequestInfo(ctx.prId);
+      console.log(`  "${ctx.prInfo.title}" (${ctx.prInfo.sourceBranch} \u2192 ${ctx.prInfo.targetBranch})`);
+      return 1 /* FETCH_DIFF */;
+    }
+    // ── Fetch diff & changed files ─────────────────────────────────────
+    case 1 /* FETCH_DIFF */: {
+      console.log("Fetching diff...");
+      ctx.diff = await ctx.adapter.getDiff(ctx.prId);
+      console.log("Fetching changed files...");
+      ctx.changedFiles = await ctx.adapter.getChangedFiles(ctx.prId);
+      ctx.lineCount = countChangedLines(ctx.diff);
+      console.log(`  ${ctx.changedFiles.length} changed file(s)`);
+      console.log(`  ${ctx.lineCount} changed line(s)`);
+      return 2 /* CHECK_THRESHOLDS */;
+    }
+    // ── PR size gate ───────────────────────────────────────────────────
+    case 2 /* CHECK_THRESHOLDS */: {
+      const { minChangedFiles, maxChangedFiles, minChangedLines, maxChangedLines } = config.thresholds;
+      const fileCount = ctx.changedFiles.length;
+      const lineCount = ctx.lineCount;
+      if (minChangedFiles > 0 && fileCount < minChangedFiles) {
+        ctx.skipReason = `PR has ${fileCount} changed file(s), minimum is ${minChangedFiles}`;
+        return 11 /* SKIP */;
+      }
+      if (maxChangedFiles > 0 && fileCount > maxChangedFiles) {
+        ctx.skipReason = `PR has ${fileCount} changed file(s), maximum is ${maxChangedFiles}`;
+        return 11 /* SKIP */;
+      }
+      if (minChangedLines > 0 && lineCount < minChangedLines) {
+        ctx.skipReason = `PR has ${lineCount} changed line(s), minimum is ${minChangedLines}`;
+        return 11 /* SKIP */;
+      }
+      if (maxChangedLines > 0 && lineCount > maxChangedLines) {
+        ctx.skipReason = `PR has ${lineCount} changed line(s), maximum is ${maxChangedLines}`;
+        return 11 /* SKIP */;
+      }
+      return 3 /* CHECK_PREVIOUS_REVIEWS */;
+    }
+    // ── Previous review detection ──────────────────────────────────────
+    case 3 /* CHECK_PREVIOUS_REVIEWS */: {
+      console.log("Checking for previous reviews...");
+      ctx.previousReviews = await ctx.adapter.getPreviousReviewComments(ctx.prId);
+      if (ctx.previousReviews.length > 0) {
+        console.log(`  Found ${ctx.previousReviews.length} previous review(s) \u2014 will produce delta review`);
+        const lastReview = ctx.previousReviews[ctx.previousReviews.length - 1];
+        const commitMatch = lastReview.body.match(/Commit: ([a-f0-9]+)/);
+        if (commitMatch && commitMatch[1] === ctx.prInfo.sourceCommit.slice(0, 12)) {
+          console.log(`  Source commit ${ctx.prInfo.sourceCommit.slice(0, 12)} already reviewed \u2014 checking for unanswered replies...`);
+          return 4 /* CHECK_REPLIES */;
+        }
+      } else {
+        console.log("  No previous reviews \u2014 first review for this PR");
+      }
+      return 6 /* LOAD_PROMPT */;
+    }
+    // ── Fetch unanswered developer replies ─────────────────────────────
+    case 4 /* CHECK_REPLIES */: {
+      const reviewIds = ctx.previousReviews.map((r2) => r2.id);
+      ctx.replies = await ctx.adapter.getRepliesToReviewComments(ctx.prId, reviewIds);
+      if (ctx.replies.length > 0) {
+        console.log(`  Found ${ctx.replies.length} unanswered reply comment(s) \u2014 responding...`);
+        return 5 /* RESPOND_TO_REPLIES */;
+      }
+      ctx.skipReason = "no new commits and no unanswered questions";
+      return 11 /* SKIP */;
+    }
+    // ── Generate and post reply ────────────────────────────────────────
+    case 5 /* RESPOND_TO_REPLIES */: {
+      const lastReview = ctx.previousReviews[ctx.previousReviews.length - 1];
+      const responseText = await runCommentResponse(
+        config.anthropic.apiKey,
+        config.anthropic.model,
+        ctx.diff,
+        lastReview.body,
+        ctx.replies
+      );
+      const replyFooter = `
 
 ---
 *Reply by Claude (${config.anthropic.model})*`;
-        const replyBody = responseText.trimEnd() + replyFooter;
-        if (dryRun) {
-          console.log("\n=== DRY RUN \u2014 Reply output (not posted) ===\n");
-          console.log(replyBody);
-          console.log("\n=== End of reply ===\n");
-        } else {
-          const targetParentId = replies[replies.length - 1].parentId;
-          await adapter2.postReply(prId, targetParentId, replyBody);
-          console.log("Done. Reply posted to PR.\n");
-        }
+      const replyBody = responseText.trimEnd() + replyFooter;
+      if (ctx.dryRun) {
+        console.log("\n=== DRY RUN \u2014 Reply output (not posted) ===\n");
+        console.log(replyBody);
+        console.log("\n=== End of reply ===\n");
       } else {
-        console.log("\nSkipping: no new commits and no unanswered questions.");
+        const targetParentId = ctx.replies[ctx.replies.length - 1].parentId;
+        await ctx.adapter.postReply(ctx.prId, targetParentId, replyBody);
+        console.log("Done. Reply posted to PR.\n");
       }
-      return;
+      return 12 /* DONE */;
     }
-  } else {
-    console.log("  No previous reviews \u2014 first review for this PR");
-  }
-  console.log("Loading prompt...");
-  const prompt = await loadPrompt(adapter2, promptPath);
-  console.log(`  Prompt source: ${prompt.source}`);
-  console.log("Fetching file context...");
-  const fileContexts = await fetchContext(
-    adapter2,
-    changedFiles,
-    prInfo.sourceCommit,
-    diff,
-    config.context.maxFiles,
-    config.context.maxFileLines
-  );
-  console.log(`  Fetched full content for ${fileContexts.length} file(s)`);
-  const reviewText = await runReview(
-    config.anthropic.apiKey,
-    config.anthropic.model,
-    prInfo,
-    diff,
-    fileContexts,
-    prompt,
-    previousReviews
-  );
-  if (reviewText.trim() === "NO_CHANGE") {
-    console.log("\nNo changes since last review \u2014 skipping comment.");
-    return;
-  }
-  const cleaned = reviewText.replace(/\n---\n\*Reviewed by Claude.*?\*\s*/g, "").trimEnd();
-  const reviewNumber = previousReviews.length + 1;
-  const commitShort = prInfo.sourceCommit.slice(0, 12);
-  const footer = `
+    // ── Load system prompt ─────────────────────────────────────────────
+    case 6 /* LOAD_PROMPT */: {
+      console.log("Loading prompt...");
+      ctx.prompt = await loadPrompt(ctx.adapter, ctx.promptPath);
+      console.log(`  Prompt source: ${ctx.prompt.source}`);
+      return 7 /* FETCH_CONTEXT */;
+    }
+    // ── Fetch full file context ────────────────────────────────────────
+    case 7 /* FETCH_CONTEXT */: {
+      console.log("Fetching file context...");
+      ctx.fileContexts = await fetchContext(
+        ctx.adapter,
+        ctx.changedFiles,
+        ctx.prInfo.sourceCommit,
+        ctx.diff,
+        config.context.maxFiles,
+        config.context.maxFileLines
+      );
+      console.log(`  Fetched full content for ${ctx.fileContexts.length} file(s)`);
+      return 8 /* CALL_CLAUDE */;
+    }
+    // ── Call Claude for review ─────────────────────────────────────────
+    case 8 /* CALL_CLAUDE */: {
+      ctx.reviewText = await runReview(
+        config.anthropic.apiKey,
+        config.anthropic.model,
+        ctx.prInfo,
+        ctx.diff,
+        ctx.fileContexts,
+        ctx.prompt,
+        ctx.previousReviews ?? []
+      );
+      return 9 /* CHECK_NO_CHANGE */;
+    }
+    // ── NO_CHANGE stop word ────────────────────────────────────────────
+    case 9 /* CHECK_NO_CHANGE */: {
+      if (ctx.reviewText.trim() === "NO_CHANGE") {
+        ctx.skipReason = "No changes since last review";
+        return 11 /* SKIP */;
+      }
+      return 10 /* POST_REVIEW */;
+    }
+    // ── Build comment and post ─────────────────────────────────────────
+    case 10 /* POST_REVIEW */: {
+      const cleaned = ctx.reviewText.replace(/\n---\n\*Reviewed by Claude.*?\*\s*/g, "").trimEnd();
+      const reviewNumber = (ctx.previousReviews?.length ?? 0) + 1;
+      const commitShort = ctx.prInfo.sourceCommit.slice(0, 12);
+      const footer = `
 
 ---
-*Reviewed by Claude (${config.anthropic.model}) | Prompt: ${prompt.source} | Review #${reviewNumber} | Commit: ${commitShort}*`;
-  const comment = cleaned + footer;
-  if (dryRun) {
-    console.log("\n=== DRY RUN \u2014 Review output (not posted) ===\n");
-    console.log(comment);
-    console.log("\n=== End of review ===\n");
-  } else {
-    console.log("Posting review comment...");
-    await adapter2.postComment(prId, comment);
-    console.log("Done. Review posted to PR.\n");
+*Reviewed by Claude (${config.anthropic.model}) | Prompt: ${ctx.prompt.source} | Review #${reviewNumber} | Commit: ${commitShort}*`;
+      const comment = cleaned + footer;
+      if (ctx.dryRun) {
+        console.log("\n=== DRY RUN \u2014 Review output (not posted) ===\n");
+        console.log(comment);
+        console.log("\n=== End of review ===\n");
+      } else {
+        console.log("Posting review comment...");
+        await ctx.adapter.postComment(ctx.prId, comment);
+        console.log("Done. Review posted to PR.\n");
+      }
+      return 12 /* DONE */;
+    }
+    // ── Terminal: skip ─────────────────────────────────────────────────
+    case 11 /* SKIP */: {
+      console.log(`
+Skipping: ${ctx.skipReason}`);
+      return 12 /* DONE */;
+    }
+    default:
+      return 12 /* DONE */;
+  }
+}
+async function review(adapter2, prId, dryRun = false, promptPath) {
+  console.log(`
+Starting review for PR #${prId}`);
+  const ctx = { adapter: adapter2, prId, dryRun, promptPath };
+  let state = 0 /* FETCH_PR_INFO */;
+  while (state !== 12 /* DONE */) {
+    state = await transition(state, ctx);
   }
 }
 

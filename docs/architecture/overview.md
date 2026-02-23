@@ -22,7 +22,7 @@ pr-review-agent/
 ├── src/
 │   ├── index.ts                  # Entry point, CLI arg parsing
 │   ├── config.ts                 # Config loading, env vars, thresholds
-│   ├── review.ts                 # Orchestration: review, delta review, reply, skip logic
+│   ├── review.ts                 # FSM orchestrator: State enum, ReviewContext, transition loop
 │   ├── claude/
 │   │   └── client.ts             # Anthropic API wrapper (review + reply endpoints)
 │   ├── vcs/
@@ -63,6 +63,31 @@ pr-review-agent/
 | HTTP client | `axios` |
 | CLI args | `commander` |
 | Model | `claude-sonnet-4-6` (configurable via `CLAUDE_MODEL` env var) |
+
+---
+
+## Review Flow (Finite State Machine)
+
+The review orchestration in `src/review.ts` is implemented as an explicit finite state machine.
+A `State` enum defines every node, a `ReviewContext` object carries accumulated data, and a
+`transition(state, ctx)` function returns the next state. The runner loops until `DONE`.
+
+```
+FETCH_PR_INFO → FETCH_DIFF → CHECK_THRESHOLDS
+                                  ├─ [fail] → SKIP → DONE
+                                  └─ CHECK_PREVIOUS_REVIEWS
+                                       ├─ [same commit] → CHECK_REPLIES
+                                       │   ├─ [replies] → RESPOND_TO_REPLIES → DONE
+                                       │   └─ [none] → SKIP → DONE
+                                       └─ LOAD_PROMPT → FETCH_CONTEXT → CALL_CLAUDE
+                                            → CHECK_NO_CHANGE
+                                               ├─ [NO_CHANGE] → SKIP → DONE
+                                               └─ POST_REVIEW → DONE
+```
+
+**13 states**, **5 possible outcomes**: skip (threshold), skip (same commit, no replies),
+reply to developer, skip (NO_CHANGE), or post review. Adding new states (e.g. Phase 4
+inline comments) requires only a new enum value and a case in the transition function.
 
 ---
 

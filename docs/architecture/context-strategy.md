@@ -110,13 +110,15 @@ The orchestrator also strips any hallucinated footer via regex before appending 
 
 ## Skip Logic (Commit Hash Dedup)
 
-Before calling Claude, the agent checks the most recent review comment's footer for the
+The review flow is implemented as a finite state machine (see
+[architecture/overview.md](overview.md#review-flow-finite-state-machine)). The
+`CHECK_PREVIOUS_REVIEWS` state checks the most recent review comment's footer for the
 commit hash. If it matches the current PR source commit:
 
-1. **Same commit** → skip full review, check for unanswered developer replies instead
-2. **Unanswered replies found** → send to Claude with reply prompt, post threaded response
-3. **No replies** → skip entirely ("no new commits and no unanswered questions")
-4. **Different commit** → proceed with full delta review
+1. **Same commit** → `CHECK_REPLIES` → check for unanswered developer replies
+2. **Unanswered replies found** → `RESPOND_TO_REPLIES` → send to Claude, post threaded response
+3. **No replies** → `SKIP` → done ("no new commits and no unanswered questions")
+4. **Different commit** → `LOAD_PROMPT` → proceed with full delta review
 
 This prevents duplicate reviews when Jenkins re-triggers on unrelated events and avoids
 unnecessary API costs.
