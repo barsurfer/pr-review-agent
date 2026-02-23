@@ -1,6 +1,6 @@
 # Phase 1b — Comment Reply Handling
 
-**Status:** 🔧 In progress
+**Status:** ✅ Complete
 
 ## Problem
 
@@ -19,12 +19,12 @@ When the commit hash matches (no new code pushed), instead of skipping immediate
 1. Fetch all comments on the PR
 2. Find replies under our review comments that we haven't responded to yet
 3. If unanswered replies exist, send them to Claude with the diff and original review
-4. Post Claude's response as a threaded reply under each question
+4. Post Claude's response as a threaded reply under the relevant review comment
 5. If no unanswered replies, skip as before
 
-## Design
+## Implementation
 
-### New types in `src/vcs/adapter.ts`
+### Types added to `src/vcs/adapter.ts`
 
 ```ts
 export interface CommentReply {
@@ -36,17 +36,35 @@ export interface CommentReply {
 }
 ```
 
-### New methods on `VCSAdapter`
+### Methods added to `VCSAdapter`
 
 ```ts
-/** Fetch replies to a specific comment (non-agent replies only). */
+/** Fetch replies to review comments (unanswered human replies only). */
 getRepliesToReviewComments(prId: string, reviewCommentIds: string[]): Promise<CommentReply[]>
 
 /** Post a threaded reply to an existing comment. */
 postReply(prId: string, parentId: string, body: string): Promise<void>
 ```
 
-### New function in `src/claude/client.ts`
+Implemented in `BitbucketAdapter`. GitHub and GitLab adapters have stubs that throw
+`NotImplementedError`.
+
+### Reply prompt: `src/prompt/reply-prompt.txt`
+
+A dedicated system prompt for conversational replies, separate from the review prompt.
+Key rules:
+
+- Answer questions concisely based on the diff and original analysis
+- Acknowledge when developer context changes the assessment
+- Give definitive recommendations — no open-ended questions back (automated agent, not chat partner)
+- No review structure (no Summary, Findings, etc.) — short and direct
+- No footer — the system adds one automatically
+
+The reply prompt is loaded from file at runtime (`src/prompt/reply-prompt.txt`) with a
+fallback to the embedded copy (`__REPLY_PROMPT__`) in the bundled build, matching the
+same pattern used for the base review prompt.
+
+### Claude client: `src/claude/client.ts`
 
 ```ts
 export async function runCommentResponse(
@@ -58,30 +76,25 @@ export async function runCommentResponse(
 ): Promise<string>
 ```
 
-Uses a focused system prompt:
-- You are the same reviewer who posted the review
-- Answer the team's questions concisely based on the diff and your analysis
-- If you lack context to answer, say so explicitly
-- Keep answers short and direct — this is a conversation, not a review
-- Do not repeat the full review structure
+Sends the original review, the diff, and all unanswered developer replies to Claude
+with the reply prompt. Max tokens: 2048 (shorter than full reviews).
 
-### Updated flow in `src/review.ts`
+### Orchestration: `src/review.ts`
 
-The commit-hash-match branch changes from:
+The commit-hash-match branch in the review flow:
+
 ```ts
-// Old: return immediately
-console.log('Skipping: source commit already reviewed.')
-return
-```
-
-To:
-```ts
-// New: check for unanswered replies before skipping
-const replies = await adapter.getRepliesToReviewComments(prId, reviewCommentIds)
-if (replies.length > 0) {
-  // Send to Claude and post threaded responses
-} else {
-  console.log('Skipping: no new commits and no unanswered questions.')
+if (commitMatch && commitMatch[1] === prInfo.sourceCommit.slice(0, 12)) {
+  // Same commit — check for unanswered replies
+  const reviewIds = previousReviews.map(r => r.id)
+  const replies = await adapter.getRepliesToReviewComments(prId, reviewIds)
+  if (replies.length > 0) {
+    // Send to Claude and post threaded response
+    const responseText = await runCommentResponse(...)
+    await adapter.postReply(prId, targetParentId, replyBody)
+  } else {
+    console.log('Skipping: no new commits and no unanswered questions.')
+  }
   return
 }
 ```
@@ -95,17 +108,21 @@ Each comment has:
 - `parent.id` — parent comment ID (for threaded replies)
 - `user.display_name` — author
 - `content.raw` — body text
-- `created_on` — timestamp
+- `created_on` — ISO timestamp
 
 Reply posting: `POST /repositories/{workspace}/{repo}/pullrequests/{pr_id}/comments`
 with body: `{ parent: { id: parentId }, content: { raw: body } }`
 
-### Reply detection
+### Reply deduplication (timestamp-based)
+
+The `getRepliesToReviewComments` method tracks the timestamp of the most recent agent reply
+(`latestAgentReply`). Only human replies posted **after** the latest agent reply are returned.
+This prevents re-answering the same questions on subsequent triggers.
 
 A reply is "unanswered" if:
 1. It is a child of one of our review comments (`parent.id` matches)
-2. It was NOT posted by the agent (doesn't contain "Reviewed by Claude")
-3. There is no agent reply that was posted AFTER it
+2. It was NOT posted by the agent (doesn't contain "Reply by Claude" marker)
+3. It was posted AFTER the most recent agent reply (timestamp comparison)
 
 ### Reply footer
 
@@ -116,16 +133,22 @@ Responses use a lighter footer:
 
 No review number or commit hash — these are conversational replies, not reviews.
 
-## Files to Create/Modify
+## Files Created/Modified
 
-- **Modify** `src/vcs/adapter.ts` — add `CommentReply` interface and new methods
-- **Modify** `src/vcs/bitbucket.ts` — implement `getRepliesToReviewComments()` and `postReply()`
-- **Modify** `src/claude/client.ts` — add `runCommentResponse()` with reply prompt
-- **Modify** `src/review.ts` — add reply-handling branch in commit-skip logic
+- **Modified** `src/vcs/adapter.ts` — added `CommentReply` interface and new methods
+- **Modified** `src/vcs/bitbucket.ts` — implemented `getRepliesToReviewComments()` and `postReply()`
+- **Modified** `src/vcs/github.ts` — added stub methods
+- **Modified** `src/vcs/gitlab.ts` — added stub methods
+- **Modified** `src/claude/client.ts` — added `runCommentResponse()` and `getReplyPrompt()`
+- **Modified** `src/review.ts` — added reply-handling branch in commit-skip logic
+- **Created** `src/prompt/reply-prompt.txt` — dedicated reply system prompt
+- **Modified** `scripts/bundle.mjs` — embedded `__REPLY_PROMPT__` alongside `__BASE_PROMPT__`
+- **Modified** `package.json` — updated `copy-assets` to include `reply-prompt.txt`
 
-## Verification
+## Verification (All Passed)
 
 1. Post a review on a PR, then add a reply question to the review comment
-2. Re-run the agent (same commit) — should detect the reply and respond
-3. Re-run again — should skip (reply already answered)
-4. Push a new commit — should do a full delta review (not reply mode)
+2. Re-run the agent (same commit) — detects the reply and responds ✅
+3. Re-run again — skips (reply already answered, timestamp dedup) ✅
+4. Push a new commit — does a full delta review (not reply mode) ✅
+5. Dry-run mode works for replies (`--dry-run` prints but doesn't post) ✅

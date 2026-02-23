@@ -71,12 +71,36 @@ These sections are always provided by the base template and cannot be overridden
 
 - **SCOPE** — "Review only added or modified code in the diff"
 - **MANDATORY RULES** — concise, bullets, runtime focus, no assumptions
-- **FORBIDDEN** — no formatting reviews, no praise, no refactoring
-- **Re-review instructions** — delta review behavior for follow-up reviews
+- **FORBIDDEN** — no formatting reviews, no praise, no refactoring, no self-contradiction,
+  no hallucinated footers
+- **Re-review / delta instructions** — delta review behavior for follow-up reviews,
+  including the `NO_CHANGE` stop word for cosmetic-only updates
 - **OUTPUT STRUCTURE** — Summary, Findings, Behavioral Diff, Production Risk, Unresolved Questions
 
 This prevents teams from accidentally breaking the review output format or omitting
 critical behavioral rules.
+
+### FORBIDDEN Rules (Hardened)
+
+The base template includes strict consistency rules learned from production testing:
+
+| Rule | Why |
+|------|-----|
+| Do not mark a finding as resolved if you still have doubts | Prevents false "resolved" on uncertain items |
+| Never contradict yourself (Unresolved Questions vs Findings) | Opus was observed marking an item resolved in Findings but questioning it in Unresolved Questions |
+| Do not add a footer or signature | The system appends its own footer with model, prompt source, review number, and commit hash |
+
+### NO_CHANGE Stop Word (Delta Reviews)
+
+When previous reviews are included (re-review after new commits), the base prompt instructs
+Claude to respond with **only** `NO_CHANGE` if ALL of these conditions are met:
+
+1. No previous findings have been resolved by the new commits
+2. No new findings (LOW, MEDIUM, or HIGH) are introduced
+3. The new commits only contain cosmetic changes (typos, formatting, comments, renames)
+
+The orchestrator in `review.ts` checks for this stop word and skips posting a comment.
+This prevents near-duplicate review comments on cosmetic-only pushes.
 
 ---
 
@@ -90,6 +114,28 @@ Full example prompts are in the [`prompts/`](../../prompts/) directory:
 | `prompts/angular-ionic.txt` | Angular / Ionic / Capacitor |
 
 These can be used as templates for creating new `.claude-review-prompt.md` files.
+
+---
+
+## Reply Prompt (`src/prompt/reply-prompt.txt`)
+
+A separate system prompt is used for **conversational replies** — when a developer replies
+to a review comment with a question and the agent responds. This prompt is NOT composed
+from the base template; it is a standalone file.
+
+Key rules in the reply prompt:
+
+- Answer questions concisely based on the diff and original analysis
+- Acknowledge when developer context changes the assessment
+- Give definitive recommendations — no open-ended questions (automated agent, not chat partner)
+- No review structure (no Summary, Findings, etc.)
+- No footer — the system adds one automatically
+
+The reply prompt is loaded at runtime from `src/prompt/reply-prompt.txt` with a fallback
+to `__REPLY_PROMPT__` (embedded at bundle time by esbuild), matching the same pattern used
+for the base review prompt.
+
+See [Phase 1b](../phases/phase-1b-comment-replies.md) for the full comment reply design.
 
 ---
 

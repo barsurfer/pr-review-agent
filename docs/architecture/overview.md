@@ -8,8 +8,10 @@ The PR Review Agent is a stateless CLI tool that:
 2. Fetches the diff and relevant file context from Bitbucket (or later: GitHub/GitLab)
 3. Assembles a structured prompt and sends it to Claude
 4. Posts the review as a comment on the PR
+5. On re-triggers: skips if already reviewed (commit hash dedup), responds to developer
+   questions (comment replies), or produces a delta review (new commits)
 
-No code is checked out. No data is stored. One run = one review.
+No code is checked out. No data is stored. One run = one review (or one reply).
 
 ---
 
@@ -20,9 +22,9 @@ pr-review-agent/
 ├── src/
 │   ├── index.ts                  # Entry point, CLI arg parsing
 │   ├── config.ts                 # Config loading, env vars, thresholds
-│   ├── review.ts                 # Orchestration logic + PR size gate
+│   ├── review.ts                 # Orchestration: review, delta review, reply, skip logic
 │   ├── claude/
-│   │   └── client.ts             # Anthropic API wrapper
+│   │   └── client.ts             # Anthropic API wrapper (review + reply endpoints)
 │   ├── vcs/
 │   │   ├── adapter.ts            # VCS interface (abstract)
 │   │   ├── bitbucket.ts          # Bitbucket implementation
@@ -30,7 +32,8 @@ pr-review-agent/
 │   │   └── gitlab.ts             # GitLab stub (backlog)
 │   ├── prompt/
 │   │   ├── loader.ts             # Loads base template, parses repo sections, fills placeholders
-│   │   ├── base-prompt.txt       # Shared template (SCOPE, RULES, OUTPUT FORMAT)
+│   │   ├── base-prompt.txt       # Shared review template (SCOPE, RULES, OUTPUT FORMAT)
+│   │   ├── reply-prompt.txt      # System prompt for conversational replies to developer questions
 │   │   └── defaults.ts           # Default values for ROLE, REVIEW PRIORITIES, MENTAL MODEL
 │   └── context/
 │       ├── fetcher.ts            # Fetches additional context files beyond diff

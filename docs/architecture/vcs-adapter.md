@@ -12,10 +12,11 @@ via the `VCS_PROVIDER` env var.
 
 ---
 
-## Phase 1 Interface
+## Current Interface (Phase 1 + 1b)
 
 ```typescript
 interface VCSAdapter {
+  // Phase 1 — Core review
   getPullRequestInfo(prId: string): Promise<PRInfo>
   getDiff(prId: string): Promise<string>
   getFileContent(filePath: string, ref: string): Promise<string>
@@ -23,6 +24,10 @@ interface VCSAdapter {
   getRepoFileContent(filePath: string): Promise<string | null>  // for .claude-review-prompt.md
   postComment(prId: string, body: string): Promise<void>
   getPreviousReviewComments(prId: string): Promise<ReviewComment[]>  // for delta reviews
+
+  // Phase 1b — Comment replies
+  getRepliesToReviewComments(prId: string, reviewCommentIds: string[]): Promise<CommentReply[]>
+  postReply(prId: string, parentId: string, body: string): Promise<void>
 }
 ```
 
@@ -72,6 +77,7 @@ interface PRInfo {
   description: string
   sourceBranch: string
   targetBranch: string
+  sourceCommit: string          // used for commit hash dedup in review footer
 }
 
 interface ChangedFile {
@@ -83,6 +89,14 @@ interface ReviewComment {
   id: string
   body: string
   createdOn: string
+}
+
+interface CommentReply {
+  id: string
+  parentId: string             // ID of the review comment this replies to
+  author: string               // display name of the reply author
+  body: string
+  createdOn: string            // ISO timestamp, used for dedup ordering
 }
 
 interface Finding {

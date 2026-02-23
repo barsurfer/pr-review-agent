@@ -11,12 +11,12 @@ structured review as a PR comment.
 | Phase | Name | Status |
 |-------|------|--------|
 | [Phase 1](phases/phase-1-core.md) | Core Script (Local Testable) | ✅ Complete |
-| [Phase 1b](phases/phase-1b-comment-replies.md) | Comment Reply Handling | 🔧 In progress |
+| [Phase 1b](phases/phase-1b-comment-replies.md) | Comment Reply Handling | ✅ Complete |
 | [Phase 2](phases/phase-2-jenkins.md) | Jenkins Integration | 🔲 Not started |
 | [Phase 3](phases/phase-4-inline-comments.md) | Inline Line-Level Comments | ⏸ Deferred |
 | [Backlog](phases/phase-5-backlog.md) | Further Backlog | ⏸ Deferred |
 
-> **Active focus:** Phase 2. Phase 1 is complete and tested against a live Bitbucket PR.
+> **Active focus:** Phase 2. Phase 1 and 1b are complete and tested against live Bitbucket PRs.
 >
 > [Multi-VCS Support](phases/phase-3-multi-vcs.md) has been moved to the backlog —
 > Bitbucket is the only VCS needed for now.
@@ -46,5 +46,7 @@ structured review as a PR comment.
 - **No local git checkout** — everything goes through the VCS REST API only
 - **Stateless per run** — no persistent database, no stored diffs
 - **Comment only** — agent never modifies, approves, or merges PRs
+- **Smart skip logic** — commit hash dedup, NO_CHANGE stop word, timestamp-based reply dedup
+- **Conversational** — responds to developer questions on review comments
 - **VCS-agnostic architecture** — Bitbucket now, GitHub/GitLab later via adapter pattern
 - **Repo-specific prompts** — each target repo can tune review behaviour via `.claude-review-prompt.md`

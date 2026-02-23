@@ -27,27 +27,28 @@ Complexity: medium-high. Language-specific import parsing required.
 
 ---
 
-### Review Caching
+### ~~Review Caching~~ ✅ Implemented (Phase 1)
 
-Skip re-review if the diff hasn't changed since the last posted comment.
-
-Approach: hash the diff content, store hash in the PR comment footer,
-compare before triggering a new review.
-
-Benefit: prevents duplicate reviews when Jenkins re-runs on unrelated triggers.
+> **Completed.** The agent embeds the source commit hash in the review comment footer
+> (`Commit: a1b2c3d4e5f6`). On re-trigger, it compares the footer hash against the
+> current PR source commit — if they match, it skips the review API call entirely
+> (or checks for unanswered developer replies via Phase 1b).
+>
+> Additionally, a `NO_CHANGE` stop word prevents posting duplicate comments when
+> delta reviews find only cosmetic changes.
 
 ---
 
-### Prompt Versioning
+### ~~Prompt Versioning~~ ✅ Implemented (Phase 1)
 
-Track which prompt version (and which model) was used for each review.
-Include in the comment footer:
-
-```
-*Reviewed by claude-sonnet-4-6 | Prompt: .claude-review-prompt.md@a3f9b2c | Agent v1.4.0*
-```
-
-Useful for debugging review quality regressions after prompt changes.
+> **Completed.** The review comment footer already includes model, prompt source,
+> review number, and commit hash:
+>
+> ```
+> *Reviewed by Claude (claude-sonnet-4-6) | Prompt: .claude-review-prompt.md | Review #2 | Commit: a1b2c3d4e5f6*
+> ```
+>
+> Agent version tracking is not yet included — add if needed for debugging regressions.
 
 ---
 

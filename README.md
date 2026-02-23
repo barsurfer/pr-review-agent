@@ -151,12 +151,40 @@ The context fetcher is selective about which files get full content:
 - **Prioritized:** high-churn files are fetched first since they benefit most from
   full context
 
+### Re-reviews and Delta Logic
+
 On re-reviews (PR updated after a previous review), the agent also sends its earlier
-review comments so Claude can produce a delta review — acknowledging fixes and only
+review comments so Claude can produce a **delta review** — acknowledging fixes and only
 flagging new or unresolved issues.
 
+If the new commits contain only cosmetic changes (typos, formatting, renames) with no
+new or resolved findings, Claude returns a `NO_CHANGE` stop word and no comment is posted.
+
+### Commit Hash Deduplication
+
+Every review comment includes a footer with the source commit hash:
+
+```
+*Reviewed by Claude (claude-sonnet-4-6) | Prompt: .claude-review-prompt.md | Review #2 | Commit: a1b2c3d4e5f6*
+```
+
+On re-trigger, the agent compares this hash against the current PR source commit. If
+they match (no new code pushed), it **skips the review API call entirely** — saving
+time and tokens.
+
+### Comment Reply Handling
+
+When the commit hasn't changed but a developer has replied to the review comment with
+a question (e.g. "Why is this HIGH severity?" or "This is intentional, does that change
+your assessment?"), the agent detects the unanswered reply and sends it to Claude with
+the diff and original review. Claude's response is posted as a **threaded reply** under
+the relevant comment.
+
+Replies use timestamp-based deduplication — if the agent has already responded, it won't
+re-answer the same question on subsequent triggers.
+
 See [docs/architecture/context-strategy.md](docs/architecture/context-strategy.md) for
-the full payload format and exclusion rules.
+the full payload format, skip logic, and exclusion rules.
 
 ---
 

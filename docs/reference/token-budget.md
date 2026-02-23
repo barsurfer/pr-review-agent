@@ -12,15 +12,32 @@
 
 Claude Sonnet context window is large enough for even big PRs, but cost scales with token count.
 
+## Rough Estimate Per Comment Reply
+
+| Component | Tokens |
+|-----------|--------|
+| Reply system prompt | 100–200 |
+| Original review body | 500–2,000 |
+| Diff (same as review) | 1,000–5,000 |
+| Developer replies (1–3 questions) | 100–500 |
+| Output (reply, max_tokens: 2,048) | 200–1,000 |
+| **Total typical** | **2,000–8,000** |
+
+Comment replies are significantly cheaper than full reviews because they skip full file
+context and use a shorter system prompt. The `max_tokens` cap is 2,048 (vs 4,096 for reviews).
+
 ---
 
-## Built-in Mitigations (Phase 1)
+## Built-in Mitigations (Phase 1 + 1b)
 
 | Control | Default | Effect |
 |---------|---------|--------|
 | `MAX_CONTEXT_FILES` | `20` | Cap on full-file fetches |
 | `MAX_FILE_LINES` | `500` | Files over this get diff-only |
 | Exclusion patterns | see below | Skips generated/lock files entirely |
+| Commit hash dedup | always on | Skips API call entirely if same commit already reviewed |
+| `NO_CHANGE` stop word | always on | Skips posting if delta review has no meaningful changes |
+| Reply timestamp dedup | always on | Skips reply API call if developer question already answered |
 
 ### Excluded File Patterns
 
