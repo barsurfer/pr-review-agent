@@ -20,7 +20,7 @@ a single summary comment.
 - [ ] Update `src/claude/client.ts` — JSON output mode, structured findings schema
 - [ ] Update system prompt template to enforce JSON output and line-grounding rules
 - [ ] `src/review.ts` — finding validation against diff map, post loop with rate limiting
-- [ ] `REVIEW_MODE` env var + `.claude-review-prompt.md` override support
+- [ ] `REVIEW_MODE` env var + `.agent-review-instructions.md` override support
 - [ ] Test: verify findings land on correct lines in Bitbucket UI
 
 ---
@@ -35,7 +35,7 @@ Add `REVIEW_MODE` env var:
 | `inline` | Inline comments per finding + summary comment |
 | `both` | Inline comments + full summary comment |
 
-Can also be overridden per-repo in `.claude-review-prompt.md`:
+Can also be overridden per-repo in `.agent-review-instructions.md`:
 ```markdown
 mode: inline
 ```

@@ -30,7 +30,7 @@ structured review as a PR comment.
 | [architecture/overview.md](architecture/overview.md) | Purpose, repository structure, tech stack, out of scope |
 | [architecture/vcs-adapter.md](architecture/vcs-adapter.md) | VCS adapter interface definition |
 | [architecture/context-strategy.md](architecture/context-strategy.md) | Context fetching logic, payload format sent to Claude |
-| [architecture/prompt-convention.md](architecture/prompt-convention.md) | Repo-specific `.claude-review-prompt.md` system |
+| [architecture/prompt-convention.md](architecture/prompt-convention.md) | Repo-specific `.agent-review-instructions.md` system |
 
 ## Reference Docs
 
@@ -49,4 +49,4 @@ structured review as a PR comment.
 - **Smart skip logic** — commit hash dedup, NO_CHANGE stop word, timestamp-based reply dedup
 - **Conversational** — responds to developer questions on review comments
 - **VCS-agnostic architecture** — Bitbucket now, GitHub/GitLab later via adapter pattern
-- **Repo-specific prompts** — each target repo can tune review behaviour via `.claude-review-prompt.md`
+- **Repo-specific prompts** — each target repo can tune review behaviour via `.agent-review-instructions.md`

@@ -24485,11 +24485,11 @@ var BitbucketAdapter = class {
     );
     return data;
   }
-  async getRepoFileContent(filePath) {
+  async getRepoFileContent(filePath, ref = "HEAD") {
     const repoSlug = this.getRepoSlug();
     try {
       const { data } = await this.client.get(
-        `/repositories/${this.workspace}/${repoSlug}/src/HEAD/${filePath}`,
+        `/repositories/${this.workspace}/${repoSlug}/src/${ref}/${filePath}`,
         { responseType: "text" }
       );
       return data;
@@ -24698,7 +24698,7 @@ var DEFAULT_MENTAL_MODEL = `- Production load
 
 // src/prompt/loader.ts
 var import_meta = {};
-var REPO_PROMPT_FILE = ".claude-review-prompt.md";
+var REPO_PROMPT_FILE = ".agent-review-instructions.md";
 function getBaseTemplate() {
   try {
     const __dir = (0, import_path.dirname)((0, import_url2.fileURLToPath)(import_meta.url));
@@ -24734,7 +24734,7 @@ function parseRepoPrompt(content) {
 function fillTemplate(template, sections) {
   return template.replace("{{ROLE}}", sections.role ?? DEFAULT_ROLE).replace("{{REVIEW_PRIORITIES}}", sections.reviewPriorities ?? DEFAULT_REVIEW_PRIORITIES).replace("{{MENTAL_MODEL}}", sections.mentalModel ?? DEFAULT_MENTAL_MODEL);
 }
-async function loadPrompt(adapter2, localPromptPath) {
+async function loadPrompt(adapter2, prInfo, localPromptPath) {
   const template = getBaseTemplate();
   if (localPromptPath) {
     const content = (0, import_fs.readFileSync)(localPromptPath, "utf-8");
@@ -24743,14 +24743,19 @@ async function loadPrompt(adapter2, localPromptPath) {
     const filled2 = fillTemplate(template, sections);
     return { content: filled2, source: localPromptPath };
   }
-  const repoPrompt = await adapter2.getRepoFileContent(REPO_PROMPT_FILE);
-  if (repoPrompt) {
-    console.log(`Using repo-specific prompt from ${REPO_PROMPT_FILE}`);
-    const sections = parseRepoPrompt(repoPrompt);
-    const filled2 = fillTemplate(template, sections);
-    return { content: filled2, source: "repo" };
+  const paths = [REPO_PROMPT_FILE, `docs/${REPO_PROMPT_FILE}`];
+  for (const branch of [prInfo.sourceBranch, prInfo.targetBranch]) {
+    for (const path of paths) {
+      const repoPrompt = await adapter2.getRepoFileContent(path, branch);
+      if (repoPrompt) {
+        console.log(`Using repo-specific prompt from ${path} (${branch})`);
+        const sections = parseRepoPrompt(repoPrompt);
+        const filled2 = fillTemplate(template, sections);
+        return { content: filled2, source: "repo" };
+      }
+    }
   }
-  console.log(`No ${REPO_PROMPT_FILE} found in target repo \u2014 using default prompt`);
+  console.log(`No ${REPO_PROMPT_FILE} found in source or target branch \u2014 using default prompt`);
   const filled = fillTemplate(template, {});
   return { content: filled, source: "default" };
 }
@@ -28525,7 +28530,7 @@ async function transition(state, ctx) {
     // ── Load system prompt ─────────────────────────────────────────────
     case 6 /* LOAD_PROMPT */: {
       console.log("Loading prompt...");
-      ctx.prompt = await loadPrompt(ctx.adapter, ctx.promptPath);
+      ctx.prompt = await loadPrompt(ctx.adapter, ctx.prInfo, ctx.promptPath);
       console.log(`  Prompt source: ${ctx.prompt.source}`);
       return 7 /* FETCH_CONTEXT */;
     }
@@ -28608,7 +28613,7 @@ Starting review for PR #${prId}`);
 
 // src/index.ts
 var program2 = new Command();
-program2.name("pr-review-agent").description("Automated PR code review powered by Claude").requiredOption("--pr-id <id>", "Pull request ID").option("--workspace <workspace>", "VCS workspace / org (overrides BITBUCKET_WORKSPACE)").option("--repo-slug <slug>", "Repository slug").option("--vcs <provider>", "VCS provider: bitbucket | github | gitlab (overrides VCS_PROVIDER)").option("--dry-run", "Print the review to stdout without posting to the PR").option("--prompt <path>", "Path to a local prompt file (overrides repo .claude-review-prompt.md)").option("--min-changed-files <n>", "Skip review if fewer files changed (overrides MIN_CHANGED_FILES)").option("--max-changed-files <n>", "Skip review if more files changed (overrides MAX_CHANGED_FILES)").option("--min-changed-lines <n>", "Skip review if fewer lines changed (overrides MIN_CHANGED_LINES)").option("--max-changed-lines <n>", "Skip review if more lines changed (overrides MAX_CHANGED_LINES)").parse(process.argv);
+program2.name("pr-review-agent").description("Automated PR code review powered by Claude").requiredOption("--pr-id <id>", "Pull request ID").option("--workspace <workspace>", "VCS workspace / org (overrides BITBUCKET_WORKSPACE)").option("--repo-slug <slug>", "Repository slug").option("--vcs <provider>", "VCS provider: bitbucket | github | gitlab (overrides VCS_PROVIDER)").option("--dry-run", "Print the review to stdout without posting to the PR").option("--prompt <path>", "Path to a local prompt file (overrides repo .agent-review-instructions.md)").option("--min-changed-files <n>", "Skip review if fewer files changed (overrides MIN_CHANGED_FILES)").option("--max-changed-files <n>", "Skip review if more files changed (overrides MAX_CHANGED_FILES)").option("--min-changed-lines <n>", "Skip review if fewer lines changed (overrides MIN_CHANGED_LINES)").option("--max-changed-lines <n>", "Skip review if more lines changed (overrides MAX_CHANGED_LINES)").parse(process.argv);
 var opts = program2.opts();
 async function main() {
   const provider = opts.vcs ?? config.vcsProvider;

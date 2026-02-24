@@ -1,10 +1,10 @@
 import { readFileSync } from 'fs'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
-import type { VCSAdapter } from '../vcs/adapter.js'
+import type { VCSAdapter, PRInfo } from '../vcs/adapter.js'
 import { DEFAULT_ROLE, DEFAULT_REVIEW_PRIORITIES, DEFAULT_MENTAL_MODEL } from './defaults.js'
 
-const REPO_PROMPT_FILE = '.claude-review-prompt.md'
+const REPO_PROMPT_FILE = '.agent-review-instructions.md'
 
 // Load base template — works both from source (tsc) and bundle (esbuild)
 function getBaseTemplate(): string {
@@ -75,7 +75,7 @@ export interface LoadedPrompt {
   source: PromptSource
 }
 
-export async function loadPrompt(adapter: VCSAdapter, localPromptPath?: string): Promise<LoadedPrompt> {
+export async function loadPrompt(adapter: VCSAdapter, prInfo: PRInfo, localPromptPath?: string): Promise<LoadedPrompt> {
   const template = getBaseTemplate()
 
   // 1. If a local prompt file was provided via --prompt, use it
@@ -87,18 +87,22 @@ export async function loadPrompt(adapter: VCSAdapter, localPromptPath?: string):
     return { content: filled, source: localPromptPath }
   }
 
-  // 2. Try repo-specific prompt via VCS API
-  const repoPrompt = await adapter.getRepoFileContent(REPO_PROMPT_FILE)
-
-  if (repoPrompt) {
-    console.log(`Using repo-specific prompt from ${REPO_PROMPT_FILE}`)
-    const sections = parseRepoPrompt(repoPrompt)
-    const filled = fillTemplate(template, sections)
-    return { content: filled, source: 'repo' }
+  // 2. Try source branch, then target branch; check root and docs/ in each
+  const paths = [REPO_PROMPT_FILE, `docs/${REPO_PROMPT_FILE}`]
+  for (const branch of [prInfo.sourceBranch, prInfo.targetBranch]) {
+    for (const path of paths) {
+      const repoPrompt = await adapter.getRepoFileContent(path, branch)
+      if (repoPrompt) {
+        console.log(`Using repo-specific prompt from ${path} (${branch})`)
+        const sections = parseRepoPrompt(repoPrompt)
+        const filled = fillTemplate(template, sections)
+        return { content: filled, source: 'repo' }
+      }
+    }
   }
 
   // 3. Fall back to all defaults
-  console.log(`No ${REPO_PROMPT_FILE} found in target repo — using default prompt`)
+  console.log(`No ${REPO_PROMPT_FILE} found in source or target branch — using default prompt`)
   const filled = fillTemplate(template, {})
   return { content: filled, source: 'default' }
 }

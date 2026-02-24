@@ -175,7 +175,7 @@ new or resolved findings, Claude returns a `NO_CHANGE` stop word and no comment 
 Every review comment includes a footer with the source commit hash:
 
 ```
-*Reviewed by Claude (claude-sonnet-4-6) | Prompt: .claude-review-prompt.md | Review #2 | Commit: a1b2c3d4e5f6*
+*Reviewed by Claude (claude-sonnet-4-6) | Prompt: .agent-review-instructions.md | Review #2 | Commit: a1b2c3d4e5f6*
 ```
 
 On re-trigger, the agent compares this hash against the current PR source commit. If
@@ -240,7 +240,7 @@ npm run bundle
 | `--workspace <workspace>` | No | Overrides `BITBUCKET_WORKSPACE` env var |
 | `--vcs <provider>` | No | `bitbucket` \| `github` \| `gitlab` — overrides `VCS_PROVIDER` env var (default: `bitbucket`) |
 | `--dry-run` | No | Print the review to stdout instead of posting to the PR |
-| `--prompt <path>` | No | Path to a local prompt file (overrides repo `.claude-review-prompt.md`) |
+| `--prompt <path>` | No | Path to a local prompt file (overrides repo `.agent-review-instructions.md`) |
 | `--min-changed-files <n>` | No | Skip review if PR has fewer changed files (overrides `MIN_CHANGED_FILES`) |
 | `--max-changed-files <n>` | No | Skip review if PR has more changed files (overrides `MAX_CHANGED_FILES`) |
 | `--min-changed-lines <n>` | No | Skip review if PR has fewer changed lines (overrides `MIN_CHANGED_LINES`) |
@@ -328,7 +328,7 @@ withCredentials([
 
 The agent uses a **base template** with shared rules (scope, mandatory rules, forbidden,
 output format) and fills in three customisable sections per repo. To customise, add a file
-called `.claude-review-prompt.md` to the **root of the target repo** (not this repo).
+called `.agent-review-instructions.md` to the **root or `docs/` directory** of the target repo (not this repo). The agent checks the PR's source branch first, then the target branch.
 
 The file can include any combination of these sections:
 
@@ -423,7 +423,7 @@ All design decisions, architecture, and per-phase plans live in [`docs/`](docs/)
 |-----|----------|
 | [docs/README.md](docs/README.md) | Phase status overview |
 | [docs/architecture/overview.md](docs/architecture/overview.md) | Repo structure, tech stack |
-| [docs/architecture/prompt-convention.md](docs/architecture/prompt-convention.md) | How `.claude-review-prompt.md` works |
+| [docs/architecture/prompt-convention.md](docs/architecture/prompt-convention.md) | How `.agent-review-instructions.md` works |
 | [docs/reference/env-vars.md](docs/reference/env-vars.md) | All environment variables |
 | [docs/reference/local-testing.md](docs/reference/local-testing.md) | Local test guide + troubleshooting |
 

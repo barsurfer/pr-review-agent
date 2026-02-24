@@ -110,7 +110,7 @@ missing keys or inconsistent additions across locales.
 Every review comment posted by the agent includes a structured footer:
 
 ```
-*Reviewed by Claude (claude-sonnet-4-6) | Prompt: .claude-review-prompt.md | Review #2 | Commit: a1b2c3d4e5f6*
+*Reviewed by Claude (claude-sonnet-4-6) | Prompt: .agent-review-instructions.md | Review #2 | Commit: a1b2c3d4e5f6*
 ```
 
 The footer serves multiple purposes:

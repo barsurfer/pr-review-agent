@@ -92,11 +92,11 @@ export class BitbucketAdapter implements VCSAdapter {
     return data as string
   }
 
-  async getRepoFileContent(filePath: string): Promise<string | null> {
+  async getRepoFileContent(filePath: string, ref = 'HEAD'): Promise<string | null> {
     const repoSlug = this.getRepoSlug()
     try {
       const { data } = await this.client.get(
-        `/repositories/${this.workspace}/${repoSlug}/src/HEAD/${filePath}`,
+        `/repositories/${this.workspace}/${repoSlug}/src/${ref}/${filePath}`,
         { responseType: 'text' }
       )
       return data as string

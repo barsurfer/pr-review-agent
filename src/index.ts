@@ -16,7 +16,7 @@ program
   .option('--repo-slug <slug>', 'Repository slug')
   .option('--vcs <provider>', 'VCS provider: bitbucket | github | gitlab (overrides VCS_PROVIDER)')
   .option('--dry-run', 'Print the review to stdout without posting to the PR')
-  .option('--prompt <path>', 'Path to a local prompt file (overrides repo .claude-review-prompt.md)')
+  .option('--prompt <path>', 'Path to a local prompt file (overrides repo .agent-review-instructions.md)')
   .option('--min-changed-files <n>', 'Skip review if fewer files changed (overrides MIN_CHANGED_FILES)')
   .option('--max-changed-files <n>', 'Skip review if more files changed (overrides MAX_CHANGED_FILES)')
   .option('--min-changed-lines <n>', 'Skip review if fewer lines changed (overrides MIN_CHANGED_LINES)')

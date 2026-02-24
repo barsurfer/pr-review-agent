@@ -45,7 +45,7 @@ Complexity: medium-high. Language-specific import parsing required.
 > review number, and commit hash:
 >
 > ```
-> *Reviewed by Claude (claude-sonnet-4-6) | Prompt: .claude-review-prompt.md | Review #2 | Commit: a1b2c3d4e5f6*
+> *Reviewed by Claude (claude-sonnet-4-6) | Prompt: .agent-review-instructions.md | Review #2 | Commit: a1b2c3d4e5f6*
 > ```
 >
 > Agent version tracking is not yet included — add if needed for debugging regressions.

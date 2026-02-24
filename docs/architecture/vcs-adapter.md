@@ -21,7 +21,7 @@ interface VCSAdapter {
   getDiff(prId: string): Promise<string>
   getFileContent(filePath: string, ref: string): Promise<string>
   getChangedFiles(prId: string): Promise<ChangedFile[]>
-  getRepoFileContent(filePath: string): Promise<string | null>  // for .claude-review-prompt.md
+  getRepoFileContent(filePath: string): Promise<string | null>  // for .agent-review-instructions.md
   postComment(prId: string, body: string): Promise<void>
   getPreviousReviewComments(prId: string): Promise<ReviewComment[]>  // for delta reviews
 

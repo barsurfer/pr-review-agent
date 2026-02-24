@@ -216,7 +216,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
     // ── Load system prompt ─────────────────────────────────────────────
     case State.LOAD_PROMPT: {
       console.log('Loading prompt...')
-      ctx.prompt = await loadPrompt(ctx.adapter, ctx.promptPath)
+      ctx.prompt = await loadPrompt(ctx.adapter, ctx.prInfo!, ctx.promptPath)
       console.log(`  Prompt source: ${ctx.prompt.source}`)
       return State.FETCH_CONTEXT
     }

@@ -7,7 +7,7 @@ The agent composes the final system prompt from two parts:
 1. **Base template** (`src/prompt/base-prompt.txt`) — shared rules that apply to every review:
    SCOPE, MANDATORY RULES, FORBIDDEN, re-review instructions, OUTPUT STRUCTURE.
 
-2. **Repo-specific sections** (`.claude-review-prompt.md` in the target repo) — customisable
+2. **Repo-specific sections** (`.agent-review-instructions.md` in the target repo) — customisable
    per technology stack. Three sections can be overridden:
 
 | Section | Header in file | Default if missing |
@@ -24,14 +24,16 @@ back to the defaults in `src/prompt/defaults.ts`.
 
 ## Resolution Order
 
-1. `.claude-review-prompt.md` in root of the PR's target repo (fetched via VCS API)
-2. If not found, all three sections use defaults
+1. `--prompt <path>` CLI flag (local file)
+2. `.agent-review-instructions.md` from the PR's **source branch** — root, then `docs/`
+3. `.agent-review-instructions.md` from the PR's **target branch** — root, then `docs/`
+4. If not found, all three sections use defaults
 
 ---
 
 ## Repo Prompt Format
 
-Add `.claude-review-prompt.md` to the root of the repo being reviewed. Include any
+Add `.agent-review-instructions.md` to the root or `docs/` directory of the repo being reviewed. Include any
 combination of these sections — omitted sections use defaults:
 
 ```markdown
@@ -142,7 +144,7 @@ Full example prompts are in the [`prompts/`](../../prompts/) directory:
 | `prompts/java-spring.txt` | Java / Spring Boot / Hibernate |
 | `prompts/angular-ionic.txt` | Angular / Ionic / Capacitor |
 
-These can be used as templates for creating new `.claude-review-prompt.md` files.
+These can be used as templates for creating new `.agent-review-instructions.md` files.
 
 ---
 
@@ -170,7 +172,7 @@ See [Phase 1b](../phases/phase-1b-comment-replies.md) for the full comment reply
 
 ## Optional Metadata Header (Phase 3+)
 
-The `.claude-review-prompt.md` file can include a YAML-style header to override agent settings:
+The `.agent-review-instructions.md` file can include a YAML-style header to override agent settings:
 
 ```markdown
 mode: inline
