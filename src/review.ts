@@ -198,7 +198,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         lastReview.body,
         ctx.replies!
       )
-      const replyFooter = `\n\n---\n*Reply by Claude (${config.anthropic.model})*`
+      const replyFooter = `\n\n---\n*Reply by ${config.agentIdentity} (${config.anthropic.model})*`
       const replyBody = responseText.trimEnd() + replyFooter
 
       if (ctx.dryRun) {
@@ -262,10 +262,10 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
 
     // ── Build comment and post ─────────────────────────────────────────
     case State.POST_REVIEW: {
-      const cleaned = ctx.reviewText!.replace(/\n---\n\*Reviewed by Claude.*?\*\s*/g, '').trimEnd()
+      const cleaned = ctx.reviewText!.replace(/\n---\n\*Reviewed by .*?\*\s*/g, '').trimEnd()
       const reviewNumber = (ctx.previousReviews?.length ?? 0) + 1
       const commitShort = ctx.prInfo!.sourceCommit.slice(0, 12)
-      const footer = `\n\n---\n*Reviewed by Claude (${config.anthropic.model}) | Prompt: ${ctx.prompt!.source} | Review #${reviewNumber} | Commit: ${commitShort}*`
+      const footer = `\n\n---\n*Reviewed by ${config.agentIdentity} (${config.anthropic.model}) | Prompt: ${ctx.prompt!.source} | Review #${reviewNumber} | Commit: ${commitShort}*`
       const comment = cleaned + footer
 
       if (ctx.dryRun) {

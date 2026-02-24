@@ -123,8 +123,8 @@ export class BitbucketAdapter implements VCSAdapter {
       const { data }: { data: any } = await this.client.get(url)
       for (const c of data.values) {
         const body: string = c.content?.raw ?? ''
-        // Only include comments posted by this agent (footer always contains this marker)
-        if (body.includes('Reviewed by Claude')) {
+        // Only include comments posted by this agent (footer always starts with "Reviewed by")
+        if (body.includes('Reviewed by ')) {
           comments.push({
             id: String(c.id),
             body,
@@ -151,7 +151,7 @@ export class BitbucketAdapter implements VCSAdapter {
         const parentId = c.parent?.id ? String(c.parent.id) : null
         if (!parentId || !idSet.has(parentId)) continue
         const body: string = c.content?.raw ?? ''
-        if (body.includes('Reply by Claude')) {
+        if (body.includes('Reply by ')) {
           // Track the latest agent reply timestamp
           if (c.created_on > latestAgentReply) latestAgentReply = c.created_on
           continue

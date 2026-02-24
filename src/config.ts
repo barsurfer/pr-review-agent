@@ -25,6 +25,8 @@ export const config = {
     model: optional('CLAUDE_MODEL', 'claude-sonnet-4-6'),
   },
 
+  agentIdentity: process.env.AGENT_IDENTITY || process.env.BITBUCKET_USERNAME || 'Claude',
+
   context: {
     maxFiles: parseInt(optional('MAX_CONTEXT_FILES', '20'), 10),
     maxFileLines: parseInt(optional('MAX_FILE_LINES', '500'), 10),

@@ -20734,6 +20734,7 @@ var config = {
     apiKey: required("ANTHROPIC_API_KEY"),
     model: optional("CLAUDE_MODEL", "claude-sonnet-4-6")
   },
+  agentIdentity: process.env.AGENT_IDENTITY || process.env.BITBUCKET_USERNAME || "Claude",
   context: {
     maxFiles: parseInt(optional("MAX_CONTEXT_FILES", "20"), 10),
     maxFileLines: parseInt(optional("MAX_FILE_LINES", "500"), 10)
@@ -24512,7 +24513,7 @@ var BitbucketAdapter = class {
       const { data } = await this.client.get(url2);
       for (const c2 of data.values) {
         const body = c2.content?.raw ?? "";
-        if (body.includes("Reviewed by Claude")) {
+        if (body.includes("Reviewed by ")) {
           comments.push({
             id: String(c2.id),
             body,
@@ -24536,7 +24537,7 @@ var BitbucketAdapter = class {
         const parentId = c2.parent?.id ? String(c2.parent.id) : null;
         if (!parentId || !idSet.has(parentId)) continue;
         const body = c2.content?.raw ?? "";
-        if (body.includes("Reply by Claude")) {
+        if (body.includes("Reply by ")) {
           if (c2.created_on > latestAgentReply) latestAgentReply = c2.created_on;
           continue;
         }
@@ -28508,7 +28509,7 @@ async function transition(state, ctx) {
       const replyFooter = `
 
 ---
-*Reply by Claude (${config.anthropic.model})*`;
+*Reply by ${config.agentIdentity} (${config.anthropic.model})*`;
       const replyBody = responseText.trimEnd() + replyFooter;
       if (ctx.dryRun) {
         console.log("\n=== DRY RUN \u2014 Reply output (not posted) ===\n");
@@ -28566,13 +28567,13 @@ async function transition(state, ctx) {
     }
     // ── Build comment and post ─────────────────────────────────────────
     case 10 /* POST_REVIEW */: {
-      const cleaned = ctx.reviewText.replace(/\n---\n\*Reviewed by Claude.*?\*\s*/g, "").trimEnd();
+      const cleaned = ctx.reviewText.replace(/\n---\n\*Reviewed by .*?\*\s*/g, "").trimEnd();
       const reviewNumber = (ctx.previousReviews?.length ?? 0) + 1;
       const commitShort = ctx.prInfo.sourceCommit.slice(0, 12);
       const footer = `
 
 ---
-*Reviewed by Claude (${config.anthropic.model}) | Prompt: ${ctx.prompt.source} | Review #${reviewNumber} | Commit: ${commitShort}*`;
+*Reviewed by ${config.agentIdentity} (${config.anthropic.model}) | Prompt: ${ctx.prompt.source} | Review #${reviewNumber} | Commit: ${commitShort}*`;
       const comment = cleaned + footer;
       if (ctx.dryRun) {
         console.log("\n=== DRY RUN \u2014 Review output (not posted) ===\n");

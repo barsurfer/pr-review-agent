@@ -126,6 +126,9 @@ BITBUCKET_TOKEN=ATATT3x...
 ANTHROPIC_API_KEY=sk-ant-...
 CLAUDE_MODEL=claude-sonnet-4-6
 
+# Agent identity (defaults to BITBUCKET_USERNAME, then 'Claude')
+# AGENT_IDENTITY=
+
 # Context limits (optional — these are the defaults)
 MAX_CONTEXT_FILES=20
 MAX_FILE_LINES=500
@@ -272,6 +275,7 @@ All credentials and settings are provided via environment variables.
 | `MAX_CHANGED_FILES` | `0` (disabled) | Skip review if PR has more changed files |
 | `MIN_CHANGED_LINES` | `0` (disabled) | Skip review if PR has fewer changed lines |
 | `MAX_CHANGED_LINES` | `0` (disabled) | Skip review if PR has more changed lines |
+| `AGENT_IDENTITY` | `BITBUCKET_USERNAME` | Name shown in review footers. Falls back to `BITBUCKET_USERNAME`, then `'Claude'` |
 
 ### How to Provide Environment Variables
 

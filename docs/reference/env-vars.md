@@ -30,6 +30,7 @@ credentials in source code or commit them to version control.**
 | `MAX_CHANGED_FILES` | `0` | Skip review if PR has more changed files (0 = disabled) |
 | `MIN_CHANGED_LINES` | `0` | Skip review if PR has fewer changed lines (0 = disabled) |
 | `MAX_CHANGED_LINES` | `0` | Skip review if PR has more changed lines (0 = disabled) |
+| `AGENT_IDENTITY` | *(BITBUCKET_USERNAME)* | Name shown in review/reply footers. Falls back to `BITBUCKET_USERNAME`, then `'Claude'` |
 
 > Threshold variables can also be set via CLI flags (`--min-changed-files`, etc.)
 > which override the env var values.
@@ -65,6 +66,9 @@ BITBUCKET_TOKEN=
 # Claude
 ANTHROPIC_API_KEY=
 CLAUDE_MODEL=claude-sonnet-4-6
+
+# Agent identity (defaults to BITBUCKET_USERNAME, then 'Claude')
+# AGENT_IDENTITY=
 
 # Context limits
 MAX_CONTEXT_FILES=20
