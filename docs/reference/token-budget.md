@@ -34,12 +34,15 @@ context and use a shorter system prompt. The `max_tokens` cap is 2,048 (vs 4,096
 |---------|---------|--------|
 | `MAX_CONTEXT_FILES` | `20` | Cap on full-file fetches |
 | `MAX_FILE_LINES` | `500` | Files over this get diff-only |
-| Exclusion patterns | see below | Skips generated/lock files entirely |
+| Exclusion patterns (context) | see below | Skips generated/lock files from full-file context |
+| Diff filtering | always on | Strips lock file sections from diff before sending to Claude |
 | Commit hash dedup | always on | Skips API call entirely if same commit already reviewed |
 | `NO_CHANGE` stop word | always on | Skips posting if delta review has no meaningful changes |
 | Reply timestamp dedup | always on | Skips reply API call if developer question already answered |
+| Latest review only | always on | Sends only the most recent previous review (not all) to save tokens |
+| Delta review prompt | always on | Findings/Unresolved Questions limited to new items only — reduces output tokens on re-reviews |
 
-### Excluded File Patterns
+### Excluded from Full-File Context
 
 ```
 *.lock
@@ -50,6 +53,17 @@ yarn.lock
 db/migrate/*
 *.snap
 ```
+
+### Excluded from Diff (Stripped Before API Call)
+
+```
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+*.lock
+```
+
+Raw diff is kept for line counting and threshold checks. Only the filtered version goes to Claude.
 
 ---
 

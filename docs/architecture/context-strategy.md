@@ -36,6 +36,26 @@ Always include full content:
 
 ---
 
+## Diff Filtering
+
+Before sending the diff to Claude, the agent strips sections for files that add noise
+without review value. The raw diff is still used for line counting and threshold checks —
+only the filtered version goes to the API.
+
+### Excluded from Diff
+
+```
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+*.lock
+```
+
+JSON files (e.g. i18n translations) are **not** filtered — their diffs can reveal
+missing keys or inconsistent additions across locales.
+
+---
+
 ## Payload Sent to Claude
 
 ### Full Review (first review or delta review)
@@ -48,12 +68,14 @@ Always include full content:
 ## Branch: {source} → {target}
 ## Description: {pr description if present}
 
-## Previous Review(s) by This Agent (N total):
-### Review from {timestamp}:
-{previous review body — only included on delta reviews}
+## Previous Review by This Agent (latest of N total):
+{only the most recent review — saves tokens while keeping delta context}
+
+## Developer Discussion on Previous Review(s):
+{all human replies across all previous reviews — provides full conversation history}
 
 ## Diff:
-{unified diff}
+{unified diff, with lock files stripped}
 
 ## Full file context:
 ### src/main/java/com/example/SomeService.java
@@ -118,7 +140,8 @@ commit hash. If it matches the current PR source commit:
 1. **Same commit** → `CHECK_REPLIES` → check for unanswered developer replies
 2. **Unanswered replies found** → `RESPOND_TO_REPLIES` → send to Claude, post threaded response
 3. **No replies** → `SKIP` → done ("no new commits and no unanswered questions")
-4. **Different commit** → `LOAD_PROMPT` → proceed with full delta review
+4. **Different commit** → fetch developer discussion (all human replies, `includeAnswered: true`)
+   → `LOAD_PROMPT` → proceed with full delta review
 
 This prevents duplicate reviews when Jenkins re-triggers on unrelated events and avoids
 unnecessary API costs.

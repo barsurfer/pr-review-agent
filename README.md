@@ -139,7 +139,8 @@ MAX_FILE_LINES=500
 
 The agent sends Claude **two things** for every review:
 
-1. **The full unified diff** — all changed hunks across all files in the PR
+1. **The filtered diff** — all changed hunks across all files in the PR, with lock files
+   stripped out (the raw diff is still used for line counting and threshold checks)
 2. **Full file content** — for up to `MAX_CONTEXT_FILES` changed files (default: 20),
    fetched from the source branch. This gives Claude surrounding context beyond just
    the changed lines.
@@ -153,9 +154,15 @@ The context fetcher is selective about which files get full content:
 
 ### Re-reviews and Delta Logic
 
-On re-reviews (PR updated after a previous review), the agent also sends its earlier
-review comments so Claude can produce a **delta review** — acknowledging fixes and only
-flagging new or unresolved issues.
+On re-reviews (PR updated after a previous review), the agent sends its **most recent**
+review comment and **all developer replies** across all previous reviews. Claude produces
+a **delta review** focused on new code only — previous findings are briefly referenced in
+the Summary ("still open" or "fixed") but not re-listed in Findings or Unresolved Questions.
+
+If developers have replied to the previous review with explanations (e.g. "this is handled
+in a different PR" or "the API contract guarantees X"), the agent includes those replies in
+context. The prompt instructs Claude to treat developer replies as authoritative about
+codebase state outside the diff.
 
 If the new commits contain only cosmetic changes (typos, formatting, renames) with no
 new or resolved findings, Claude returns a `NO_CHANGE` stop word and no comment is posted.

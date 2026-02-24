@@ -70,11 +70,15 @@ A file with only `## REVIEW PRIORITIES` is valid — default role and mental mod
 These sections are always provided by the base template and cannot be overridden:
 
 - **SCOPE** — "Review only added or modified code in the diff"
-- **MANDATORY RULES** — concise, bullets, runtime focus, no assumptions
+- **MANDATORY RULES** — concise, bullets, runtime focus, no assumptions, developer trust
 - **FORBIDDEN** — no formatting reviews, no praise, no refactoring, no self-contradiction,
-  no hallucinated footers
+  no hallucinated footers, no recommending fixes for non-existent features, no re-raising
+  findings after developer addressed them
 - **Re-review / delta instructions** — delta review behavior for follow-up reviews,
   including the `NO_CHANGE` stop word for cosmetic-only updates
+- **Developer discussion trust rules** — developer replies are final authority on codebase
+  state outside the diff
+- **OUTPUT FORMAT RULES** — bullets on new lines, proper markdown structure
 - **OUTPUT STRUCTURE** — Summary, Findings, Behavioral Diff, Production Risk, Unresolved Questions
 
 This prevents teams from accidentally breaking the review output format or omitting
@@ -89,6 +93,31 @@ The base template includes strict consistency rules learned from production test
 | Do not mark a finding as resolved if you still have doubts | Prevents false "resolved" on uncertain items |
 | Never contradict yourself (Unresolved Questions vs Findings) | Opus was observed marking an item resolved in Findings but questioning it in Unresolved Questions |
 | Do not add a footer or signature | The system appends its own footer with model, prompt source, review number, and commit hash |
+| Do not recommend fixes for non-existent features | Model was suggesting "track open conversation ID" when developers said conversation view doesn't exist yet |
+| Do not re-raise findings after developer addressed them | If developer acknowledges a limitation as a known trade-off, that's not an open question |
+
+### Delta Review Rules (Re-reviews)
+
+When previous reviews are included, the delta review instructions enforce noise reduction:
+
+| Rule | Effect |
+|------|--------|
+| Findings = new findings only | Old findings are already on record — not re-listed |
+| Unresolved Questions = new questions only | Previous questions not repeated |
+| Summary references old findings briefly | "Still open" or "fixed" — one line each, no detail |
+| No re-analysis of untouched findings | If previous finding wasn't touched by new commits, just note as "still open" |
+
+### Developer Discussion Trust Rules
+
+When developer replies are included in the review context, the prompt enforces strict trust:
+
+| Rule | Effect |
+|------|--------|
+| Developer replies are FINAL | On any claim about codebase state outside the diff, the developer is right |
+| Drop resolved findings entirely | If developer says it's handled elsewhere — not a finding, not an unresolved question, not a production risk |
+| No hedging or caveats | Accept design decisions without re-raising in other sections |
+| "Not in diff" ≠ "not in codebase" | Absence from the diff tells the model nothing about whether something exists |
+| Only push back with diff evidence | The model may only challenge a developer reply if the diff itself contains a direct contradiction |
 
 ### NO_CHANGE Stop Word (Delta Reviews)
 

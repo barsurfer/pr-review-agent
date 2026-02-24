@@ -72,8 +72,11 @@ The review orchestration in `src/review.ts` is implemented as an explicit finite
 A `State` enum defines every node, a `ReviewContext` object carries accumulated data, and a
 `transition(state, ctx)` function returns the next state. The runner loops until `DONE`.
 
+The `FETCH_DIFF` state also produces a **filtered diff** (lock files stripped) which is
+used for all Claude API calls. The raw diff is kept for line counting and threshold checks.
+
 ```
-FETCH_PR_INFO → FETCH_DIFF → CHECK_THRESHOLDS
+FETCH_PR_INFO → FETCH_DIFF (+ filterDiff) → CHECK_THRESHOLDS
                                   ├─ [fail] → SKIP → DONE
                                   └─ CHECK_PREVIOUS_REVIEWS
                                        ├─ [same commit] → CHECK_REPLIES
