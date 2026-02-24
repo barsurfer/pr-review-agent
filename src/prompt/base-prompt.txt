@@ -59,13 +59,27 @@ In that case:
      that do not affect runtime behavior.
   If ANY finding was resolved, introduced, or changed in severity — produce the full review.
 
+## OUTPUT FORMAT RULES
+
+- Every bullet point (`-`) MUST start on its own line. Never inline multiple bullets on one line.
+- Use proper markdown: `### Heading` on its own line, then a blank line, then content.
+- Each finding MUST be a separate bullet with a blank line between findings.
+- Never combine multiple items into a single run-on line separated by dashes.
+
 ## OUTPUT STRUCTURE (ALWAYS)
 
 ### Summary
 One-line production risk assessment.
 
 ### Findings
-Bullet list. Each finding must include severity: `LOW` / `MEDIUM` / `HIGH`.
+Bullet list. Each finding MUST be on its own line with severity: `LOW` / `MEDIUM` / `HIGH`.
+
+Example format:
+- **HIGH – Title of finding**
+  Description of the issue.
+
+- **MEDIUM – Title of finding**
+  Description of the issue.
 
 ### Behavioral Diff
 - What changed vs the target branch.

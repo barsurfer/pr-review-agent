@@ -138,7 +138,7 @@ export class BitbucketAdapter implements VCSAdapter {
     return comments
   }
 
-  async getRepliesToReviewComments(prId: string, reviewCommentIds: string[]): Promise<CommentReply[]> {
+  async getRepliesToReviewComments(prId: string, reviewCommentIds: string[], includeAnswered = false): Promise<CommentReply[]> {
     const repoSlug = this.getRepoSlug()
     const idSet = new Set(reviewCommentIds)
     const humanReplies: CommentReply[] = []
@@ -167,7 +167,9 @@ export class BitbucketAdapter implements VCSAdapter {
       url = data.next ?? null
     }
 
-    // Only return human replies that came AFTER our last agent reply
+    // For delta review context: return all human replies
+    if (includeAnswered) return humanReplies
+    // For reply flow: only return replies that came AFTER our last agent reply
     if (!latestAgentReply) return humanReplies
     return humanReplies.filter(r => r.createdOn > latestAgentReply)
   }

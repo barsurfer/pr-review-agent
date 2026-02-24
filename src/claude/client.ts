@@ -15,11 +15,12 @@ export async function runReview(
   diff: string,
   fileContexts: FileContext[],
   prompt: LoadedPrompt,
-  previousReviews: ReviewComment[]
+  previousReviews: ReviewComment[],
+  developerReplies: CommentReply[] = []
 ): Promise<string> {
   const client = new Anthropic({ apiKey })
 
-  const userMessage = buildUserMessage(prInfo, diff, fileContexts, previousReviews)
+  const userMessage = buildUserMessage(prInfo, diff, fileContexts, previousReviews, developerReplies)
 
   console.log(`Sending request to Claude (${model})...`)
 
@@ -42,7 +43,8 @@ function buildUserMessage(
   prInfo: PRInfo,
   diff: string,
   fileContexts: FileContext[],
-  previousReviews: ReviewComment[]
+  previousReviews: ReviewComment[],
+  developerReplies: CommentReply[]
 ): string {
   const parts: string[] = []
 
@@ -54,10 +56,17 @@ function buildUserMessage(
   }
 
   if (previousReviews.length > 0) {
-    parts.push(`## Previous Review(s) by This Agent (${previousReviews.length} total):`)
-    parts.push('The following reviews were posted on earlier revisions of this PR. Acknowledge what was fixed, do not repeat issues that are now resolved, and call out anything still unaddressed.')
-    for (const review of previousReviews) {
-      parts.push(`### Review from ${review.createdOn}:\n${review.body}`)
+    const latest = previousReviews[previousReviews.length - 1]
+    parts.push(`## Previous Review by This Agent (latest of ${previousReviews.length} total):`)
+    parts.push('This is the most recent review posted on an earlier revision of this PR. Acknowledge what was fixed, do not repeat issues that are now resolved, and call out anything still unaddressed.')
+    parts.push(`### Review from ${latest.createdOn}:\n${latest.body}`)
+  }
+
+  if (developerReplies.length > 0) {
+    parts.push(`## Developer Discussion on Previous Review(s):`)
+    parts.push('Developers replied to previous review comments with the following context. Consider their explanations when reviewing the new changes — they may explain why certain changes were made.')
+    for (const r of developerReplies) {
+      parts.push(`**${r.author}** (${r.createdOn}):\n> ${r.body}`)
     }
   }
 

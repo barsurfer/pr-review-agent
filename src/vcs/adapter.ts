@@ -36,8 +36,10 @@ export interface VCSAdapter {
   postComment(prId: string, body: string): Promise<void>
   /** Fetch previous review comments posted by this agent on the PR. */
   getPreviousReviewComments(prId: string): Promise<ReviewComment[]>
-  /** Fetch human replies to the agent's review comments. */
-  getRepliesToReviewComments(prId: string, reviewCommentIds: string[]): Promise<CommentReply[]>
+  /** Fetch human replies to the agent's review comments.
+   *  When includeAnswered is true, returns all human replies (for delta review context).
+   *  When false (default), returns only unanswered replies (for the reply flow). */
+  getRepliesToReviewComments(prId: string, reviewCommentIds: string[], includeAnswered?: boolean): Promise<CommentReply[]>
   /** Post a threaded reply to an existing comment. */
   postReply(prId: string, parentId: string, body: string): Promise<void>
 }

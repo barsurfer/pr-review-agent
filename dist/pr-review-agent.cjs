@@ -24524,7 +24524,7 @@ var BitbucketAdapter = class {
     }
     return comments;
   }
-  async getRepliesToReviewComments(prId, reviewCommentIds) {
+  async getRepliesToReviewComments(prId, reviewCommentIds, includeAnswered = false) {
     const repoSlug = this.getRepoSlug();
     const idSet = new Set(reviewCommentIds);
     const humanReplies = [];
@@ -24550,6 +24550,7 @@ var BitbucketAdapter = class {
       }
       url2 = data.next ?? null;
     }
+    if (includeAnswered) return humanReplies;
     if (!latestAgentReply) return humanReplies;
     return humanReplies.filter((r2) => r2.createdOn > latestAgentReply);
   }
@@ -24606,7 +24607,7 @@ var GitHubAdapter = class {
   getPreviousReviewComments(_prId) {
     throw new Error("GitHubAdapter not implemented \u2014 deferred to Phase 3");
   }
-  getRepliesToReviewComments(_prId, _reviewCommentIds) {
+  getRepliesToReviewComments(_prId, _reviewCommentIds, _includeAnswered) {
     throw new Error("GitHubAdapter not implemented \u2014 deferred to Phase 3");
   }
   postReply(_prId, _parentId, _body) {
@@ -24637,7 +24638,7 @@ var GitLabAdapter = class {
   getPreviousReviewComments(_prId) {
     throw new Error("GitLabAdapter not implemented \u2014 deferred to Phase 3");
   }
-  getRepliesToReviewComments(_prId, _reviewCommentIds) {
+  getRepliesToReviewComments(_prId, _reviewCommentIds, _includeAnswered) {
     throw new Error("GitLabAdapter not implemented \u2014 deferred to Phase 3");
   }
   postReply(_prId, _parentId, _body) {
@@ -24702,7 +24703,7 @@ function getBaseTemplate() {
     const __dir = (0, import_path.dirname)((0, import_url2.fileURLToPath)(import_meta.url));
     return (0, import_fs.readFileSync)((0, import_path.join)(__dir, "base-prompt.txt"), "utf-8");
   } catch {
-    if (true) return '{{ROLE}}\n\nYour responsibility is to prevent production incidents.\nYou review only what this branch introduced \u2014 the diff provided below.\nYou are the last gate before production.\n\nIf anything you approve breaks production, you will be the one debugging it at 3am.\n\n## SCOPE\n\n- Review only added or modified code in the diff.\n- Do not speculate about untouched code unless directly impacted by the change.\n- Do not review files outside the diff.\n\n## REVIEW PRIORITIES (STRICT ORDER)\n\n{{REVIEW_PRIORITIES}}\n\n## MANDATORY RULES\n\n- Be extremely concise.\n- Prefer bullets over paragraphs.\n- Prioritize runtime impact over grammar.\n- Review only the diff.\n- Do not assume behavior \u2014 verify.\n- Always list Unresolved Questions.\n- If unsure: explicitly warn about uncertainty.\n\n## FORBIDDEN\n\n- Do not focus on formatting or style.\n- Do not refactor unless explicitly asked.\n- Do not review unchanged code.\n- Do not praise code.\n- Do not skip unresolved questions.\n- Do not give uncertain answers silently.\n- Do not mark a finding as resolved if you still have doubts about it \u2014 keep it as unresolved.\n- Never contradict yourself: if a finding appears in Unresolved Questions, it MUST NOT be marked as resolved in Findings.\n- Do not add a footer, signature, or "Reviewed by" line \u2014 the system adds one automatically.\n\n## MENTAL MODEL\n\nAssume:\n{{MENTAL_MODEL}}\n\nIf risk increases \u2014 block it.\n\nIf previous reviews by this agent are included, this is a re-review after new commits.\nIn that case:\n- Acknowledge issues from previous reviews that have been fixed (briefly, under Summary).\n- Do not repeat issues that are now resolved.\n- Call out any issues from previous reviews that are still present.\n- Focus your review on the new or changed code since the last review.\n- Before writing the review, compare your findings against the previous review.\n  Respond with ONLY the exact text NO_CHANGE (no other output) if ALL of these are true:\n  1. No previous findings have been resolved by the new commits.\n  2. No new findings (LOW, MEDIUM, or HIGH) are introduced by the new commits.\n  3. The new commits only contain cosmetic changes (typos, formatting, comments, renames)\n     that do not affect runtime behavior.\n  If ANY finding was resolved, introduced, or changed in severity \u2014 produce the full review.\n\n## OUTPUT STRUCTURE (ALWAYS)\n\n### Summary\nOne-line production risk assessment.\n\n### Findings\nBullet list. Each finding must include severity: `LOW` / `MEDIUM` / `HIGH`.\n\n### Behavioral Diff\n- What changed vs the target branch.\n- Why it matters.\n\n### Production Risk\n- Concrete failure modes.\n- Realistic outage scenarios.\n\n### Unresolved Questions\nBullet list. This section must always exist (empty is allowed).\nIf you cannot verify a behavioral change is safe \u2014 it MUST appear here.\nIf a finding is HIGH severity and you lack context to confirm correctness \u2014 it MUST appear here.\nDo not silently assume critical behavior is correct. When in doubt, escalate to this section.\n';
+    if (true) return '{{ROLE}}\n\nYour responsibility is to prevent production incidents.\nYou review only what this branch introduced \u2014 the diff provided below.\nYou are the last gate before production.\n\nIf anything you approve breaks production, you will be the one debugging it at 3am.\n\n## SCOPE\n\n- Review only added or modified code in the diff.\n- Do not speculate about untouched code unless directly impacted by the change.\n- Do not review files outside the diff.\n\n## REVIEW PRIORITIES (STRICT ORDER)\n\n{{REVIEW_PRIORITIES}}\n\n## MANDATORY RULES\n\n- Be extremely concise.\n- Prefer bullets over paragraphs.\n- Prioritize runtime impact over grammar.\n- Review only the diff.\n- Do not assume behavior \u2014 verify.\n- Always list Unresolved Questions.\n- If unsure: explicitly warn about uncertainty.\n\n## FORBIDDEN\n\n- Do not focus on formatting or style.\n- Do not refactor unless explicitly asked.\n- Do not review unchanged code.\n- Do not praise code.\n- Do not skip unresolved questions.\n- Do not give uncertain answers silently.\n- Do not mark a finding as resolved if you still have doubts about it \u2014 keep it as unresolved.\n- Never contradict yourself: if a finding appears in Unresolved Questions, it MUST NOT be marked as resolved in Findings.\n- Do not add a footer, signature, or "Reviewed by" line \u2014 the system adds one automatically.\n\n## MENTAL MODEL\n\nAssume:\n{{MENTAL_MODEL}}\n\nIf risk increases \u2014 block it.\n\nIf previous reviews by this agent are included, this is a re-review after new commits.\nIn that case:\n- Acknowledge issues from previous reviews that have been fixed (briefly, under Summary).\n- Do not repeat issues that are now resolved.\n- Call out any issues from previous reviews that are still present.\n- Focus your review on the new or changed code since the last review.\n- Before writing the review, compare your findings against the previous review.\n  Respond with ONLY the exact text NO_CHANGE (no other output) if ALL of these are true:\n  1. No previous findings have been resolved by the new commits.\n  2. No new findings (LOW, MEDIUM, or HIGH) are introduced by the new commits.\n  3. The new commits only contain cosmetic changes (typos, formatting, comments, renames)\n     that do not affect runtime behavior.\n  If ANY finding was resolved, introduced, or changed in severity \u2014 produce the full review.\n\n## OUTPUT FORMAT RULES\n\n- Every bullet point (`-`) MUST start on its own line. Never inline multiple bullets on one line.\n- Use proper markdown: `### Heading` on its own line, then a blank line, then content.\n- Each finding MUST be a separate bullet with a blank line between findings.\n- Never combine multiple items into a single run-on line separated by dashes.\n\n## OUTPUT STRUCTURE (ALWAYS)\n\n### Summary\nOne-line production risk assessment.\n\n### Findings\nBullet list. Each finding MUST be on its own line with severity: `LOW` / `MEDIUM` / `HIGH`.\n\nExample format:\n- **HIGH \u2013 Title of finding**\n  Description of the issue.\n\n- **MEDIUM \u2013 Title of finding**\n  Description of the issue.\n\n### Behavioral Diff\n- What changed vs the target branch.\n- Why it matters.\n\n### Production Risk\n- Concrete failure modes.\n- Realistic outage scenarios.\n\n### Unresolved Questions\nBullet list. This section must always exist (empty is allowed).\nIf you cannot verify a behavioral change is safe \u2014 it MUST appear here.\nIf a finding is HIGH severity and you lack context to confirm correctness \u2014 it MUST appear here.\nDo not silently assume critical behavior is correct. When in doubt, escalate to this section.\n';
     throw new Error("Cannot load base prompt: file not found and no embedded copy");
   }
 }
@@ -28296,9 +28297,9 @@ var sdk_default = Anthropic;
 // src/claude/client.ts
 var import_meta2 = {};
 var MAX_TOKENS = 4096;
-async function runReview(apiKey, model, prInfo, diff, fileContexts, prompt, previousReviews) {
+async function runReview(apiKey, model, prInfo, diff, fileContexts, prompt, previousReviews, developerReplies = []) {
   const client = new sdk_default({ apiKey });
-  const userMessage = buildUserMessage(prInfo, diff, fileContexts, previousReviews);
+  const userMessage = buildUserMessage(prInfo, diff, fileContexts, previousReviews, developerReplies);
   console.log(`Sending request to Claude (${model})...`);
   const response = await client.messages.create({
     model,
@@ -28311,7 +28312,7 @@ async function runReview(apiKey, model, prInfo, diff, fileContexts, prompt, prev
   console.log(`Review received (${response.usage.input_tokens} in / ${response.usage.output_tokens} out tokens)`);
   return block.text;
 }
-function buildUserMessage(prInfo, diff, fileContexts, previousReviews) {
+function buildUserMessage(prInfo, diff, fileContexts, previousReviews, developerReplies) {
   const parts = [];
   parts.push(`## Pull Request: ${prInfo.title}`);
   parts.push(`## Branch: ${prInfo.sourceBranch} \u2192 ${prInfo.targetBranch}`);
@@ -28320,11 +28321,18 @@ function buildUserMessage(prInfo, diff, fileContexts, previousReviews) {
 ${prInfo.description}`);
   }
   if (previousReviews.length > 0) {
-    parts.push(`## Previous Review(s) by This Agent (${previousReviews.length} total):`);
-    parts.push("The following reviews were posted on earlier revisions of this PR. Acknowledge what was fixed, do not repeat issues that are now resolved, and call out anything still unaddressed.");
-    for (const review2 of previousReviews) {
-      parts.push(`### Review from ${review2.createdOn}:
-${review2.body}`);
+    const latest = previousReviews[previousReviews.length - 1];
+    parts.push(`## Previous Review by This Agent (latest of ${previousReviews.length} total):`);
+    parts.push("This is the most recent review posted on an earlier revision of this PR. Acknowledge what was fixed, do not repeat issues that are now resolved, and call out anything still unaddressed.");
+    parts.push(`### Review from ${latest.createdOn}:
+${latest.body}`);
+  }
+  if (developerReplies.length > 0) {
+    parts.push(`## Developer Discussion on Previous Review(s):`);
+    parts.push("Developers replied to previous review comments with the following context. Consider their explanations when reviewing the new changes \u2014 they may explain why certain changes were made.");
+    for (const r2 of developerReplies) {
+      parts.push(`**${r2.author}** (${r2.createdOn}):
+> ${r2.body}`);
     }
   }
   parts.push(`## Diff:
@@ -28347,7 +28355,7 @@ function getReplyPrompt() {
     const __dir = (0, import_path3.dirname)((0, import_url3.fileURLToPath)(import_meta2.url));
     return (0, import_fs3.readFileSync)((0, import_path3.join)(__dir, "..", "prompt", "reply-prompt.txt"), "utf-8");
   } catch {
-    if (true) return "You are the same code reviewer who posted the review below.\nA developer has replied to your review with questions or comments.\n\nYour job:\n- Answer their questions concisely based on the diff and your original analysis.\n- If they provide context that changes your assessment, acknowledge it clearly.\n- If you lack context to answer confidently, say so explicitly.\n- Keep answers short and direct \u2014 this is a conversation, not a full review.\n- Do not repeat the full review structure (no Summary, Findings, etc.).\n- Do not ask open-ended questions back. Give definitive recommendations instead.\n  You are an automated agent, not a chat partner. State your position clearly.\n- Do not add a footer or signature \u2014 the system adds one automatically.\n";
+    if (true) return "You are the same code reviewer who posted the review below.\nA developer has replied to your review with questions or comments.\n\nYour job:\n- Answer their questions concisely based on the diff and your original analysis.\n- If they provide context that changes your assessment, acknowledge it clearly.\n- If you lack context to answer confidently, say so explicitly.\n- Keep answers short and direct \u2014 this is a conversation, not a full review.\n- Do not repeat the full review structure (no Summary, Findings, etc.).\n- Do not ask open-ended questions back. Give definitive recommendations instead.\n  You are an automated agent, not a chat partner. State your position clearly.\n- Do not add a footer or signature \u2014 the system adds one automatically.\n\nFormat rules:\n- Every bullet point (`-`) MUST start on its own line.\n- Never inline multiple items on a single line separated by dashes.\n- Use proper markdown with blank lines between sections.\n";
     throw new Error("Cannot load reply prompt: file not found and no embedded copy");
   }
 }
@@ -28444,6 +28452,12 @@ async function transition(state, ctx) {
           console.log(`  Source commit ${ctx.prInfo.sourceCommit.slice(0, 12)} already reviewed \u2014 checking for unanswered replies...`);
           return 4 /* CHECK_REPLIES */;
         }
+        const reviewIds = ctx.previousReviews.map((r2) => r2.id);
+        const discussion = await ctx.adapter.getRepliesToReviewComments(ctx.prId, reviewIds, true);
+        if (discussion.length > 0) {
+          ctx.replies = discussion;
+          console.log(`  Found ${discussion.length} developer reply comment(s) \u2014 will include in review context`);
+        }
       } else {
         console.log("  No previous reviews \u2014 first review for this PR");
       }
@@ -28516,7 +28530,8 @@ async function transition(state, ctx) {
         ctx.diff,
         ctx.fileContexts,
         ctx.prompt,
-        ctx.previousReviews ?? []
+        ctx.previousReviews ?? [],
+        ctx.replies ?? []
       );
       return 9 /* CHECK_NO_CHANGE */;
     }

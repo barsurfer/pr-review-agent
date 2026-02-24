@@ -22,7 +22,7 @@ export class GitHubAdapter implements VCSAdapter {
   getPreviousReviewComments(_prId: string): Promise<ReviewComment[]> {
     throw new Error('GitHubAdapter not implemented — deferred to Phase 3')
   }
-  getRepliesToReviewComments(_prId: string, _reviewCommentIds: string[]): Promise<CommentReply[]> {
+  getRepliesToReviewComments(_prId: string, _reviewCommentIds: string[], _includeAnswered?: boolean): Promise<CommentReply[]> {
     throw new Error('GitHubAdapter not implemented — deferred to Phase 3')
   }
   postReply(_prId: string, _parentId: string, _body: string): Promise<void> {

@@ -134,6 +134,14 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
           console.log(`  Source commit ${ctx.prInfo!.sourceCommit.slice(0, 12)} already reviewed — checking for unanswered replies...`)
           return State.CHECK_REPLIES
         }
+
+        // New commit — fetch developer discussion for delta review context
+        const reviewIds = ctx.previousReviews.map(r => r.id)
+        const discussion = await ctx.adapter.getRepliesToReviewComments(ctx.prId, reviewIds, true)
+        if (discussion.length > 0) {
+          ctx.replies = discussion
+          console.log(`  Found ${discussion.length} developer reply comment(s) — will include in review context`)
+        }
       } else {
         console.log('  No previous reviews — first review for this PR')
       }
@@ -212,7 +220,8 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         ctx.diff!,
         ctx.fileContexts!,
         ctx.prompt!,
-        ctx.previousReviews ?? []
+        ctx.previousReviews ?? [],
+        ctx.replies ?? []
       )
       return State.CHECK_NO_CHANGE
     }
