@@ -40,6 +40,7 @@ interface ReviewContext {
   // Populated progressively
   prInfo?: PRInfo
   diff?: string
+  filteredDiff?: string
   changedFiles?: ChangedFile[]
   lineCount?: number
   previousReviews?: ReviewComment[]
@@ -53,6 +54,29 @@ interface ReviewContext {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+const DIFF_EXCLUDED_PATTERNS = [
+  /package-lock\.json$/,
+  /yarn\.lock$/,
+  /pnpm-lock\.yaml$/,
+  /\.lock$/,
+]
+
+/** Strip diff sections for files that add noise without review value (lock files, etc.). */
+function filterDiff(diff: string): string {
+  const sections = diff.split(/(?=^diff --git )/m)
+  const kept = sections.filter(section => {
+    const match = section.match(/^diff --git a\/(.+?) b\//)
+    if (!match) return true
+    return !DIFF_EXCLUDED_PATTERNS.some(p => p.test(match[1]))
+  })
+  const filtered = kept.join('')
+  const removedCount = sections.length - kept.length
+  if (removedCount > 0) {
+    console.log(`  Filtered ${removedCount} lock file(s) from diff`)
+  }
+  return filtered
+}
 
 /** Count added/removed lines in a unified diff (excludes --- and +++ headers). */
 function countChangedLines(diff: string): number {
@@ -89,6 +113,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       console.log('Fetching changed files...')
       ctx.changedFiles = await ctx.adapter.getChangedFiles(ctx.prId)
       ctx.lineCount = countChangedLines(ctx.diff)
+      ctx.filteredDiff = filterDiff(ctx.diff)
       console.log(`  ${ctx.changedFiles.length} changed file(s)`)
       console.log(`  ${ctx.lineCount} changed line(s)`)
       return State.CHECK_THRESHOLDS
@@ -169,7 +194,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       const responseText = await runCommentResponse(
         config.anthropic.apiKey,
         config.anthropic.model,
-        ctx.diff!,
+        ctx.filteredDiff!,
         lastReview.body,
         ctx.replies!
       )
@@ -217,7 +242,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         config.anthropic.apiKey,
         config.anthropic.model,
         ctx.prInfo!,
-        ctx.diff!,
+        ctx.filteredDiff!,
         ctx.fileContexts!,
         ctx.prompt!,
         ctx.previousReviews ?? [],
