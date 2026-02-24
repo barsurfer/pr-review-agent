@@ -87,13 +87,15 @@ export async function loadPrompt(adapter: VCSAdapter, prInfo: PRInfo, localPromp
     return { content: filled, source: localPromptPath }
   }
 
-  // 2. Try source branch, then target branch; check root and docs/ in each
+  // 2. Try source commit, then target branch; check root and docs/ in each
+  //    Use sourceCommit (hash) instead of sourceBranch because branch names
+  //    with slashes (e.g. feature/foo) break Bitbucket's src API URL routing.
   const paths = [REPO_PROMPT_FILE, `docs/${REPO_PROMPT_FILE}`]
-  for (const branch of [prInfo.sourceBranch, prInfo.targetBranch]) {
+  for (const ref of [prInfo.sourceCommit, prInfo.targetBranch]) {
     for (const path of paths) {
-      const repoPrompt = await adapter.getRepoFileContent(path, branch)
+      const repoPrompt = await adapter.getRepoFileContent(path, ref)
       if (repoPrompt) {
-        console.log(`Using repo-specific prompt from ${path} (${branch})`)
+        console.log(`Using repo-specific prompt from ${path} (${ref.slice(0, 12)})`)
         const sections = parseRepoPrompt(repoPrompt)
         const filled = fillTemplate(template, sections)
         return { content: filled, source: 'repo' }

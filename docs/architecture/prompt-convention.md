@@ -25,7 +25,7 @@ back to the defaults in `src/prompt/defaults.ts`.
 ## Resolution Order
 
 1. `--prompt <path>` CLI flag (local file)
-2. `.agent-review-instructions.md` from the PR's **source branch** — root, then `docs/`
+2. `.agent-review-instructions.md` from the PR's **source commit** — root, then `docs/`
 3. `.agent-review-instructions.md` from the PR's **target branch** — root, then `docs/`
 4. If not found, all three sections use defaults
 

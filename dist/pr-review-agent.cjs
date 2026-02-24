@@ -24744,11 +24744,11 @@ async function loadPrompt(adapter2, prInfo, localPromptPath) {
     return { content: filled2, source: localPromptPath };
   }
   const paths = [REPO_PROMPT_FILE, `docs/${REPO_PROMPT_FILE}`];
-  for (const branch of [prInfo.sourceBranch, prInfo.targetBranch]) {
+  for (const ref of [prInfo.sourceCommit, prInfo.targetBranch]) {
     for (const path of paths) {
-      const repoPrompt = await adapter2.getRepoFileContent(path, branch);
+      const repoPrompt = await adapter2.getRepoFileContent(path, ref);
       if (repoPrompt) {
-        console.log(`Using repo-specific prompt from ${path} (${branch})`);
+        console.log(`Using repo-specific prompt from ${path} (${ref.slice(0, 12)})`);
         const sections = parseRepoPrompt(repoPrompt);
         const filled2 = fillTemplate(template, sections);
         return { content: filled2, source: "repo" };
