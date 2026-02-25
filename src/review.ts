@@ -36,6 +36,7 @@ interface ReviewContext {
   readonly prId: string
   readonly dryRun: boolean
   readonly promptPath?: string
+  readonly force: boolean
 
   // Populated progressively
   prInfo?: PRInfo
@@ -146,6 +147,11 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
 
     // ── Previous review detection ──────────────────────────────────────
     case State.CHECK_PREVIOUS_REVIEWS: {
+      if (ctx.force) {
+        console.log('Skipping previous review check (--force)')
+        ctx.previousReviews = []
+        return State.LOAD_PROMPT
+      }
       console.log('Checking for previous reviews...')
       ctx.previousReviews = await ctx.adapter.getPreviousReviewComments(ctx.prId)
 
@@ -295,10 +301,10 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
 // Public API — unchanged signature
 // ---------------------------------------------------------------------------
 
-export async function review(adapter: VCSAdapter, prId: string, dryRun = false, promptPath?: string): Promise<void> {
+export async function review(adapter: VCSAdapter, prId: string, dryRun = false, promptPath?: string, force = false): Promise<void> {
   console.log(`\nStarting review for PR #${prId}`)
 
-  const ctx: ReviewContext = { adapter, prId, dryRun, promptPath }
+  const ctx: ReviewContext = { adapter, prId, dryRun, promptPath, force }
   let state = State.FETCH_PR_INFO
 
   while (state !== State.DONE) {

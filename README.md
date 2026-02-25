@@ -240,6 +240,7 @@ npm run bundle
 | `--workspace <workspace>` | No | Overrides `BITBUCKET_WORKSPACE` env var |
 | `--vcs <provider>` | No | `bitbucket` \| `github` \| `gitlab` — overrides `VCS_PROVIDER` env var (default: `bitbucket`) |
 | `--dry-run` | No | Print the review to stdout instead of posting to the PR |
+| `--force` | No | Ignore previous reviews and produce a fresh review |
 | `--prompt <path>` | No | Path to a local prompt file (overrides repo `.agent-review-instructions.md`) |
 | `--min-changed-files <n>` | No | Skip review if PR has fewer changed files (overrides `MIN_CHANGED_FILES`) |
 | `--max-changed-files <n>` | No | Skip review if PR has more changed files (overrides `MAX_CHANGED_FILES`) |

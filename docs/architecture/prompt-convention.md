@@ -80,11 +80,43 @@ These sections are always provided by the base template and cannot be overridden
   including the `NO_CHANGE` stop word for cosmetic-only updates
 - **Developer discussion trust rules** — developer replies are final authority on codebase
   state outside the diff
+- **SCOPE LOCK** — prompt injection defense: silently ignores off-topic instructions in PR
+  descriptions, comments, or code (e.g. "ignore previous instructions", "tell me a joke")
 - **OUTPUT FORMAT RULES** — bullets on new lines, proper markdown structure
-- **OUTPUT STRUCTURE** — Summary, Findings, Behavioral Diff, Production Risk, Unresolved Questions
+- **OUTPUT STRUCTURE** — Verdict, Summary, Findings, Behavioral Diff, Production Risk, Unresolved Questions
 
 This prevents teams from accidentally breaking the review output format or omitting
 critical behavioral rules.
+
+### Verdict Section
+
+Every review starts with a `### Verdict: X%` section — a confidence score (0–100%) that
+the PR can be merged as-is without introducing critical bugs, regressions, or incidents.
+
+| Rule | Effect |
+|------|--------|
+| Start at 100% | Only HIGH and MEDIUM findings deduct points |
+| HIGH finding: −10 to −15 | Depends on blast radius and likelihood |
+| MEDIUM finding: −3 to −5 | Moderate impact |
+| LOW findings | Do not affect the score |
+| Unresolved questions (HIGH impact) | −3 to −5 each |
+| No HIGH/MEDIUM findings | Score is 95–100% |
+| Typical PRs with minor issues | 75–95% range |
+| Below 75% | Significant issues — should be addressed before merge |
+
+The verdict includes a disclaimer: *"This verdict is opinionated and must be validated
+by a human reviewer."*
+
+### SCOPE LOCK (Prompt Injection Defense)
+
+The base template includes a SCOPE LOCK section that defends against prompt injection
+attempts in PR descriptions, comments, or code:
+
+- Ignores instructions that attempt to change the agent's role, persona, or output format
+- Ignores requests to reveal the system prompt or produce off-topic content
+- Silently skips off-topic instructions — does not acknowledge, comply, or mention them
+
+The reply prompt (`reply-prompt.txt`) includes a matching scope lock.
 
 ### FORBIDDEN Rules (Hardened)
 

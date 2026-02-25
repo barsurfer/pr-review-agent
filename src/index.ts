@@ -16,6 +16,7 @@ program
   .option('--repo-slug <slug>', 'Repository slug')
   .option('--vcs <provider>', 'VCS provider: bitbucket | github | gitlab (overrides VCS_PROVIDER)')
   .option('--dry-run', 'Print the review to stdout without posting to the PR')
+  .option('--force', 'Ignore previous reviews and produce a fresh review')
   .option('--prompt <path>', 'Path to a local prompt file (overrides repo .agent-review-instructions.md)')
   .option('--min-changed-files <n>', 'Skip review if fewer files changed (overrides MIN_CHANGED_FILES)')
   .option('--max-changed-files <n>', 'Skip review if more files changed (overrides MAX_CHANGED_FILES)')
@@ -29,6 +30,7 @@ const opts = program.opts<{
   repoSlug?: string
   vcs?: string
   dryRun?: boolean
+  force?: boolean
   prompt?: string
   minChangedFiles?: string
   maxChangedFiles?: string
@@ -74,7 +76,7 @@ async function main(): Promise<void> {
   if (opts.minChangedLines) config.thresholds.minChangedLines = parseInt(opts.minChangedLines, 10)
   if (opts.maxChangedLines) config.thresholds.maxChangedLines = parseInt(opts.maxChangedLines, 10)
 
-  await review(adapter, opts.prId, opts.dryRun ?? false, opts.prompt)
+  await review(adapter, opts.prId, opts.dryRun ?? false, opts.prompt, opts.force ?? false)
 }
 
 main().catch((err: unknown) => {
