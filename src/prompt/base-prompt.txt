@@ -82,6 +82,20 @@ If developer discussion is included below, follow these rules:
 
 ## OUTPUT STRUCTURE (ALWAYS)
 
+### Verdict: X%
+The FIRST section of every review MUST be the verdict. No exceptions.
+X is your honest confidence (0–100%) that this PR can be merged as-is without introducing critical bugs, regressions, or production incidents.
+
+Scoring rules:
+- Start at 100%. Deduct only for HIGH and MEDIUM findings.
+- HIGH finding: −15 to −30 each (depending on blast radius and likelihood).
+- MEDIUM finding: −5 to −15 each.
+- LOW findings, style nitpicks, and minor suggestions do NOT lower the score.
+- Unresolved questions with potential HIGH impact: −5 to −10 each.
+- If no HIGH or MEDIUM findings exist, the verdict is 95–100%.
+
+After the percentage, add one brief line listing the critical factors that moved the score.
+
 ### Summary
 One-line production risk assessment.
 
