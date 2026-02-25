@@ -24647,6 +24647,9 @@ var GitLabAdapter = class {
   }
 };
 
+// src/review.ts
+var import_fs4 = require("fs");
+
 // src/prompt/loader.ts
 var import_fs = require("fs");
 var import_path = require("path");
@@ -28315,8 +28318,12 @@ async function runReview(apiKey, model, prInfo, diff, fileContexts, prompt, prev
   });
   const block = response.content[0];
   if (block.type !== "text") throw new Error("Unexpected response type from Claude");
-  console.log(`Review received (${response.usage.input_tokens} in / ${response.usage.output_tokens} out tokens)`);
-  return block.text;
+  const usage = {
+    input_tokens: response.usage.input_tokens,
+    output_tokens: response.usage.output_tokens
+  };
+  console.log(`Review received (${usage.input_tokens} in / ${usage.output_tokens} out tokens)`);
+  return { text: block.text, usage };
 }
 function buildUserMessage(prInfo, diff, fileContexts, previousReviews, developerReplies) {
   const parts = [];
@@ -28389,8 +28396,12 @@ ${diff}
   });
   const block = response.content[0];
   if (block.type !== "text") throw new Error("Unexpected response type from Claude");
-  console.log(`Reply received (${response.usage.input_tokens} in / ${response.usage.output_tokens} out tokens)`);
-  return block.text;
+  const usage = {
+    input_tokens: response.usage.input_tokens,
+    output_tokens: response.usage.output_tokens
+  };
+  console.log(`Reply received (${usage.input_tokens} in / ${usage.output_tokens} out tokens)`);
+  return { text: block.text, usage };
 }
 
 // src/review.ts
@@ -28509,13 +28520,16 @@ async function transition(state, ctx) {
     // ── Generate and post reply ────────────────────────────────────────
     case 5 /* RESPOND_TO_REPLIES */: {
       const lastReview = ctx.previousReviews[ctx.previousReviews.length - 1];
-      const responseText = await runCommentResponse(
+      const result = await runCommentResponse(
         config.anthropic.apiKey,
         config.anthropic.model,
         ctx.filteredDiff,
         lastReview.body,
         ctx.replies
       );
+      ctx.usage.input_tokens += result.usage.input_tokens;
+      ctx.usage.output_tokens += result.usage.output_tokens;
+      const responseText = result.text;
       const replyFooter = `
 
 ---
@@ -28555,7 +28569,7 @@ async function transition(state, ctx) {
     }
     // ── Call Claude for review ─────────────────────────────────────────
     case 8 /* CALL_CLAUDE */: {
-      ctx.reviewText = await runReview(
+      const result = await runReview(
         config.anthropic.apiKey,
         config.anthropic.model,
         ctx.prInfo,
@@ -28565,6 +28579,9 @@ async function transition(state, ctx) {
         ctx.previousReviews ?? [],
         ctx.replies ?? []
       );
+      ctx.reviewText = result.text;
+      ctx.usage.input_tokens += result.usage.input_tokens;
+      ctx.usage.output_tokens += result.usage.output_tokens;
       return 9 /* CHECK_NO_CHANGE */;
     }
     // ── NO_CHANGE stop word ────────────────────────────────────────────
@@ -28606,19 +28623,39 @@ Skipping: ${ctx.skipReason}`);
       return 12 /* DONE */;
   }
 }
-async function review(adapter2, prId, dryRun = false, promptPath, force = false) {
+async function review(adapter2, prId, dryRun = false, promptPath, force = false, logUsage = false, repoSlug = "") {
   console.log(`
 Starting review for PR #${prId}`);
-  const ctx = { adapter: adapter2, prId, dryRun, promptPath, force };
+  const ctx = { adapter: adapter2, prId, dryRun, promptPath, force, logUsage, repoSlug, usage: { input_tokens: 0, output_tokens: 0 } };
   let state = 0 /* FETCH_PR_INFO */;
   while (state !== 12 /* DONE */) {
     state = await transition(state, ctx);
   }
+  if (ctx.usage.input_tokens === 0 && ctx.usage.output_tokens === 0) return null;
+  const record = {
+    date: (/* @__PURE__ */ new Date()).toISOString(),
+    repo: ctx.repoSlug,
+    pr: prId,
+    model: config.anthropic.model,
+    input_tokens: ctx.usage.input_tokens,
+    output_tokens: ctx.usage.output_tokens,
+    dry_run: dryRun,
+    force,
+    prompt_source: ctx.prompt?.source ?? "none"
+  };
+  console.log(`
+=== Usage ===
+${JSON.stringify(record, null, 2)}`);
+  if (logUsage) {
+    (0, import_fs4.appendFileSync)("results.jsonl", JSON.stringify(record) + "\n");
+    console.log("Usage appended to results.jsonl");
+  }
+  return record;
 }
 
 // src/index.ts
 var program2 = new Command();
-program2.name("pr-review-agent").description("Automated PR code review powered by Claude").requiredOption("--pr-id <id>", "Pull request ID").option("--workspace <workspace>", "VCS workspace / org (overrides BITBUCKET_WORKSPACE)").option("--repo-slug <slug>", "Repository slug").option("--vcs <provider>", "VCS provider: bitbucket | github | gitlab (overrides VCS_PROVIDER)").option("--dry-run", "Print the review to stdout without posting to the PR").option("--force", "Ignore previous reviews and produce a fresh review").option("--prompt <path>", "Path to a local prompt file (overrides repo .agent-review-instructions.md)").option("--min-changed-files <n>", "Skip review if fewer files changed (overrides MIN_CHANGED_FILES)").option("--max-changed-files <n>", "Skip review if more files changed (overrides MAX_CHANGED_FILES)").option("--min-changed-lines <n>", "Skip review if fewer lines changed (overrides MIN_CHANGED_LINES)").option("--max-changed-lines <n>", "Skip review if more lines changed (overrides MAX_CHANGED_LINES)").parse(process.argv);
+program2.name("pr-review-agent").description("Automated PR code review powered by Claude").requiredOption("--pr-id <id>", "Pull request ID").option("--workspace <workspace>", "VCS workspace / org (overrides BITBUCKET_WORKSPACE)").option("--repo-slug <slug>", "Repository slug").option("--vcs <provider>", "VCS provider: bitbucket | github | gitlab (overrides VCS_PROVIDER)").option("--dry-run", "Print the review to stdout without posting to the PR").option("--force", "Ignore previous reviews and produce a fresh review").option("--log-usage [bool]", "Log usage data to results.jsonl (default: true)", (v2) => v2 !== "false", true).option("--prompt <path>", "Path to a local prompt file (overrides repo .agent-review-instructions.md)").option("--min-changed-files <n>", "Skip review if fewer files changed (overrides MIN_CHANGED_FILES)").option("--max-changed-files <n>", "Skip review if more files changed (overrides MAX_CHANGED_FILES)").option("--min-changed-lines <n>", "Skip review if fewer lines changed (overrides MIN_CHANGED_LINES)").option("--max-changed-lines <n>", "Skip review if more lines changed (overrides MAX_CHANGED_LINES)").parse(process.argv);
 var opts = program2.opts();
 async function main() {
   const provider = opts.vcs ?? config.vcsProvider;
@@ -28650,7 +28687,7 @@ async function main() {
   if (opts.maxChangedFiles) config.thresholds.maxChangedFiles = parseInt(opts.maxChangedFiles, 10);
   if (opts.minChangedLines) config.thresholds.minChangedLines = parseInt(opts.minChangedLines, 10);
   if (opts.maxChangedLines) config.thresholds.maxChangedLines = parseInt(opts.maxChangedLines, 10);
-  await review(adapter2, opts.prId, opts.dryRun ?? false, opts.prompt, opts.force ?? false);
+  await review(adapter2, opts.prId, opts.dryRun ?? false, opts.prompt, opts.force ?? false, opts.logUsage ?? true, opts.repoSlug ?? "");
 }
 main().catch((err) => {
   console.error("Fatal error:", err.message);

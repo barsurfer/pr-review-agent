@@ -1,10 +1,24 @@
+import { appendFileSync } from 'fs'
 import { config } from './config.js'
 import { loadPrompt } from './prompt/loader.js'
 import { fetchContext } from './context/fetcher.js'
 import { runReview, runCommentResponse } from './claude/client.js'
+import type { ClaudeUsage } from './claude/client.js'
 import type { VCSAdapter, PRInfo, ChangedFile, ReviewComment, CommentReply } from './vcs/adapter.js'
 import type { LoadedPrompt } from './prompt/loader.js'
 import type { FileContext } from './context/fetcher.js'
+
+export interface UsageRecord {
+  date: string
+  repo: string
+  pr: string
+  model: string
+  input_tokens: number
+  output_tokens: number
+  dry_run: boolean
+  force: boolean
+  prompt_source: string
+}
 
 // ---------------------------------------------------------------------------
 // State enum — every node in the review flow
@@ -37,6 +51,8 @@ interface ReviewContext {
   readonly dryRun: boolean
   readonly promptPath?: string
   readonly force: boolean
+  readonly logUsage: boolean
+  readonly repoSlug: string
 
   // Populated progressively
   prInfo?: PRInfo
@@ -50,6 +66,7 @@ interface ReviewContext {
   fileContexts?: FileContext[]
   reviewText?: string
   skipReason?: string
+  usage: { input_tokens: number; output_tokens: number }
 }
 
 // ---------------------------------------------------------------------------
@@ -197,13 +214,16 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
     // ── Generate and post reply ────────────────────────────────────────
     case State.RESPOND_TO_REPLIES: {
       const lastReview = ctx.previousReviews![ctx.previousReviews!.length - 1]
-      const responseText = await runCommentResponse(
+      const result = await runCommentResponse(
         config.anthropic.apiKey,
         config.anthropic.model,
         ctx.filteredDiff!,
         lastReview.body,
         ctx.replies!
       )
+      ctx.usage.input_tokens += result.usage.input_tokens
+      ctx.usage.output_tokens += result.usage.output_tokens
+      const responseText = result.text
       const replyFooter = `\n\n---\n*Reply by ${config.agentIdentity} (${config.anthropic.model})*`
       const replyBody = responseText.trimEnd() + replyFooter
 
@@ -244,7 +264,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
 
     // ── Call Claude for review ─────────────────────────────────────────
     case State.CALL_CLAUDE: {
-      ctx.reviewText = await runReview(
+      const result = await runReview(
         config.anthropic.apiKey,
         config.anthropic.model,
         ctx.prInfo!,
@@ -254,6 +274,9 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         ctx.previousReviews ?? [],
         ctx.replies ?? []
       )
+      ctx.reviewText = result.text
+      ctx.usage.input_tokens += result.usage.input_tokens
+      ctx.usage.output_tokens += result.usage.output_tokens
       return State.CHECK_NO_CHANGE
     }
 
@@ -301,13 +324,36 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
 // Public API — unchanged signature
 // ---------------------------------------------------------------------------
 
-export async function review(adapter: VCSAdapter, prId: string, dryRun = false, promptPath?: string, force = false): Promise<void> {
+export async function review(adapter: VCSAdapter, prId: string, dryRun = false, promptPath?: string, force = false, logUsage = false, repoSlug = ''): Promise<UsageRecord | null> {
   console.log(`\nStarting review for PR #${prId}`)
 
-  const ctx: ReviewContext = { adapter, prId, dryRun, promptPath, force }
+  const ctx: ReviewContext = { adapter, prId, dryRun, promptPath, force, logUsage, repoSlug, usage: { input_tokens: 0, output_tokens: 0 } }
   let state = State.FETCH_PR_INFO
 
   while (state !== State.DONE) {
     state = await transition(state, ctx)
   }
+
+  if (ctx.usage.input_tokens === 0 && ctx.usage.output_tokens === 0) return null
+
+  const record: UsageRecord = {
+    date: new Date().toISOString(),
+    repo: ctx.repoSlug,
+    pr: prId,
+    model: config.anthropic.model,
+    input_tokens: ctx.usage.input_tokens,
+    output_tokens: ctx.usage.output_tokens,
+    dry_run: dryRun,
+    force,
+    prompt_source: ctx.prompt?.source ?? 'none',
+  }
+
+  console.log(`\n=== Usage ===\n${JSON.stringify(record, null, 2)}`)
+
+  if (logUsage) {
+    appendFileSync('results.jsonl', JSON.stringify(record) + '\n')
+    console.log('Usage appended to results.jsonl')
+  }
+
+  return record
 }

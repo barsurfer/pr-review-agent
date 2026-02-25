@@ -8,6 +8,16 @@ import type { LoadedPrompt } from '../prompt/loader.js'
 
 const MAX_TOKENS = 4096
 
+export interface ClaudeUsage {
+  input_tokens: number
+  output_tokens: number
+}
+
+export interface ClaudeResult {
+  text: string
+  usage: ClaudeUsage
+}
+
 export async function runReview(
   apiKey: string,
   model: string,
@@ -17,7 +27,7 @@ export async function runReview(
   prompt: LoadedPrompt,
   previousReviews: ReviewComment[],
   developerReplies: CommentReply[] = []
-): Promise<string> {
+): Promise<ClaudeResult> {
   const client = new Anthropic({ apiKey })
 
   const userMessage = buildUserMessage(prInfo, diff, fileContexts, previousReviews, developerReplies)
@@ -34,9 +44,14 @@ export async function runReview(
   const block = response.content[0]
   if (block.type !== 'text') throw new Error('Unexpected response type from Claude')
 
-  console.log(`Review received (${response.usage.input_tokens} in / ${response.usage.output_tokens} out tokens)`)
+  const usage: ClaudeUsage = {
+    input_tokens: response.usage.input_tokens,
+    output_tokens: response.usage.output_tokens,
+  }
 
-  return block.text
+  console.log(`Review received (${usage.input_tokens} in / ${usage.output_tokens} out tokens)`)
+
+  return { text: block.text, usage }
 }
 
 function buildUserMessage(
@@ -99,7 +114,7 @@ export async function runCommentResponse(
   diff: string,
   originalReview: string,
   replies: CommentReply[]
-): Promise<string> {
+): Promise<ClaudeResult> {
   const client = new Anthropic({ apiKey })
 
   const parts: string[] = []
@@ -123,7 +138,12 @@ export async function runCommentResponse(
   const block = response.content[0]
   if (block.type !== 'text') throw new Error('Unexpected response type from Claude')
 
-  console.log(`Reply received (${response.usage.input_tokens} in / ${response.usage.output_tokens} out tokens)`)
+  const usage: ClaudeUsage = {
+    input_tokens: response.usage.input_tokens,
+    output_tokens: response.usage.output_tokens,
+  }
 
-  return block.text
+  console.log(`Reply received (${usage.input_tokens} in / ${usage.output_tokens} out tokens)`)
+
+  return { text: block.text, usage }
 }
