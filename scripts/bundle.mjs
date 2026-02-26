@@ -3,6 +3,7 @@ import { readFileSync } from 'fs'
 
 const basePrompt = readFileSync('src/prompt/base-prompt.txt', 'utf-8')
 const replyPrompt = readFileSync('src/prompt/reply-prompt.txt', 'utf-8')
+const pkg = JSON.parse(readFileSync('package.json', 'utf-8'))
 
 await build({
   entryPoints: ['src/index.ts'],
@@ -16,6 +17,7 @@ await build({
   define: {
     __BASE_PROMPT__: JSON.stringify(basePrompt),
     __REPLY_PROMPT__: JSON.stringify(replyPrompt),
+    __AGENT_VERSION__: JSON.stringify(pkg.version),
   },
   banner: {
     js: '#!/usr/bin/env node',

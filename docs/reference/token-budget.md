@@ -67,10 +67,89 @@ Raw diff is kept for line counting and threshold checks. Only the filtered versi
 
 ---
 
-## Phase 5: Cost Tracking
+## Usage Logging & Cost Tracking
 
-Once the agent is in production and running across multiple repos, add:
+Every run appends a JSON record to `results.jsonl` (controlled by `--log-usage`, default: `true`).
+The record is also printed to stdout at the end of every run regardless of the flag.
 
-- Log `input_tokens` and `output_tokens` from the Anthropic API response per run
-- Alert if total tokens exceed a configurable threshold (e.g. `MAX_TOKENS_PER_REVIEW=60000`)
-- Aggregate cost reporting per repo per month
+### Record Schema
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `run_id` | `string` | Deterministic key: `{vcs}-{repo_slug}-{pr_id}-{commit_short}` |
+| `timestamp` | `string` | ISO 8601 UTC |
+| `agent_version` | `string` | From `package.json` (injected at bundle time) |
+| `vcs` | `string` | VCS provider (e.g. `bitbucket`) |
+| `workspace` | `string` | Bitbucket workspace slug |
+| `repo_slug` | `string` | Repository slug |
+| `pr_id` | `string` | Pull request ID |
+| `source_commit` | `string` | Source commit hash at time of review |
+| `target_branch` | `string` | e.g. `main`, `develop` |
+| `review_number` | `number` | 1 = initial review, 2+ = re-review |
+| `action` | `string` | `REVIEW` \| `REPLY` \| `NO_CHANGE` \| `SKIP` \| `DEDUP_SKIP` \| `ERROR` |
+| `skip_reason` | `string \| null` | Human-readable reason when action is not `REVIEW` |
+| `model` | `string` | Claude model ID used |
+| `tokens.input` | `number` | Input tokens (from API response) |
+| `tokens.output` | `number` | Output tokens (from API response) |
+| `tokens.cache_read` | `number` | Cache read tokens (reserved for prompt caching) |
+| `tokens.cache_write` | `number` | Cache write tokens (reserved for prompt caching) |
+| `cost_usd` | `number` | Estimated cost from hardcoded per-model pricing table |
+| `duration_ms` | `number` | Wall-clock time for the full run |
+| `dry_run` | `boolean` | Whether `--dry-run` was used |
+| `force` | `boolean` | Whether `--force` was used |
+| `prompt_source` | `string` | Prompt file path or `default` |
+| `error` | `object \| null` | `{ type, message, status }` on failure |
+
+### Action Values
+
+| Action | Meaning |
+|--------|---------|
+| `REVIEW` | Review posted (or printed in dry-run) |
+| `REPLY` | Reply to developer question posted |
+| `NO_CHANGE` | Claude determined only cosmetic changes — comment suppressed |
+| `SKIP` | PR out of scope (size thresholds) — no API call |
+| `DEDUP_SKIP` | Commit hash matched previous review, no unanswered replies — no API call |
+| `ERROR` | Agent failed — see `error` field |
+
+### Cost Estimation
+
+Cost is calculated client-side from token counts and hardcoded per-model pricing (per 1M tokens):
+
+| Model | Input | Output |
+|-------|-------|--------|
+| `claude-sonnet-4-6` | $3.00 | $15.00 |
+| `claude-opus-4-6` | $15.00 | $75.00 |
+| `claude-haiku-4-5-20251001` | $0.80 | $4.00 |
+
+Unknown models fall back to Sonnet pricing. Update the pricing table in `src/review.ts` when Anthropic changes rates.
+
+### Useful Queries
+
+```bash
+# Total spend
+jq -s '[.[] | .cost_usd // 0] | add' results.jsonl
+
+# Cost by repo
+jq -s 'group_by(.repo_slug) | map({repo: .[0].repo_slug, total: (map(.cost_usd // 0) | add)})' results.jsonl
+
+# Average tokens per review
+jq -s '[.[] | select(.action=="REVIEW") | .tokens.input] | add/length' results.jsonl
+
+# DEDUP_SKIP rate
+jq -s '{total: length, dedup: [.[] | select(.action=="DEDUP_SKIP")] | length}' results.jsonl
+
+# Error rate
+jq -s '{total: length, errors: [.[] | select(.action=="ERROR")] | length}' results.jsonl
+```
+
+### Jenkins Archiving
+
+On Jenkins, `results.jsonl` is written to the build workspace and lost on cleanup. Add:
+
+```groovy
+post {
+  always {
+    archiveArtifacts artifacts: 'results.jsonl', allowEmptyArchive: true
+  }
+}
+```

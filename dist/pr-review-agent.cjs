@@ -24649,6 +24649,7 @@ var GitLabAdapter = class {
 
 // src/review.ts
 var import_fs4 = require("fs");
+var import_url4 = require("url");
 
 // src/prompt/loader.ts
 var import_fs = require("fs");
@@ -28405,6 +28406,7 @@ ${diff}
 }
 
 // src/review.ts
+var import_meta3 = {};
 var DIFF_EXCLUDED_PATTERNS = [
   /package-lock\.json$/,
   /yarn\.lock$/,
@@ -28434,6 +28436,26 @@ function countChangedLines(diff) {
   }
   return count;
 }
+function getAgentVersion() {
+  try {
+    const pkgPath = (0, import_url4.fileURLToPath)(new URL("../../package.json", import_meta3.url));
+    const pkg = JSON.parse((0, import_fs4.readFileSync)(pkgPath, "utf-8"));
+    return pkg.version;
+  } catch {
+    if (true) return "1.0.0";
+    return "unknown";
+  }
+}
+var MODEL_PRICING = {
+  "claude-sonnet-4-6": { input: 3, output: 15 },
+  "claude-opus-4-6": { input: 15, output: 75 },
+  "claude-haiku-4-5-20251001": { input: 0.8, output: 4 }
+};
+function estimateCost(tokens, model) {
+  const p2 = MODEL_PRICING[model] ?? MODEL_PRICING["claude-sonnet-4-6"];
+  const cost = tokens.input / 1e6 * p2.input + tokens.output / 1e6 * p2.output;
+  return Math.round(cost * 1e4) / 1e4;
+}
 async function transition(state, ctx) {
   switch (state) {
     // ── Fetch PR metadata ──────────────────────────────────────────────
@@ -28461,18 +28483,22 @@ async function transition(state, ctx) {
       const fileCount = ctx.changedFiles.length;
       const lineCount = ctx.lineCount;
       if (minChangedFiles > 0 && fileCount < minChangedFiles) {
+        ctx.action = "SKIP";
         ctx.skipReason = `PR has ${fileCount} changed file(s), minimum is ${minChangedFiles}`;
         return 11 /* SKIP */;
       }
       if (maxChangedFiles > 0 && fileCount > maxChangedFiles) {
+        ctx.action = "SKIP";
         ctx.skipReason = `PR has ${fileCount} changed file(s), maximum is ${maxChangedFiles}`;
         return 11 /* SKIP */;
       }
       if (minChangedLines > 0 && lineCount < minChangedLines) {
+        ctx.action = "SKIP";
         ctx.skipReason = `PR has ${lineCount} changed line(s), minimum is ${minChangedLines}`;
         return 11 /* SKIP */;
       }
       if (maxChangedLines > 0 && lineCount > maxChangedLines) {
+        ctx.action = "SKIP";
         ctx.skipReason = `PR has ${lineCount} changed line(s), maximum is ${maxChangedLines}`;
         return 11 /* SKIP */;
       }
@@ -28483,6 +28509,7 @@ async function transition(state, ctx) {
       if (ctx.force) {
         console.log("Skipping previous review check (--force)");
         ctx.previousReviews = [];
+        ctx.reviewNumber = 1;
         return 6 /* LOAD_PROMPT */;
       }
       console.log("Checking for previous reviews...");
@@ -28493,6 +28520,7 @@ async function transition(state, ctx) {
         const commitMatch = lastReview.body.match(/Commit: ([a-f0-9]+)/);
         if (commitMatch && commitMatch[1] === ctx.prInfo.sourceCommit.slice(0, 12)) {
           console.log(`  Source commit ${ctx.prInfo.sourceCommit.slice(0, 12)} already reviewed \u2014 checking for unanswered replies...`);
+          ctx.reviewNumber = ctx.previousReviews.length;
           return 4 /* CHECK_REPLIES */;
         }
         const reviewIds = ctx.previousReviews.map((r2) => r2.id);
@@ -28504,6 +28532,7 @@ async function transition(state, ctx) {
       } else {
         console.log("  No previous reviews \u2014 first review for this PR");
       }
+      ctx.reviewNumber = (ctx.previousReviews?.length ?? 0) + 1;
       return 6 /* LOAD_PROMPT */;
     }
     // ── Fetch unanswered developer replies ─────────────────────────────
@@ -28514,6 +28543,7 @@ async function transition(state, ctx) {
         console.log(`  Found ${ctx.replies.length} unanswered reply comment(s) \u2014 responding...`);
         return 5 /* RESPOND_TO_REPLIES */;
       }
+      ctx.action = "DEDUP_SKIP";
       ctx.skipReason = "no new commits and no unanswered questions";
       return 11 /* SKIP */;
     }
@@ -28544,6 +28574,7 @@ async function transition(state, ctx) {
         await ctx.adapter.postReply(ctx.prId, targetParentId, replyBody);
         console.log("Done. Reply posted to PR.\n");
       }
+      ctx.action = "REPLY";
       return 12 /* DONE */;
     }
     // ── Load system prompt ─────────────────────────────────────────────
@@ -28587,6 +28618,7 @@ async function transition(state, ctx) {
     // ── NO_CHANGE stop word ────────────────────────────────────────────
     case 9 /* CHECK_NO_CHANGE */: {
       if (ctx.reviewText.trim() === "NO_CHANGE") {
+        ctx.action = "NO_CHANGE";
         ctx.skipReason = "No changes since last review";
         return 11 /* SKIP */;
       }
@@ -28595,12 +28627,11 @@ async function transition(state, ctx) {
     // ── Build comment and post ─────────────────────────────────────────
     case 10 /* POST_REVIEW */: {
       const cleaned = ctx.reviewText.replace(/\n---\n\*Reviewed by .*?\*\s*/g, "").trimEnd();
-      const reviewNumber = (ctx.previousReviews?.length ?? 0) + 1;
       const commitShort = ctx.prInfo.sourceCommit.slice(0, 12);
       const footer = `
 
 ---
-*Reviewed by ${config.agentIdentity} (${config.anthropic.model}) | Prompt: ${ctx.prompt.source} | Review #${reviewNumber} | Commit: ${commitShort}*`;
+*Reviewed by ${config.agentIdentity} (${config.anthropic.model}) | Prompt: ${ctx.prompt.source} | Review #${ctx.reviewNumber} | Commit: ${commitShort}*`;
       const comment = cleaned + footer;
       if (ctx.dryRun) {
         console.log("\n=== DRY RUN \u2014 Review output (not posted) ===\n");
@@ -28611,6 +28642,7 @@ async function transition(state, ctx) {
         await ctx.adapter.postComment(ctx.prId, comment);
         console.log("Done. Review posted to PR.\n");
       }
+      ctx.action = "REVIEW";
       return 12 /* DONE */;
     }
     // ── Terminal: skip ─────────────────────────────────────────────────
@@ -28626,22 +28658,62 @@ Skipping: ${ctx.skipReason}`);
 async function review(adapter2, prId, dryRun = false, promptPath, force = false, logUsage = false, repoSlug = "") {
   console.log(`
 Starting review for PR #${prId}`);
-  const ctx = { adapter: adapter2, prId, dryRun, promptPath, force, logUsage, repoSlug, usage: { input_tokens: 0, output_tokens: 0 } };
-  let state = 0 /* FETCH_PR_INFO */;
-  while (state !== 12 /* DONE */) {
-    state = await transition(state, ctx);
+  const startTime = Date.now();
+  const ctx = {
+    adapter: adapter2,
+    prId,
+    dryRun,
+    promptPath,
+    force,
+    logUsage,
+    repoSlug,
+    usage: { input_tokens: 0, output_tokens: 0 },
+    action: "ERROR",
+    reviewNumber: 0
+  };
+  let error = null;
+  try {
+    let state = 0 /* FETCH_PR_INFO */;
+    while (state !== 12 /* DONE */) {
+      state = await transition(state, ctx);
+    }
+  } catch (err) {
+    ctx.action = "ERROR";
+    const e2 = err;
+    error = {
+      type: e2.constructor.name,
+      message: e2.message,
+      status: e2.status ?? null
+    };
   }
-  if (ctx.usage.input_tokens === 0 && ctx.usage.output_tokens === 0) return null;
+  const durationMs = Date.now() - startTime;
+  const commitShort = ctx.prInfo?.sourceCommit?.slice(0, 12) ?? "unknown";
   const record = {
-    date: (/* @__PURE__ */ new Date()).toISOString(),
-    repo: ctx.repoSlug,
-    pr: prId,
+    run_id: `${config.vcsProvider}-${repoSlug}-${prId}-${commitShort}`,
+    timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+    agent_version: getAgentVersion(),
+    vcs: config.vcsProvider,
+    workspace: config.bitbucket.workspace,
+    repo_slug: repoSlug,
+    pr_id: prId,
+    source_commit: ctx.prInfo?.sourceCommit ?? "unknown",
+    target_branch: ctx.prInfo?.targetBranch ?? "unknown",
+    review_number: ctx.reviewNumber,
+    action: ctx.action,
+    skip_reason: ctx.skipReason ?? null,
     model: config.anthropic.model,
-    input_tokens: ctx.usage.input_tokens,
-    output_tokens: ctx.usage.output_tokens,
+    tokens: {
+      input: ctx.usage.input_tokens,
+      output: ctx.usage.output_tokens,
+      cache_read: 0,
+      cache_write: 0
+    },
+    cost_usd: estimateCost({ input: ctx.usage.input_tokens, output: ctx.usage.output_tokens }, config.anthropic.model),
+    duration_ms: durationMs,
     dry_run: dryRun,
     force,
-    prompt_source: ctx.prompt?.source ?? "none"
+    prompt_source: ctx.prompt?.source ?? "none",
+    error
   };
   console.log(`
 === Usage ===
@@ -28650,6 +28722,7 @@ ${JSON.stringify(record, null, 2)}`);
     (0, import_fs4.appendFileSync)("results.jsonl", JSON.stringify(record) + "\n");
     console.log("Usage appended to results.jsonl");
   }
+  if (error) throw new Error(error.message);
   return record;
 }
 

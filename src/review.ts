@@ -1,4 +1,5 @@
-import { appendFileSync } from 'fs'
+import { appendFileSync, readFileSync } from 'fs'
+import { fileURLToPath } from 'url'
 import { config } from './config.js'
 import { loadPrompt } from './prompt/loader.js'
 import { fetchContext } from './context/fetcher.js'
@@ -9,15 +10,26 @@ import type { LoadedPrompt } from './prompt/loader.js'
 import type { FileContext } from './context/fetcher.js'
 
 export interface UsageRecord {
-  date: string
-  repo: string
-  pr: string
+  run_id: string
+  timestamp: string
+  agent_version: string
+  vcs: string
+  workspace: string
+  repo_slug: string
+  pr_id: string
+  source_commit: string
+  target_branch: string
+  review_number: number
+  action: string
+  skip_reason: string | null
   model: string
-  input_tokens: number
-  output_tokens: number
+  tokens: { input: number; output: number; cache_read: number; cache_write: number }
+  cost_usd: number
+  duration_ms: number
   dry_run: boolean
   force: boolean
   prompt_source: string
+  error: { type: string; message: string; status: number | null } | null
 }
 
 // ---------------------------------------------------------------------------
@@ -67,6 +79,10 @@ interface ReviewContext {
   reviewText?: string
   skipReason?: string
   usage: { input_tokens: number; output_tokens: number }
+
+  // Tracking
+  action: string
+  reviewNumber: number
 }
 
 // ---------------------------------------------------------------------------
@@ -109,6 +125,34 @@ function countChangedLines(diff: string): number {
 }
 
 // ---------------------------------------------------------------------------
+// Version & cost helpers
+// ---------------------------------------------------------------------------
+
+function getAgentVersion(): string {
+  try {
+    const pkgPath = fileURLToPath(new URL('../../package.json', import.meta.url))
+    const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8'))
+    return pkg.version
+  } catch {
+    // @ts-ignore — injected at bundle time by esbuild
+    if (typeof __AGENT_VERSION__ !== 'undefined') return __AGENT_VERSION__ as string
+    return 'unknown'
+  }
+}
+
+const MODEL_PRICING: Record<string, { input: number; output: number }> = {
+  'claude-sonnet-4-6': { input: 3.0, output: 15.0 },
+  'claude-opus-4-6': { input: 15.0, output: 75.0 },
+  'claude-haiku-4-5-20251001': { input: 0.8, output: 4.0 },
+}
+
+function estimateCost(tokens: { input: number; output: number }, model: string): number {
+  const p = MODEL_PRICING[model] ?? MODEL_PRICING['claude-sonnet-4-6']
+  const cost = (tokens.input / 1_000_000) * p.input + (tokens.output / 1_000_000) * p.output
+  return Math.round(cost * 10000) / 10000 // 4 decimal places
+}
+
+// ---------------------------------------------------------------------------
 // Transition — pure decision logic per state
 // ---------------------------------------------------------------------------
 
@@ -144,18 +188,22 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       const lineCount = ctx.lineCount!
 
       if (minChangedFiles > 0 && fileCount < minChangedFiles) {
+        ctx.action = 'SKIP'
         ctx.skipReason = `PR has ${fileCount} changed file(s), minimum is ${minChangedFiles}`
         return State.SKIP
       }
       if (maxChangedFiles > 0 && fileCount > maxChangedFiles) {
+        ctx.action = 'SKIP'
         ctx.skipReason = `PR has ${fileCount} changed file(s), maximum is ${maxChangedFiles}`
         return State.SKIP
       }
       if (minChangedLines > 0 && lineCount < minChangedLines) {
+        ctx.action = 'SKIP'
         ctx.skipReason = `PR has ${lineCount} changed line(s), minimum is ${minChangedLines}`
         return State.SKIP
       }
       if (maxChangedLines > 0 && lineCount > maxChangedLines) {
+        ctx.action = 'SKIP'
         ctx.skipReason = `PR has ${lineCount} changed line(s), maximum is ${maxChangedLines}`
         return State.SKIP
       }
@@ -167,6 +215,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       if (ctx.force) {
         console.log('Skipping previous review check (--force)')
         ctx.previousReviews = []
+        ctx.reviewNumber = 1
         return State.LOAD_PROMPT
       }
       console.log('Checking for previous reviews...')
@@ -180,6 +229,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         const commitMatch = lastReview.body.match(/Commit: ([a-f0-9]+)/)
         if (commitMatch && commitMatch[1] === ctx.prInfo!.sourceCommit.slice(0, 12)) {
           console.log(`  Source commit ${ctx.prInfo!.sourceCommit.slice(0, 12)} already reviewed — checking for unanswered replies...`)
+          ctx.reviewNumber = ctx.previousReviews.length
           return State.CHECK_REPLIES
         }
 
@@ -194,6 +244,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         console.log('  No previous reviews — first review for this PR')
       }
 
+      ctx.reviewNumber = (ctx.previousReviews?.length ?? 0) + 1
       return State.LOAD_PROMPT
     }
 
@@ -207,6 +258,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         return State.RESPOND_TO_REPLIES
       }
 
+      ctx.action = 'DEDUP_SKIP'
       ctx.skipReason = 'no new commits and no unanswered questions'
       return State.SKIP
     }
@@ -236,6 +288,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         await ctx.adapter.postReply(ctx.prId, targetParentId, replyBody)
         console.log('Done. Reply posted to PR.\n')
       }
+      ctx.action = 'REPLY'
       return State.DONE
     }
 
@@ -283,6 +336,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
     // ── NO_CHANGE stop word ────────────────────────────────────────────
     case State.CHECK_NO_CHANGE: {
       if (ctx.reviewText!.trim() === 'NO_CHANGE') {
+        ctx.action = 'NO_CHANGE'
         ctx.skipReason = 'No changes since last review'
         return State.SKIP
       }
@@ -292,9 +346,8 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
     // ── Build comment and post ─────────────────────────────────────────
     case State.POST_REVIEW: {
       const cleaned = ctx.reviewText!.replace(/\n---\n\*Reviewed by .*?\*\s*/g, '').trimEnd()
-      const reviewNumber = (ctx.previousReviews?.length ?? 0) + 1
       const commitShort = ctx.prInfo!.sourceCommit.slice(0, 12)
-      const footer = `\n\n---\n*Reviewed by ${config.agentIdentity} (${config.anthropic.model}) | Prompt: ${ctx.prompt!.source} | Review #${reviewNumber} | Commit: ${commitShort}*`
+      const footer = `\n\n---\n*Reviewed by ${config.agentIdentity} (${config.anthropic.model}) | Prompt: ${ctx.prompt!.source} | Review #${ctx.reviewNumber} | Commit: ${commitShort}*`
       const comment = cleaned + footer
 
       if (ctx.dryRun) {
@@ -306,6 +359,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         await ctx.adapter.postComment(ctx.prId, comment)
         console.log('Done. Review posted to PR.\n')
       }
+      ctx.action = 'REVIEW'
       return State.DONE
     }
 
@@ -327,25 +381,60 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
 export async function review(adapter: VCSAdapter, prId: string, dryRun = false, promptPath?: string, force = false, logUsage = false, repoSlug = ''): Promise<UsageRecord | null> {
   console.log(`\nStarting review for PR #${prId}`)
 
-  const ctx: ReviewContext = { adapter, prId, dryRun, promptPath, force, logUsage, repoSlug, usage: { input_tokens: 0, output_tokens: 0 } }
-  let state = State.FETCH_PR_INFO
-
-  while (state !== State.DONE) {
-    state = await transition(state, ctx)
+  const startTime = Date.now()
+  const ctx: ReviewContext = {
+    adapter, prId, dryRun, promptPath, force, logUsage, repoSlug,
+    usage: { input_tokens: 0, output_tokens: 0 },
+    action: 'ERROR',
+    reviewNumber: 0,
   }
 
-  if (ctx.usage.input_tokens === 0 && ctx.usage.output_tokens === 0) return null
+  let error: { type: string; message: string; status: number | null } | null = null
+
+  try {
+    let state = State.FETCH_PR_INFO
+    while (state !== State.DONE) {
+      state = await transition(state, ctx)
+    }
+  } catch (err: unknown) {
+    ctx.action = 'ERROR'
+    const e = err as Error & { status?: number }
+    error = {
+      type: e.constructor.name,
+      message: e.message,
+      status: e.status ?? null,
+    }
+  }
+
+  const durationMs = Date.now() - startTime
+  const commitShort = ctx.prInfo?.sourceCommit?.slice(0, 12) ?? 'unknown'
 
   const record: UsageRecord = {
-    date: new Date().toISOString(),
-    repo: ctx.repoSlug,
-    pr: prId,
+    run_id: `${config.vcsProvider}-${repoSlug}-${prId}-${commitShort}`,
+    timestamp: new Date().toISOString(),
+    agent_version: getAgentVersion(),
+    vcs: config.vcsProvider,
+    workspace: config.bitbucket.workspace,
+    repo_slug: repoSlug,
+    pr_id: prId,
+    source_commit: ctx.prInfo?.sourceCommit ?? 'unknown',
+    target_branch: ctx.prInfo?.targetBranch ?? 'unknown',
+    review_number: ctx.reviewNumber,
+    action: ctx.action,
+    skip_reason: ctx.skipReason ?? null,
     model: config.anthropic.model,
-    input_tokens: ctx.usage.input_tokens,
-    output_tokens: ctx.usage.output_tokens,
+    tokens: {
+      input: ctx.usage.input_tokens,
+      output: ctx.usage.output_tokens,
+      cache_read: 0,
+      cache_write: 0,
+    },
+    cost_usd: estimateCost({ input: ctx.usage.input_tokens, output: ctx.usage.output_tokens }, config.anthropic.model),
+    duration_ms: durationMs,
     dry_run: dryRun,
     force,
     prompt_source: ctx.prompt?.source ?? 'none',
+    error,
   }
 
   console.log(`\n=== Usage ===\n${JSON.stringify(record, null, 2)}`)
@@ -354,6 +443,8 @@ export async function review(adapter: VCSAdapter, prId: string, dryRun = false, 
     appendFileSync('results.jsonl', JSON.stringify(record) + '\n')
     console.log('Usage appended to results.jsonl')
   }
+
+  if (error) throw new Error(error.message)
 
   return record
 }
