@@ -42,3 +42,5 @@ export const DEFAULT_MENTAL_MODEL = `- Production load
 - Real money
 - Large dataset
 - It is 3am`
+
+export const DEFAULT_EXCEPTIONS = 'No repo-specific exceptions. Apply all rules as written.'

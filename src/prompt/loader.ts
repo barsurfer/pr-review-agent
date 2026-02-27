@@ -2,7 +2,7 @@ import { readFileSync } from 'fs'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import type { VCSAdapter, PRInfo } from '../vcs/adapter.js'
-import { DEFAULT_ROLE, DEFAULT_REVIEW_PRIORITIES, DEFAULT_MENTAL_MODEL } from './defaults.js'
+import { DEFAULT_ROLE, DEFAULT_REVIEW_PRIORITIES, DEFAULT_MENTAL_MODEL, DEFAULT_EXCEPTIONS } from './defaults.js'
 
 const REPO_PROMPT_FILE = '.agent-review-instructions.md'
 
@@ -24,6 +24,7 @@ interface RepoPromptSections {
   role?: string
   reviewPriorities?: string
   mentalModel?: string
+  exceptions?: string
 }
 
 /**
@@ -55,17 +56,20 @@ function parseRepoPrompt(content: string): RepoPromptSections {
       sections.reviewPriorities = body
     } else if (name.startsWith('MENTAL MODEL')) {
       sections.mentalModel = body
+    } else if (name.startsWith('EXCEPTION')) {
+      sections.exceptions = body
     }
   }
 
   return sections
 }
 
-const SECTION_NAMES: (keyof RepoPromptSections)[] = ['role', 'reviewPriorities', 'mentalModel']
+const SECTION_NAMES: (keyof RepoPromptSections)[] = ['role', 'reviewPriorities', 'mentalModel', 'exceptions']
 const SECTION_LABELS: Record<keyof RepoPromptSections, string> = {
   role: 'ROLE',
   reviewPriorities: 'REVIEW PRIORITIES',
   mentalModel: 'MENTAL MODEL',
+  exceptions: 'EXCEPTIONS',
 }
 
 function logSections(sections: RepoPromptSections): void {
@@ -80,6 +84,7 @@ function fillTemplate(template: string, sections: RepoPromptSections): string {
     .replace('{{ROLE}}', sections.role ?? DEFAULT_ROLE)
     .replace('{{REVIEW_PRIORITIES}}', sections.reviewPriorities ?? DEFAULT_REVIEW_PRIORITIES)
     .replace('{{MENTAL_MODEL}}', sections.mentalModel ?? DEFAULT_MENTAL_MODEL)
+    .replace('{{EXCEPTIONS}}', sections.exceptions ?? DEFAULT_EXCEPTIONS)
 }
 
 export function validateLocalPrompt(path: string): void {

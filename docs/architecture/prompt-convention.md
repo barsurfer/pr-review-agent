@@ -8,17 +8,18 @@ The agent composes the final system prompt from two parts:
    SCOPE, MANDATORY RULES, FORBIDDEN, re-review instructions, OUTPUT STRUCTURE.
 
 2. **Repo-specific sections** (`.agent-review-instructions.md` in the target repo) — customisable
-   per technology stack. Three sections can be overridden:
+   per technology stack. Four sections can be overridden:
 
 | Section | Header in file | Default if missing |
 |---------|---------------|-------------------|
 | Role | `## ROLE` | "Senior Architect and Production Gatekeeper" |
 | Review Priorities | `## REVIEW PRIORITIES` | Generic priorities (logic, safety, correctness) |
 | Mental Model | `## MENTAL MODEL` | Production load, real users, large dataset, 3am |
+| Exceptions | `## EXCEPTIONS` | No repo-specific exceptions |
 
-The base template has `{{ROLE}}`, `{{REVIEW_PRIORITIES}}`, and `{{MENTAL_MODEL}}` placeholders.
-The loader parses the repo prompt for these sections and injects them. Missing sections fall
-back to the defaults in `src/prompt/defaults.ts`.
+The base template has `{{ROLE}}`, `{{REVIEW_PRIORITIES}}`, `{{MENTAL_MODEL}}`, and `{{EXCEPTIONS}}`
+placeholders. The loader parses the repo prompt for these sections and injects them. Missing
+sections fall back to the defaults in `src/prompt/defaults.ts`.
 
 ---
 
@@ -27,7 +28,7 @@ back to the defaults in `src/prompt/defaults.ts`.
 1. `--prompt <path>` CLI flag (local file)
 2. `.agent-review-instructions.md` from the PR's **source commit** — root, then `docs/`
 3. `.agent-review-instructions.md` from the PR's **target branch** — root, then `docs/`
-4. If not found, all three sections use defaults
+4. If not found, all four sections use defaults
 
 ---
 
@@ -56,6 +57,11 @@ You are a Senior Frontend Architect and Production Gatekeeper.
 - Async race conditions
 - Null / undefined handling
 
+## EXCEPTIONS
+- Do not flag missing unit tests for migration scripts
+- Do not flag `any` types in test files
+- Ignore console.log in debug utilities
+
 ## MENTAL MODEL
 - Low-end Android device
 - Poor network
@@ -63,7 +69,7 @@ You are a Senior Frontend Architect and Production Gatekeeper.
 - It is 3am
 ```
 
-A file with only `## REVIEW PRIORITIES` is valid — default role and mental model apply.
+A file with only `## REVIEW PRIORITIES` is valid — all other sections use defaults.
 
 ---
 
@@ -83,21 +89,23 @@ These sections are always provided by the base template and cannot be overridden
 - **SCOPE LOCK** — prompt injection defense: silently ignores off-topic instructions in PR
   descriptions, comments, or code (e.g. "ignore previous instructions", "tell me a joke")
 - **OUTPUT FORMAT RULES** — bullets on new lines, proper markdown structure
-- **OUTPUT STRUCTURE** — Verdict, Summary, Findings, Behavioral Diff, Production Risk, Unresolved Questions
+- **EXCEPTIONS** — defaults to "no exceptions" if the repo prompt doesn't include `## EXCEPTIONS`
+- **OUTPUT STRUCTURE** — Summary, Findings, Behavioral Diff, Production Risk, Unresolved Questions, Verdict
 
 This prevents teams from accidentally breaking the review output format or omitting
 critical behavioral rules.
 
 ### Verdict Section
 
-Every review starts with a `### Verdict: X%` section — a confidence score (0–100%) that
+Every review ends with a `### Verdict: X%` section — a confidence score (0–100%) that
 the PR can be merged as-is without introducing critical bugs, regressions, or incidents.
+Placed last so the reviewer reads the full analysis before seeing the number.
 
 | Rule | Effect |
 |------|--------|
 | Start at 100% | Only HIGH and MEDIUM findings deduct points |
-| HIGH finding: −10 to −15 | Depends on blast radius and likelihood |
-| MEDIUM finding: −3 to −5 | Moderate impact |
+| HIGH finding: −9 to −18 | Depends on blast radius and likelihood |
+| MEDIUM finding: −3 to −9 | Moderate impact |
 | LOW findings | Do not affect the score |
 | Unresolved questions (HIGH impact) | −3 to −5 each |
 | No HIGH/MEDIUM findings | Score is 95–100% |
