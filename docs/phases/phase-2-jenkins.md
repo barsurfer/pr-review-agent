@@ -4,10 +4,14 @@
 
 Auto-trigger the review agent on PR events. No manual steps required after setup.
 
-## Status: ✅ Complete
+## Status: 🔄 In Progress
 
 > Phase 1 and 1b are complete and tested against live Bitbucket PRs.
-> Jenkins integration is live.
+> Per-repo Jenkins integration is live.
+>
+> **Next**: Single Jenkins job that reviews multiple repositories. Approach TBD —
+> options include a config file listing target repos, a parameterised pipeline,
+> or a shared library with a repo list.
 
 ---
 

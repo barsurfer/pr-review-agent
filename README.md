@@ -4,7 +4,22 @@ Automated pull request code reviewer powered by Claude. When a PR is opened or u
 the agent fetches the diff and relevant file context from your VCS, sends it to Claude,
 and posts a structured review comment directly on the PR.
 
-**Current VCS support:** Bitbucket (GitHub and GitLab coming in Phase 3)
+**Current VCS support:** Bitbucket (GitHub and GitLab planned)
+
+### What it does
+
+- Reviews PR diffs and posts structured comments (summary, findings, verdict score)
+- Skips duplicate reviews (commit hash dedup)
+- Produces delta reviews when new commits are pushed
+- Responds to developer questions on previous reviews
+- Supports per-repo review instructions (`.agent-review-instructions.md`)
+
+### What it does not
+
+- Does not check out code — everything via VCS API
+- Does not approve or merge PRs — comment only
+- Does not store PR data — stateless, one run = one review
+- Does not replace human reviewers — opinionated aid, not a gatekeeper
 
 ---
 
