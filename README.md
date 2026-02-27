@@ -387,7 +387,17 @@ valid — the base role and mental model will be used automatically.
 
 The agent fetches this file via the Bitbucket API — no checkout required.
 See [docs/architecture/prompt-convention.md](docs/architecture/prompt-convention.md) for
-details and more examples. Full example prompts are in the [`prompts/`](prompts/) directory.
+details and more examples. Full example prompts are in the [`prompts/`](prompts/) directory:
+
+| File | Stack | Format |
+|------|-------|--------|
+| `prompts/angular-ionic.txt` | Angular / Ionic / Capacitor | Agent only |
+| `prompts/java-spring.txt` | Java / Spring Boot / Hibernate | Agent only |
+| `prompts/angular-ionic-copilot.prompt.md` | Angular / Ionic / Capacitor | Copilot + Agent |
+| `prompts/angular-copilot.prompt.md` | Angular (web) | Copilot + Agent |
+
+The `.prompt.md` files include YAML frontmatter and a `## HOW TO REVIEW` section for
+GitHub Copilot — see [docs/reference/copilot-integration.md](docs/reference/copilot-integration.md).
 
 ---
 

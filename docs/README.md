@@ -38,6 +38,7 @@ structured review as a PR comment.
 |-----|----------|
 | [reference/env-vars.md](reference/env-vars.md) | All environment variables across phases |
 | [reference/token-budget.md](reference/token-budget.md) | Token cost estimates and mitigation strategies |
+| [reference/copilot-integration.md](reference/copilot-integration.md) | Sharing prompt files with GitHub Copilot |
 
 ---
 

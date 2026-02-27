@@ -214,12 +214,15 @@ This prevents near-duplicate review comments on cosmetic-only pushes.
 
 Full example prompts are in the [`prompts/`](../../prompts/) directory:
 
-| File | Stack |
-|------|-------|
-| `prompts/java-spring.txt` | Java / Spring Boot / Hibernate |
-| `prompts/angular-ionic.txt` | Angular / Ionic / Capacitor |
+| File | Stack | Format |
+|------|-------|--------|
+| `prompts/angular-ionic.txt` | Angular / Ionic / Capacitor | Agent only |
+| `prompts/java-spring.txt` | Java / Spring Boot / Hibernate | Agent only |
+| `prompts/angular-ionic-copilot.prompt.md` | Angular / Ionic / Capacitor | Copilot + Agent |
+| `prompts/angular-copilot.prompt.md` | Angular (web) | Copilot + Agent |
 
-These can be used as templates for creating new `.agent-review-instructions.md` files.
+The `.txt` files are agent-only templates. The `.prompt.md` files include YAML frontmatter
+and a `## HOW TO REVIEW` section for GitHub Copilot — the agent strips both when parsing.
 
 ---
 
