@@ -23,7 +23,7 @@ export interface UsageRecord {
   action: string
   skip_reason: string | null
   model: string
-  tokens: { input: number; output: number; cache_read: number; cache_write: number }
+  tokens: { input: number; output: number; cache_read: number; cache_write: number; estimated_input: number }
   cost_usd: number
   duration_ms: number
   dry_run: boolean
@@ -45,6 +45,7 @@ enum State {
   RESPOND_TO_REPLIES,
   LOAD_PROMPT,
   FETCH_CONTEXT,
+  ESTIMATE_TOKENS,
   CALL_CLAUDE,
   CHECK_NO_CHANGE,
   POST_REVIEW,
@@ -79,6 +80,7 @@ interface ReviewContext {
   reviewText?: string
   skipReason?: string
   usage: { input_tokens: number; output_tokens: number }
+  estimatedInputTokens: number
 
   // Tracking
   action: string
@@ -269,6 +271,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       const result = await runCommentResponse(
         config.anthropic.apiKey,
         config.anthropic.model,
+        config.anthropic.maxRetries,
         ctx.filteredDiff!,
         lastReview.body,
         ctx.replies!
@@ -312,6 +315,28 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         config.context.maxFileLines
       )
       console.log(`  Fetched full content for ${ctx.fileContexts.length} file(s)`)
+      return State.ESTIMATE_TOKENS
+    }
+
+    // ── Token estimation ──────────────────────────────────────────────
+    case State.ESTIMATE_TOKENS: {
+      const promptChars = ctx.prompt!.content.length
+      const diffChars = ctx.filteredDiff!.length
+      const contextChars = ctx.fileContexts!.reduce((sum, f) => sum + f.content.length, 0)
+      const reviewChars = (ctx.previousReviews ?? []).reduce((sum, r) => sum + r.body.length, 0)
+      const replyChars = (ctx.replies ?? []).reduce((sum, r) => sum + r.body.length, 0)
+      const totalChars = promptChars + diffChars + contextChars + reviewChars + replyChars
+      const estimatedTokens = Math.ceil(totalChars / 4)
+
+      ctx.estimatedInputTokens = estimatedTokens
+      console.log(`  Estimated input: ~${estimatedTokens.toLocaleString()} tokens (${totalChars.toLocaleString()} chars)`)
+
+      const max = config.anthropic.maxInputTokens
+      if (max > 0 && estimatedTokens > max) {
+        ctx.action = 'SKIP'
+        ctx.skipReason = `Estimated input ~${estimatedTokens.toLocaleString()} tokens exceeds MAX_INPUT_TOKENS (${max.toLocaleString()})`
+        return State.SKIP
+      }
       return State.CALL_CLAUDE
     }
 
@@ -320,6 +345,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       const result = await runReview(
         config.anthropic.apiKey,
         config.anthropic.model,
+        config.anthropic.maxRetries,
         ctx.prInfo!,
         ctx.filteredDiff!,
         ctx.fileContexts!,
@@ -385,6 +411,7 @@ export async function review(adapter: VCSAdapter, prId: string, dryRun = false, 
   const ctx: ReviewContext = {
     adapter, prId, dryRun, promptPath, force, logUsage, repoSlug,
     usage: { input_tokens: 0, output_tokens: 0 },
+    estimatedInputTokens: 0,
     action: 'ERROR',
     reviewNumber: 0,
   }
@@ -428,6 +455,7 @@ export async function review(adapter: VCSAdapter, prId: string, dryRun = false, 
       output: ctx.usage.output_tokens,
       cache_read: 0,
       cache_write: 0,
+      estimated_input: ctx.estimatedInputTokens,
     },
     cost_usd: estimateCost({ input: ctx.usage.input_tokens, output: ctx.usage.output_tokens }, config.anthropic.model),
     duration_ms: durationMs,

@@ -20732,7 +20732,9 @@ var config = {
   },
   anthropic: {
     apiKey: required("ANTHROPIC_API_KEY"),
-    model: optional("CLAUDE_MODEL", "claude-sonnet-4-6")
+    model: optional("CLAUDE_MODEL", "claude-sonnet-4-6"),
+    maxRetries: parseInt(optional("MAX_RETRIES", "3"), 10),
+    maxInputTokens: parseInt(optional("MAX_INPUT_TOKENS", "150000"), 10)
   },
   agentIdentity: process.env.AGENT_IDENTITY || process.env.BITBUCKET_USERNAME || "Claude",
   context: {
@@ -24735,8 +24737,30 @@ function parseRepoPrompt(content) {
   }
   return sections;
 }
+var SECTION_NAMES = ["role", "reviewPriorities", "mentalModel"];
+var SECTION_LABELS = {
+  role: "ROLE",
+  reviewPriorities: "REVIEW PRIORITIES",
+  mentalModel: "MENTAL MODEL"
+};
+function logSections(sections) {
+  const parsed = SECTION_NAMES.filter((k2) => sections[k2]);
+  const defaulted = SECTION_NAMES.filter((k2) => !sections[k2]);
+  if (parsed.length) console.log(`  Sections from prompt: ${parsed.map((k2) => SECTION_LABELS[k2]).join(", ")}`);
+  if (defaulted.length) console.log(`  Sections using defaults: ${defaulted.map((k2) => SECTION_LABELS[k2]).join(", ")}`);
+}
 function fillTemplate(template, sections) {
   return template.replace("{{ROLE}}", sections.role ?? DEFAULT_ROLE).replace("{{REVIEW_PRIORITIES}}", sections.reviewPriorities ?? DEFAULT_REVIEW_PRIORITIES).replace("{{MENTAL_MODEL}}", sections.mentalModel ?? DEFAULT_MENTAL_MODEL);
+}
+function validateLocalPrompt(path) {
+  const template = getBaseTemplate();
+  const content = (0, import_fs.readFileSync)(path, "utf-8");
+  console.log(`Validating prompt: ${path}`);
+  const sections = parseRepoPrompt(content);
+  logSections(sections);
+  const filled = fillTemplate(template, sections);
+  console.log(`
+Filled prompt length: ${filled.length} chars (~${Math.ceil(filled.length / 4).toLocaleString()} tokens)`);
 }
 async function loadPrompt(adapter2, prInfo, localPromptPath) {
   const template = getBaseTemplate();
@@ -24744,6 +24768,7 @@ async function loadPrompt(adapter2, prInfo, localPromptPath) {
     const content = (0, import_fs.readFileSync)(localPromptPath, "utf-8");
     console.log(`Using local prompt from ${localPromptPath}`);
     const sections = parseRepoPrompt(content);
+    logSections(sections);
     const filled2 = fillTemplate(template, sections);
     return { content: filled2, source: localPromptPath };
   }
@@ -24754,6 +24779,7 @@ async function loadPrompt(adapter2, prInfo, localPromptPath) {
       if (repoPrompt) {
         console.log(`Using repo-specific prompt from ${path} (${ref.slice(0, 12)})`);
         const sections = parseRepoPrompt(repoPrompt);
+        logSections(sections);
         const filled2 = fillTemplate(template, sections);
         return { content: filled2, source: "repo" };
       }
@@ -26326,10 +26352,10 @@ function getBrowserInfo() {
   for (const { key, pattern } of browserPatterns) {
     const match = pattern.exec(navigator.userAgent);
     if (match) {
-      const major = match[1] || 0;
+      const major2 = match[1] || 0;
       const minor = match[2] || 0;
       const patch = match[3] || 0;
-      return { browser: key, version: `${major}.${minor}.${patch}` };
+      return { browser: key, version: `${major2}.${minor}.${patch}` };
     }
   }
   return null;
@@ -28307,10 +28333,10 @@ var sdk_default = Anthropic;
 // src/claude/client.ts
 var import_meta2 = {};
 var MAX_TOKENS = 4096;
-async function runReview(apiKey, model, prInfo, diff, fileContexts, prompt, previousReviews, developerReplies = []) {
-  const client = new sdk_default({ apiKey });
+async function runReview(apiKey, model, maxRetries, prInfo, diff, fileContexts, prompt, previousReviews, developerReplies = []) {
+  const client = new sdk_default({ apiKey, maxRetries });
   const userMessage = buildUserMessage(prInfo, diff, fileContexts, previousReviews, developerReplies);
-  console.log(`Sending request to Claude (${model})...`);
+  console.log(`Sending request to Claude (${model}, maxRetries: ${maxRetries})...`);
   const response = await client.messages.create({
     model,
     max_tokens: MAX_TOKENS,
@@ -28373,8 +28399,8 @@ function getReplyPrompt() {
     throw new Error("Cannot load reply prompt: file not found and no embedded copy");
   }
 }
-async function runCommentResponse(apiKey, model, diff, originalReview, replies) {
-  const client = new sdk_default({ apiKey });
+async function runCommentResponse(apiKey, model, maxRetries, diff, originalReview, replies) {
+  const client = new sdk_default({ apiKey, maxRetries });
   const parts = [];
   parts.push(`## Your Original Review:
 ${originalReview}`);
@@ -28388,7 +28414,7 @@ ${diff}
 > ${r2.body}`);
   }
   const userMessage = parts.join("\n\n");
-  console.log(`Sending reply request to Claude (${model})...`);
+  console.log(`Sending reply request to Claude (${model}, maxRetries: ${maxRetries})...`);
   const response = await client.messages.create({
     model,
     max_tokens: 2048,
@@ -28485,22 +28511,22 @@ async function transition(state, ctx) {
       if (minChangedFiles > 0 && fileCount < minChangedFiles) {
         ctx.action = "SKIP";
         ctx.skipReason = `PR has ${fileCount} changed file(s), minimum is ${minChangedFiles}`;
-        return 11 /* SKIP */;
+        return 12 /* SKIP */;
       }
       if (maxChangedFiles > 0 && fileCount > maxChangedFiles) {
         ctx.action = "SKIP";
         ctx.skipReason = `PR has ${fileCount} changed file(s), maximum is ${maxChangedFiles}`;
-        return 11 /* SKIP */;
+        return 12 /* SKIP */;
       }
       if (minChangedLines > 0 && lineCount < minChangedLines) {
         ctx.action = "SKIP";
         ctx.skipReason = `PR has ${lineCount} changed line(s), minimum is ${minChangedLines}`;
-        return 11 /* SKIP */;
+        return 12 /* SKIP */;
       }
       if (maxChangedLines > 0 && lineCount > maxChangedLines) {
         ctx.action = "SKIP";
         ctx.skipReason = `PR has ${lineCount} changed line(s), maximum is ${maxChangedLines}`;
-        return 11 /* SKIP */;
+        return 12 /* SKIP */;
       }
       return 3 /* CHECK_PREVIOUS_REVIEWS */;
     }
@@ -28545,7 +28571,7 @@ async function transition(state, ctx) {
       }
       ctx.action = "DEDUP_SKIP";
       ctx.skipReason = "no new commits and no unanswered questions";
-      return 11 /* SKIP */;
+      return 12 /* SKIP */;
     }
     // ── Generate and post reply ────────────────────────────────────────
     case 5 /* RESPOND_TO_REPLIES */: {
@@ -28553,6 +28579,7 @@ async function transition(state, ctx) {
       const result = await runCommentResponse(
         config.anthropic.apiKey,
         config.anthropic.model,
+        config.anthropic.maxRetries,
         ctx.filteredDiff,
         lastReview.body,
         ctx.replies
@@ -28575,7 +28602,7 @@ async function transition(state, ctx) {
         console.log("Done. Reply posted to PR.\n");
       }
       ctx.action = "REPLY";
-      return 12 /* DONE */;
+      return 13 /* DONE */;
     }
     // ── Load system prompt ─────────────────────────────────────────────
     case 6 /* LOAD_PROMPT */: {
@@ -28596,13 +28623,33 @@ async function transition(state, ctx) {
         config.context.maxFileLines
       );
       console.log(`  Fetched full content for ${ctx.fileContexts.length} file(s)`);
-      return 8 /* CALL_CLAUDE */;
+      return 8 /* ESTIMATE_TOKENS */;
+    }
+    // ── Token estimation ──────────────────────────────────────────────
+    case 8 /* ESTIMATE_TOKENS */: {
+      const promptChars = ctx.prompt.content.length;
+      const diffChars = ctx.filteredDiff.length;
+      const contextChars = ctx.fileContexts.reduce((sum, f2) => sum + f2.content.length, 0);
+      const reviewChars = (ctx.previousReviews ?? []).reduce((sum, r2) => sum + r2.body.length, 0);
+      const replyChars = (ctx.replies ?? []).reduce((sum, r2) => sum + r2.body.length, 0);
+      const totalChars = promptChars + diffChars + contextChars + reviewChars + replyChars;
+      const estimatedTokens = Math.ceil(totalChars / 4);
+      ctx.estimatedInputTokens = estimatedTokens;
+      console.log(`  Estimated input: ~${estimatedTokens.toLocaleString()} tokens (${totalChars.toLocaleString()} chars)`);
+      const max = config.anthropic.maxInputTokens;
+      if (max > 0 && estimatedTokens > max) {
+        ctx.action = "SKIP";
+        ctx.skipReason = `Estimated input ~${estimatedTokens.toLocaleString()} tokens exceeds MAX_INPUT_TOKENS (${max.toLocaleString()})`;
+        return 12 /* SKIP */;
+      }
+      return 9 /* CALL_CLAUDE */;
     }
     // ── Call Claude for review ─────────────────────────────────────────
-    case 8 /* CALL_CLAUDE */: {
+    case 9 /* CALL_CLAUDE */: {
       const result = await runReview(
         config.anthropic.apiKey,
         config.anthropic.model,
+        config.anthropic.maxRetries,
         ctx.prInfo,
         ctx.filteredDiff,
         ctx.fileContexts,
@@ -28613,19 +28660,19 @@ async function transition(state, ctx) {
       ctx.reviewText = result.text;
       ctx.usage.input_tokens += result.usage.input_tokens;
       ctx.usage.output_tokens += result.usage.output_tokens;
-      return 9 /* CHECK_NO_CHANGE */;
+      return 10 /* CHECK_NO_CHANGE */;
     }
     // ── NO_CHANGE stop word ────────────────────────────────────────────
-    case 9 /* CHECK_NO_CHANGE */: {
+    case 10 /* CHECK_NO_CHANGE */: {
       if (ctx.reviewText.trim() === "NO_CHANGE") {
         ctx.action = "NO_CHANGE";
         ctx.skipReason = "No changes since last review";
-        return 11 /* SKIP */;
+        return 12 /* SKIP */;
       }
-      return 10 /* POST_REVIEW */;
+      return 11 /* POST_REVIEW */;
     }
     // ── Build comment and post ─────────────────────────────────────────
-    case 10 /* POST_REVIEW */: {
+    case 11 /* POST_REVIEW */: {
       const cleaned = ctx.reviewText.replace(/\n---\n\*Reviewed by .*?\*\s*/g, "").trimEnd();
       const commitShort = ctx.prInfo.sourceCommit.slice(0, 12);
       const footer = `
@@ -28643,16 +28690,16 @@ async function transition(state, ctx) {
         console.log("Done. Review posted to PR.\n");
       }
       ctx.action = "REVIEW";
-      return 12 /* DONE */;
+      return 13 /* DONE */;
     }
     // ── Terminal: skip ─────────────────────────────────────────────────
-    case 11 /* SKIP */: {
+    case 12 /* SKIP */: {
       console.log(`
 Skipping: ${ctx.skipReason}`);
-      return 12 /* DONE */;
+      return 13 /* DONE */;
     }
     default:
-      return 12 /* DONE */;
+      return 13 /* DONE */;
   }
 }
 async function review(adapter2, prId, dryRun = false, promptPath, force = false, logUsage = false, repoSlug = "") {
@@ -28668,13 +28715,14 @@ Starting review for PR #${prId}`);
     logUsage,
     repoSlug,
     usage: { input_tokens: 0, output_tokens: 0 },
+    estimatedInputTokens: 0,
     action: "ERROR",
     reviewNumber: 0
   };
   let error = null;
   try {
     let state = 0 /* FETCH_PR_INFO */;
-    while (state !== 12 /* DONE */) {
+    while (state !== 13 /* DONE */) {
       state = await transition(state, ctx);
     }
   } catch (err) {
@@ -28706,7 +28754,8 @@ Starting review for PR #${prId}`);
       input: ctx.usage.input_tokens,
       output: ctx.usage.output_tokens,
       cache_read: 0,
-      cache_write: 0
+      cache_write: 0,
+      estimated_input: ctx.estimatedInputTokens
     },
     cost_usd: estimateCost({ input: ctx.usage.input_tokens, output: ctx.usage.output_tokens }, config.anthropic.model),
     duration_ms: durationMs,
@@ -28727,10 +28776,29 @@ ${JSON.stringify(record, null, 2)}`);
 }
 
 // src/index.ts
+var [major] = process.versions.node.split(".").map(Number);
+if (major < 20) {
+  console.error(`Node.js 20+ required. Current: ${process.version}`);
+  process.exit(1);
+}
 var program2 = new Command();
-program2.name("pr-review-agent").description("Automated PR code review powered by Claude").requiredOption("--pr-id <id>", "Pull request ID").option("--workspace <workspace>", "VCS workspace / org (overrides BITBUCKET_WORKSPACE)").option("--repo-slug <slug>", "Repository slug").option("--vcs <provider>", "VCS provider: bitbucket | github | gitlab (overrides VCS_PROVIDER)").option("--dry-run", "Print the review to stdout without posting to the PR").option("--force", "Ignore previous reviews and produce a fresh review").option("--log-usage [bool]", "Log usage data to results.jsonl (default: true)", (v2) => v2 !== "false", true).option("--prompt <path>", "Path to a local prompt file (overrides repo .agent-review-instructions.md)").option("--min-changed-files <n>", "Skip review if fewer files changed (overrides MIN_CHANGED_FILES)").option("--max-changed-files <n>", "Skip review if more files changed (overrides MAX_CHANGED_FILES)").option("--min-changed-lines <n>", "Skip review if fewer lines changed (overrides MIN_CHANGED_LINES)").option("--max-changed-lines <n>", "Skip review if more lines changed (overrides MAX_CHANGED_LINES)").parse(process.argv);
+program2.name("pr-review-agent").description("Automated PR code review powered by Claude").option("--pr-id <id>", "Pull request ID").option("--workspace <workspace>", "VCS workspace / org (overrides BITBUCKET_WORKSPACE)").option("--repo-slug <slug>", "Repository slug").option("--vcs <provider>", "VCS provider: bitbucket | github | gitlab (overrides VCS_PROVIDER)").option("--dry-run", "Print the review to stdout without posting to the PR").option("--force", "Ignore previous reviews and produce a fresh review").option("--log-usage [bool]", "Log usage data to results.jsonl (default: true)", (v2) => v2 !== "false", true).option("--prompt <path>", "Path to a local prompt file (overrides repo .agent-review-instructions.md)").option("--validate-prompt", "Validate prompt and exit (local via --prompt, or repo via --pr-id)").option("--min-changed-files <n>", "Skip review if fewer files changed (overrides MIN_CHANGED_FILES)").option("--max-changed-files <n>", "Skip review if more files changed (overrides MAX_CHANGED_FILES)").option("--min-changed-lines <n>", "Skip review if fewer lines changed (overrides MIN_CHANGED_LINES)").option("--max-changed-lines <n>", "Skip review if more lines changed (overrides MAX_CHANGED_LINES)").parse(process.argv);
 var opts = program2.opts();
 async function main() {
+  if (opts.validatePrompt) {
+    if (opts.prompt) {
+      validateLocalPrompt(opts.prompt);
+      return;
+    }
+    if (!opts.prId) {
+      console.error("Error: --validate-prompt requires --prompt <path> or --pr-id <id>");
+      process.exit(1);
+    }
+  }
+  if (!opts.prId) {
+    console.error("Error: --pr-id is required");
+    process.exit(1);
+  }
   const provider = opts.vcs ?? config.vcsProvider;
   let adapter2;
   if (provider === "bitbucket") {
@@ -28755,6 +28823,13 @@ async function main() {
   } else {
     console.error(`Unknown VCS provider: ${provider}`);
     process.exit(1);
+  }
+  if (opts.validatePrompt) {
+    const prInfo = await adapter2.getPullRequestInfo(opts.prId);
+    const result = await loadPrompt(adapter2, prInfo);
+    console.log(`
+Filled prompt length: ${result.content.length} chars (~${Math.ceil(result.content.length / 4).toLocaleString()} tokens)`);
+    return;
   }
   if (opts.minChangedFiles) config.thresholds.minChangedFiles = parseInt(opts.minChangedFiles, 10);
   if (opts.maxChangedFiles) config.thresholds.maxChangedFiles = parseInt(opts.maxChangedFiles, 10);

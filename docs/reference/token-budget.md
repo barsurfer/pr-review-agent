@@ -91,6 +91,7 @@ The record is also printed to stdout at the end of every run regardless of the f
 | `model` | `string` | Claude model ID used |
 | `tokens.input` | `number` | Input tokens (from API response) |
 | `tokens.output` | `number` | Output tokens (from API response) |
+| `tokens.estimated_input` | `number` | Pre-call estimate (`chars / 4`) — compare with `tokens.input` for accuracy |
 | `tokens.cache_read` | `number` | Cache read tokens (reserved for prompt caching) |
 | `tokens.cache_write` | `number` | Cache write tokens (reserved for prompt caching) |
 | `cost_usd` | `number` | Estimated cost from hardcoded per-model pricing table |
@@ -140,6 +141,9 @@ jq -s '{total: length, dedup: [.[] | select(.action=="DEDUP_SKIP")] | length}' r
 
 # Error rate
 jq -s '{total: length, errors: [.[] | select(.action=="ERROR")] | length}' results.jsonl
+
+# Estimate vs actual tokens (accuracy check)
+jq -s '[.[] | select(.action=="REVIEW") | {pr: .pr_id, estimated: .tokens.estimated_input, actual: .tokens.input, ratio: (if .tokens.estimated_input > 0 then (.tokens.input / .tokens.estimated_input * 100 | round | tostring + "%") else "n/a" end)}]' results.jsonl
 ```
 
 ### Jenkins Archiving

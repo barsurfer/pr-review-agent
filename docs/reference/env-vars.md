@@ -24,6 +24,8 @@ credentials in source code or commit them to version control.**
 | `BITBUCKET_TOKEN` | `ATATT3x...` | Atlassian API token with Bitbucket scopes (replaces deprecated app passwords) |
 | `ANTHROPIC_API_KEY` | `sk-ant-...` | Anthropic API key (billed separately from Claude.ai subscriptions) |
 | `CLAUDE_MODEL` | `claude-sonnet-4-6` | Claude model ID to use for reviews |
+| `MAX_RETRIES` | `3` | Max retries on 429/5xx errors (SDK built-in exponential backoff). Default: `3` |
+| `MAX_INPUT_TOKENS` | `150000` | Skip review if estimated input tokens exceed this value (0 = disabled) |
 | `MAX_CONTEXT_FILES` | `20` | Max number of files to fetch full content for |
 | `MAX_FILE_LINES` | `500` | Files over this line count get diff-only (no full content) |
 | `MIN_CHANGED_FILES` | `0` | Skip review if PR has fewer changed files (0 = disabled) |
@@ -66,6 +68,8 @@ BITBUCKET_TOKEN=
 # Claude
 ANTHROPIC_API_KEY=
 CLAUDE_MODEL=claude-sonnet-4-6
+MAX_RETRIES=3
+# MAX_INPUT_TOKENS=150000
 
 # Agent identity (defaults to BITBUCKET_USERNAME, then 'Claude')
 # AGENT_IDENTITY=

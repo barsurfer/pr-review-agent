@@ -61,11 +61,35 @@ function parseRepoPrompt(content: string): RepoPromptSections {
   return sections
 }
 
+const SECTION_NAMES: (keyof RepoPromptSections)[] = ['role', 'reviewPriorities', 'mentalModel']
+const SECTION_LABELS: Record<keyof RepoPromptSections, string> = {
+  role: 'ROLE',
+  reviewPriorities: 'REVIEW PRIORITIES',
+  mentalModel: 'MENTAL MODEL',
+}
+
+function logSections(sections: RepoPromptSections): void {
+  const parsed = SECTION_NAMES.filter(k => sections[k])
+  const defaulted = SECTION_NAMES.filter(k => !sections[k])
+  if (parsed.length) console.log(`  Sections from prompt: ${parsed.map(k => SECTION_LABELS[k]).join(', ')}`)
+  if (defaulted.length) console.log(`  Sections using defaults: ${defaulted.map(k => SECTION_LABELS[k]).join(', ')}`)
+}
+
 function fillTemplate(template: string, sections: RepoPromptSections): string {
   return template
     .replace('{{ROLE}}', sections.role ?? DEFAULT_ROLE)
     .replace('{{REVIEW_PRIORITIES}}', sections.reviewPriorities ?? DEFAULT_REVIEW_PRIORITIES)
     .replace('{{MENTAL_MODEL}}', sections.mentalModel ?? DEFAULT_MENTAL_MODEL)
+}
+
+export function validateLocalPrompt(path: string): void {
+  const template = getBaseTemplate()
+  const content = readFileSync(path, 'utf-8')
+  console.log(`Validating prompt: ${path}`)
+  const sections = parseRepoPrompt(content)
+  logSections(sections)
+  const filled = fillTemplate(template, sections)
+  console.log(`\nFilled prompt length: ${filled.length} chars (~${Math.ceil(filled.length / 4).toLocaleString()} tokens)`)
 }
 
 export type PromptSource = 'repo' | 'default' | string
@@ -83,6 +107,7 @@ export async function loadPrompt(adapter: VCSAdapter, prInfo: PRInfo, localPromp
     const content = readFileSync(localPromptPath, 'utf-8')
     console.log(`Using local prompt from ${localPromptPath}`)
     const sections = parseRepoPrompt(content)
+    logSections(sections)
     const filled = fillTemplate(template, sections)
     return { content: filled, source: localPromptPath }
   }
@@ -97,6 +122,7 @@ export async function loadPrompt(adapter: VCSAdapter, prInfo: PRInfo, localPromp
       if (repoPrompt) {
         console.log(`Using repo-specific prompt from ${path} (${ref.slice(0, 12)})`)
         const sections = parseRepoPrompt(repoPrompt)
+        logSections(sections)
         const filled = fillTemplate(template, sections)
         return { content: filled, source: 'repo' }
       }

@@ -21,6 +21,7 @@ export interface ClaudeResult {
 export async function runReview(
   apiKey: string,
   model: string,
+  maxRetries: number,
   prInfo: PRInfo,
   diff: string,
   fileContexts: FileContext[],
@@ -28,11 +29,11 @@ export async function runReview(
   previousReviews: ReviewComment[],
   developerReplies: CommentReply[] = []
 ): Promise<ClaudeResult> {
-  const client = new Anthropic({ apiKey })
+  const client = new Anthropic({ apiKey, maxRetries })
 
   const userMessage = buildUserMessage(prInfo, diff, fileContexts, previousReviews, developerReplies)
 
-  console.log(`Sending request to Claude (${model})...`)
+  console.log(`Sending request to Claude (${model}, maxRetries: ${maxRetries})...`)
 
   const response = await client.messages.create({
     model,
@@ -111,11 +112,12 @@ function getReplyPrompt(): string {
 export async function runCommentResponse(
   apiKey: string,
   model: string,
+  maxRetries: number,
   diff: string,
   originalReview: string,
   replies: CommentReply[]
 ): Promise<ClaudeResult> {
-  const client = new Anthropic({ apiKey })
+  const client = new Anthropic({ apiKey, maxRetries })
 
   const parts: string[] = []
   parts.push(`## Your Original Review:\n${originalReview}`)
@@ -126,7 +128,7 @@ export async function runCommentResponse(
   }
   const userMessage = parts.join('\n\n')
 
-  console.log(`Sending reply request to Claude (${model})...`)
+  console.log(`Sending reply request to Claude (${model}, maxRetries: ${maxRetries})...`)
 
   const response = await client.messages.create({
     model,

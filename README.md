@@ -235,7 +235,7 @@ npm run bundle
 
 | Flag | Required | Description |
 |------|----------|-------------|
-| `--pr-id <id>` | **Yes** | Pull request ID to review |
+| `--pr-id <id>` | **Yes**\* | Pull request ID to review |
 | `--repo-slug <slug>` | **Yes** (Bitbucket) | Repository slug |
 | `--workspace <workspace>` | No | Overrides `BITBUCKET_WORKSPACE` env var |
 | `--vcs <provider>` | No | `bitbucket` \| `github` \| `gitlab` — overrides `VCS_PROVIDER` env var (default: `bitbucket`) |
@@ -243,10 +243,13 @@ npm run bundle
 | `--force` | No | Ignore previous reviews and produce a fresh review |
 | `--log-usage [bool]` | No | Log usage record to `results.jsonl` (default: `true`, use `--log-usage false` to disable). See [docs/reference/token-budget.md](docs/reference/token-budget.md) for schema. |
 | `--prompt <path>` | No | Path to a local prompt file (overrides repo `.agent-review-instructions.md`) |
+| `--validate-prompt` | No | Validate prompt and exit — local via `--prompt`, or repo via `--pr-id` |
 | `--min-changed-files <n>` | No | Skip review if PR has fewer changed files (overrides `MIN_CHANGED_FILES`) |
 | `--max-changed-files <n>` | No | Skip review if PR has more changed files (overrides `MAX_CHANGED_FILES`) |
 | `--min-changed-lines <n>` | No | Skip review if PR has fewer changed lines (overrides `MIN_CHANGED_LINES`) |
 | `--max-changed-lines <n>` | No | Skip review if PR has more changed lines (overrides `MAX_CHANGED_LINES`) |
+
+\* Not required when using `--validate-prompt --prompt <path>` (local file validation).
 
 ---
 
@@ -271,6 +274,8 @@ All credentials and settings are provided via environment variables.
 | `VCS_PROVIDER` | `bitbucket` | Which VCS adapter to use (`bitbucket` \| `github` \| `gitlab`) |
 | `BITBUCKET_BASE_URL` | `https://api.bitbucket.org/2.0` | Bitbucket API base URL (change for self-hosted) |
 | `CLAUDE_MODEL` | `claude-sonnet-4-6` | Claude model ID to use for reviews |
+| `MAX_RETRIES` | `3` | Max retries on 429/5xx errors (exponential backoff) |
+| `MAX_INPUT_TOKENS` | `150000` | Skip review if estimated input tokens exceed this value (0 = disabled) |
 | `MAX_CONTEXT_FILES` | `20` | Max files to fetch full content for |
 | `MAX_FILE_LINES` | `500` | Files over this line count get diff-only context |
 | `MIN_CHANGED_FILES` | `0` (disabled) | Skip review if PR has fewer changed files |
@@ -382,38 +387,40 @@ details and more examples. Full example prompts are in the [`prompts/`](prompts/
 
 ---
 
-## Jenkins Integration (Phase 2)
+## Jenkins Integration
 
-Once you've verified local runs work, integrate into your Jenkins pipeline.
-The pre-built bundle means **no `npm install` is needed** on the Jenkins agent — just
-Node.js and the single file.
+Add an `AI Review` stage to your repo's Jenkinsfile. The bundle is downloaded at
+build time — no cloning or `npm install` needed on the Jenkins agent.
 
 ```groovy
-stage('AI PR Review') {
+stage('AI Review') {
   when { changeRequest() }
   steps {
-    withCredentials([
-      string(credentialsId: 'anthropic-api-key', variable: 'ANTHROPIC_API_KEY'),
-      string(credentialsId: 'bitbucket-token', variable: 'BITBUCKET_TOKEN'),
-      string(credentialsId: 'bitbucket-username', variable: 'BITBUCKET_USERNAME')
-    ]) {
-      sh '''
-        node /opt/pr-review-agent/dist/pr-review-agent.cjs \
-          --workspace $BITBUCKET_WORKSPACE \
-          --repo-slug $BITBUCKET_REPO_SLUG \
-          --pr-id $BITBUCKET_PULL_REQUEST_ID
-      '''
+    catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
+      nodejs(nodeJSInstallationName: env.NODE_VERSION) {
+        withCredentials([
+          string(credentialsId: 'anthropic-api-key', variable: 'ANTHROPIC_API_KEY'),
+          string(credentialsId: 'bitbucket-token', variable: 'BITBUCKET_TOKEN'),
+          string(credentialsId: 'bitbucket-username', variable: 'BITBUCKET_USERNAME'),
+          string(credentialsId: 'claude-model', variable: 'CLAUDE_MODEL')
+        ]) {
+          sh """
+            curl -fsSL https://raw.githubusercontent.com/<org>/pr-review-agent/main/dist/pr-review-agent.cjs -o /tmp/pr-review-agent.cjs
+            node /tmp/pr-review-agent.cjs \
+              --repo-slug ${env.APP_NAME} \
+              --pr-id ${env.CHANGE_ID}
+          """
+        }
+      }
     }
   }
 }
 ```
 
-Requirements on the Jenkins agent:
-- Node.js v20+ installed
-- This repo cloned to a fixed path (e.g. `/opt/pr-review-agent`)
-- Secrets stored as **masked** Jenkins credentials (see [Environment Variables](#environment-variables) above)
-
-See [docs/phases/phase-2-jenkins.md](docs/phases/phase-2-jenkins.md) for the full guide.
+Key points:
+- **`catchError`** ensures agent failures never break the build
+- **`CLAUDE_MODEL` as a credential** lets you switch models without code changes
+- The bundle can also be served from a fixed path — see [docs/phases/phase-2-jenkins.md](docs/phases/phase-2-jenkins.md) for alternatives and full details
 
 ---
 

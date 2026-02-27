@@ -12,11 +12,11 @@ structured review as a PR comment.
 |-------|------|--------|
 | [Phase 1](phases/phase-1-core.md) | Core Script (Local Testable) | ✅ Complete |
 | [Phase 1b](phases/phase-1b-comment-replies.md) | Comment Reply Handling | ✅ Complete |
-| [Phase 2](phases/phase-2-jenkins.md) | Jenkins Integration | 🔲 Not started |
+| [Phase 2](phases/phase-2-jenkins.md) | Jenkins Integration | ✅ Complete |
 | [Phase 3](phases/phase-4-inline-comments.md) | Inline Line-Level Comments | ⏸ Deferred |
 | [Backlog](phases/phase-5-backlog.md) | Further Backlog | ⏸ Deferred |
 
-> **Active focus:** Phase 2. Phase 1 and 1b are complete and tested against live Bitbucket PRs.
+> Phase 1, 1b, and 2 are complete. Jenkins integration is live.
 >
 > [Multi-VCS Support](phases/phase-3-multi-vcs.md) has been moved to the backlog —
 > Bitbucket is the only VCS needed for now.

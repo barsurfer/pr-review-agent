@@ -52,30 +52,21 @@ Complexity: medium-high. Language-specific import parsing required.
 
 ---
 
-### Anthropic API Retry Configuration
+### ~~Anthropic API Retry Configuration~~ ✅ Implemented
 
-The `@anthropic-ai/sdk` has built-in retry for 429/5xx (2 retries by default), but the agent
-doesn't explicitly configure it. For multi-repo Jenkins environments with concurrent PRs,
-rate limiting is expected.
-
-- Explicitly set `maxRetries` on the Anthropic client (e.g. 3 with backoff)
-- Log retry attempts so they appear in usage output
-- Consider a configurable `MAX_RETRIES` env var
-
-Priority: **HIGH** — required before scaling to many repos.
+> **Completed.** The Anthropic client now uses a configurable `MAX_RETRIES` env var
+> (default: `3`). The SDK's built-in exponential backoff handles 429/5xx retries
+> automatically. Retry count is logged with each API call.
 
 ---
 
-### Token Estimation Before API Call
+### ~~Token Estimation Before API Call~~ ✅ Implemented
 
-No token count estimation happens before sending the payload to Claude. A PR with 20 files
-at 499 lines each could push toward model limits.
-
-- Estimate tokens after building the payload (rough: `chars / 4`)
-- Warn if estimated tokens exceed a configurable threshold (e.g. `MAX_INPUT_TOKENS=100000`)
-- Consider truncating or skipping files to stay under budget
-
-Priority: **HIGH** — prevents surprise failures on large PRs.
+> **Completed.** After building the payload, the agent estimates input tokens
+> (`total chars / 4`) and logs the estimate. `MAX_INPUT_TOKENS` defaults to
+> `150000` — reviews exceeding the estimate are skipped. Set to `0` to disable.
+> The usage record includes `tokens.estimated_input` alongside actual
+> `tokens.input` for accuracy tracking.
 
 ---
 
@@ -93,44 +84,27 @@ Priority: **MEDIUM**
 
 ---
 
-### Prompt Section Logging
+### ~~Prompt Section Logging~~ ✅ Implemented
 
-When loading `.agent-review-instructions.md`, the loader logs which file was used but NOT
-which sections (ROLE, REVIEW PRIORITIES, MENTAL MODEL) were found vs defaulted. A malformed
-file silently falls back to defaults with no feedback.
-
-- Log which sections were parsed from the repo prompt
-- Log which sections fell back to defaults
-- Consider a `--validate-prompt` flag for explicit checking
-
-Priority: **MEDIUM**
+> **Completed.** After loading any prompt (local, repo, or default), the loader
+> logs which sections (ROLE, REVIEW PRIORITIES, MENTAL MODEL) were parsed from
+> the file and which fell back to defaults. A `--validate-prompt` flag (requires
+> `--prompt <path>`) parses a local prompt file and exits without running a review.
 
 ---
 
-### Jenkins Stage Hardening
+### ~~Jenkins Stage Hardening~~ ✅ Implemented (Phase 2)
 
-The documented Jenkins example is missing error handling. Recommended additions:
-
-- `catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE')` — agent failure shouldn't block the build
-- `timeout(time: 3, unit: 'MINUTES')` — prevent hanging API calls from blocking the executor
-- `retry(2)` — retry on transient failures
-- `archiveArtifacts` for `results.jsonl` (documented in token-budget.md)
-
-Priority: **MEDIUM** — required before Phase 2 Jenkins rollout.
+> **Completed.** The production Jenkinsfile uses `catchError(buildResult: 'SUCCESS',
+> stageResult: 'UNSTABLE')` so agent failures never break the build. Retry is handled
+> by the agent itself (`MAX_RETRIES`). See [phase-2-jenkins.md](phase-2-jenkins.md).
 
 ---
 
-### Node.js Version Check at Startup
+### ~~Node.js Version Check at Startup~~ ✅ Implemented
 
-`.nvmrc` pins Node 20 and `package.json` has `engines.node >= 20`, but nothing validates
-at runtime. On a Jenkins agent running Node 18, behavior is undefined.
-
-```typescript
-const [major] = process.versions.node.split('.').map(Number)
-if (major < 20) { console.error(`Node.js 20+ required. Current: ${process.version}`); process.exit(1) }
-```
-
-Priority: **LOW**
+> **Completed.** The entry point (`src/index.ts`) checks `process.versions.node`
+> before any imports and exits with a clear error if the major version is below 20.
 
 ---
 

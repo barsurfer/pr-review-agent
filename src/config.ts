@@ -23,6 +23,8 @@ export const config = {
   anthropic: {
     apiKey: required('ANTHROPIC_API_KEY'),
     model: optional('CLAUDE_MODEL', 'claude-sonnet-4-6'),
+    maxRetries: parseInt(optional('MAX_RETRIES', '3'), 10),
+    maxInputTokens: parseInt(optional('MAX_INPUT_TOKENS', '150000'), 10),
   },
 
   agentIdentity: process.env.AGENT_IDENTITY || process.env.BITBUCKET_USERNAME || 'Claude',
