@@ -334,7 +334,7 @@ withCredentials([
 ## Customising the Review Prompt
 
 The agent uses a **base template** with shared rules (scope, mandatory rules, forbidden,
-output format) and fills in three customisable sections per repo. To customise, add a file
+output format) and fills in four customisable sections per repo. To customise, add a file
 called `.agent-review-instructions.md` to the **root or `docs/` directory** of the target repo (not this repo). The agent checks the PR's source branch first, then the target branch.
 
 The file can include any combination of these sections:
@@ -343,7 +343,11 @@ The file can include any combination of these sections:
 |---------|---------|-------------------|
 | `## ROLE` | Reviewer persona | "Senior Architect and Production Gatekeeper" |
 | `## REVIEW PRIORITIES` | Technology-specific checklist | Generic priorities (logic, safety, correctness) |
+| `## EXCEPTIONS` | Things to skip during review | No exceptions |
 | `## MENTAL MODEL` | Assumptions about the environment | Production load, real users, large dataset, 3am |
+
+YAML frontmatter (`---` delimited) is stripped before parsing, so the same file can include
+metadata for other tools (e.g. GitHub Copilot `.prompt.md` files) without affecting the agent.
 
 Example for a Java/Spring Boot project:
 

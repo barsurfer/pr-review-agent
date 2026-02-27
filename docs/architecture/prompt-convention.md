@@ -71,6 +71,41 @@ You are a Senior Frontend Architect and Production Gatekeeper.
 
 A file with only `## REVIEW PRIORITIES` is valid — all other sections use defaults.
 
+### YAML Frontmatter
+
+The parser strips YAML frontmatter (`---` delimited) before scanning for sections. This means
+the same file can include metadata for other tools (e.g. GitHub Copilot) without affecting the
+review agent:
+
+```markdown
+---
+description: "Code review instructions for this repo"
+agent: "agent"
+---
+
+## ROLE
+You are a Senior Frontend Architect.
+
+## REVIEW PRIORITIES
+...
+```
+
+Only the four recognised `## SECTION` headers are extracted — all other content (frontmatter,
+extra headers, free-form text) is silently ignored.
+
+### Sharing with GitHub Copilot
+
+The prompt file format is compatible with GitHub Copilot prompt files (`.prompt.md`). To share
+a single file between both tools, create the prompt as `.agent-review-instructions.md` and
+symlink it for Copilot:
+
+```bash
+ln -s ../../.agent-review-instructions.md .github/prompts/review.prompt.md
+```
+
+Both tools read the same markdown. Copilot uses the full file as-is; the review agent extracts
+only the four recognised sections.
+
 ---
 
 ## What Repos Do NOT Need to Write

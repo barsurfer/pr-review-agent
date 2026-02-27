@@ -32,7 +32,12 @@ interface RepoPromptSections {
  * Looks for ## ROLE, ## REVIEW PRIORITIES, and ## MENTAL MODEL headers.
  * Content between headers belongs to the preceding section.
  */
-function parseRepoPrompt(content: string): RepoPromptSections {
+function stripFrontmatter(content: string): string {
+  return content.startsWith('---') ? content.replace(/^---[\s\S]*?---\n*/, '') : content
+}
+
+function parseRepoPrompt(raw: string): RepoPromptSections {
+  const content = stripFrontmatter(raw)
   const sections: RepoPromptSections = {}
 
   // Split on ## headers, keeping the header text

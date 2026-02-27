@@ -24715,7 +24715,11 @@ function getBaseTemplate() {
     throw new Error("Cannot load base prompt: file not found and no embedded copy");
   }
 }
-function parseRepoPrompt(content) {
+function stripFrontmatter(content) {
+  return content.startsWith("---") ? content.replace(/^---[\s\S]*?---\n*/, "") : content;
+}
+function parseRepoPrompt(raw) {
+  const content = stripFrontmatter(raw);
   const sections = {};
   const sectionPattern = /^## (.+)/gm;
   const headers = [];
