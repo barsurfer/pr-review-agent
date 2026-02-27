@@ -19,7 +19,7 @@ a single summary comment.
 - [ ] Implement `postInlineComment` in `BitbucketAdapter`
 - [ ] Update `src/claude/client.ts` — JSON output mode, structured findings schema
 - [ ] Update system prompt template to enforce JSON output and line-grounding rules
-- [ ] `src/review.ts` — finding validation against diff map, post loop with rate limiting
+- [ ] `src/review/index.ts` — finding validation against diff map, post loop with rate limiting
 - [ ] `REVIEW_MODE` env var + `.agent-review-instructions.md` override support
 - [ ] Test: verify findings land on correct lines in Bitbucket UI
 

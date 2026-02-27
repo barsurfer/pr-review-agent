@@ -22,7 +22,12 @@ pr-review-agent/
 ├── src/
 │   ├── index.ts                  # Entry point, CLI arg parsing
 │   ├── config.ts                 # Config loading, env vars, thresholds
-│   ├── review.ts                 # FSM orchestrator: State enum, ReviewContext, transition loop
+│   ├── review/
+│   │   ├── index.ts             # FSM orchestrator: transition loop, public review() API
+│   │   ├── types.ts             # State enum, ReviewContext interface
+│   │   ├── parsers.ts           # Diff filtering, line counting, verdict/findings/delta parsing
+│   │   ├── formatter.ts         # Comment footer builders, commit hash extraction
+│   │   └── usage.ts             # UsageRecord type, cost estimation, record builder
 │   ├── claude/
 │   │   └── client.ts             # Anthropic API wrapper (review + reply endpoints)
 │   ├── vcs/
@@ -38,9 +43,11 @@ pr-review-agent/
 │   └── context/
 │       ├── fetcher.ts            # Fetches additional context files beyond diff
 │       └── diffParser.ts         # Unified diff parser for line mapping (Phase 4)
-├── prompts/                      # Example repo-specific prompts (ROLE + PRIORITIES + MENTAL MODEL)
-│   ├── java-spring.txt
-│   └── angular-ionic.txt
+├── prompts/                      # Example repo-specific prompts
+│   ├── java-spring.txt           # Agent-only (Java / Spring Boot)
+│   ├── angular-ionic.txt         # Agent-only (Angular / Ionic)
+│   ├── angular-copilot.prompt.md          # Copilot + Agent (Angular)
+│   └── angular-ionic-copilot.prompt.md    # Copilot + Agent (Angular / Ionic)
 ├── scripts/
 │   └── bundle.mjs                # esbuild config — single-file CJS bundle
 ├── dist/
@@ -68,7 +75,7 @@ pr-review-agent/
 
 ## Review Flow (Finite State Machine)
 
-The review orchestration in `src/review.ts` is implemented as an explicit finite state machine.
+The review orchestration in `src/review/index.ts` is implemented as an explicit finite state machine.
 A `State` enum defines every node, a `ReviewContext` object carries accumulated data, and a
 `transition(state, ctx)` function returns the next state. The runner loops until `DONE`.
 

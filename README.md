@@ -241,7 +241,7 @@ npm run bundle
 | `--vcs <provider>` | No | `bitbucket` \| `github` \| `gitlab` — overrides `VCS_PROVIDER` env var (default: `bitbucket`) |
 | `--dry-run` | No | Print the review to stdout instead of posting to the PR |
 | `--force` | No | Ignore previous reviews and produce a fresh review |
-| `--log-usage [bool]` | No | Log usage record to `results.jsonl` (default: `true`, use `--log-usage false` to disable). See [docs/reference/token-budget.md](docs/reference/token-budget.md) for schema. |
+| `--log-usage [bool]` | No | Log usage record to `results.jsonl` (default: `true`, use `--log-usage false` to disable). See [docs/reference/usage-logging.md](docs/reference/usage-logging.md) for schema. |
 | `--prompt <path>` | No | Path to a local prompt file (overrides repo `.agent-review-instructions.md`) |
 | `--validate-prompt` | No | Validate prompt and exit — local via `--prompt`, or repo via `--pr-id` |
 | `--min-changed-files <n>` | No | Skip review if PR has fewer changed files (overrides `MIN_CHANGED_FILES`) |
@@ -279,9 +279,9 @@ All credentials and settings are provided via environment variables.
 | `MAX_CONTEXT_FILES` | `20` | Max files to fetch full content for |
 | `MAX_FILE_LINES` | `500` | Files over this line count get diff-only context |
 | `MIN_CHANGED_FILES` | `0` (disabled) | Skip review if PR has fewer changed files |
-| `MAX_CHANGED_FILES` | `0` (disabled) | Skip review if PR has more changed files |
+| `MAX_CHANGED_FILES` | `200` | Skip review if PR has more changed files (0 = disabled) |
 | `MIN_CHANGED_LINES` | `0` (disabled) | Skip review if PR has fewer changed lines |
-| `MAX_CHANGED_LINES` | `0` (disabled) | Skip review if PR has more changed lines |
+| `MAX_CHANGED_LINES` | `3000` | Skip review if PR has more changed lines (0 = disabled) |
 | `AGENT_IDENTITY` | `BITBUCKET_USERNAME` | Name shown in review footers. Falls back to `BITBUCKET_USERNAME`, then `'Claude'` |
 
 ### How to Provide Environment Variables

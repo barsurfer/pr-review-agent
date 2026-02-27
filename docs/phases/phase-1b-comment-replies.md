@@ -79,7 +79,7 @@ export async function runCommentResponse(
 Sends the original review, the diff, and all unanswered developer replies to Claude
 with the reply prompt. Max tokens: 2048 (shorter than full reviews).
 
-### Orchestration: `src/review.ts`
+### Orchestration: `src/review/index.ts`
 
 The commit-hash-match branch in the review flow:
 
@@ -140,7 +140,7 @@ No review number or commit hash — these are conversational replies, not review
 - **Modified** `src/vcs/github.ts` — added stub methods
 - **Modified** `src/vcs/gitlab.ts` — added stub methods
 - **Modified** `src/claude/client.ts` — added `runCommentResponse()` and `getReplyPrompt()`
-- **Modified** `src/review.ts` — added reply-handling branch in commit-skip logic
+- **Modified** `src/review/index.ts` — added reply-handling branch in commit-skip logic
 - **Created** `src/prompt/reply-prompt.txt` — dedicated reply system prompt
 - **Modified** `scripts/bundle.mjs` — embedded `__REPLY_PROMPT__` alongside `__BASE_PROMPT__`
 - **Modified** `package.json` — updated `copy-assets` to include `reply-prompt.txt`

@@ -138,3 +138,9 @@ Scoring rules:
 
 After the percentage, add one brief line listing the critical factors that moved the score.
 Then add: *"This verdict is opinionated and must be validated by a human reviewer."*
+
+If this is a re-review, add the following HTML comment as the very last line of the review (after the verdict disclaimer). Replace the numbers with actual counts:
+`<!-- DELTA_STATS: resolved=N still_open=N new=N -->`
+- `resolved` = number of previous findings fixed by the new commits
+- `still_open` = number of previous findings still present (not fixed, not addressed)
+- `new` = number of new findings introduced in this re-review

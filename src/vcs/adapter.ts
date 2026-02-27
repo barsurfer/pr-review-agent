@@ -2,6 +2,7 @@ export interface PRInfo {
   id: string
   title: string
   description: string
+  author: string
   sourceBranch: string
   targetBranch: string
   sourceCommit: string

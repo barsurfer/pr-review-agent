@@ -9,7 +9,7 @@ import { config, validateBitbucketConfig } from './config.js'
 import { BitbucketAdapter } from './vcs/bitbucket.js'
 import { GitHubAdapter } from './vcs/github.js'
 import { GitLabAdapter } from './vcs/gitlab.js'
-import { review } from './review.js'
+import { review } from './review/index.js'
 import { validateLocalPrompt, loadPrompt } from './prompt/loader.js'
 import type { VCSAdapter } from './vcs/adapter.js'
 

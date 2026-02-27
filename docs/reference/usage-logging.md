@@ -1,4 +1,4 @@
-# Token Budget
+# Usage Logging & Cost Reference
 
 ## Rough Estimate Per Review
 
@@ -83,10 +83,15 @@ The record is also printed to stdout at the end of every run regardless of the f
 | `workspace` | `string` | Bitbucket workspace slug |
 | `repo_slug` | `string` | Repository slug |
 | `pr_id` | `string` | Pull request ID |
+| `pr_author` | `string` | PR author display name |
 | `source_commit` | `string` | Source commit hash at time of review |
+| `source_branch` | `string` | Source branch name (e.g. `feature/AL-1234`) |
 | `target_branch` | `string` | e.g. `main`, `develop` |
+| `changed_files` | `number` | Number of files changed in the PR |
+| `changed_lines` | `number` | Total lines changed (additions + deletions) |
+| `context_files_fetched` | `number` | Number of files fetched for full context |
 | `review_number` | `number` | 1 = initial review, 2+ = re-review |
-| `action` | `string` | `REVIEW` \| `REPLY` \| `NO_CHANGE` \| `SKIP` \| `DEDUP_SKIP` \| `ERROR` |
+| `action` | `string` | `REVIEW` \| `RE_REVIEW` \| `REPLY` \| `NO_CHANGE` \| `SKIP` \| `DEDUP_SKIP` \| `ERROR` |
 | `skip_reason` | `string \| null` | Human-readable reason when action is not `REVIEW` |
 | `model` | `string` | Claude model ID used |
 | `tokens.input` | `number` | Input tokens (from API response) |
@@ -99,13 +104,17 @@ The record is also printed to stdout at the end of every run regardless of the f
 | `dry_run` | `boolean` | Whether `--dry-run` was used |
 | `force` | `boolean` | Whether `--force` was used |
 | `prompt_source` | `string` | Prompt file path or `default` |
+| `verdict_score` | `number \| null` | Verdict percentage (0–100) parsed from review output |
+| `findings` | `object \| null` | `{ high, medium, low }` — counts parsed from Findings section |
+| `delta` | `object \| null` | Re-review only: `{ developer_replies, resolved, still_open, new_findings }` |
 | `error` | `object \| null` | `{ type, message, status }` on failure |
 
 ### Action Values
 
 | Action | Meaning |
 |--------|---------|
-| `REVIEW` | Review posted (or printed in dry-run) |
+| `REVIEW` | First review posted (or printed in dry-run) |
+| `RE_REVIEW` | Subsequent review (`review_number > 1`) — includes `delta` stats |
 | `REPLY` | Reply to developer question posted |
 | `NO_CHANGE` | Claude determined only cosmetic changes — comment suppressed |
 | `SKIP` | PR out of scope (size thresholds) — no API call |
@@ -122,7 +131,7 @@ Cost is calculated client-side from token counts and hardcoded per-model pricing
 | `claude-opus-4-6` | $15.00 | $75.00 |
 | `claude-haiku-4-5-20251001` | $0.80 | $4.00 |
 
-Unknown models fall back to Sonnet pricing. Update the pricing table in `src/review.ts` when Anthropic changes rates.
+Unknown models fall back to Sonnet pricing. Update the pricing table in `src/review/usage.ts` when Anthropic changes rates.
 
 ### Useful Queries
 
@@ -144,6 +153,21 @@ jq -s '{total: length, errors: [.[] | select(.action=="ERROR")] | length}' resul
 
 # Estimate vs actual tokens (accuracy check)
 jq -s '[.[] | select(.action=="REVIEW") | {pr: .pr_id, estimated: .tokens.estimated_input, actual: .tokens.input, ratio: (if .tokens.estimated_input > 0 then (.tokens.input / .tokens.estimated_input * 100 | round | tostring + "%") else "n/a" end)}]' results.jsonl
+
+# Average verdict score
+jq -s '[.[] | select(.verdict_score != null) | .verdict_score] | add/length | round' results.jsonl
+
+# Reviews by author
+jq -s 'group_by(.pr_author) | map({author: .[0].pr_author, reviews: length}) | sort_by(-.reviews)' results.jsonl
+
+# High-severity findings
+jq -s '[.[] | select(.findings.high > 0) | {repo: .repo_slug, pr: .pr_id, high: .findings.high}]' results.jsonl
+
+# Re-review resolution rate
+jq -s '[.[] | select(.action=="RE_REVIEW" and .delta != null) | {pr: .pr_id, resolved: .delta.resolved, still_open: .delta.still_open}]' results.jsonl
+
+# Largest PRs reviewed (by changed lines)
+jq -s '[.[] | select(.changed_lines != null)] | sort_by(-.changed_lines) | .[:10] | map({repo: .repo_slug, pr: .pr_id, files: .changed_files, lines: .changed_lines})' results.jsonl
 ```
 
 ### Jenkins Archiving

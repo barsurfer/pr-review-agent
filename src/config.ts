@@ -36,9 +36,9 @@ export const config = {
 
   thresholds: {
     minChangedFiles: parseInt(optional('MIN_CHANGED_FILES', '0'), 10),
-    maxChangedFiles: parseInt(optional('MAX_CHANGED_FILES', '0'), 10),
+    maxChangedFiles: parseInt(optional('MAX_CHANGED_FILES', '200'), 10),
     minChangedLines: parseInt(optional('MIN_CHANGED_LINES', '0'), 10),
-    maxChangedLines: parseInt(optional('MAX_CHANGED_LINES', '0'), 10),
+    maxChangedLines: parseInt(optional('MAX_CHANGED_LINES', '3000'), 10),
   },
 }
 

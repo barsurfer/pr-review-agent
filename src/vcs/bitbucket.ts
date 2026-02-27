@@ -39,6 +39,7 @@ export class BitbucketAdapter implements VCSAdapter {
       id: String(data.id),
       title: data.title,
       description: data.description ?? '',
+      author: data.author?.display_name ?? 'Unknown',
       sourceBranch: data.source.branch.name,
       targetBranch: data.destination.branch.name,
       sourceCommit: data.source.commit.hash,

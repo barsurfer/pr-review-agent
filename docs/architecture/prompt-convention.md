@@ -205,7 +205,7 @@ Claude to respond with **only** `NO_CHANGE` if ALL of these conditions are met:
 2. No new findings (LOW, MEDIUM, or HIGH) are introduced
 3. The new commits only contain cosmetic changes (typos, formatting, comments, renames)
 
-The orchestrator in `review.ts` checks for this stop word and skips posting a comment.
+The orchestrator in `src/review/index.ts` checks for this stop word and skips posting a comment.
 This prevents near-duplicate review comments on cosmetic-only pushes.
 
 ---

@@ -29,9 +29,9 @@ credentials in source code or commit them to version control.**
 | `MAX_CONTEXT_FILES` | `20` | Max number of files to fetch full content for |
 | `MAX_FILE_LINES` | `500` | Files over this line count get diff-only (no full content) |
 | `MIN_CHANGED_FILES` | `0` | Skip review if PR has fewer changed files (0 = disabled) |
-| `MAX_CHANGED_FILES` | `0` | Skip review if PR has more changed files (0 = disabled) |
+| `MAX_CHANGED_FILES` | `200` | Skip review if PR has more changed files (0 = disabled). Default: `200` |
 | `MIN_CHANGED_LINES` | `0` | Skip review if PR has fewer changed lines (0 = disabled) |
-| `MAX_CHANGED_LINES` | `0` | Skip review if PR has more changed lines (0 = disabled) |
+| `MAX_CHANGED_LINES` | `3000` | Skip review if PR has more changed lines (0 = disabled). Default: `3000` |
 | `AGENT_IDENTITY` | *(BITBUCKET_USERNAME)* | Name shown in review/reply footers. Falls back to `BITBUCKET_USERNAME`, then `'Claude'` |
 
 > Threshold variables can also be set via CLI flags (`--min-changed-files`, etc.)
@@ -80,7 +80,7 @@ MAX_FILE_LINES=500
 
 # PR size thresholds (0 = disabled)
 MIN_CHANGED_FILES=0
-MAX_CHANGED_FILES=0
+MAX_CHANGED_FILES=200
 MIN_CHANGED_LINES=0
-MAX_CHANGED_LINES=0
+MAX_CHANGED_LINES=3000
 ```

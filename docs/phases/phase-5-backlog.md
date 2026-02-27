@@ -23,7 +23,7 @@ Complexity: medium-high. Language-specific import parsing required.
 
 > **Completed.** Every run logs a structured usage record to `results.jsonl` with
 > token counts, estimated `cost_usd`, `action`, `duration_ms`, and full PR context.
-> See [reference/token-budget.md](../reference/token-budget.md) for schema and `jq` queries.
+> See [reference/usage-logging.md](../reference/usage-logging.md) for schema and `jq` queries.
 
 ---
 
@@ -70,17 +70,11 @@ Complexity: medium-high. Language-specific import parsing required.
 
 ---
 
-### Sensible Default Thresholds
+### ~~Sensible Default Thresholds~~ ✅ Implemented
 
-`MIN_CHANGED_FILES`, `MAX_CHANGED_FILES`, `MIN_CHANGED_LINES`, `MAX_CHANGED_LINES` all
-default to `0` (disabled). A 10,000-line PR will be reviewed without question, consuming
-significant tokens and likely producing low-quality output.
-
-- Set `MAX_CHANGED_LINES=3000` (or similar) as default
-- Set `MAX_CHANGED_FILES=50` as default
-- Document rationale
-
-Priority: **MEDIUM**
+> **Completed.** `MAX_CHANGED_FILES` defaults to `200` and `MAX_CHANGED_LINES` defaults
+> to `3000`. PRs exceeding these limits are skipped with a log message. Set to `0` to
+> disable. `MIN_CHANGED_FILES` and `MIN_CHANGED_LINES` remain `0` (disabled).
 
 ---
 
