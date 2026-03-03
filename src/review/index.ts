@@ -37,10 +37,10 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       ctx.changedFiles = await ctx.adapter.getChangedFiles(ctx.prId)
       ctx.lineCount = countChangedLines(ctx.diff)
 
-      const { filtered, removedCount } = filterDiff(ctx.diff)
+      const { filtered, removedCount } = filterDiff(ctx.diff, config.diffExcludePatterns)
       ctx.filteredDiff = filtered
       if (removedCount > 0) {
-        console.log(`  Filtered ${removedCount} lock file(s) from diff`)
+        console.log(`  Filtered ${removedCount} file(s) from diff (${config.diffExcludePatterns.join(', ')})`)
       }
 
       console.log(`  ${ctx.changedFiles.length} changed file(s)`)

@@ -34,6 +34,11 @@ export const config = {
     maxFileLines: parseInt(optional('MAX_FILE_LINES', '500'), 10),
   },
 
+  diffExcludePatterns: optional('DIFF_EXCLUDE_PATTERNS', '*.lock,package-lock.json,yarn.lock,pnpm-lock.yaml,*.json,*.spec.ts')
+    .split(',')
+    .map(p => p.trim())
+    .filter(Boolean),
+
   thresholds: {
     minChangedFiles: parseInt(optional('MIN_CHANGED_FILES', '0'), 10),
     maxChangedFiles: parseInt(optional('MAX_CHANGED_FILES', '200'), 10),

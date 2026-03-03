@@ -2,20 +2,23 @@
 // Pure parsing & diff helpers — no side effects, no I/O
 // ---------------------------------------------------------------------------
 
-const DIFF_EXCLUDED_PATTERNS = [
-  /package-lock\.json$/,
-  /yarn\.lock$/,
-  /pnpm-lock\.yaml$/,
-  /\.lock$/,
-]
+/** Convert a glob-like pattern (e.g. "*.json", "package-lock.json") to a regex. */
+function patternToRegex(pattern: string): RegExp {
+  // Exact filename match
+  if (!pattern.includes('*')) return new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$')
+  // *.ext → match any file ending with .ext
+  const escaped = pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\\\*/g, '.*')
+  return new RegExp(escaped + '$')
+}
 
-/** Strip diff sections for files that add noise without review value (lock files, etc.). */
-export function filterDiff(diff: string): { filtered: string; removedCount: number } {
+/** Strip diff sections for files matching exclusion patterns. */
+export function filterDiff(diff: string, excludePatterns: string[]): { filtered: string; removedCount: number } {
+  const regexes = excludePatterns.map(patternToRegex)
   const sections = diff.split(/(?=^diff --git )/m)
   const kept = sections.filter(section => {
     const match = section.match(/^diff --git a\/(.+?) b\//)
     if (!match) return true
-    return !DIFF_EXCLUDED_PATTERNS.some(p => p.test(match[1]))
+    return !regexes.some(r => r.test(match[1]))
   })
   return { filtered: kept.join(''), removedCount: sections.length - kept.length }
 }
@@ -40,7 +43,7 @@ export function parseVerdictScore(text: string): number | null {
 
 /** Count HIGH, MEDIUM, LOW findings from the Findings section only. */
 export function parseFindings(text: string): { high: number; medium: number; low: number } {
-  const findingsMatch = text.match(/#{1,4}\s*Findings\b([\s\S]*?)(?=#{1,4}\s|\z)/i)
+  const findingsMatch = text.match(/#{1,4}\s*Findings\b([\s\S]*?)(?=#{1,4}\s|$)/i)
   const section = findingsMatch?.[1] ?? ''
   return {
     high: (section.match(/\*\*HIGH\b/gi) ?? []).length,

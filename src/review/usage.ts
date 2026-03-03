@@ -34,6 +34,7 @@ export interface UsageRecord {
   force: boolean
   prompt_source: string
   verdict_score: number | null
+  computed_score: number | null
   findings: { high: number; medium: number; low: number } | null
   delta: { developer_replies: number; resolved: number; still_open: number; new_findings: number } | null
   error: { type: string; message: string; status: number | null } | null
@@ -117,6 +118,7 @@ export function buildUsageRecord(
     force: ctx.force,
     prompt_source: ctx.prompt?.source ?? 'none',
     verdict_score: verdictScore,
+    computed_score: findings ? Math.max(0, 100 - findings.high * 12 - findings.medium * 4) : null,
     findings,
     delta: ctx.reviewNumber > 1 && reviewText ? (() => {
       const stats = parseDeltaStats(reviewText)

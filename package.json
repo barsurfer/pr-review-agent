@@ -11,7 +11,9 @@
     "copy-assets": "node --input-type=module -e \"import{cpSync,mkdirSync}from'node:fs';mkdirSync('dist/prompt',{recursive:true});cpSync('src/prompt/base-prompt.txt','dist/prompt/base-prompt.txt');cpSync('src/prompt/reply-prompt.txt','dist/prompt/reply-prompt.txt');\"",
     "bundle": "node scripts/bundle.mjs",
     "start": "node dist/index.js",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.36.3",
@@ -23,7 +25,8 @@
     "@types/node": "^20.17.10",
     "esbuild": "^0.27.3",
     "tsx": "^4.19.2",
-    "typescript": "^5.7.3"
+    "typescript": "^5.7.3",
+    "vitest": "^4.0.18"
   },
   "engines": {
     "node": ">=20"

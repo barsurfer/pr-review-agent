@@ -56,11 +56,10 @@ db/migrate/*
 
 ### Excluded from Diff (Stripped Before API Call)
 
+Configurable via `DIFF_EXCLUDE_PATTERNS` env var (comma-separated). Defaults:
+
 ```
-package-lock.json
-yarn.lock
-pnpm-lock.yaml
-*.lock
+*.lock, package-lock.json, yarn.lock, pnpm-lock.yaml, *.json, *.spec.ts
 ```
 
 Raw diff is kept for line counting and threshold checks. Only the filtered version goes to Claude.
@@ -105,6 +104,7 @@ The record is also printed to stdout at the end of every run regardless of the f
 | `force` | `boolean` | Whether `--force` was used |
 | `prompt_source` | `string` | Prompt file path or `default` |
 | `verdict_score` | `number \| null` | Verdict percentage (0–100) parsed from review output |
+| `computed_score` | `number \| null` | Code-computed score: `max(0, 100 − HIGHs×12 − MEDIUMs×4)`. Independent of model's verdict. |
 | `findings` | `object \| null` | `{ high, medium, low }` — counts parsed from Findings section |
 | `delta` | `object \| null` | Re-review only: `{ developer_replies, resolved, still_open, new_findings }` |
 | `error` | `object \| null` | `{ type, message, status }` on failure |
@@ -159,6 +159,9 @@ jq -s '[.[] | select(.verdict_score != null) | .verdict_score] | add/length | ro
 
 # Reviews by author
 jq -s 'group_by(.pr_author) | map({author: .[0].pr_author, reviews: length}) | sort_by(-.reviews)' results.jsonl
+
+# Verdict vs computed score drift
+jq -s '[.[] | select(.verdict_score != null and .computed_score != null) | {pr: .pr_id, verdict: .verdict_score, computed: .computed_score, drift: (.verdict_score - .computed_score)}]' results.jsonl
 
 # High-severity findings
 jq -s '[.[] | select(.findings.high > 0) | {repo: .repo_slug, pr: .pr_id, high: .findings.high}]' results.jsonl
