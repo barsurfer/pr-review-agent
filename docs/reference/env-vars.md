@@ -33,6 +33,7 @@ credentials in source code or commit them to version control.**
 | `MIN_CHANGED_LINES` | `0` | Skip review if PR has fewer changed lines (0 = disabled) |
 | `MAX_CHANGED_LINES` | `3000` | Skip review if PR has more changed lines (0 = disabled). Default: `3000` |
 | `DIFF_EXCLUDE_PATTERNS` | `*.lock,*.json,*.spec.ts` | Comma-separated file patterns to strip from diff before sending to Claude. Default: `*.lock,package-lock.json,yarn.lock,pnpm-lock.yaml,*.json,*.spec.ts` |
+| `JUDGING_MODEL` | `claude-sonnet-4-6` | Optional judge model for finding validation. Empty = skip judge pass. |
 | `AGENT_IDENTITY` | *(BITBUCKET_USERNAME)* | Name shown in review/reply footers. Falls back to `BITBUCKET_USERNAME`, then `'Claude'` |
 
 > Threshold variables can also be set via CLI flags (`--min-changed-files`, etc.)
@@ -87,4 +88,7 @@ MAX_CHANGED_LINES=3000
 
 # Diff exclusion patterns (comma-separated, default includes lock files, .json, .spec.ts)
 # DIFF_EXCLUDE_PATTERNS=*.lock,package-lock.json,yarn.lock,pnpm-lock.yaml,*.json,*.spec.ts
+
+# Judge model (optional — validates findings before posting, empty = skip)
+# JUDGING_MODEL=claude-sonnet-4-6
 ```

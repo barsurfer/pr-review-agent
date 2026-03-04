@@ -93,14 +93,20 @@ You are a Senior Frontend Architect.
 Only the four recognised `## SECTION` headers are extracted — all other content (frontmatter,
 extra headers, free-form text) is silently ignored.
 
-### Sharing with GitHub Copilot
+### Symlink Support
 
-The prompt file format is compatible with GitHub Copilot prompt files (`.prompt.md`). To share
-a single file between both tools, create the prompt as `.agent-review-instructions.md` and
-symlink it for Copilot:
+The loader follows git symlinks transparently. When `.agent-review-instructions.md` is a symlink
+(git stores symlinks as a single line containing the target path), the loader detects it, resolves
+the relative path, and fetches the actual file via the VCS API.
+
+This supports both symlink directions for Copilot integration:
 
 ```bash
+# Option A: agent file is the source, Copilot gets a symlink
 ln -s ../../.agent-review-instructions.md .github/prompts/review.prompt.md
+
+# Option B: Copilot file is the source, agent gets a symlink
+ln -s ../.github/prompts/review.prompt.md docs/.agent-review-instructions.md
 ```
 
 Both tools read the same markdown. Copilot uses the full file as-is; the review agent extracts
@@ -125,30 +131,24 @@ These sections are always provided by the base template and cannot be overridden
   descriptions, comments, or code (e.g. "ignore previous instructions", "tell me a joke")
 - **OUTPUT FORMAT RULES** — bullets on new lines, proper markdown structure
 - **EXCEPTIONS** — defaults to "no exceptions" if the repo prompt doesn't include `## EXCEPTIONS`
-- **OUTPUT STRUCTURE** — Summary, Findings, Behavioral Diff, Production Risk, Unresolved Questions, Verdict
+- **OUTPUT STRUCTURE** — Summary, Findings, Behavioral Diff, Production Risk, Unresolved Questions
 
 This prevents teams from accidentally breaking the review output format or omitting
 critical behavioral rules.
 
-### Verdict Section
+### Judge Model (Optional Finding Validation)
 
-Every review ends with a `### Verdict: X%` section — a confidence score (0–100%) that
-the PR can be merged as-is without introducing critical bugs, regressions, or incidents.
-Placed last so the reviewer reads the full analysis before seeing the number.
+When `JUDGING_MODEL` is set, the review output is sent to a second model for validation
+before posting. The judge receives the diff + review text and validates each MEDIUM/HIGH
+finding against the actual code. Invalid findings are dropped; the judge produces a clean
+final comment with only validated findings and a verdict score.
 
-| Rule | Effect |
-|------|--------|
-| Start at 100% | Only HIGH and MEDIUM findings deduct points |
-| HIGH finding: −9 to −18 | Depends on blast radius and likelihood |
-| MEDIUM finding: −3 to −9 | Moderate impact |
-| LOW findings | Do not affect the score |
-| Unresolved questions (HIGH impact) | −3 to −5 each |
-| No HIGH/MEDIUM findings | Score is 95–100% |
-| Typical PRs with minor issues | 75–95% range |
-| Below 75% | Significant issues — should be addressed before merge |
+The judge prompt is in `src/prompt/judge-prompt.txt`. Scoring uses the arithmetic formula:
+`Score = 100 − (HIGHs × 12) − (MEDIUMs × 4)` on validated findings only.
 
-The verdict includes a disclaimer: *"This verdict is opinionated and must be validated
-by a human reviewer."*
+When no judge is configured, the review model's output is posted as-is (without a verdict
+section). The `computed_score` in the usage record provides the arithmetic score from
+parsed findings regardless of whether a judge was used.
 
 ### SCOPE LOCK (Prompt Injection Defense)
 

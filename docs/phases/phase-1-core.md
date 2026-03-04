@@ -16,7 +16,7 @@ No Jenkins. No CI. Just a CLI you can run from your terminal.
 - [x] `src/prompt/loader.ts` — fetch `.agent-review-instructions.md` from repo root via API, fallback chain
 - [x] `src/context/fetcher.ts` — fetch full file contents for changed files with exclusion rules
 - [x] `src/claude/client.ts` — send assembled payload to `claude-sonnet-4-6`, return review text
-- [x] `src/review/index.ts` — orchestrate: fetch info → check previous reviews → load prompt → fetch context → call Claude → post comment
+- [x] `src/review/index.ts` — orchestrate: fetch info → check previous reviews → load prompt → fetch context → call Claude → (optional) judge → post comment
 - [x] `src/index.ts` — CLI: `--workspace`, `--repo-slug`, `--pr-id`, `--vcs` (default: `bitbucket`), `--dry-run`
 - [x] `.env.example` with all required vars
 - [x] Local test: run against a real open PR, verify comment appears in Bitbucket

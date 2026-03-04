@@ -19,6 +19,7 @@ export enum State {
   ESTIMATE_TOKENS,
   CALL_CLAUDE,
   CHECK_NO_CHANGE,
+  JUDGE_REVIEW,
   POST_REVIEW,
   SKIP,
   DONE,
@@ -46,8 +47,10 @@ export interface ReviewContext {
   prompt?: LoadedPrompt
   fileContexts?: FileContext[]
   reviewText?: string
+  reviewTextBeforeJudge?: string
   skipReason?: string
   usage: { input_tokens: number; output_tokens: number }
+  judgeUsage?: { input_tokens: number; output_tokens: number }
   estimatedInputTokens: number
 
   // Tracking

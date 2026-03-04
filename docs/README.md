@@ -49,5 +49,6 @@ structured review as a PR comment.
 - **Comment only** — agent never modifies, approves, or merges PRs
 - **Smart skip logic** — commit hash dedup, NO_CHANGE stop word, timestamp-based reply dedup
 - **Conversational** — responds to developer questions on review comments
+- **Optional judge model** — validates findings against the diff before posting (generator-verifier pattern)
 - **VCS-agnostic architecture** — Bitbucket now, GitHub/GitLab later via adapter pattern
 - **Repo-specific prompts** — each target repo can tune review behaviour via `.agent-review-instructions.md`

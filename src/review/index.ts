@@ -5,9 +5,9 @@
 import { config } from '../config.js'
 import { loadPrompt } from '../prompt/loader.js'
 import { fetchContext } from '../context/fetcher.js'
-import { runReview, runCommentResponse } from '../claude/client.js'
+import { runReview, runCommentResponse, runJudge } from '../claude/client.js'
 import { filterDiff, countChangedLines } from './parsers.js'
-import { buildReviewFooter, buildReplyFooter, stripPreviousFooter, isNoChange, extractCommitHash } from './formatter.js'
+import { buildReviewFooter, buildReplyFooter, stripPreviousFooter, stripDeltaStats, isNoChange, extractCommitHash } from './formatter.js'
 import { buildUsageRecord, logUsageRecord } from './usage.js'
 import { State } from './types.js'
 import type { ReviewContext } from './types.js'
@@ -219,11 +219,33 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         ctx.skipReason = 'No changes since last review'
         return State.SKIP
       }
+      return State.JUDGE_REVIEW
+    }
+
+    case State.JUDGE_REVIEW: {
+      if (!config.judge.model) {
+        return State.POST_REVIEW
+      }
+
+      ctx.reviewTextBeforeJudge = ctx.reviewText
+      const result = await runJudge(
+        config.anthropic.apiKey,
+        config.judge.model,
+        config.judge.maxRetries,
+        ctx.filteredDiff!,
+        ctx.reviewText!,
+      )
+
+      ctx.reviewText = result.text
+      ctx.judgeUsage = { input_tokens: result.usage.input_tokens, output_tokens: result.usage.output_tokens }
+      ctx.usage.input_tokens += result.usage.input_tokens
+      ctx.usage.output_tokens += result.usage.output_tokens
+
       return State.POST_REVIEW
     }
 
     case State.POST_REVIEW: {
-      const cleaned = stripPreviousFooter(ctx.reviewText!)
+      const cleaned = stripDeltaStats(stripPreviousFooter(ctx.reviewText!))
       const commitShort = ctx.prInfo!.sourceCommit.slice(0, 12)
       const footer = buildReviewFooter(config.agentIdentity, config.anthropic.model, ctx.prompt!.source, ctx.reviewNumber, commitShort)
       const comment = cleaned + footer

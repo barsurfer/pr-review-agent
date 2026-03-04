@@ -102,6 +102,21 @@ export function validateLocalPrompt(path: string): void {
   console.log(`\nFilled prompt length: ${filled.length} chars (~${Math.ceil(filled.length / 4).toLocaleString()} tokens)`)
 }
 
+function looksLikeSymlink(content: string): boolean {
+  const trimmed = content.trim()
+  return !trimmed.includes('\n') && /^\.{1,2}\/[^\s]+\.\w+$/.test(trimmed)
+}
+
+function resolveSymlink(symlinkDir: string, target: string): string {
+  const parts = (symlinkDir ? symlinkDir + '/' + target : target).split('/')
+  const resolved: string[] = []
+  for (const p of parts) {
+    if (p === '..') resolved.pop()
+    else if (p !== '.') resolved.push(p)
+  }
+  return resolved.join('/')
+}
+
 export type PromptSource = 'repo' | 'default' | string
 
 export interface LoadedPrompt {
@@ -128,8 +143,16 @@ export async function loadPrompt(adapter: VCSAdapter, prInfo: PRInfo, localPromp
   const paths = [REPO_PROMPT_FILE, `docs/${REPO_PROMPT_FILE}`]
   for (const ref of [prInfo.sourceCommit, prInfo.targetBranch]) {
     for (const path of paths) {
-      const repoPrompt = await adapter.getRepoFileContent(path, ref)
+      let repoPrompt = await adapter.getRepoFileContent(path, ref)
       if (repoPrompt) {
+        // Git symlinks are stored as a single line with the target path
+        if (looksLikeSymlink(repoPrompt)) {
+          const dir = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : ''
+          const resolved = resolveSymlink(dir, repoPrompt.trim())
+          console.log(`  ${path} is a symlink → ${resolved}`)
+          repoPrompt = await adapter.getRepoFileContent(resolved, ref)
+          if (!repoPrompt) continue
+        }
         console.log(`Using repo-specific prompt from ${path} (${ref.slice(0, 12)})`)
         const sections = parseRepoPrompt(repoPrompt)
         logSections(sections)

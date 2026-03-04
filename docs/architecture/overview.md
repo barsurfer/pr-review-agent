@@ -29,7 +29,7 @@ pr-review-agent/
 │   │   ├── formatter.ts         # Comment footer builders, commit hash extraction
 │   │   └── usage.ts             # UsageRecord type, cost estimation, record builder
 │   ├── claude/
-│   │   └── client.ts             # Anthropic API wrapper (review + reply endpoints)
+│   │   └── client.ts             # Anthropic API wrapper (review + judge + reply endpoints)
 │   ├── vcs/
 │   │   ├── adapter.ts            # VCS interface (abstract)
 │   │   ├── bitbucket.ts          # Bitbucket implementation
@@ -38,6 +38,7 @@ pr-review-agent/
 │   ├── prompt/
 │   │   ├── loader.ts             # Loads base template, parses repo sections, fills placeholders
 │   │   ├── base-prompt.txt       # Shared review template (SCOPE, RULES, OUTPUT FORMAT)
+│   │   ├── judge-prompt.txt      # System prompt for judge model (finding validation)
 │   │   ├── reply-prompt.txt      # System prompt for conversational replies to developer questions
 │   │   └── defaults.ts           # Default values for ROLE, REVIEW PRIORITIES, MENTAL MODEL
 │   └── context/
@@ -92,12 +93,16 @@ FETCH_PR_INFO → FETCH_DIFF (+ filterDiff) → CHECK_THRESHOLDS
                                        └─ LOAD_PROMPT → FETCH_CONTEXT → CALL_CLAUDE
                                             → CHECK_NO_CHANGE
                                                ├─ [NO_CHANGE] → SKIP → DONE
-                                               └─ POST_REVIEW → DONE
+                                               └─ JUDGE_REVIEW
+                                                    ├─ [JUDGING_MODEL set] → validate → POST_REVIEW → DONE
+                                                    └─ [no judge] → POST_REVIEW → DONE
 ```
 
-**13 states**, **5 possible outcomes**: skip (threshold), skip (same commit, no replies),
-reply to developer, skip (NO_CHANGE), or post review. Adding new states (e.g. Phase 4
-inline comments) requires only a new enum value and a case in the transition function.
+**14 states**, **5 possible outcomes**: skip (threshold), skip (same commit, no replies),
+reply to developer, skip (NO_CHANGE), or post review. The optional `JUDGE_REVIEW` state
+sends the review output and diff to a separate judge model (`JUDGING_MODEL`) that validates
+each finding against the actual code before posting. When no judge is configured, this state
+is a no-op passthrough.
 
 ---
 

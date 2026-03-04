@@ -29,13 +29,19 @@ description: "Code review and development guidelines for this Angular/Ionic proj
 ### 2. Symlink for Copilot
 
 Copilot expects prompt files in `.github/prompts/` with a `.prompt.md` extension. Create a
-symlink so both tools read the same file:
+symlink so both tools read the same file. Either direction works:
 
 ```bash
-# From the repo root
+# Option A: agent file is the source, Copilot gets a symlink
 mkdir -p .github/prompts
 ln -s ../../.agent-review-instructions.md .github/prompts/review.prompt.md
+
+# Option B: Copilot file is the source, agent gets a symlink
+ln -s ../.github/prompts/review.prompt.md docs/.agent-review-instructions.md
 ```
+
+The review agent follows git symlinks automatically — when it fetches `.agent-review-instructions.md`
+and finds a symlink target path, it resolves and fetches the actual file.
 
 On Windows (requires admin or Developer Mode):
 
@@ -86,6 +92,8 @@ the sections, then symlink for Copilot (see Setup above).
 - The symlink must be committed to the repo for Copilot to find it
 - If `.agent-review-instructions.md` is in `docs/`, adjust the symlink path accordingly:
   `ln -s ../../docs/.agent-review-instructions.md .github/prompts/review.prompt.md`
-- The review agent does not read from `.github/prompts/` — it only checks root and `docs/`
+- The review agent does not read from `.github/prompts/` directly — it checks root and `docs/`,
+  but follows symlinks, so a symlink at `docs/.agent-review-instructions.md` pointing to
+  `.github/prompts/review.prompt.md` works transparently
 - Extra sections (e.g. `## TESTING GUIDELINES`) are ignored by the review agent but available
   to Copilot

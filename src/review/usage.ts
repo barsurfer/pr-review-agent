@@ -29,12 +29,16 @@ export interface UsageRecord {
   model: string
   tokens: { input: number; output: number; cache_read: number; cache_write: number; estimated_input: number }
   cost_usd: number
+  judge_model: string | null
+  judge_tokens: { input: number; output: number } | null
+  judge_cost_usd: number | null
   duration_ms: number
   dry_run: boolean
   force: boolean
   prompt_source: string
   verdict_score: number | null
   computed_score: number | null
+  review_findings: { high: number; medium: number; low: number } | null
   findings: { high: number; medium: number; low: number } | null
   delta: { developer_replies: number; resolved: number; still_open: number; new_findings: number } | null
   error: { type: string; message: string; status: number | null } | null
@@ -83,8 +87,14 @@ export function buildUsageRecord(
 ): UsageRecord {
   const commitShort = ctx.prInfo?.sourceCommit?.slice(0, 12) ?? 'unknown'
   const reviewText = ctx.reviewText ?? ''
+  const reviewTextBeforeJudge = ctx.reviewTextBeforeJudge ?? ''
   const verdictScore = reviewText ? parseVerdictScore(reviewText) : null
   const findings = reviewText ? parseFindings(reviewText) : null
+  const reviewFindings = reviewTextBeforeJudge ? parseFindings(reviewTextBeforeJudge) : null
+  const judgeModel = config.judge.model || null
+  const judgeTokensRaw = ctx.judgeUsage ?? null
+  const judgeTokens = judgeTokensRaw ? { input: judgeTokensRaw.input_tokens, output: judgeTokensRaw.output_tokens } : null
+  const judgeCost = judgeTokens && judgeModel ? estimateCost(judgeTokens, judgeModel) : null
 
   return {
     run_id: `${config.vcsProvider}-${ctx.repoSlug}-${ctx.prId}-${commitShort}`,
@@ -112,16 +122,23 @@ export function buildUsageRecord(
       cache_write: 0,
       estimated_input: ctx.estimatedInputTokens,
     },
-    cost_usd: estimateCost({ input: ctx.usage.input_tokens, output: ctx.usage.output_tokens }, config.anthropic.model),
+    cost_usd: estimateCost({
+      input: ctx.usage.input_tokens - (judgeTokens?.input ?? 0),
+      output: ctx.usage.output_tokens - (judgeTokens?.output ?? 0),
+    }, config.anthropic.model) + (judgeCost ?? 0),
+    judge_model: judgeModel,
+    judge_tokens: judgeTokens,
+    judge_cost_usd: judgeCost,
     duration_ms: durationMs,
     dry_run: ctx.dryRun,
     force: ctx.force,
     prompt_source: ctx.prompt?.source ?? 'none',
     verdict_score: verdictScore,
     computed_score: findings ? Math.max(0, 100 - findings.high * 12 - findings.medium * 4) : null,
+    review_findings: reviewFindings,
     findings,
     delta: ctx.reviewNumber > 1 && reviewText ? (() => {
-      const stats = parseDeltaStats(reviewText)
+      const stats = parseDeltaStats(reviewTextBeforeJudge || reviewText)
       return {
         developer_replies: ctx.replies?.length ?? 0,
         resolved: stats?.resolved ?? 0,

@@ -167,6 +167,16 @@ The context fetcher is selective about which files get full content:
 - **Excluded:** lockfiles, `.min.js`, `.map`, snapshots, migrations, generated files
 - **Skipped:** files over `MAX_FILE_LINES` (default: 500) unless they have high churn
   (>30% of lines changed)
+
+### Optional Judge Model
+
+When `JUDGING_MODEL` is set, the review output goes through a second validation pass before
+posting. The judge model receives the diff + review text and validates each MEDIUM/HIGH
+finding against the actual code. Invalid or fabricated findings are dropped. The judge
+produces a clean final comment with only validated findings and a verdict score.
+
+This enables a cost-effective **generator-verifier** pattern: use a cheap model (Haiku) to
+generate candidate findings, then a stronger model (Sonnet) to validate them.
 - **Prioritized:** high-churn files are fetched first since they benefit most from
   full context
 
@@ -400,7 +410,8 @@ You are a Senior Backend Architect and Production Gatekeeper.
 Any section you omit uses the default. A file with only `## REVIEW PRIORITIES` is perfectly
 valid — the base role and mental model will be used automatically.
 
-The agent fetches this file via the Bitbucket API — no checkout required.
+The agent fetches this file via the VCS API — no checkout required. Git symlinks are followed
+automatically, so the file can be a symlink to a Copilot `.prompt.md` file (or vice versa).
 See [docs/architecture/prompt-convention.md](docs/architecture/prompt-convention.md) for
 details and more examples. Full example prompts are in the [`prompts/`](prompts/) directory:
 

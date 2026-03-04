@@ -98,6 +98,53 @@ function buildUserMessage(
   return parts.join('\n\n')
 }
 
+function getJudgePrompt(): string {
+  try {
+    const __dir = dirname(fileURLToPath(import.meta.url))
+    return readFileSync(join(__dir, '..', 'prompt', 'judge-prompt.txt'), 'utf-8')
+  } catch {
+    // @ts-ignore — injected at bundle time
+    if (typeof __JUDGE_PROMPT__ !== 'undefined') return __JUDGE_PROMPT__ as string
+    throw new Error('Cannot load judge prompt: file not found and no embedded copy')
+  }
+}
+
+export async function runJudge(
+  apiKey: string,
+  model: string,
+  maxRetries: number,
+  diff: string,
+  reviewText: string,
+): Promise<ClaudeResult> {
+  const client = new Anthropic({ apiKey, maxRetries })
+
+  const parts: string[] = []
+  parts.push(`## Diff:\n\`\`\`diff\n${diff}\n\`\`\``)
+  parts.push(`## Review to Validate:\n${reviewText}`)
+  const userMessage = parts.join('\n\n')
+
+  console.log(`Sending to judge (${model}, maxRetries: ${maxRetries})...`)
+
+  const response = await client.messages.create({
+    model,
+    max_tokens: MAX_TOKENS,
+    system: getJudgePrompt(),
+    messages: [{ role: 'user', content: userMessage }],
+  })
+
+  const block = response.content[0]
+  if (block.type !== 'text') throw new Error('Unexpected response type from Claude')
+
+  const usage: ClaudeUsage = {
+    input_tokens: response.usage.input_tokens,
+    output_tokens: response.usage.output_tokens,
+  }
+
+  console.log(`Judge received (${usage.input_tokens} in / ${usage.output_tokens} out tokens)`)
+
+  return { text: block.text, usage }
+}
+
 function getReplyPrompt(): string {
   try {
     const __dir = dirname(fileURLToPath(import.meta.url))

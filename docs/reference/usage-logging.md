@@ -98,14 +98,19 @@ The record is also printed to stdout at the end of every run regardless of the f
 | `tokens.estimated_input` | `number` | Pre-call estimate (`chars / 4`) — compare with `tokens.input` for accuracy |
 | `tokens.cache_read` | `number` | Cache read tokens (reserved for prompt caching) |
 | `tokens.cache_write` | `number` | Cache write tokens (reserved for prompt caching) |
-| `cost_usd` | `number` | Estimated cost from hardcoded per-model pricing table |
+| `cost_usd` | `number` | Total estimated cost (review + judge) from hardcoded per-model pricing table |
+| `judge_model` | `string \| null` | Judge model ID, or null if no judge pass |
+| `judge_tokens.input` | `number` | Judge input tokens (0 if no judge) |
+| `judge_tokens.output` | `number` | Judge output tokens (0 if no judge) |
+| `judge_cost_usd` | `number \| null` | Judge call cost, or null if no judge |
 | `duration_ms` | `number` | Wall-clock time for the full run |
 | `dry_run` | `boolean` | Whether `--dry-run` was used |
 | `force` | `boolean` | Whether `--force` was used |
 | `prompt_source` | `string` | Prompt file path or `default` |
-| `verdict_score` | `number \| null` | Verdict percentage (0–100) parsed from review output |
-| `computed_score` | `number \| null` | Code-computed score: `max(0, 100 − HIGHs×12 − MEDIUMs×4)`. Independent of model's verdict. |
-| `findings` | `object \| null` | `{ high, medium, low }` — counts parsed from Findings section |
+| `verdict_score` | `number \| null` | Verdict percentage (0–100) parsed from final output (judge if used, reviewer otherwise) |
+| `computed_score` | `number \| null` | Code-computed score: `max(0, 100 − HIGHs×12 − MEDIUMs×4)` from final findings |
+| `review_findings` | `object \| null` | `{ high, medium, low }` — raw findings from reviewer before judge validation |
+| `findings` | `object \| null` | `{ high, medium, low }` — final findings (from judge if used, from reviewer otherwise) |
 | `delta` | `object \| null` | Re-review only: `{ developer_replies, resolved, still_open, new_findings }` |
 | `error` | `object \| null` | `{ type, message, status }` on failure |
 
@@ -154,14 +159,17 @@ jq -s '{total: length, errors: [.[] | select(.action=="ERROR")] | length}' resul
 # Estimate vs actual tokens (accuracy check)
 jq -s '[.[] | select(.action=="REVIEW") | {pr: .pr_id, estimated: .tokens.estimated_input, actual: .tokens.input, ratio: (if .tokens.estimated_input > 0 then (.tokens.input / .tokens.estimated_input * 100 | round | tostring + "%") else "n/a" end)}]' results.jsonl
 
-# Average verdict score
-jq -s '[.[] | select(.verdict_score != null) | .verdict_score] | add/length | round' results.jsonl
+# Average computed score
+jq -s '[.[] | select(.computed_score != null) | .computed_score] | add/length | round' results.jsonl
 
 # Reviews by author
 jq -s 'group_by(.pr_author) | map({author: .[0].pr_author, reviews: length}) | sort_by(-.reviews)' results.jsonl
 
-# Verdict vs computed score drift
-jq -s '[.[] | select(.verdict_score != null and .computed_score != null) | {pr: .pr_id, verdict: .verdict_score, computed: .computed_score, drift: (.verdict_score - .computed_score)}]' results.jsonl
+# Judge finding validation (raw vs validated)
+jq -s '[.[] | select(.review_findings != null and .findings != null and .judge_model != null) | {pr: .pr_id, raw: .review_findings, validated: .findings, judge: .judge_model}]' results.jsonl
+
+# Judge cost breakdown
+jq -s '[.[] | select(.judge_cost_usd != null) | {pr: .pr_id, review_cost: (.cost_usd - .judge_cost_usd), judge_cost: .judge_cost_usd, total: .cost_usd}]' results.jsonl
 
 # High-severity findings
 jq -s '[.[] | select(.findings.high > 0) | {repo: .repo_slug, pr: .pr_id, high: .findings.high}]' results.jsonl

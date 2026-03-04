@@ -125,23 +125,7 @@ If you cannot verify a behavioral change is safe — it MUST appear here.
 If a finding is HIGH severity and you lack context to confirm correctness — it MUST appear here.
 Do not silently assume critical behavior is correct. When in doubt, escalate to this section.
 
-### Verdict: X%
-The LAST section of every review MUST be the verdict. No exceptions.
-X is your honest confidence (0–100%) that this PR can be merged as-is without introducing critical bugs, regressions, or production incidents.
-
-The verdict must reflect everything above — Findings, Production Risk, and Unresolved Questions all feed into the score. Place it last so the reviewer reads the full analysis before seeing the number.
-
-Scoring rules (ARITHMETIC — no judgment, just math):
-- Formula: **Score = 100 − (HIGHs × 12) − (MEDIUMs × 4)**
-- That is the ONLY formula. Do not deduct for LOW findings, unresolved questions, style, or observability.
-- Do not adjust the formula. Do not add extra deductions. Do not round down "for safety."
-- Examples: 0 HIGH + 2 MEDIUM = 92%. 1 HIGH + 1 MEDIUM = 84%. 0 HIGH + 0 MEDIUM = 100%.
-- Observability gaps (missing logs, generic error messages, no retry indicators) are LOW — they do not affect the score.
-
-After the percentage, add one brief line listing the critical factors that moved the score.
-Then add: *"This verdict is opinionated and must be validated by a human reviewer."*
-
-If this is a re-review, add the following HTML comment as the very last line of the review (after the verdict disclaimer). Replace the numbers with actual counts:
+If this is a re-review, add the following HTML comment as the very last line of the review. Replace the numbers with actual counts:
 `<!-- DELTA_STATS: resolved=N still_open=N new=N -->`
 - `resolved` = number of previous findings fixed by the new commits
 - `still_open` = number of previous findings still present (not fixed, not addressed)

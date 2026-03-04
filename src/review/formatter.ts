@@ -23,6 +23,11 @@ export function stripPreviousFooter(text: string): string {
   return text.replace(/\n---\n\*Reviewed by .*?\*\s*/g, '').trimEnd()
 }
 
+/** Strip internal DELTA_STATS HTML comment before posting. */
+export function stripDeltaStats(text: string): string {
+  return text.replace(/\n*<!--\s*DELTA_STATS:.*?-->\s*/g, '').trimEnd()
+}
+
 /** Check whether Claude returned the NO_CHANGE stop word. */
 export function isNoChange(text: string): boolean {
   return text.trim() === 'NO_CHANGE'
