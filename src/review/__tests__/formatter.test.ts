@@ -50,13 +50,13 @@ describe('stripPreviousFooter', () => {
 
 describe('stripDeltaStats', () => {
   it('removes DELTA_STATS comment from end of text', () => {
-    const text = '### Verdict: 90%\n<!-- DELTA_STATS: resolved=2 still_open=1 new=0 -->'
-    expect(stripDeltaStats(text)).toBe('### Verdict: 90%')
+    const text = '### Merge Confidence: 90%\n<!-- DELTA_STATS: resolved=2 still_open=1 new=0 -->'
+    expect(stripDeltaStats(text)).toBe('### Merge Confidence: 90%')
   })
 
   it('removes DELTA_STATS with extra whitespace', () => {
-    const text = '### Verdict: 90%\n\n<!--  DELTA_STATS:  resolved=1  still_open=0  new=3  -->\n'
-    expect(stripDeltaStats(text)).toBe('### Verdict: 90%')
+    const text = '### Merge Confidence: 90%\n\n<!--  DELTA_STATS:  resolved=1  still_open=0  new=3  -->\n'
+    expect(stripDeltaStats(text)).toBe('### Merge Confidence: 90%')
   })
 
   it('returns text unchanged when no DELTA_STATS present', () => {
@@ -65,10 +65,10 @@ describe('stripDeltaStats', () => {
   })
 
   it('removes DELTA_STATS from the middle of text', () => {
-    const text = '### Verdict: 88%\n<!-- DELTA_STATS: resolved=0 still_open=2 new=1 -->\nSome trailing text'
+    const text = '### Merge Confidence: 88%\n<!-- DELTA_STATS: resolved=0 still_open=2 new=1 -->\nSome trailing text'
     const result = stripDeltaStats(text)
     expect(result).not.toContain('DELTA_STATS')
-    expect(result).toContain('### Verdict: 88%')
+    expect(result).toContain('### Merge Confidence: 88%')
     expect(result).toContain('Some trailing text')
   })
 })

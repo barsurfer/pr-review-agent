@@ -35,9 +35,9 @@ export function countChangedLines(diff: string): number {
   return count
 }
 
-/** Extract verdict percentage from review text. Returns null if not found. */
+/** Extract merge confidence / verdict percentage from review text. Returns null if not found. */
 export function parseVerdictScore(text: string): number | null {
-  const match = text.match(/#{1,4}\s*Verdict:\s*(\d+)%/)
+  const match = text.match(/#{1,4}\s*(?:Merge Confidence|Verdict):\s*(\d+)%/)
   return match ? parseInt(match[1], 10) : null
 }
 

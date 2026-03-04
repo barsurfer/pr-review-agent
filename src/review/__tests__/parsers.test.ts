@@ -134,32 +134,32 @@ describe('countChangedLines', () => {
 // ---------------------------------------------------------------------------
 
 describe('parseVerdictScore', () => {
-  it('extracts score from ### Verdict: XX%', () => {
-    expect(parseVerdictScore('### Verdict: 85%')).toBe(85)
+  it('extracts score from ### Merge Confidence: XX%', () => {
+    expect(parseVerdictScore('### Merge Confidence: 85%')).toBe(85)
   })
 
-  it('extracts score from ## Verdict: XX%', () => {
-    expect(parseVerdictScore('## Verdict: 92%')).toBe(92)
+  it('extracts score from ## Merge Confidence: XX%', () => {
+    expect(parseVerdictScore('## Merge Confidence: 92%')).toBe(92)
   })
 
-  it('extracts score from # Verdict: XX%', () => {
-    expect(parseVerdictScore('# Verdict: 100%')).toBe(100)
+  it('extracts score from legacy ### Verdict: XX%', () => {
+    expect(parseVerdictScore('### Verdict: 100%')).toBe(100)
   })
 
-  it('extracts score from #### Verdict: XX%', () => {
-    expect(parseVerdictScore('#### Verdict: 77%')).toBe(77)
+  it('extracts score from #### Merge Confidence: XX%', () => {
+    expect(parseVerdictScore('#### Merge Confidence: 77%')).toBe(77)
   })
 
-  it('returns null when no verdict found', () => {
+  it('returns null when no score found', () => {
     expect(parseVerdictScore('no verdict here')).toBeNull()
   })
 
-  it('returns null for malformed verdict', () => {
-    expect(parseVerdictScore('### Verdict: high')).toBeNull()
+  it('returns null for malformed score', () => {
+    expect(parseVerdictScore('### Merge Confidence: high')).toBeNull()
   })
 
-  it('finds verdict in longer text', () => {
-    const text = '### Summary\nAll good.\n\n### Verdict: 95%\nSome notes.'
+  it('finds score in longer text', () => {
+    const text = '### Summary\nAll good.\n\n### Merge Confidence: 95%\nSome notes.'
     expect(parseVerdictScore(text)).toBe(95)
   })
 })
@@ -227,7 +227,7 @@ describe('parseFindings', () => {
       '- **HIGH – Issue**',
       '- **LOW – Nitpick**',
       '',
-      '## Verdict: 80%',
+      '## Merge Confidence: 80%',
     ].join('\n')
 
     expect(parseFindings(text)).toEqual({ high: 1, medium: 0, low: 1 })
@@ -258,7 +258,7 @@ describe('parseDeltaStats', () => {
 
   it('extracts stats embedded in larger text', () => {
     const text = [
-      '### Verdict: 90%',
+      '### Merge Confidence: 90%',
       '*This verdict is opinionated.*',
       '<!-- DELTA_STATS: resolved=5 still_open=0 new=3 -->',
     ].join('\n')
@@ -271,7 +271,7 @@ describe('parseDeltaStats', () => {
   })
 
   it('returns null when no DELTA_STATS comment', () => {
-    expect(parseDeltaStats('### Verdict: 90%\nNo delta here.')).toBeNull()
+    expect(parseDeltaStats('### Merge Confidence: 90%\nNo delta here.')).toBeNull()
   })
 
   it('returns null for malformed comment', () => {

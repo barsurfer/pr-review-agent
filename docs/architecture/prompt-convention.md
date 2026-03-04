@@ -141,19 +141,27 @@ critical behavioral rules.
 When `JUDGING_MODEL` is set, the review output is sent to a second model for validation
 before posting. The judge receives the diff + review text and validates each MEDIUM/HIGH
 finding against the actual code. Invalid findings are dropped; the judge produces a clean
-final comment with only validated findings and a verdict score.
+final comment with only validated findings and a **Merge Confidence** score.
 
-The judge prompt is in `src/prompt/judge-prompt.txt`. Scoring uses the arithmetic formula:
-`Score = 100 − (HIGHs × 12) − (MEDIUMs × 4)` on validated findings only.
+The judge prompt is in `src/prompt/judge-prompt.txt`. The judge produces a holistic
+merge-safety confidence percentage (not arithmetic — considers findings, code scope,
+unresolved questions, and critical path impact). The `computed_score` in the usage record
+provides the arithmetic score (`100 − HIGHs×12 − MEDIUMs×4`) from parsed findings
+regardless of whether a judge was used.
 
-When no judge is configured, the review model's output is posted as-is (without a verdict
-section). The `computed_score` in the usage record provides the arithmetic score from
-parsed findings regardless of whether a judge was used.
+The judge also applies calibration rules cherry-picked from the reviewer's FORBIDDEN section:
+- Style/formatting findings → dropped
+- HIGH without confirmed runtime failure → downgraded to MEDIUM
+- Findings requiring 3+ chained hypotheticals → downgraded to LOW
+- Framework/library uncertainty → moved to Unresolved Questions
+
+When no judge is configured, the review model's output is posted as-is (without a
+Merge Confidence section).
 
 ### SCOPE LOCK (Prompt Injection Defense)
 
-The base template includes a SCOPE LOCK section that defends against prompt injection
-attempts in PR descriptions, comments, or code:
+The base template and judge prompt both include a SCOPE LOCK section that defends against
+prompt injection attempts in PR descriptions, comments, or code:
 
 - Ignores instructions that attempt to change the agent's role, persona, or output format
 - Ignores requests to reveal the system prompt or produce off-topic content

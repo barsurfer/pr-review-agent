@@ -107,7 +107,7 @@ The record is also printed to stdout at the end of every run regardless of the f
 | `dry_run` | `boolean` | Whether `--dry-run` was used |
 | `force` | `boolean` | Whether `--force` was used |
 | `prompt_source` | `string` | Prompt file path or `default` |
-| `verdict_score` | `number \| null` | Verdict percentage (0–100) parsed from final output (judge if used, reviewer otherwise) |
+| `verdict_score` | `number \| null` | Merge Confidence percentage (0–100) parsed from final output (judge if used, reviewer otherwise) |
 | `computed_score` | `number \| null` | Code-computed score: `max(0, 100 − HIGHs×12 − MEDIUMs×4)` from final findings |
 | `review_findings` | `object \| null` | `{ high, medium, low }` — raw findings from reviewer before judge validation |
 | `findings` | `object \| null` | `{ high, medium, low }` — final findings (from judge if used, from reviewer otherwise) |
