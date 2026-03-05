@@ -6,7 +6,7 @@ import { config } from '../config.js'
 import { loadPrompt } from '../prompt/loader.js'
 import { fetchContext } from '../context/fetcher.js'
 import { runReview, runCommentResponse, runJudge } from '../claude/client.js'
-import { filterDiff, countChangedLines } from './parsers.js'
+import { filterDiff, countChangedLines, parseFindings } from './parsers.js'
 import { buildReviewFooter, buildReplyFooter, stripPreviousFooter, stripDeltaStats, isNoChange, extractCommitHash } from './formatter.js'
 import { buildUsageRecord, logUsageRecord } from './usage.js'
 import { State } from './types.js'
@@ -215,6 +215,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
 
     case State.CHECK_NO_CHANGE: {
       if (isNoChange(ctx.reviewText!)) {
+        console.log('  Reviewer: NO_CHANGE')
         ctx.action = 'NO_CHANGE'
         ctx.skipReason = 'No changes since last review'
         return State.SKIP
@@ -223,7 +224,15 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
     }
 
     case State.JUDGE_REVIEW: {
+      const reviewFindings = parseFindings(ctx.reviewText!)
+      console.log(`  Reviewer findings: ${reviewFindings.high}H / ${reviewFindings.medium}M / ${reviewFindings.low}L`)
+
       if (!config.judge.model) {
+        return State.POST_REVIEW
+      }
+
+      if (reviewFindings.high === 0 && reviewFindings.medium === 0 && reviewFindings.low === 0) {
+        console.log('  Skipping judge — no findings to validate')
         return State.POST_REVIEW
       }
 

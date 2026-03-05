@@ -151,9 +151,12 @@ regardless of whether a judge was used.
 
 The judge also applies calibration rules cherry-picked from the reviewer's FORBIDDEN section:
 - Style/formatting findings → dropped
+- LOW findings that are purely style preference, configurability opinion, or "nice to have" with no runtime impact → dropped
 - HIGH without confirmed runtime failure → downgraded to MEDIUM
 - Findings requiring 3+ chained hypotheticals → downgraded to LOW
 - Framework/library uncertainty → moved to Unresolved Questions
+
+The judge is skipped automatically if the reviewer produces zero findings (nothing to validate).
 
 When no judge is configured, the review model's output is posted as-is (without a
 Merge Confidence section).
