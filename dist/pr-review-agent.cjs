@@ -28943,7 +28943,7 @@ if (major < 20) {
   process.exit(1);
 }
 var program2 = new Command();
-program2.name("pr-review-agent").description("Automated PR code review powered by Claude").option("--pr-id <id>", "Pull request ID").option("--workspace <workspace>", "VCS workspace / org (overrides BITBUCKET_WORKSPACE)").option("--repo-slug <slug>", "Repository slug").option("--vcs <provider>", "VCS provider: bitbucket | github | gitlab (overrides VCS_PROVIDER)").option("--dry-run", "Print the review to stdout without posting to the PR").option("--force", "Ignore previous reviews and produce a fresh review").option("--log-usage [bool]", "Log usage data to results.jsonl (default: true)", (v2) => v2 !== "false", true).option("--prompt <path>", "Path to a local prompt file (overrides repo .agent-review-instructions.md)").option("--validate-prompt", "Validate prompt and exit (local via --prompt, or repo via --pr-id)").option("--min-changed-files <n>", "Skip review if fewer files changed (overrides MIN_CHANGED_FILES)").option("--max-changed-files <n>", "Skip review if more files changed (overrides MAX_CHANGED_FILES)").option("--min-changed-lines <n>", "Skip review if fewer lines changed (overrides MIN_CHANGED_LINES)").option("--max-changed-lines <n>", "Skip review if more lines changed (overrides MAX_CHANGED_LINES)").parse(process.argv);
+program2.name("pr-review-agent").description("Automated PR code review powered by Claude").option("--pr-id <id>", "Pull request ID").option("--workspace <workspace>", "VCS workspace / org (overrides BITBUCKET_WORKSPACE)").option("--repo-slug <slug>", "Repository slug").option("--vcs <provider>", "VCS provider: bitbucket | github | gitlab (overrides VCS_PROVIDER)").option("--dry-run", "Print the review to stdout without posting to the PR").option("--force", "Ignore previous reviews and produce a fresh review").option("--log-usage [bool]", "Log usage data to results.jsonl (default: true)", (v2) => v2 !== "false", true).option("--prompt <path>", "Path to a local prompt file (overrides repo .agent-review-instructions.md)").option("--validate-prompt", "Validate prompt and exit (local via --prompt, or repo via --pr-id)").option("--model <id>", "Claude model ID (overrides CLAUDE_MODEL)").option("--judge-model <id>", "Judge model ID (overrides JUDGING_MODEL)").option("--min-changed-files <n>", "Skip review if fewer files changed (overrides MIN_CHANGED_FILES)").option("--max-changed-files <n>", "Skip review if more files changed (overrides MAX_CHANGED_FILES)").option("--min-changed-lines <n>", "Skip review if fewer lines changed (overrides MIN_CHANGED_LINES)").option("--max-changed-lines <n>", "Skip review if more lines changed (overrides MAX_CHANGED_LINES)").parse(process.argv);
 var opts = program2.opts();
 async function main() {
   if (opts.validatePrompt) {
@@ -28992,6 +28992,8 @@ async function main() {
 Filled prompt length: ${result.content.length} chars (~${Math.ceil(result.content.length / 4).toLocaleString()} tokens)`);
     return;
   }
+  if (opts.model) config.anthropic.model = opts.model;
+  if (opts.judgeModel) config.judge.model = opts.judgeModel;
   if (opts.minChangedFiles) config.thresholds.minChangedFiles = parseInt(opts.minChangedFiles, 10);
   if (opts.maxChangedFiles) config.thresholds.maxChangedFiles = parseInt(opts.maxChangedFiles, 10);
   if (opts.minChangedLines) config.thresholds.minChangedLines = parseInt(opts.minChangedLines, 10);

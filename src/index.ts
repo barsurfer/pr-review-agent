@@ -27,6 +27,8 @@ program
   .option('--log-usage [bool]', 'Log usage data to results.jsonl (default: true)', (v: string) => v !== 'false', true)
   .option('--prompt <path>', 'Path to a local prompt file (overrides repo .agent-review-instructions.md)')
   .option('--validate-prompt', 'Validate prompt and exit (local via --prompt, or repo via --pr-id)')
+  .option('--model <id>', 'Claude model ID (overrides CLAUDE_MODEL)')
+  .option('--judge-model <id>', 'Judge model ID (overrides JUDGING_MODEL)')
   .option('--min-changed-files <n>', 'Skip review if fewer files changed (overrides MIN_CHANGED_FILES)')
   .option('--max-changed-files <n>', 'Skip review if more files changed (overrides MAX_CHANGED_FILES)')
   .option('--min-changed-lines <n>', 'Skip review if fewer lines changed (overrides MIN_CHANGED_LINES)')
@@ -38,6 +40,8 @@ const opts = program.opts<{
   workspace?: string
   repoSlug?: string
   vcs?: string
+  model?: string
+  judgeModel?: string
   dryRun?: boolean
   force?: boolean
   logUsage?: boolean
@@ -107,6 +111,10 @@ async function main(): Promise<void> {
     console.log(`\nFilled prompt length: ${result.content.length} chars (~${Math.ceil(result.content.length / 4).toLocaleString()} tokens)`)
     return
   }
+
+  // CLI flags override env var models
+  if (opts.model) config.anthropic.model = opts.model
+  if (opts.judgeModel) config.judge.model = opts.judgeModel
 
   // CLI flags override env var thresholds
   if (opts.minChangedFiles) config.thresholds.minChangedFiles = parseInt(opts.minChangedFiles, 10)
