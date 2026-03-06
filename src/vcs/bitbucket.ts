@@ -183,6 +183,16 @@ export class BitbucketAdapter implements VCSAdapter {
     )
   }
 
+  async getCommitDiff(fromCommit: string, toCommit: string): Promise<string> {
+    const repoSlug = this.getRepoSlug()
+    // Bitbucket Cloud diff spec: {new}..{old} shows what new has over old
+    const { data } = await this.getFollowingRedirects(
+      `/repositories/${this.workspace}/${repoSlug}/diff/${toCommit}..${fromCommit}`,
+      { headers: { Accept: 'text/plain' }, responseType: 'text' }
+    )
+    return data as string
+  }
+
   // repo slug is passed in at call sites via CLI — store it after construction
   private repoSlug = ''
 

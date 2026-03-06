@@ -28,4 +28,7 @@ export class GitLabAdapter implements VCSAdapter {
   postReply(_prId: string, _parentId: string, _body: string): Promise<void> {
     throw new Error('GitLabAdapter not implemented — deferred to Phase 3')
   }
+  getCommitDiff(_fromCommit: string, _toCommit: string): Promise<string> {
+    throw new Error('GitLabAdapter not implemented — deferred to Phase 3')
+  }
 }

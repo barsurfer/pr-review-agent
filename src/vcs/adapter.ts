@@ -43,4 +43,6 @@ export interface VCSAdapter {
   getRepliesToReviewComments(prId: string, reviewCommentIds: string[], includeAnswered?: boolean): Promise<CommentReply[]>
   /** Post a threaded reply to an existing comment. */
   postReply(prId: string, parentId: string, body: string): Promise<void>
+  /** Fetch the diff between two commits (for delta reviews). */
+  getCommitDiff(fromCommit: string, toCommit: string): Promise<string>
 }

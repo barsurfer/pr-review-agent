@@ -24570,6 +24570,14 @@ var BitbucketAdapter = class {
       { parent: { id: Number(parentId) }, content: { raw: body } }
     );
   }
+  async getCommitDiff(fromCommit, toCommit) {
+    const repoSlug = this.getRepoSlug();
+    const { data } = await this.getFollowingRedirects(
+      `/repositories/${this.workspace}/${repoSlug}/diff/${toCommit}..${fromCommit}`,
+      { headers: { Accept: "text/plain" }, responseType: "text" }
+    );
+    return data;
+  }
   // repo slug is passed in at call sites via CLI — store it after construction
   repoSlug = "";
   setRepoSlug(slug) {
@@ -24622,6 +24630,9 @@ var GitHubAdapter = class {
   postReply(_prId, _parentId, _body) {
     throw new Error("GitHubAdapter not implemented \u2014 deferred to Phase 3");
   }
+  getCommitDiff(_fromCommit, _toCommit) {
+    throw new Error("GitHubAdapter not implemented \u2014 deferred to Phase 3");
+  }
 };
 
 // src/vcs/gitlab.ts
@@ -24651,6 +24662,9 @@ var GitLabAdapter = class {
     throw new Error("GitLabAdapter not implemented \u2014 deferred to Phase 3");
   }
   postReply(_prId, _parentId, _body) {
+    throw new Error("GitLabAdapter not implemented \u2014 deferred to Phase 3");
+  }
+  getCommitDiff(_fromCommit, _toCommit) {
     throw new Error("GitLabAdapter not implemented \u2014 deferred to Phase 3");
   }
 };
@@ -28731,6 +28745,22 @@ async function transition(state, ctx) {
           console.log(`  Source commit ${ctx.prInfo.sourceCommit.slice(0, 12)} already reviewed \u2014 checking for unanswered replies...`);
           ctx.reviewNumber = ctx.previousReviews.length;
           return 4 /* CHECK_REPLIES */;
+        }
+        if (commitHash) {
+          console.log(`  Fetching delta diff (${commitHash}..${ctx.prInfo.sourceCommit.slice(0, 12)})...`);
+          try {
+            const deltaDiff = await ctx.adapter.getCommitDiff(commitHash, ctx.prInfo.sourceCommit);
+            const { filtered, removedCount } = filterDiff(deltaDiff, config.diffExcludePatterns);
+            const deltaLines = countChangedLines(filtered);
+            console.log(`  Delta: ${countChangedLines(deltaDiff)} lines total, ${removedCount} file(s) filtered, ${deltaLines} lines remain`);
+            if (deltaLines === 0) {
+              ctx.action = "NO_CHANGE";
+              ctx.skipReason = "New commits contain only excluded files (e.g. tests, lock files) \u2014 no reviewable changes";
+              return 13 /* SKIP */;
+            }
+          } catch (err) {
+            console.log(`  Delta diff fetch failed (${err.message}) \u2014 falling back to full PR diff`);
+          }
         }
         const reviewIds = ctx.previousReviews.map((r2) => r2.id);
         const discussion = await ctx.adapter.getRepliesToReviewComments(ctx.prId, reviewIds, true);
