@@ -1,5 +1,5 @@
 import axios, { AxiosInstance, AxiosRequestConfig } from 'axios'
-import type { VCSAdapter, PRInfo, ChangedFile, ReviewComment, CommentReply } from './adapter.js'
+import type { VCSAdapter, PRInfo, ChangedFile, ReviewComment, CommentReply, ReplyResult } from './adapter.js'
 
 export class BitbucketAdapter implements VCSAdapter {
   private readonly client: AxiosInstance
@@ -139,10 +139,11 @@ export class BitbucketAdapter implements VCSAdapter {
     return comments
   }
 
-  async getRepliesToReviewComments(prId: string, reviewCommentIds: string[], includeAnswered = false): Promise<CommentReply[]> {
+  async getRepliesToReviewComments(prId: string, reviewCommentIds: string[], includeAnswered = false): Promise<ReplyResult> {
     const repoSlug = this.getRepoSlug()
-    const idSet = new Set(reviewCommentIds)
+    const parentIds = new Set(reviewCommentIds)
     const humanReplies: CommentReply[] = []
+    let agentReplyCount = 0
     let latestAgentReply = ''   // ISO timestamp of our most recent reply
     let url: string | null = `/repositories/${this.workspace}/${repoSlug}/pullrequests/${prId}/comments`
 
@@ -150,10 +151,12 @@ export class BitbucketAdapter implements VCSAdapter {
       const { data }: { data: any } = await this.client.get(url)
       for (const c of data.values) {
         const parentId = c.parent?.id ? String(c.parent.id) : null
-        if (!parentId || !idSet.has(parentId)) continue
+        if (!parentId || !parentIds.has(parentId)) continue
         const body: string = c.content?.raw ?? ''
         if (body.includes('Reply by ')) {
-          // Track the latest agent reply timestamp
+          agentReplyCount++
+          // Track agent reply IDs so we also find replies nested under them
+          parentIds.add(String(c.id))
           if (c.created_on > latestAgentReply) latestAgentReply = c.created_on
           continue
         }
@@ -169,10 +172,10 @@ export class BitbucketAdapter implements VCSAdapter {
     }
 
     // For delta review context: return all human replies
-    if (includeAnswered) return humanReplies
+    if (includeAnswered) return { replies: humanReplies, agentReplyCount }
     // For reply flow: only return replies that came AFTER our last agent reply
-    if (!latestAgentReply) return humanReplies
-    return humanReplies.filter(r => r.createdOn > latestAgentReply)
+    if (!latestAgentReply) return { replies: humanReplies, agentReplyCount }
+    return { replies: humanReplies.filter(r => r.createdOn > latestAgentReply), agentReplyCount }
   }
 
   async postReply(prId: string, parentId: string, body: string): Promise<void> {

@@ -105,6 +105,54 @@ missing keys or inconsistent additions across locales.
 
 ---
 
+## Reply Flow
+
+When the agent is re-triggered on the **same commit** (no new code), it checks for
+unanswered developer questions and responds conversationally.
+
+### Detection
+
+The agent scans all PR comments looking for replies to its review comments:
+
+1. Start with the set of **review comment IDs** (comments containing `"Reviewed by"`)
+2. For each comment with a matching `parent.id`:
+   - If it contains `"Reply by"` → it's an **agent reply** — add its ID to the parent set
+     (so replies-to-replies are also discovered) and track the timestamp
+   - Otherwise → it's a **human reply** — collect it
+3. Filter human replies to only those posted **after** the agent's latest reply
+   (already-answered questions are excluded)
+
+This recursive parent tracking means the agent finds developer questions at any nesting
+depth — not just direct replies to the review, but also follow-ups to the agent's own
+replies.
+
+### One Reply per Trigger
+
+Each trigger produces **at most one agent reply** that answers all pending questions:
+
+- All unanswered developer questions are bundled into a single Claude API call
+- Claude receives the original review, the diff, and all pending questions
+- The response is posted as a **threaded reply** under the review comment
+
+On the next trigger:
+- New unanswered questions → reply again (one response)
+- No new questions → skip ("no unanswered questions")
+
+### Reply Limit (`MAX_REPLY_COMMENTS`)
+
+To prevent runaway token usage from extended back-and-forth conversations, the agent
+enforces a per-PR reply cap. Default: **3 replies**.
+
+Once the limit is reached, the agent logs the unanswered questions but skips the API
+call: `"reply limit reached (3/3)"`. This prevents:
+- Developers gaming the agent with infinite follow-up questions
+- Token cost spiraling on contentious PRs
+- The agent getting baited into off-topic conversations
+
+Set `MAX_REPLY_COMMENTS=0` to disable the limit (unlimited replies).
+
+---
+
 ## Review Comment Footer
 
 Every review comment posted by the agent includes a structured footer:

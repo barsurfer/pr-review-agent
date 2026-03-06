@@ -27,6 +27,11 @@ export interface CommentReply {
   createdOn: string
 }
 
+export interface ReplyResult {
+  replies: CommentReply[]
+  agentReplyCount: number
+}
+
 export interface VCSAdapter {
   getPullRequestInfo(prId: string): Promise<PRInfo>
   getDiff(prId: string): Promise<string>
@@ -40,7 +45,7 @@ export interface VCSAdapter {
   /** Fetch human replies to the agent's review comments.
    *  When includeAnswered is true, returns all human replies (for delta review context).
    *  When false (default), returns only unanswered replies (for the reply flow). */
-  getRepliesToReviewComments(prId: string, reviewCommentIds: string[], includeAnswered?: boolean): Promise<CommentReply[]>
+  getRepliesToReviewComments(prId: string, reviewCommentIds: string[], includeAnswered?: boolean): Promise<ReplyResult>
   /** Post a threaded reply to an existing comment. */
   postReply(prId: string, parentId: string, body: string): Promise<void>
   /** Fetch the diff between two commits (for delta reviews). */

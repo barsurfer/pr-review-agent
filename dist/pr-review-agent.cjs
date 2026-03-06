@@ -20741,6 +20741,9 @@ var config = {
     maxRetries: parseInt(optional("MAX_RETRIES", "3"), 10)
   },
   agentIdentity: process.env.AGENT_IDENTITY || process.env.BITBUCKET_USERNAME || "Claude",
+  reply: {
+    maxComments: parseInt(optional("MAX_REPLY_COMMENTS", "3"), 10)
+  },
   context: {
     maxFiles: parseInt(optional("MAX_CONTEXT_FILES", "20"), 10),
     maxFileLines: parseInt(optional("MAX_FILE_LINES", "500"), 10)
@@ -24535,17 +24538,20 @@ var BitbucketAdapter = class {
   }
   async getRepliesToReviewComments(prId, reviewCommentIds, includeAnswered = false) {
     const repoSlug = this.getRepoSlug();
-    const idSet = new Set(reviewCommentIds);
+    const parentIds = new Set(reviewCommentIds);
     const humanReplies = [];
+    let agentReplyCount = 0;
     let latestAgentReply = "";
     let url2 = `/repositories/${this.workspace}/${repoSlug}/pullrequests/${prId}/comments`;
     while (url2) {
       const { data } = await this.client.get(url2);
       for (const c2 of data.values) {
         const parentId = c2.parent?.id ? String(c2.parent.id) : null;
-        if (!parentId || !idSet.has(parentId)) continue;
+        if (!parentId || !parentIds.has(parentId)) continue;
         const body = c2.content?.raw ?? "";
         if (body.includes("Reply by ")) {
+          agentReplyCount++;
+          parentIds.add(String(c2.id));
           if (c2.created_on > latestAgentReply) latestAgentReply = c2.created_on;
           continue;
         }
@@ -24559,9 +24565,9 @@ var BitbucketAdapter = class {
       }
       url2 = data.next ?? null;
     }
-    if (includeAnswered) return humanReplies;
-    if (!latestAgentReply) return humanReplies;
-    return humanReplies.filter((r2) => r2.createdOn > latestAgentReply);
+    if (includeAnswered) return { replies: humanReplies, agentReplyCount };
+    if (!latestAgentReply) return { replies: humanReplies, agentReplyCount };
+    return { replies: humanReplies.filter((r2) => r2.createdOn > latestAgentReply), agentReplyCount };
   }
   async postReply(prId, parentId, body) {
     const repoSlug = this.getRepoSlug();
@@ -28763,7 +28769,7 @@ async function transition(state, ctx) {
           }
         }
         const reviewIds = ctx.previousReviews.map((r2) => r2.id);
-        const discussion = await ctx.adapter.getRepliesToReviewComments(ctx.prId, reviewIds, true);
+        const { replies: discussion } = await ctx.adapter.getRepliesToReviewComments(ctx.prId, reviewIds, true);
         if (discussion.length > 0) {
           ctx.replies = discussion;
           console.log(`  Found ${discussion.length} developer reply comment(s) \u2014 will include in review context`);
@@ -28776,9 +28782,16 @@ async function transition(state, ctx) {
     }
     case 4 /* CHECK_REPLIES */: {
       const reviewIds = ctx.previousReviews.map((r2) => r2.id);
-      ctx.replies = await ctx.adapter.getRepliesToReviewComments(ctx.prId, reviewIds);
+      const { replies, agentReplyCount } = await ctx.adapter.getRepliesToReviewComments(ctx.prId, reviewIds);
+      ctx.replies = replies;
       if (ctx.replies.length > 0) {
-        console.log(`  Found ${ctx.replies.length} unanswered reply comment(s) \u2014 responding...`);
+        if (config.reply.maxComments > 0 && agentReplyCount >= config.reply.maxComments) {
+          console.log(`  Found ${ctx.replies.length} unanswered reply(s), but agent already posted ${agentReplyCount}/${config.reply.maxComments} replies \u2014 skipping`);
+          ctx.action = "DEDUP_SKIP";
+          ctx.skipReason = `reply limit reached (${agentReplyCount}/${config.reply.maxComments})`;
+          return 13 /* SKIP */;
+        }
+        console.log(`  Found ${ctx.replies.length} unanswered reply(s) \u2014 responding... (${agentReplyCount}/${config.reply.maxComments || "\u221E"} replies used)`);
         return 5 /* RESPOND_TO_REPLIES */;
       }
       ctx.action = "DEDUP_SKIP";

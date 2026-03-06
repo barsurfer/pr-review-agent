@@ -116,7 +116,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         }
 
         const reviewIds = ctx.previousReviews.map(r => r.id)
-        const discussion = await ctx.adapter.getRepliesToReviewComments(ctx.prId, reviewIds, true)
+        const { replies: discussion } = await ctx.adapter.getRepliesToReviewComments(ctx.prId, reviewIds, true)
         if (discussion.length > 0) {
           ctx.replies = discussion
           console.log(`  Found ${discussion.length} developer reply comment(s) — will include in review context`)
@@ -131,10 +131,17 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
 
     case State.CHECK_REPLIES: {
       const reviewIds = ctx.previousReviews!.map(r => r.id)
-      ctx.replies = await ctx.adapter.getRepliesToReviewComments(ctx.prId, reviewIds)
+      const { replies, agentReplyCount } = await ctx.adapter.getRepliesToReviewComments(ctx.prId, reviewIds)
+      ctx.replies = replies
 
       if (ctx.replies.length > 0) {
-        console.log(`  Found ${ctx.replies.length} unanswered reply comment(s) — responding...`)
+        if (config.reply.maxComments > 0 && agentReplyCount >= config.reply.maxComments) {
+          console.log(`  Found ${ctx.replies.length} unanswered reply(s), but agent already posted ${agentReplyCount}/${config.reply.maxComments} replies — skipping`)
+          ctx.action = 'DEDUP_SKIP'
+          ctx.skipReason = `reply limit reached (${agentReplyCount}/${config.reply.maxComments})`
+          return State.SKIP
+        }
+        console.log(`  Found ${ctx.replies.length} unanswered reply(s) — responding... (${agentReplyCount}/${config.reply.maxComments || '∞'} replies used)`)
         return State.RESPOND_TO_REPLIES
       }
 
