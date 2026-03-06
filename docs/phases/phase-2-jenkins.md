@@ -88,7 +88,7 @@ pr-review-agent
 | Field | Value |
 |-------|-------|
 | Expression | `$REPO_SLUG` |
-| Text | `^(alice-mobile-app\|ticket-dispatch-client)$` |
+| Text | `^(my-app\|my-other-app)$` |
 
 Only repos matching the regex will trigger a build. Non-matching repos are
 rejected immediately (no build queued).
@@ -260,7 +260,7 @@ curl -s -X POST "https://<jenkins-host>/generic-webhook-trigger/invoke?token=pr-
   -H "Content-Type: application/json" \
   -H "X-Event-Key: pullrequest:comment_created" \
   -d '{
-    "repository": {"name": "alice-mobile-app"},
+    "repository": {"name": "my-app"},
     "pullrequest": {"id": 709},
     "comment": {"user": {"nickname": "testuser"}}
   }'
