@@ -95,38 +95,15 @@ rejected immediately (no build queued).
 
 #### 3. Pipeline Script
 
-Paste this in the **Pipeline → Definition → Pipeline script** section:
+Copy the contents of [`jenkins/pipeline.groovy`](../../jenkins/pipeline.groovy) into
+**Pipeline → Definition → Pipeline script**.
 
-```groovy
-pipeline {
-    agent any
-    stages {
-        stage('AI Review') {
-            steps {
-                catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
-                    nodejs(nodeJSInstallationName: 'Node20') {
-                        withCredentials([
-                            string(credentialsId: 'anthropic-api-key', variable: 'ANTHROPIC_API_KEY'),
-                            string(credentialsId: 'bitbucket-token', variable: 'BITBUCKET_TOKEN'),
-                            string(credentialsId: 'bitbucket-username', variable: 'BITBUCKET_USERNAME')
-                        ]) {
-                            sh """
-                                curl -fsSL https://raw.githubusercontent.com/<org>/pr-review-agent/main/dist/pr-review-agent.cjs \
-                                    -o /tmp/pr-review-agent.cjs
-                                node /tmp/pr-review-agent.cjs \
-                                    --repo-slug "\$REPO_SLUG" \
-                                    --pr-id "\$PR_ID" \
-                                    --model "claude-haiku-4-5-20251001" \
-                                    --judge-model "claude-sonnet-4-6"
-                            """
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-```
+The pipeline includes:
+- **Quiet period** (30s) — coalesces rapid triggers into one build
+- **`lock(skipIfLocked: true)`** — only one review per repo+PR at a time (requires Lockable Resources plugin)
+- **Build display name** — `#42-alice-mobile-app-709` instead of just `#42`
+- **`archiveArtifacts`** — saves `results.jsonl` per build
+- **Persistent results** — appends to `/opt/pr-review-agent/results.jsonl` for aggregated analytics
 
 > **Important:** Model IDs must NOT be stored as Jenkins credentials. Jenkins
 > masks all credential values in logs and API calls, which corrupts the model ID

@@ -440,43 +440,20 @@ No Jenkinsfile changes in target repos.
 **Option B: Per-repo Jenkinsfile stage** — Each repo adds an `AI Review` stage to
 its own pipeline. Triggered by the repo's existing multibranch pipeline on PR events.
 
-### Quick Example (Option A pipeline script)
+### Pipeline Script
 
-```groovy
-pipeline {
-    agent any
-    stages {
-        stage('AI Review') {
-            steps {
-                catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
-                    nodejs(nodeJSInstallationName: 'Node20') {
-                        withCredentials([
-                            string(credentialsId: 'anthropic-api-key', variable: 'ANTHROPIC_API_KEY'),
-                            string(credentialsId: 'bitbucket-token', variable: 'BITBUCKET_TOKEN'),
-                            string(credentialsId: 'bitbucket-username', variable: 'BITBUCKET_USERNAME')
-                        ]) {
-                            sh """
-                                curl -fsSL https://raw.githubusercontent.com/<org>/pr-review-agent/main/dist/pr-review-agent.cjs \
-                                    -o /tmp/pr-review-agent.cjs
-                                node /tmp/pr-review-agent.cjs \
-                                    --repo-slug "\$REPO_SLUG" \
-                                    --pr-id "\$PR_ID" \
-                                    --model "claude-haiku-4-5-20251001" \
-                                    --judge-model "claude-sonnet-4-6"
-                            """
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-```
+A ready-to-use pipeline script is at [`jenkins/pipeline.groovy`](jenkins/pipeline.groovy).
+Copy it into **Job → Pipeline → Definition → Pipeline script**.
 
-Key points:
-- **`catchError`** ensures agent failures never break the build
+Key features:
+- **`catchError`** — agent failures never break the build
+- **`quietPeriod(30)`** — coalesces rapid triggers into one build
+- **`lock(skipIfLocked: true)`** — one review per PR at a time, duplicates dropped
+- **Build display name** — `#42-my-app-709` for easy identification
+- **`archiveArtifacts`** — saves `results.jsonl` per build + appends to persistent file
 - **Model IDs via `--model`/`--judge-model` flags** — do NOT store as Jenkins credentials (masking corrupts the value)
-- See [docs/phases/phase-2-jenkins.md](docs/phases/phase-2-jenkins.md) for full setup guide, webhook configuration, and repo allowlist
+
+See [docs/phases/phase-2-jenkins.md](docs/phases/phase-2-jenkins.md) for full setup guide, webhook configuration, and repo allowlist
 
 ---
 
