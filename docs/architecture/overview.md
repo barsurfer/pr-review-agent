@@ -90,6 +90,7 @@ FETCH_PR_INFO → FETCH_DIFF (+ filterDiff) → CHECK_THRESHOLDS
                                        ├─ [same commit] → CHECK_REPLIES
                                        │   ├─ [replies] → RESPOND_TO_REPLIES → DONE
                                        │   └─ [none] → SKIP → DONE
+                                       ├─ [delta diff empty after filter] → SKIP (NO_CHANGE) → DONE
                                        └─ LOAD_PROMPT → FETCH_CONTEXT → CALL_CLAUDE
                                             → CHECK_NO_CHANGE
                                                ├─ [NO_CHANGE] → SKIP → DONE
@@ -98,11 +99,19 @@ FETCH_PR_INFO → FETCH_DIFF (+ filterDiff) → CHECK_THRESHOLDS
                                                     └─ [no judge] → POST_REVIEW → DONE
 ```
 
-**14 states**, **5 possible outcomes**: skip (threshold), skip (same commit, no replies),
-reply to developer, skip (NO_CHANGE), or post review. The optional `JUDGE_REVIEW` state
-sends the review output and diff to a separate judge model (`JUDGING_MODEL`) that validates
-each finding against the actual code before posting. When no judge is configured, this state
-is a no-op passthrough.
+**14 states**, **6 possible outcomes**: skip (threshold), skip (same commit, no replies),
+skip (delta diff empty — only excluded files changed), reply to developer, skip (NO_CHANGE),
+or post review. The optional `JUDGE_REVIEW` state sends the review output and diff to a
+separate judge model (`JUDGING_MODEL`) that validates each finding against the actual code
+before posting. When no judge is configured, this state is a no-op passthrough.
+
+### Delta Diff Pre-Check
+
+When a previous review exists with a different commit hash, the agent fetches the
+commit-to-commit diff (last reviewed commit → current head) before proceeding. After
+applying `DIFF_EXCLUDE_PATTERNS`, if zero lines remain, the review is skipped
+deterministically as `NO_CHANGE` — no API call needed. This catches cases where new
+commits only add excluded files (tests, lock files, translations).
 
 ---
 

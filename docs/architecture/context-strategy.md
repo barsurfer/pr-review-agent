@@ -140,8 +140,23 @@ commit hash. If it matches the current PR source commit:
 1. **Same commit** → `CHECK_REPLIES` → check for unanswered developer replies
 2. **Unanswered replies found** → `RESPOND_TO_REPLIES` → send to Claude, post threaded response
 3. **No replies** → `SKIP` → done ("no new commits and no unanswered questions")
-4. **Different commit** → fetch developer discussion (all human replies, `includeAnswered: true`)
-   → `LOAD_PROMPT` → proceed with full delta review
+4. **Different commit** → **delta diff pre-check** → fetch developer discussion → proceed
+
+### Delta Diff Pre-Check (Step 4)
+
+Before sending the full PR diff to Claude, the agent fetches the commit-to-commit diff
+between the last-reviewed commit and the current head. After applying `DIFF_EXCLUDE_PATTERNS`:
+
+- **0 lines remain** → deterministic `NO_CHANGE` skip. No API call, no tokens, no cost.
+  This catches commits that only add tests (`.spec.ts`), lock files, translations, etc.
+- **Lines remain** → proceed with full delta review (fetch discussion, load prompt, call Claude)
+
+This is a **deterministic** check — it doesn't rely on Claude to detect that nothing
+changed. The filtering uses the same `filterDiff()` function as the main diff pipeline.
+
+The delta diff is fetched via `VCSAdapter.getCommitDiff(fromCommit, toCommit)`. If the
+API call fails (e.g. commit no longer exists after force-push), the agent falls back to
+the full PR diff flow.
 
 This prevents duplicate reviews when Jenkins re-triggers on unrelated events and avoids
 unnecessary API costs.
