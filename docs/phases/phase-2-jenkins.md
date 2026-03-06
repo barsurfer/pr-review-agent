@@ -4,51 +4,166 @@
 
 Auto-trigger the review agent on PR events. No manual steps required after setup.
 
-## Status: 🔄 In Progress
+## Status: ✅ Complete
 
-> Phase 1 and 1b are complete and tested against live Bitbucket PRs.
-> Per-repo Jenkins integration is live.
->
-> **Next**: Single Jenkins job that reviews multiple repositories. Approach TBD —
-> options include a config file listing target repos, a parameterised pipeline,
-> or a shared library with a repo list.
+> Webhook-triggered Jenkins job is live. Bitbucket PR events (create, update,
+> comment) trigger the agent automatically via the Generic Webhook Trigger plugin.
 
 ---
 
-## How It Works
+## Architecture
 
-Each target repo adds an `AI Review` stage to its own `Jenkinsfile` / `build.jenkins`.
-The stage downloads the bundle from the agent repo and runs it. No shared library required.
+```
+Bitbucket Cloud                    Jenkins
+─────────────                      ───────
+PR created/updated/commented
+        │
+        ▼
+  Webhook POST ──────────────►  /generic-webhook-trigger/invoke?token=...
+  (X-Event-Key header)                │
+                                      ▼
+                               Extract: REPO_SLUG, PR_ID
+                               Optional filter: repo allowlist
+                                      │
+                                      ▼
+                               Pipeline runs pr-review-agent
+                               (downloads bundle or uses local clone)
+```
 
-### Deployment Options
+The agent handles all three event types with a single entry point — no special
+flags needed per event type:
 
-**Option A: Download at build time (current approach)**
+| Bitbucket Event | Agent Behavior |
+|----------------|----------------|
+| `pullrequest:created` | First review |
+| `pullrequest:updated` | Delta review (new commits) or dedup skip (same commit) |
+| `pullrequest:comment_created` | Reply to developer questions, or dedup skip |
+
+---
+
+## Option A: Generic Webhook Trigger (Standalone Job)
+
+A single Jenkins job that reviews any repo in the workspace. No Jenkinsfile in
+target repos required — everything is configured in the Jenkins UI.
+
+### Prerequisites
+
+- **Generic Webhook Trigger** plugin installed in Jenkins
+- **NodeJS** plugin installed (or Node 20+ available on the agent)
+- Jenkins endpoint accessible from Bitbucket Cloud (see [Network Requirements](#network-requirements))
+
+### Step-by-Step Setup
+
+#### 1. Create Jenkins Job
+
+- New Item → **Pipeline** → name it (e.g. `pr-review-agent`)
+
+#### 2. Configure Generic Webhook Trigger
+
+Under **Build Triggers → Generic Webhook Trigger**:
+
+**Token:**
+```
+pr-review-agent
+```
+
+**Post content parameters** (extract fields from Bitbucket JSON payload):
+
+| Variable | Expression | JSONPath |
+|----------|-----------|----------|
+| `REPO_SLUG` | `$.repository.name` | JSONPath |
+| `PR_ID` | `$.pullrequest.id` | JSONPath |
+
+**Request header** (optional — for logging/filtering by event type):
+
+| Variable | Header name |
+|----------|-------------|
+| `x_event_key` | `X-Event-Key` |
+
+> **Note:** The plugin auto-converts header names to lowercase with underscores.
+> `X-Event-Key` becomes variable `x_event_key`.
+
+**Optional filter** (repo allowlist — rejects builds at trigger level):
+
+| Field | Value |
+|-------|-------|
+| Expression | `$REPO_SLUG` |
+| Text | `^(alice-mobile-app\|ticket-dispatch-client)$` |
+
+Only repos matching the regex will trigger a build. Non-matching repos are
+rejected immediately (no build queued).
+
+#### 3. Pipeline Script
+
+Paste this in the **Pipeline → Definition → Pipeline script** section:
 
 ```groovy
-sh """
-  curl -fsSL https://raw.githubusercontent.com/<org>/pr-review-agent/main/dist/pr-review-agent.cjs -o /tmp/pr-review-agent.cjs
-  node /tmp/pr-review-agent.cjs \
-    --repo-slug ${env.APP_NAME} \
-    --pr-id ${env.CHANGE_ID}
-"""
+pipeline {
+    agent any
+    stages {
+        stage('AI Review') {
+            steps {
+                catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
+                    nodejs(nodeJSInstallationName: 'Node20') {
+                        withCredentials([
+                            string(credentialsId: 'anthropic-api-key', variable: 'ANTHROPIC_API_KEY'),
+                            string(credentialsId: 'bitbucket-token', variable: 'BITBUCKET_TOKEN'),
+                            string(credentialsId: 'bitbucket-username', variable: 'BITBUCKET_USERNAME')
+                        ]) {
+                            sh """
+                                curl -fsSL https://raw.githubusercontent.com/<org>/pr-review-agent/main/dist/pr-review-agent.cjs \
+                                    -o /tmp/pr-review-agent.cjs
+                                node /tmp/pr-review-agent.cjs \
+                                    --repo-slug "\$REPO_SLUG" \
+                                    --pr-id "\$PR_ID" \
+                                    --model "claude-haiku-4-5-20251001" \
+                                    --judge-model "claude-sonnet-4-6"
+                            """
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
 ```
 
-Simple, always gets latest. No version pinning yet — planned for a future iteration.
+> **Important:** Model IDs must NOT be stored as Jenkins credentials. Jenkins
+> masks all credential values in logs and API calls, which corrupts the model ID
+> and causes "unknown model" errors. Use `--model` and `--judge-model` CLI flags
+> or hardcode in the pipeline script.
 
-**Option B: Clone to a fixed path on the Jenkins agent**
+#### 4. Configure Bitbucket Webhook
 
-```bash
-git clone <this-repo-url> /opt/pr-review-agent
-```
+In the Bitbucket repository (or workspace-level for all repos):
 
-Then reference `node /opt/pr-review-agent/dist/pr-review-agent.cjs` in the Jenkinsfile.
-Update with `git pull`.
+1. **Settings → Webhooks → Add webhook**
+2. **URL:** `https://<jenkins-host>/generic-webhook-trigger/invoke?token=pr-review-agent`
+3. **Triggers:** Select these events:
+   - `pullrequest:created`
+   - `pullrequest:updated`
+   - `pullrequest:comment_created`
+4. **Save**
 
-Both approaches work — Option A is easier to roll out across repos, Option B gives more control.
+For workspace-level webhooks, configure once and all repos in the workspace will
+trigger the job (filtered by the optional regex in step 2).
+
+#### 5. Store Credentials in Jenkins
+
+| Credential ID | Maps to env var | Type | Description |
+|---------------|-----------------|------|-------------|
+| `anthropic-api-key` | `ANTHROPIC_API_KEY` | Secret text | Anthropic API key |
+| `bitbucket-token` | `BITBUCKET_TOKEN` | Secret text | Atlassian API token |
+| `bitbucket-username` | `BITBUCKET_USERNAME` | Secret text | Atlassian account email |
+
+All must be **Secret text** with masking enabled.
 
 ---
 
-## Jenkinsfile Stage Example
+## Option B: Per-Repo Jenkinsfile Stage
+
+Each target repo adds an `AI Review` stage to its own `Jenkinsfile` / `build.jenkins`.
+Triggered by the repo's existing multibranch pipeline on PR events.
 
 ```groovy
 environment {
@@ -66,14 +181,16 @@ stage('AI Review') {
                 withCredentials([
                     string(credentialsId: 'anthropic-api-key', variable: 'ANTHROPIC_API_KEY'),
                     string(credentialsId: 'bitbucket-token', variable: 'BITBUCKET_TOKEN'),
-                    string(credentialsId: 'bitbucket-username', variable: 'BITBUCKET_USERNAME'),
-                    string(credentialsId: 'claude-model', variable: 'CLAUDE_MODEL')
+                    string(credentialsId: 'bitbucket-username', variable: 'BITBUCKET_USERNAME')
                 ]) {
                     sh """
-                        curl -fsSL https://raw.githubusercontent.com/<org>/pr-review-agent/main/dist/pr-review-agent.cjs -o /tmp/pr-review-agent.cjs
+                        curl -fsSL https://raw.githubusercontent.com/<org>/pr-review-agent/main/dist/pr-review-agent.cjs \
+                            -o /tmp/pr-review-agent.cjs
                         node /tmp/pr-review-agent.cjs \
                             --repo-slug ${env.APP_NAME} \
-                            --pr-id ${env.CHANGE_ID}
+                            --pr-id ${env.CHANGE_ID} \
+                            --model "claude-haiku-4-5-20251001" \
+                            --judge-model "claude-sonnet-4-6"
                     """
                 }
             }
@@ -82,17 +199,10 @@ stage('AI Review') {
 }
 ```
 
-### Key Design Decisions
-
-- **`catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE')`** — agent failure never breaks the build
-- **`CLAUDE_MODEL` as a Jenkins credential** — switch models without code changes
-- **`nodejs()` wrapper** — uses the Jenkins NodeJS plugin to ensure the right version
-- **`when { changeRequest() }`** — only runs on PRs, not on branch builds
+- **`when { changeRequest() }`** — only runs on PRs, not branch builds
 - **`CHANGE_ID`** — Jenkins built-in variable for the PR number
 
 ### With PR size thresholds (optional)
-
-Skip trivially small PRs (< 5 lines) and excessively large ones (> 2000 lines):
 
 ```groovy
 sh """
@@ -104,41 +214,69 @@ sh """
 """
 ```
 
-Thresholds can also be set via environment variables (`MIN_CHANGED_LINES`,
-`MAX_CHANGED_LINES`, `MIN_CHANGED_FILES`, `MAX_CHANGED_FILES`). See the
-[README](../../README.md#environment-variables) for the full list.
+---
+
+## Deployment Options
+
+**Download at build time (recommended for getting started):**
+
+```groovy
+sh """
+  curl -fsSL https://raw.githubusercontent.com/<org>/pr-review-agent/main/dist/pr-review-agent.cjs \
+      -o /tmp/pr-review-agent.cjs
+  node /tmp/pr-review-agent.cjs ...
+"""
+```
+
+Always gets latest. GitHub raw CDN may cache for a few minutes after push.
+
+**Clone to a fixed path on the Jenkins agent:**
+
+```bash
+git clone <this-repo-url> /opt/pr-review-agent
+```
+
+Then reference `node /opt/pr-review-agent/dist/pr-review-agent.cjs`. Update with
+`git pull`. Gives more control and avoids CDN cache delay.
 
 ---
 
-## Credentials to Store in Jenkins
+## Network Requirements
 
-| Credential ID | Maps to env var | Description |
-|---------------|-----------------|-------------|
-| `anthropic-api-key` | `ANTHROPIC_API_KEY` | Anthropic API key |
-| `bitbucket-token` | `BITBUCKET_TOKEN` | Atlassian API token with Bitbucket scopes |
-| `bitbucket-username` | `BITBUCKET_USERNAME` | Atlassian account email |
-| `claude-model` | `CLAUDE_MODEL` | Claude model ID (e.g. `claude-sonnet-4-6`) |
+The Generic Webhook Trigger endpoint (`/generic-webhook-trigger/invoke`) must be
+accessible from Bitbucket Cloud's public IP ranges.
 
-All must be stored as **Secret text** credentials with masking enabled.
+If Jenkins is behind a VPN/firewall, you need to whitelist this path for
+Bitbucket Cloud IPs — the same way `/bitbucket-scmsource-hook/notify` is
+whitelisted for multibranch pipeline triggers.
+
+Bitbucket Cloud IP ranges are published at:
+[Bitbucket Cloud IP ranges](https://support.atlassian.com/organization-administration/docs/ip-addresses-and-domains-for-atlassian-cloud-products/)
+
+**Testing the endpoint from within the network:**
+
+```bash
+curl -s -X POST "https://<jenkins-host>/generic-webhook-trigger/invoke?token=pr-review-agent" \
+  -H "Content-Type: application/json" \
+  -H "X-Event-Key: pullrequest:comment_created" \
+  -d '{
+    "repository": {"name": "alice-mobile-app"},
+    "pullrequest": {"id": 709},
+    "comment": {"user": {"nickname": "testuser"}}
+  }'
+```
+
+If this returns 200 from VPN but Bitbucket gets 404, it's a network/firewall issue.
 
 ---
 
-## Jenkins Environment Variables
+## Key Design Decisions
 
-| Variable | Source |
-|----------|--------|
-| `CHANGE_ID` | Jenkins built-in — PR number |
-| `APP_NAME` | Set in pipeline `environment` block |
-| `BITBUCKET_WORKSPACE` | Set in pipeline `environment` block |
-
----
-
-## Shared Library (Optional, Not Required)
-
-A shared Jenkins library is possible but not required. Each repo can add the stage
-directly to its own Jenkinsfile — copy-paste is fine for a handful of repos.
-
-If scaling to many repos, consider extracting to a shared library.
+- **`catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE')`** — agent failure never breaks the build
+- **`nodejs()` wrapper** — uses the Jenkins NodeJS plugin to ensure Node 20+
+- **Model IDs as CLI flags, not credentials** — Jenkins masks credential values everywhere (including API calls), corrupting model IDs
+- **Single entry point** — the agent's state machine handles all event types (create, update, comment) with the same CLI invocation
+- **Optional filter at trigger level** — non-matching repos don't even queue a build
 
 ---
 
@@ -158,3 +296,5 @@ A future iteration could:
 - [x] Review comment appears on the PR
 - [x] Build pipeline is **not** marked as failed if the review agent errors
 - [x] Credentials are masked in Jenkins logs
+- [x] Generic Webhook Trigger job handles multiple repos with allowlist
+- [x] `--model` and `--judge-model` CLI flags avoid credential masking issues

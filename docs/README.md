@@ -16,7 +16,8 @@ structured review as a PR comment.
 | [Phase 3](phases/phase-4-inline-comments.md) | Inline Line-Level Comments | ⏸ Deferred |
 | [Backlog](phases/phase-5-backlog.md) | Further Backlog | ⏸ Deferred |
 
-> Phase 1, 1b, and 2 are complete. Jenkins integration is live.
+> Phase 1, 1b, and 2 are complete. Jenkins integration is live via Generic
+> Webhook Trigger — Bitbucket PR events (create, update, comment) auto-trigger reviews.
 >
 > [Multi-VCS Support](phases/phase-3-multi-vcs.md) has been moved to the backlog —
 > Bitbucket is the only VCS needed for now.

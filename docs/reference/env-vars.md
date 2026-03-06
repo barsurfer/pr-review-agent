@@ -37,7 +37,8 @@ credentials in source code or commit them to version control.**
 | `AGENT_IDENTITY` | *(BITBUCKET_USERNAME)* | Name shown in review/reply footers. Falls back to `BITBUCKET_USERNAME`, then `'Claude'` |
 
 > Threshold variables can also be set via CLI flags (`--min-changed-files`, etc.)
-> which override the env var values.
+> which override the env var values. `CLAUDE_MODEL` and `JUDGING_MODEL` can be
+> overridden with `--model` and `--judge-model` respectively.
 
 ---
 

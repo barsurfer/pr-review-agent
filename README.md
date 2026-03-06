@@ -269,6 +269,8 @@ npm run bundle
 | `--log-usage [bool]` | No | Log usage record to `results.jsonl` (default: `true`, use `--log-usage false` to disable). See [docs/reference/usage-logging.md](docs/reference/usage-logging.md) for schema. |
 | `--prompt <path>` | No | Path to a local prompt file (overrides repo `.agent-review-instructions.md`) |
 | `--validate-prompt` | No | Validate prompt and exit — local via `--prompt`, or repo via `--pr-id` |
+| `--model <id>` | No | Claude model ID (overrides `CLAUDE_MODEL` env var) |
+| `--judge-model <id>` | No | Judge model ID (overrides `JUDGING_MODEL` env var) |
 | `--min-changed-files <n>` | No | Skip review if PR has fewer changed files (overrides `MIN_CHANGED_FILES`) |
 | `--max-changed-files <n>` | No | Skip review if PR has more changed files (overrides `MAX_CHANGED_FILES`) |
 | `--min-changed-lines <n>` | No | Skip review if PR has fewer changed lines (overrides `MIN_CHANGED_LINES`) |
@@ -429,38 +431,52 @@ GitHub Copilot — see [docs/reference/copilot-integration.md](docs/reference/co
 
 ## Jenkins Integration
 
-Add an `AI Review` stage to your repo's Jenkinsfile. The bundle is downloaded at
-build time — no cloning or `npm install` needed on the Jenkins agent.
+Two integration options are available:
+
+**Option A: Generic Webhook Trigger (recommended)** — A single standalone Jenkins
+job triggered by Bitbucket webhooks. Handles multiple repos with an allowlist filter.
+No Jenkinsfile changes in target repos.
+
+**Option B: Per-repo Jenkinsfile stage** — Each repo adds an `AI Review` stage to
+its own pipeline. Triggered by the repo's existing multibranch pipeline on PR events.
+
+### Quick Example (Option A pipeline script)
 
 ```groovy
-stage('AI Review') {
-  when { changeRequest() }
-  steps {
-    catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
-      nodejs(nodeJSInstallationName: env.NODE_VERSION) {
-        withCredentials([
-          string(credentialsId: 'anthropic-api-key', variable: 'ANTHROPIC_API_KEY'),
-          string(credentialsId: 'bitbucket-token', variable: 'BITBUCKET_TOKEN'),
-          string(credentialsId: 'bitbucket-username', variable: 'BITBUCKET_USERNAME'),
-          string(credentialsId: 'claude-model', variable: 'CLAUDE_MODEL')
-        ]) {
-          sh """
-            curl -fsSL https://raw.githubusercontent.com/<org>/pr-review-agent/main/dist/pr-review-agent.cjs -o /tmp/pr-review-agent.cjs
-            node /tmp/pr-review-agent.cjs \
-              --repo-slug ${env.APP_NAME} \
-              --pr-id ${env.CHANGE_ID}
-          """
+pipeline {
+    agent any
+    stages {
+        stage('AI Review') {
+            steps {
+                catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
+                    nodejs(nodeJSInstallationName: 'Node20') {
+                        withCredentials([
+                            string(credentialsId: 'anthropic-api-key', variable: 'ANTHROPIC_API_KEY'),
+                            string(credentialsId: 'bitbucket-token', variable: 'BITBUCKET_TOKEN'),
+                            string(credentialsId: 'bitbucket-username', variable: 'BITBUCKET_USERNAME')
+                        ]) {
+                            sh """
+                                curl -fsSL https://raw.githubusercontent.com/<org>/pr-review-agent/main/dist/pr-review-agent.cjs \
+                                    -o /tmp/pr-review-agent.cjs
+                                node /tmp/pr-review-agent.cjs \
+                                    --repo-slug "\$REPO_SLUG" \
+                                    --pr-id "\$PR_ID" \
+                                    --model "claude-haiku-4-5-20251001" \
+                                    --judge-model "claude-sonnet-4-6"
+                            """
+                        }
+                    }
+                }
+            }
         }
-      }
     }
-  }
 }
 ```
 
 Key points:
 - **`catchError`** ensures agent failures never break the build
-- **`CLAUDE_MODEL` as a credential** lets you switch models without code changes
-- The bundle can also be served from a fixed path — see [docs/phases/phase-2-jenkins.md](docs/phases/phase-2-jenkins.md) for alternatives and full details
+- **Model IDs via `--model`/`--judge-model` flags** — do NOT store as Jenkins credentials (masking corrupts the value)
+- See [docs/phases/phase-2-jenkins.md](docs/phases/phase-2-jenkins.md) for full setup guide, webhook configuration, and repo allowlist
 
 ---
 
