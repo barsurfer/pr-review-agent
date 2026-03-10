@@ -32,6 +32,8 @@ credentials in source code or commit them to version control.**
 | `MAX_CHANGED_FILES` | `200` | Skip review if PR has more changed files (0 = disabled). Default: `200` |
 | `MIN_CHANGED_LINES` | `0` | Skip review if PR has fewer changed lines (0 = disabled) |
 | `MAX_CHANGED_LINES` | `3000` | Skip review if PR has more changed lines (0 = disabled). Default: `3000` |
+| `SKIP_SOURCE_BRANCHES` | `main,master,release/*` | Comma-separated branch patterns. Skip review if PR source branch matches. Default: `main,master,release/*,hotfix/*` |
+| `SKIP_TARGET_BRANCHES` | `main,master` | Comma-separated branch patterns. Skip review if PR target branch matches. Default: `main,master` |
 | `DIFF_EXCLUDE_PATTERNS` | `*.lock,*.json,*.spec.ts` | Comma-separated file patterns to strip from diff before sending to Claude. Default: `*.lock,package-lock.json,yarn.lock,pnpm-lock.yaml,*.json,*.spec.ts` |
 | `JUDGING_MODEL` | `claude-sonnet-4-6` | Optional judge model for finding validation. Empty = skip judge pass. |
 | `MAX_REPLY_COMMENTS` | `3` | Max agent reply comments per PR (0 = unlimited). Prevents runaway token usage on extended conversations. Default: `3` |
@@ -90,6 +92,10 @@ MIN_CHANGED_FILES=0
 MAX_CHANGED_FILES=200
 MIN_CHANGED_LINES=0
 MAX_CHANGED_LINES=3000
+
+# Branch exclusion — skip reviews for merge-back / release PRs
+# SKIP_SOURCE_BRANCHES=main,master,release/*,hotfix/*
+# SKIP_TARGET_BRANCHES=main,master
 
 # Diff exclusion patterns (comma-separated, default includes lock files, .json, .spec.ts)
 # DIFF_EXCLUDE_PATTERNS=*.lock,package-lock.json,yarn.lock,pnpm-lock.yaml,*.json,*.spec.ts

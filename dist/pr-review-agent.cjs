@@ -20748,6 +20748,8 @@ var config = {
     maxFiles: parseInt(optional("MAX_CONTEXT_FILES", "20"), 10),
     maxFileLines: parseInt(optional("MAX_FILE_LINES", "500"), 10)
   },
+  skipSourceBranches: optional("SKIP_SOURCE_BRANCHES", "main,master,release/*,hotfix/*").split(",").map((p2) => p2.trim()).filter(Boolean),
+  skipTargetBranches: optional("SKIP_TARGET_BRANCHES", "main,master").split(",").map((p2) => p2.trim()).filter(Boolean),
   diffExcludePatterns: optional("DIFF_EXCLUDE_PATTERNS", "*.lock,package-lock.json,yarn.lock,pnpm-lock.yaml,*.json,*.spec.ts").split(",").map((p2) => p2.trim()).filter(Boolean),
   thresholds: {
     minChangedFiles: parseInt(optional("MIN_CHANGED_FILES", "0"), 10),
@@ -28667,6 +28669,13 @@ function buildUsageRecord(ctx, durationMs, error) {
     computed_score: findings ? Math.max(0, 100 - findings.high * 12 - findings.medium * 4) : null,
     review_findings: reviewFindings,
     findings,
+    touch_rate: ctx.reviewNumber > 1 && reviewText ? (() => {
+      const stats = parseDeltaStats(reviewTextBeforeJudge || reviewText);
+      const resolved = stats?.resolved ?? 0;
+      const stillOpen = stats?.still_open ?? 0;
+      const total = resolved + stillOpen;
+      return total > 0 ? Math.round(resolved / total * 100) : null;
+    })() : null,
     delta: ctx.reviewNumber > 1 && reviewText ? (() => {
       const stats = parseDeltaStats(reviewTextBeforeJudge || reviewText);
       return {
@@ -28691,9 +28700,25 @@ async function transition(state, ctx) {
       console.log("Fetching PR info...");
       ctx.prInfo = await ctx.adapter.getPullRequestInfo(ctx.prId);
       console.log(`  "${ctx.prInfo.title}" (${ctx.prInfo.sourceBranch} \u2192 ${ctx.prInfo.targetBranch})`);
-      return 1 /* FETCH_DIFF */;
+      return 1 /* CHECK_BRANCHES */;
     }
-    case 1 /* FETCH_DIFF */: {
+    case 1 /* CHECK_BRANCHES */: {
+      const src = ctx.prInfo.sourceBranch;
+      const tgt = ctx.prInfo.targetBranch;
+      const matchesPattern = (branch, patterns) => patterns.some((p2) => p2.includes("*") ? new RegExp("^" + p2.replace(/\*/g, ".*") + "$").test(branch) : p2 === branch);
+      if (config.skipSourceBranches.length > 0 && matchesPattern(src, config.skipSourceBranches)) {
+        ctx.action = "SKIP";
+        ctx.skipReason = `source branch "${src}" matches SKIP_SOURCE_BRANCHES`;
+        return 14 /* SKIP */;
+      }
+      if (config.skipTargetBranches.length > 0 && matchesPattern(tgt, config.skipTargetBranches)) {
+        ctx.action = "SKIP";
+        ctx.skipReason = `target branch "${tgt}" matches SKIP_TARGET_BRANCHES`;
+        return 14 /* SKIP */;
+      }
+      return 2 /* FETCH_DIFF */;
+    }
+    case 2 /* FETCH_DIFF */: {
       console.log("Fetching diff...");
       ctx.diff = await ctx.adapter.getDiff(ctx.prId);
       console.log("Fetching changed files...");
@@ -28706,40 +28731,40 @@ async function transition(state, ctx) {
       }
       console.log(`  ${ctx.changedFiles.length} changed file(s)`);
       console.log(`  ${ctx.lineCount} changed line(s)`);
-      return 2 /* CHECK_THRESHOLDS */;
+      return 3 /* CHECK_THRESHOLDS */;
     }
-    case 2 /* CHECK_THRESHOLDS */: {
+    case 3 /* CHECK_THRESHOLDS */: {
       const { minChangedFiles, maxChangedFiles, minChangedLines, maxChangedLines } = config.thresholds;
       const fileCount = ctx.changedFiles.length;
       const lineCount = ctx.lineCount;
       if (minChangedFiles > 0 && fileCount < minChangedFiles) {
         ctx.action = "SKIP";
         ctx.skipReason = `PR has ${fileCount} changed file(s), minimum is ${minChangedFiles}`;
-        return 13 /* SKIP */;
+        return 14 /* SKIP */;
       }
       if (maxChangedFiles > 0 && fileCount > maxChangedFiles) {
         ctx.action = "SKIP";
         ctx.skipReason = `PR has ${fileCount} changed file(s), maximum is ${maxChangedFiles}`;
-        return 13 /* SKIP */;
+        return 14 /* SKIP */;
       }
       if (minChangedLines > 0 && lineCount < minChangedLines) {
         ctx.action = "SKIP";
         ctx.skipReason = `PR has ${lineCount} changed line(s), minimum is ${minChangedLines}`;
-        return 13 /* SKIP */;
+        return 14 /* SKIP */;
       }
       if (maxChangedLines > 0 && lineCount > maxChangedLines) {
         ctx.action = "SKIP";
         ctx.skipReason = `PR has ${lineCount} changed line(s), maximum is ${maxChangedLines}`;
-        return 13 /* SKIP */;
+        return 14 /* SKIP */;
       }
-      return 3 /* CHECK_PREVIOUS_REVIEWS */;
+      return 4 /* CHECK_PREVIOUS_REVIEWS */;
     }
-    case 3 /* CHECK_PREVIOUS_REVIEWS */: {
+    case 4 /* CHECK_PREVIOUS_REVIEWS */: {
       if (ctx.force) {
         console.log("Skipping previous review check (--force)");
         ctx.previousReviews = [];
         ctx.reviewNumber = 1;
-        return 6 /* LOAD_PROMPT */;
+        return 7 /* LOAD_PROMPT */;
       }
       console.log("Checking for previous reviews...");
       ctx.previousReviews = await ctx.adapter.getPreviousReviewComments(ctx.prId);
@@ -28750,7 +28775,7 @@ async function transition(state, ctx) {
         if (commitHash && commitHash === ctx.prInfo.sourceCommit.slice(0, 12)) {
           console.log(`  Source commit ${ctx.prInfo.sourceCommit.slice(0, 12)} already reviewed \u2014 checking for unanswered replies...`);
           ctx.reviewNumber = ctx.previousReviews.length;
-          return 4 /* CHECK_REPLIES */;
+          return 5 /* CHECK_REPLIES */;
         }
         if (commitHash) {
           console.log(`  Fetching delta diff (${commitHash}..${ctx.prInfo.sourceCommit.slice(0, 12)})...`);
@@ -28762,7 +28787,7 @@ async function transition(state, ctx) {
             if (deltaLines === 0) {
               ctx.action = "NO_CHANGE";
               ctx.skipReason = "New commits contain only excluded files (e.g. tests, lock files) \u2014 no reviewable changes";
-              return 13 /* SKIP */;
+              return 14 /* SKIP */;
             }
           } catch (err) {
             console.log(`  Delta diff fetch failed (${err.message}) \u2014 falling back to full PR diff`);
@@ -28778,9 +28803,9 @@ async function transition(state, ctx) {
         console.log("  No previous reviews \u2014 first review for this PR");
       }
       ctx.reviewNumber = (ctx.previousReviews?.length ?? 0) + 1;
-      return 6 /* LOAD_PROMPT */;
+      return 7 /* LOAD_PROMPT */;
     }
-    case 4 /* CHECK_REPLIES */: {
+    case 5 /* CHECK_REPLIES */: {
       const reviewIds = ctx.previousReviews.map((r2) => r2.id);
       const { replies, agentReplyCount } = await ctx.adapter.getRepliesToReviewComments(ctx.prId, reviewIds);
       ctx.replies = replies;
@@ -28789,16 +28814,16 @@ async function transition(state, ctx) {
           console.log(`  Found ${ctx.replies.length} unanswered reply(s), but agent already posted ${agentReplyCount}/${config.reply.maxComments} replies \u2014 skipping`);
           ctx.action = "DEDUP_SKIP";
           ctx.skipReason = `reply limit reached (${agentReplyCount}/${config.reply.maxComments})`;
-          return 13 /* SKIP */;
+          return 14 /* SKIP */;
         }
         console.log(`  Found ${ctx.replies.length} unanswered reply(s) \u2014 responding... (${agentReplyCount}/${config.reply.maxComments || "\u221E"} replies used)`);
-        return 5 /* RESPOND_TO_REPLIES */;
+        return 6 /* RESPOND_TO_REPLIES */;
       }
       ctx.action = "DEDUP_SKIP";
       ctx.skipReason = "no new commits and no unanswered questions";
-      return 13 /* SKIP */;
+      return 14 /* SKIP */;
     }
-    case 5 /* RESPOND_TO_REPLIES */: {
+    case 6 /* RESPOND_TO_REPLIES */: {
       const lastReview = ctx.previousReviews[ctx.previousReviews.length - 1];
       const result = await runCommentResponse(
         config.anthropic.apiKey,
@@ -28821,15 +28846,15 @@ async function transition(state, ctx) {
         console.log("Done. Reply posted to PR.\n");
       }
       ctx.action = "REPLY";
-      return 14 /* DONE */;
+      return 15 /* DONE */;
     }
-    case 6 /* LOAD_PROMPT */: {
+    case 7 /* LOAD_PROMPT */: {
       console.log("Loading prompt...");
       ctx.prompt = await loadPrompt(ctx.adapter, ctx.prInfo, ctx.promptPath);
       console.log(`  Prompt source: ${ctx.prompt.source}`);
-      return 7 /* FETCH_CONTEXT */;
+      return 8 /* FETCH_CONTEXT */;
     }
-    case 7 /* FETCH_CONTEXT */: {
+    case 8 /* FETCH_CONTEXT */: {
       console.log("Fetching file context...");
       ctx.fileContexts = await fetchContext(
         ctx.adapter,
@@ -28840,9 +28865,9 @@ async function transition(state, ctx) {
         config.context.maxFileLines
       );
       console.log(`  Fetched full content for ${ctx.fileContexts.length} file(s)`);
-      return 8 /* ESTIMATE_TOKENS */;
+      return 9 /* ESTIMATE_TOKENS */;
     }
-    case 8 /* ESTIMATE_TOKENS */: {
+    case 9 /* ESTIMATE_TOKENS */: {
       const promptChars = ctx.prompt.content.length;
       const diffChars = ctx.filteredDiff.length;
       const contextChars = ctx.fileContexts.reduce((sum, f2) => sum + f2.content.length, 0);
@@ -28856,11 +28881,11 @@ async function transition(state, ctx) {
       if (max > 0 && estimatedTokens > max) {
         ctx.action = "SKIP";
         ctx.skipReason = `Estimated input ~${estimatedTokens.toLocaleString()} tokens exceeds MAX_INPUT_TOKENS (${max.toLocaleString()})`;
-        return 13 /* SKIP */;
+        return 14 /* SKIP */;
       }
-      return 9 /* CALL_CLAUDE */;
+      return 10 /* CALL_CLAUDE */;
     }
-    case 9 /* CALL_CLAUDE */: {
+    case 10 /* CALL_CLAUDE */: {
       const result = await runReview(
         config.anthropic.apiKey,
         config.anthropic.model,
@@ -28875,26 +28900,26 @@ async function transition(state, ctx) {
       ctx.reviewText = result.text;
       ctx.usage.input_tokens += result.usage.input_tokens;
       ctx.usage.output_tokens += result.usage.output_tokens;
-      return 10 /* CHECK_NO_CHANGE */;
+      return 11 /* CHECK_NO_CHANGE */;
     }
-    case 10 /* CHECK_NO_CHANGE */: {
+    case 11 /* CHECK_NO_CHANGE */: {
       if (isNoChange(ctx.reviewText)) {
         console.log("  Reviewer: NO_CHANGE");
         ctx.action = "NO_CHANGE";
         ctx.skipReason = "No changes since last review";
-        return 13 /* SKIP */;
+        return 14 /* SKIP */;
       }
-      return 11 /* JUDGE_REVIEW */;
+      return 12 /* JUDGE_REVIEW */;
     }
-    case 11 /* JUDGE_REVIEW */: {
+    case 12 /* JUDGE_REVIEW */: {
       const reviewFindings = parseFindings(ctx.reviewText);
       console.log(`  Reviewer findings: ${reviewFindings.high}H / ${reviewFindings.medium}M / ${reviewFindings.low}L`);
       if (!config.judge.model) {
-        return 12 /* POST_REVIEW */;
+        return 13 /* POST_REVIEW */;
       }
       if (reviewFindings.high === 0 && reviewFindings.medium === 0 && reviewFindings.low === 0) {
         console.log("  Skipping judge \u2014 no findings to validate");
-        return 12 /* POST_REVIEW */;
+        return 13 /* POST_REVIEW */;
       }
       ctx.reviewTextBeforeJudge = ctx.reviewText;
       const result = await runJudge(
@@ -28908,9 +28933,9 @@ async function transition(state, ctx) {
       ctx.judgeUsage = { input_tokens: result.usage.input_tokens, output_tokens: result.usage.output_tokens };
       ctx.usage.input_tokens += result.usage.input_tokens;
       ctx.usage.output_tokens += result.usage.output_tokens;
-      return 12 /* POST_REVIEW */;
+      return 13 /* POST_REVIEW */;
     }
-    case 12 /* POST_REVIEW */: {
+    case 13 /* POST_REVIEW */: {
       const cleaned = stripDeltaStats(stripPreviousFooter(ctx.reviewText));
       const commitShort = ctx.prInfo.sourceCommit.slice(0, 12);
       const footer = buildReviewFooter(config.agentIdentity, config.anthropic.model, ctx.prompt.source, ctx.reviewNumber, commitShort);
@@ -28925,15 +28950,15 @@ async function transition(state, ctx) {
         console.log("Done. Review posted to PR.\n");
       }
       ctx.action = ctx.reviewNumber > 1 ? "RE_REVIEW" : "REVIEW";
-      return 14 /* DONE */;
+      return 15 /* DONE */;
     }
-    case 13 /* SKIP */: {
+    case 14 /* SKIP */: {
       console.log(`
 Skipping: ${ctx.skipReason}`);
-      return 14 /* DONE */;
+      return 15 /* DONE */;
     }
     default:
-      return 14 /* DONE */;
+      return 15 /* DONE */;
   }
 }
 async function review(adapter2, prId, dryRun = false, promptPath, force = false, logUsage = false, repoSlug = "") {
@@ -28956,7 +28981,7 @@ Starting review for PR #${prId}`);
   let error = null;
   try {
     let state = 0 /* FETCH_PR_INFO */;
-    while (state !== 14 /* DONE */) {
+    while (state !== 15 /* DONE */) {
       state = await transition(state, ctx);
     }
   } catch (err) {

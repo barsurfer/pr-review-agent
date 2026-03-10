@@ -39,14 +39,48 @@ pipeline {
                                         --judge-model "claude-sonnet-4-6"
                                 """
                             }
+                            // Generate plot data from results (needs Node)
+                            sh '''
+                                if [ -f results.jsonl ]; then
+                                    node -e "
+                                      const fs = require('fs');
+                                      const lines = fs.readFileSync('results.jsonl','utf8').trim().split('\\n');
+                                      const r = JSON.parse(lines[lines.length - 1]);
+                                      const props = [
+                                        'YVALUE=' + (r.cost_usd || 0)
+                                      ].join('\\n');
+                                      fs.writeFileSync('plot-cost.properties', props);
+                                      fs.writeFileSync('plot-tokens.properties', 'YVALUE=' + ((r.tokens && r.tokens.input) || 0));
+                                      fs.writeFileSync('plot-duration.properties', 'YVALUE=' + (r.duration_ms || 0));
+                                      if (r.touch_rate != null) fs.writeFileSync('plot-touchrate.properties', 'YVALUE=' + r.touch_rate);
+                                    "
+                                fi
+                            '''
                         }
                     }
                 }
             }
             post {
                 always {
-                    sh 'cat results.jsonl >> /opt/pr-review-agent/results.jsonl 2>/dev/null || true'
                     archiveArtifacts artifacts: 'results.jsonl', allowEmptyArchive: true
+                    script {
+                        if (fileExists('plot-cost.properties')) {
+                            plot group: 'Review Metrics', style: 'line', csvFileName: 'plot-cost.csv',
+                                 title: 'Cost per Review (USD)', yaxis: 'USD',
+                                 propertiesSeries: [[file: 'plot-cost.properties', label: 'cost']]
+                            plot group: 'Review Metrics', style: 'line', csvFileName: 'plot-tokens.csv',
+                                 title: 'Input Tokens', yaxis: 'Tokens',
+                                 propertiesSeries: [[file: 'plot-tokens.properties', label: 'tokens']]
+                            plot group: 'Review Metrics', style: 'line', csvFileName: 'plot-duration.csv',
+                                 title: 'Duration (ms)', yaxis: 'ms',
+                                 propertiesSeries: [[file: 'plot-duration.properties', label: 'duration']]
+                        }
+                        if (fileExists('plot-touchrate.properties')) {
+                            plot group: 'Review Metrics', style: 'line', csvFileName: 'plot-touchrate.csv',
+                                 title: 'Finding Touch Rate (%)', yaxis: '%',
+                                 propertiesSeries: [[file: 'plot-touchrate.properties', label: 'touch_rate']]
+                        }
+                    }
                 }
             }
         }

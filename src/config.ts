@@ -43,6 +43,12 @@ export const config = {
     maxFileLines: parseInt(optional('MAX_FILE_LINES', '500'), 10),
   },
 
+  skipSourceBranches: optional('SKIP_SOURCE_BRANCHES', 'main,master,release/*,hotfix/*')
+    .split(',').map(p => p.trim()).filter(Boolean),
+
+  skipTargetBranches: optional('SKIP_TARGET_BRANCHES', 'main,master')
+    .split(',').map(p => p.trim()).filter(Boolean),
+
   diffExcludePatterns: optional('DIFF_EXCLUDE_PATTERNS', '*.lock,package-lock.json,yarn.lock,pnpm-lock.yaml,*.json,*.spec.ts')
     .split(',')
     .map(p => p.trim())

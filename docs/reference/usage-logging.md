@@ -111,6 +111,7 @@ The record is also printed to stdout at the end of every run regardless of the f
 | `computed_score` | `number \| null` | Code-computed score: `max(0, 100 − HIGHs×12 − MEDIUMs×4)` from final findings |
 | `review_findings` | `object \| null` | `{ high, medium, low }` — raw findings from reviewer before judge validation |
 | `findings` | `object \| null` | `{ high, medium, low }` — final findings (from judge if used, from reviewer otherwise) |
+| `touch_rate` | `number \| null` | Re-review only: `resolved / (resolved + still_open) × 100` — percentage of previous findings addressed by the developer |
 | `delta` | `object \| null` | Re-review only: `{ developer_replies, resolved, still_open, new_findings }` |
 | `error` | `object \| null` | `{ type, message, status }` on failure |
 
@@ -176,6 +177,9 @@ jq -s '[.[] | select(.findings.high > 0) | {repo: .repo_slug, pr: .pr_id, high: 
 
 # Re-review resolution rate
 jq -s '[.[] | select(.action=="RE_REVIEW" and .delta != null) | {pr: .pr_id, resolved: .delta.resolved, still_open: .delta.still_open}]' results.jsonl
+
+# Average touch rate (% of findings addressed by developers)
+jq -s '[.[] | select(.touch_rate != null) | .touch_rate] | if length > 0 then (add/length | round) else "no data" end' results.jsonl
 
 # Largest PRs reviewed (by changed lines)
 jq -s '[.[] | select(.changed_lines != null)] | sort_by(-.changed_lines) | .[:10] | map({repo: .repo_slug, pr: .pr_id, files: .changed_files, lines: .changed_lines})' results.jsonl

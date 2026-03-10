@@ -40,6 +40,7 @@ export interface UsageRecord {
   computed_score: number | null
   review_findings: { high: number; medium: number; low: number } | null
   findings: { high: number; medium: number; low: number } | null
+  touch_rate: number | null
   delta: { developer_replies: number; resolved: number; still_open: number; new_findings: number } | null
   error: { type: string; message: string; status: number | null } | null
 }
@@ -137,6 +138,13 @@ export function buildUsageRecord(
     computed_score: findings ? Math.max(0, 100 - findings.high * 12 - findings.medium * 4) : null,
     review_findings: reviewFindings,
     findings,
+    touch_rate: ctx.reviewNumber > 1 && reviewText ? (() => {
+      const stats = parseDeltaStats(reviewTextBeforeJudge || reviewText)
+      const resolved = stats?.resolved ?? 0
+      const stillOpen = stats?.still_open ?? 0
+      const total = resolved + stillOpen
+      return total > 0 ? Math.round((resolved / total) * 100) : null
+    })() : null,
     delta: ctx.reviewNumber > 1 && reviewText ? (() => {
       const stats = parseDeltaStats(reviewTextBeforeJudge || reviewText)
       return {

@@ -26,6 +26,27 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       console.log('Fetching PR info...')
       ctx.prInfo = await ctx.adapter.getPullRequestInfo(ctx.prId)
       console.log(`  "${ctx.prInfo.title}" (${ctx.prInfo.sourceBranch} → ${ctx.prInfo.targetBranch})`)
+      return State.CHECK_BRANCHES
+    }
+
+    case State.CHECK_BRANCHES: {
+      const src = ctx.prInfo!.sourceBranch
+      const tgt = ctx.prInfo!.targetBranch
+      const matchesPattern = (branch: string, patterns: string[]) =>
+        patterns.some(p => p.includes('*')
+          ? new RegExp('^' + p.replace(/\*/g, '.*') + '$').test(branch)
+          : p === branch)
+
+      if (config.skipSourceBranches.length > 0 && matchesPattern(src, config.skipSourceBranches)) {
+        ctx.action = 'SKIP'
+        ctx.skipReason = `source branch "${src}" matches SKIP_SOURCE_BRANCHES`
+        return State.SKIP
+      }
+      if (config.skipTargetBranches.length > 0 && matchesPattern(tgt, config.skipTargetBranches)) {
+        ctx.action = 'SKIP'
+        ctx.skipReason = `target branch "${tgt}" matches SKIP_TARGET_BRANCHES`
+        return State.SKIP
+      }
       return State.FETCH_DIFF
     }
 

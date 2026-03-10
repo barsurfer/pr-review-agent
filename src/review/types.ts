@@ -9,6 +9,7 @@ import type { FileContext } from '../context/fetcher.js'
 /** Every node in the review flow. */
 export enum State {
   FETCH_PR_INFO,
+  CHECK_BRANCHES,
   FETCH_DIFF,
   CHECK_THRESHOLDS,
   CHECK_PREVIOUS_REVIEWS,
