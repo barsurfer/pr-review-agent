@@ -178,6 +178,20 @@ The orchestrator also strips any hallucinated footer via regex before appending 
 
 ---
 
+## Branch Exclusion
+
+Before fetching any diff or context, the `CHECK_BRANCHES` state compares the PR's source
+and target branches against configurable glob patterns:
+
+- **`SKIP_SOURCE_BRANCHES`** (default: `main,master,release/*,hotfix/*`) — skips merge-back
+  PRs like `main→develop` or `release/1.5→develop`
+- **`SKIP_TARGET_BRANCHES`** (default: `main,master`) — skips release PRs merging into production
+
+Patterns support `*` wildcards (e.g. `release/*` matches `release/1.5.0`). Set either to
+an empty string to disable that filter.
+
+---
+
 ## Skip Logic (Commit Hash Dedup)
 
 The review flow is implemented as a finite state machine (see

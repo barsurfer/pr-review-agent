@@ -103,7 +103,7 @@ The pipeline includes:
 - **`lock(skipIfLocked: true)`** — only one review per repo+PR at a time (requires Lockable Resources plugin)
 - **Build display name** — `#42-alice-mobile-app-709` instead of just `#42`
 - **`archiveArtifacts`** — saves `results.jsonl` per build
-- **Persistent results** — appends to `/opt/pr-review-agent/results.jsonl` for aggregated analytics
+- **Plot plugin** — visualizes cost, tokens, duration, and touch rate across builds (see [Metrics & Plots](#metrics--plots))
 
 > **Important:** Model IDs must NOT be stored as Jenkins credentials. Jenkins
 > masks all credential values in logs and API calls, which corrupts the model ID
@@ -244,6 +244,45 @@ curl -s -X POST "https://<jenkins-host>/generic-webhook-trigger/invoke?token=pr-
 ```
 
 If this returns 200 from VPN but Bitbucket gets 404, it's a network/firewall issue.
+
+---
+
+## Metrics & Plots
+
+The pipeline uses the [Jenkins Plot plugin](https://plugins.jenkins.io/plot/) to
+visualize review metrics over time. After each review, a `node -e` script extracts
+values from `results.jsonl` into `.properties` files, which the Plot plugin reads in
+the `post` block.
+
+### Charts
+
+| Chart | File | Data Source | Notes |
+|-------|------|-------------|-------|
+| Cost per Review (USD) | `plot-cost.properties` | `cost_usd` | Every build |
+| Input Tokens | `plot-tokens.properties` | `tokens.input` | Every build |
+| Duration (ms) | `plot-duration.properties` | `duration_ms` | Every build |
+| Finding Touch Rate (%) | `plot-touchrate.properties` | `touch_rate` | Re-reviews only |
+
+### Prerequisites
+
+- **Plot plugin** installed in Jenkins
+- Charts appear under **"Review Metrics"** link in the **job** left sidebar (not build page)
+- Needs 2+ builds to render meaningful charts
+- `csvFileName` in the pipeline is the Plot plugin's internal history file — not user-created
+
+### Touch Rate
+
+Measures whether developers act on review findings: `resolved / (resolved + still_open) × 100`.
+Only populated on re-reviews (when `DELTA_STATS` is present). The plot only gets data points
+when re-reviews happen, so it will be sparser than the other 3 charts.
+
+### `fileExists` Guards
+
+- The 3 core plots (`cost`, `tokens`, `duration`) are guarded by `fileExists('plot-cost.properties')` —
+  if the lock was skipped or the agent errored before writing results, no plot data is written
+- The touch rate plot has its own `fileExists('plot-touchrate.properties')` guard since it's
+  only generated on re-reviews
+- `archiveArtifacts` uses `allowEmptyArchive: true` for the same reason
 
 ---
 

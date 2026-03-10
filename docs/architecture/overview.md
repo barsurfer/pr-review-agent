@@ -84,7 +84,9 @@ The `FETCH_DIFF` state also produces a **filtered diff** (lock files stripped) w
 used for all Claude API calls. The raw diff is kept for line counting and threshold checks.
 
 ```
-FETCH_PR_INFO → FETCH_DIFF (+ filterDiff) → CHECK_THRESHOLDS
+FETCH_PR_INFO → CHECK_BRANCHES
+                  ├─ [source/target match skip patterns] → SKIP → DONE
+                  └─ FETCH_DIFF (+ filterDiff) → CHECK_THRESHOLDS
                                   ├─ [fail] → SKIP → DONE
                                   └─ CHECK_PREVIOUS_REVIEWS
                                        ├─ [same commit] → CHECK_REPLIES
@@ -99,9 +101,9 @@ FETCH_PR_INFO → FETCH_DIFF (+ filterDiff) → CHECK_THRESHOLDS
                                                     └─ [no judge] → POST_REVIEW → DONE
 ```
 
-**14 states**, **6 possible outcomes**: skip (threshold), skip (same commit, no replies),
-skip (delta diff empty — only excluded files changed), reply to developer, skip (NO_CHANGE),
-or post review. The optional `JUDGE_REVIEW` state sends the review output and diff to a
+**15 states**, **7 possible outcomes**: skip (branch exclusion), skip (threshold),
+skip (same commit, no replies), skip (delta diff empty — only excluded files changed),
+skip (reply limit reached), reply to developer, skip (NO_CHANGE), or post review. The optional `JUDGE_REVIEW` state sends the review output and diff to a
 separate judge model (`JUDGING_MODEL`) that validates each finding against the actual code
 before posting. When no judge is configured, this state is a no-op passthrough.
 
