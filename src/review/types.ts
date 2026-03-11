@@ -33,7 +33,7 @@ export interface ReviewContext {
   readonly prId: string
   readonly dryRun: boolean
   readonly promptPath?: string
-  readonly force: boolean
+  readonly force: 'off' | 'clean' | 're-review'
   readonly logUsage: boolean
   readonly repoSlug: string
 

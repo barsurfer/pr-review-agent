@@ -34,7 +34,7 @@ export interface UsageRecord {
   judge_cost_usd: number | null
   duration_ms: number
   dry_run: boolean
-  force: boolean
+  force: string
   prompt_source: string
   verdict_score: number | null
   computed_score: number | null

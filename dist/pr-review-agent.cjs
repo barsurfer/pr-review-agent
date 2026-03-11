@@ -24555,6 +24555,15 @@ var BitbucketAdapter = class {
           agentReplyCount++;
           parentIds.add(String(c2.id));
           if (c2.created_on > latestAgentReply) latestAgentReply = c2.created_on;
+          if (includeAnswered) {
+            humanReplies.push({
+              id: String(c2.id),
+              parentId,
+              author: "Agent (prior reply)",
+              body,
+              createdOn: c2.created_on
+            });
+          }
           continue;
         }
         humanReplies.push({
@@ -28421,7 +28430,7 @@ ${latest.body}`);
   }
   if (developerReplies.length > 0) {
     parts.push(`## Developer Discussion on Previous Review(s):`);
-    parts.push("Developers replied to previous review comments with the following context. Consider their explanations when reviewing the new changes. If a developer states that something is handled outside this PR or already exists in the codebase, trust their explanation and do not flag it as missing or unresolved.");
+    parts.push("Below is the conversation thread from previous reviews, including developer replies and the agent's own prior responses. IMPORTANT: If the agent previously acknowledged a finding as a false positive or accepted a developer's explanation, do NOT re-raise that finding. Treat the agent's prior conclusions as settled unless the new code changes invalidate them.");
     for (const r2 of developerReplies) {
       parts.push(`**${r2.author}** (${r2.createdOn}):
 > ${r2.body}`);
@@ -28760,8 +28769,8 @@ async function transition(state, ctx) {
       return 4 /* CHECK_PREVIOUS_REVIEWS */;
     }
     case 4 /* CHECK_PREVIOUS_REVIEWS */: {
-      if (ctx.force) {
-        console.log("Skipping previous review check (--force)");
+      if (ctx.force === "clean") {
+        console.log("Skipping previous review check (--force clean)");
         ctx.previousReviews = [];
         ctx.reviewNumber = 1;
         return 7 /* LOAD_PROMPT */;
@@ -28772,32 +28781,36 @@ async function transition(state, ctx) {
         console.log(`  Found ${ctx.previousReviews.length} previous review(s) \u2014 will produce delta review`);
         const lastReview = ctx.previousReviews[ctx.previousReviews.length - 1];
         const commitHash = extractCommitHash(lastReview.body);
-        if (commitHash && commitHash === ctx.prInfo.sourceCommit.slice(0, 12)) {
-          console.log(`  Source commit ${ctx.prInfo.sourceCommit.slice(0, 12)} already reviewed \u2014 checking for unanswered replies...`);
-          ctx.reviewNumber = ctx.previousReviews.length;
-          return 5 /* CHECK_REPLIES */;
-        }
-        if (commitHash) {
-          console.log(`  Fetching delta diff (${commitHash}..${ctx.prInfo.sourceCommit.slice(0, 12)})...`);
-          try {
-            const deltaDiff = await ctx.adapter.getCommitDiff(commitHash, ctx.prInfo.sourceCommit);
-            const { filtered, removedCount } = filterDiff(deltaDiff, config.diffExcludePatterns);
-            const deltaLines = countChangedLines(filtered);
-            console.log(`  Delta: ${countChangedLines(deltaDiff)} lines total, ${removedCount} file(s) filtered, ${deltaLines} lines remain`);
-            if (deltaLines === 0) {
-              ctx.action = "NO_CHANGE";
-              ctx.skipReason = "New commits contain only excluded files (e.g. tests, lock files) \u2014 no reviewable changes";
-              return 14 /* SKIP */;
+        if (ctx.force === "re-review") {
+          console.log("  Bypassing dedup check (--force re-review) \u2014 will re-review with full context");
+        } else {
+          if (commitHash && commitHash === ctx.prInfo.sourceCommit.slice(0, 12)) {
+            console.log(`  Source commit ${ctx.prInfo.sourceCommit.slice(0, 12)} already reviewed \u2014 checking for unanswered replies...`);
+            ctx.reviewNumber = ctx.previousReviews.length;
+            return 5 /* CHECK_REPLIES */;
+          }
+          if (commitHash) {
+            console.log(`  Fetching delta diff (${commitHash}..${ctx.prInfo.sourceCommit.slice(0, 12)})...`);
+            try {
+              const deltaDiff = await ctx.adapter.getCommitDiff(commitHash, ctx.prInfo.sourceCommit);
+              const { filtered, removedCount } = filterDiff(deltaDiff, config.diffExcludePatterns);
+              const deltaLines = countChangedLines(filtered);
+              console.log(`  Delta: ${countChangedLines(deltaDiff)} lines total, ${removedCount} file(s) filtered, ${deltaLines} lines remain`);
+              if (deltaLines === 0) {
+                ctx.action = "NO_CHANGE";
+                ctx.skipReason = "New commits contain only excluded files (e.g. tests, lock files) \u2014 no reviewable changes";
+                return 14 /* SKIP */;
+              }
+            } catch (err) {
+              console.log(`  Delta diff fetch failed (${err.message}) \u2014 falling back to full PR diff`);
             }
-          } catch (err) {
-            console.log(`  Delta diff fetch failed (${err.message}) \u2014 falling back to full PR diff`);
           }
         }
         const reviewIds = ctx.previousReviews.map((r2) => r2.id);
         const { replies: discussion } = await ctx.adapter.getRepliesToReviewComments(ctx.prId, reviewIds, true);
         if (discussion.length > 0) {
           ctx.replies = discussion;
-          console.log(`  Found ${discussion.length} developer reply comment(s) \u2014 will include in review context`);
+          console.log(`  Found ${discussion.length} discussion comment(s) (dev replies + agent replies) \u2014 will include in review context`);
         }
       } else {
         console.log("  No previous reviews \u2014 first review for this PR");
@@ -28961,7 +28974,7 @@ Skipping: ${ctx.skipReason}`);
       return 15 /* DONE */;
   }
 }
-async function review(adapter2, prId, dryRun = false, promptPath, force = false, logUsage = false, repoSlug = "") {
+async function review(adapter2, prId, dryRun = false, promptPath, force = "off", logUsage = false, repoSlug = "") {
   console.log(`
 Starting review for PR #${prId}`);
   const startTime = Date.now();
@@ -29011,7 +29024,7 @@ if (major < 20) {
   process.exit(1);
 }
 var program2 = new Command();
-program2.name("pr-review-agent").description("Automated PR code review powered by Claude").option("--pr-id <id>", "Pull request ID").option("--workspace <workspace>", "VCS workspace / org (overrides BITBUCKET_WORKSPACE)").option("--repo-slug <slug>", "Repository slug").option("--vcs <provider>", "VCS provider: bitbucket | github | gitlab (overrides VCS_PROVIDER)").option("--dry-run", "Print the review to stdout without posting to the PR").option("--force", "Ignore previous reviews and produce a fresh review").option("--log-usage [bool]", "Log usage data to results.jsonl (default: true)", (v2) => v2 !== "false", true).option("--prompt <path>", "Path to a local prompt file (overrides repo .agent-review-instructions.md)").option("--validate-prompt", "Validate prompt and exit (local via --prompt, or repo via --pr-id)").option("--model <id>", "Claude model ID (overrides CLAUDE_MODEL)").option("--judge-model <id>", "Judge model ID (overrides JUDGING_MODEL)").option("--min-changed-files <n>", "Skip review if fewer files changed (overrides MIN_CHANGED_FILES)").option("--max-changed-files <n>", "Skip review if more files changed (overrides MAX_CHANGED_FILES)").option("--min-changed-lines <n>", "Skip review if fewer lines changed (overrides MIN_CHANGED_LINES)").option("--max-changed-lines <n>", "Skip review if more lines changed (overrides MAX_CHANGED_LINES)").parse(process.argv);
+program2.name("pr-review-agent").description("Automated PR code review powered by Claude").option("--pr-id <id>", "Pull request ID").option("--workspace <workspace>", "VCS workspace / org (overrides BITBUCKET_WORKSPACE)").option("--repo-slug <slug>", "Repository slug").option("--vcs <provider>", "VCS provider: bitbucket | github | gitlab (overrides VCS_PROVIDER)").option("--dry-run", "Print the review to stdout without posting to the PR").option("--force [mode]", 'Force review: "clean" (no prior context) or "re-review" (keep context, bypass dedup)', "re-review").option("--log-usage [bool]", "Log usage data to results.jsonl (default: true)", (v2) => v2 !== "false", true).option("--prompt <path>", "Path to a local prompt file (overrides repo .agent-review-instructions.md)").option("--validate-prompt", "Validate prompt and exit (local via --prompt, or repo via --pr-id)").option("--model <id>", "Claude model ID (overrides CLAUDE_MODEL)").option("--judge-model <id>", "Judge model ID (overrides JUDGING_MODEL)").option("--min-changed-files <n>", "Skip review if fewer files changed (overrides MIN_CHANGED_FILES)").option("--max-changed-files <n>", "Skip review if more files changed (overrides MAX_CHANGED_FILES)").option("--min-changed-lines <n>", "Skip review if fewer lines changed (overrides MIN_CHANGED_LINES)").option("--max-changed-lines <n>", "Skip review if more lines changed (overrides MAX_CHANGED_LINES)").parse(process.argv);
 var opts = program2.opts();
 async function main() {
   if (opts.validatePrompt) {
@@ -29066,7 +29079,8 @@ Filled prompt length: ${result.content.length} chars (~${Math.ceil(result.conten
   if (opts.maxChangedFiles) config.thresholds.maxChangedFiles = parseInt(opts.maxChangedFiles, 10);
   if (opts.minChangedLines) config.thresholds.minChangedLines = parseInt(opts.minChangedLines, 10);
   if (opts.maxChangedLines) config.thresholds.maxChangedLines = parseInt(opts.maxChangedLines, 10);
-  await review(adapter2, opts.prId, opts.dryRun ?? false, opts.prompt, opts.force ?? false, opts.logUsage ?? true, opts.repoSlug ?? "");
+  const forceMode = opts.force === true ? "re-review" : typeof opts.force === "string" ? opts.force : "off";
+  await review(adapter2, opts.prId, opts.dryRun ?? false, opts.prompt, forceMode, opts.logUsage ?? true, opts.repoSlug ?? "");
 }
 main().catch((err) => {
   console.error("Fatal error:", err.message);

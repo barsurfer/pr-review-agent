@@ -72,7 +72,9 @@ missing keys or inconsistent additions across locales.
 {only the most recent review — saves tokens while keeping delta context}
 
 ## Developer Discussion on Previous Review(s):
-{all human replies across all previous reviews — provides full conversation history}
+{all replies across all previous reviews — developer replies AND agent's own
+ prior responses, so the model sees its prior conclusions and does not re-raise
+ findings it already conceded as false positives}
 
 ## Diff:
 {unified diff, with lock files stripped}

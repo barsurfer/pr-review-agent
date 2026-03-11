@@ -98,8 +98,8 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
     }
 
     case State.CHECK_PREVIOUS_REVIEWS: {
-      if (ctx.force) {
-        console.log('Skipping previous review check (--force)')
+      if (ctx.force === 'clean') {
+        console.log('Skipping previous review check (--force clean)')
         ctx.previousReviews = []
         ctx.reviewNumber = 1
         return State.LOAD_PROMPT
@@ -112,27 +112,32 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
 
         const lastReview = ctx.previousReviews[ctx.previousReviews.length - 1]
         const commitHash = extractCommitHash(lastReview.body)
-        if (commitHash && commitHash === ctx.prInfo!.sourceCommit.slice(0, 12)) {
-          console.log(`  Source commit ${ctx.prInfo!.sourceCommit.slice(0, 12)} already reviewed — checking for unanswered replies...`)
-          ctx.reviewNumber = ctx.previousReviews.length
-          return State.CHECK_REPLIES
-        }
 
-        // Delta diff check: fetch only the changes since the last reviewed commit
-        if (commitHash) {
-          console.log(`  Fetching delta diff (${commitHash}..${ctx.prInfo!.sourceCommit.slice(0, 12)})...`)
-          try {
-            const deltaDiff = await ctx.adapter.getCommitDiff(commitHash, ctx.prInfo!.sourceCommit)
-            const { filtered, removedCount } = filterDiff(deltaDiff, config.diffExcludePatterns)
-            const deltaLines = countChangedLines(filtered)
-            console.log(`  Delta: ${countChangedLines(deltaDiff)} lines total, ${removedCount} file(s) filtered, ${deltaLines} lines remain`)
-            if (deltaLines === 0) {
-              ctx.action = 'NO_CHANGE'
-              ctx.skipReason = 'New commits contain only excluded files (e.g. tests, lock files) — no reviewable changes'
-              return State.SKIP
+        if (ctx.force === 're-review') {
+          console.log('  Bypassing dedup check (--force re-review) — will re-review with full context')
+        } else {
+          if (commitHash && commitHash === ctx.prInfo!.sourceCommit.slice(0, 12)) {
+            console.log(`  Source commit ${ctx.prInfo!.sourceCommit.slice(0, 12)} already reviewed — checking for unanswered replies...`)
+            ctx.reviewNumber = ctx.previousReviews.length
+            return State.CHECK_REPLIES
+          }
+
+          // Delta diff check: fetch only the changes since the last reviewed commit
+          if (commitHash) {
+            console.log(`  Fetching delta diff (${commitHash}..${ctx.prInfo!.sourceCommit.slice(0, 12)})...`)
+            try {
+              const deltaDiff = await ctx.adapter.getCommitDiff(commitHash, ctx.prInfo!.sourceCommit)
+              const { filtered, removedCount } = filterDiff(deltaDiff, config.diffExcludePatterns)
+              const deltaLines = countChangedLines(filtered)
+              console.log(`  Delta: ${countChangedLines(deltaDiff)} lines total, ${removedCount} file(s) filtered, ${deltaLines} lines remain`)
+              if (deltaLines === 0) {
+                ctx.action = 'NO_CHANGE'
+                ctx.skipReason = 'New commits contain only excluded files (e.g. tests, lock files) — no reviewable changes'
+                return State.SKIP
+              }
+            } catch (err: unknown) {
+              console.log(`  Delta diff fetch failed (${(err as Error).message}) — falling back to full PR diff`)
             }
-          } catch (err: unknown) {
-            console.log(`  Delta diff fetch failed (${(err as Error).message}) — falling back to full PR diff`)
           }
         }
 
@@ -140,7 +145,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         const { replies: discussion } = await ctx.adapter.getRepliesToReviewComments(ctx.prId, reviewIds, true)
         if (discussion.length > 0) {
           ctx.replies = discussion
-          console.log(`  Found ${discussion.length} developer reply comment(s) — will include in review context`)
+          console.log(`  Found ${discussion.length} discussion comment(s) (dev replies + agent replies) — will include in review context`)
         }
       } else {
         console.log('  No previous reviews — first review for this PR')
@@ -332,7 +337,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
 // Public API
 // ---------------------------------------------------------------------------
 
-export async function review(adapter: VCSAdapter, prId: string, dryRun = false, promptPath?: string, force = false, logUsage = false, repoSlug = ''): Promise<UsageRecord | null> {
+export async function review(adapter: VCSAdapter, prId: string, dryRun = false, promptPath?: string, force: 'off' | 'clean' | 're-review' = 'off', logUsage = false, repoSlug = ''): Promise<UsageRecord | null> {
   console.log(`\nStarting review for PR #${prId}`)
 
   const startTime = Date.now()

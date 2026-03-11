@@ -124,6 +124,13 @@ A reply is "unanswered" if:
 2. It was NOT posted by the agent (doesn't contain "Reply by Claude" marker)
 3. It was posted AFTER the most recent agent reply (timestamp comparison)
 
+### Agent replies in delta review context
+
+When called with `includeAnswered=true` (delta reviews), the method also returns the
+agent's own reply comments (marked with `"Reply by"`) alongside human replies. This ensures
+the model sees its prior conclusions — e.g. findings it conceded as false positives — and
+does not re-raise them in subsequent reviews.
+
 ### Reply footer
 
 Responses use a lighter footer:

@@ -23,7 +23,7 @@ program
   .option('--repo-slug <slug>', 'Repository slug')
   .option('--vcs <provider>', 'VCS provider: bitbucket | github | gitlab (overrides VCS_PROVIDER)')
   .option('--dry-run', 'Print the review to stdout without posting to the PR')
-  .option('--force', 'Ignore previous reviews and produce a fresh review')
+  .option('--force [mode]', 'Force review: "clean" (no prior context) or "re-review" (keep context, bypass dedup)', 're-review')
   .option('--log-usage [bool]', 'Log usage data to results.jsonl (default: true)', (v: string) => v !== 'false', true)
   .option('--prompt <path>', 'Path to a local prompt file (overrides repo .agent-review-instructions.md)')
   .option('--validate-prompt', 'Validate prompt and exit (local via --prompt, or repo via --pr-id)')
@@ -43,7 +43,7 @@ const opts = program.opts<{
   model?: string
   judgeModel?: string
   dryRun?: boolean
-  force?: boolean
+  force?: string | boolean
   logUsage?: boolean
   prompt?: string
   validatePrompt?: boolean
@@ -122,7 +122,9 @@ async function main(): Promise<void> {
   if (opts.minChangedLines) config.thresholds.minChangedLines = parseInt(opts.minChangedLines, 10)
   if (opts.maxChangedLines) config.thresholds.maxChangedLines = parseInt(opts.maxChangedLines, 10)
 
-  await review(adapter, opts.prId!, opts.dryRun ?? false, opts.prompt, opts.force ?? false, opts.logUsage ?? true, opts.repoSlug ?? '')
+  // --force with no value defaults to 're-review'; --force clean or --force re-review explicit
+  const forceMode = opts.force === true ? 're-review' : typeof opts.force === 'string' ? opts.force as 'clean' | 're-review' : 'off'
+  await review(adapter, opts.prId!, opts.dryRun ?? false, opts.prompt, forceMode, opts.logUsage ?? true, opts.repoSlug ?? '')
 }
 
 main().catch((err: unknown) => {

@@ -71,6 +71,9 @@ web_modules/
 # Usage logs
 results.jsonl
 
+# Temp folder for PR analysis
+tmp/
+
 # dotenv environment variable files
 .env
 .env.*

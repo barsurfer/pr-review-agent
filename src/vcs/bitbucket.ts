@@ -158,6 +158,16 @@ export class BitbucketAdapter implements VCSAdapter {
           // Track agent reply IDs so we also find replies nested under them
           parentIds.add(String(c.id))
           if (c.created_on > latestAgentReply) latestAgentReply = c.created_on
+          // For delta reviews, include agent replies so the model sees its own prior conclusions
+          if (includeAnswered) {
+            humanReplies.push({
+              id: String(c.id),
+              parentId,
+              author: 'Agent (prior reply)',
+              body,
+              createdOn: c.created_on,
+            })
+          }
           continue
         }
         humanReplies.push({

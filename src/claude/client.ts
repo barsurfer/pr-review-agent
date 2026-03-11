@@ -80,7 +80,7 @@ function buildUserMessage(
 
   if (developerReplies.length > 0) {
     parts.push(`## Developer Discussion on Previous Review(s):`)
-    parts.push('Developers replied to previous review comments with the following context. Consider their explanations when reviewing the new changes. If a developer states that something is handled outside this PR or already exists in the codebase, trust their explanation and do not flag it as missing or unresolved.')
+    parts.push('Below is the conversation thread from previous reviews, including developer replies and the agent\'s own prior responses. IMPORTANT: If the agent previously acknowledged a finding as a false positive or accepted a developer\'s explanation, do NOT re-raise that finding. Treat the agent\'s prior conclusions as settled unless the new code changes invalidate them.')
     for (const r of developerReplies) {
       parts.push(`**${r.author}** (${r.createdOn}):\n> ${r.body}`)
     }

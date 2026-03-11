@@ -105,7 +105,7 @@ The record is also printed to stdout at the end of every run regardless of the f
 | `judge_cost_usd` | `number \| null` | Judge call cost, or null if no judge |
 | `duration_ms` | `number` | Wall-clock time for the full run |
 | `dry_run` | `boolean` | Whether `--dry-run` was used |
-| `force` | `boolean` | Whether `--force` was used |
+| `force` | `string` | Force mode: `"off"`, `"clean"` (no prior context), or `"re-review"` (bypass dedup, keep context) |
 | `prompt_source` | `string` | Prompt file path or `default` |
 | `verdict_score` | `number \| null` | Merge Confidence percentage (0–100) parsed from final output (judge if used, reviewer otherwise) |
 | `computed_score` | `number \| null` | Code-computed score: `max(0, 100 − HIGHs×12 − MEDIUMs×4)` from final findings |
