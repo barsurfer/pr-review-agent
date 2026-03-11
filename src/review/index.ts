@@ -158,7 +158,14 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
     case State.CHECK_REPLIES: {
       const reviewIds = ctx.previousReviews!.map(r => r.id)
       const { replies, agentReplyCount } = await ctx.adapter.getRepliesToReviewComments(ctx.prId, reviewIds)
-      ctx.replies = replies
+
+      // Filter out human replies that are older than the latest review —
+      // a new review supersedes the previous conversation thread
+      const latestReviewDate = ctx.previousReviews![ctx.previousReviews!.length - 1].createdOn
+      ctx.replies = replies.filter(r => r.createdOn > latestReviewDate)
+      if (ctx.replies.length < replies.length) {
+        console.log(`  Filtered ${replies.length - ctx.replies.length} reply(s) older than latest review (${latestReviewDate})`)
+      }
 
       if (ctx.replies.length > 0) {
         if (config.reply.maxComments > 0 && agentReplyCount >= config.reply.maxComments) {
@@ -306,6 +313,12 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
 
     case State.POST_REVIEW: {
       const cleaned = stripDeltaStats(stripPreviousFooter(ctx.reviewText!))
+      if (!cleaned.trim() || isNoChange(cleaned)) {
+        console.log('  Review text empty or NO_CHANGE after cleanup — skipping post')
+        ctx.action = 'NO_CHANGE'
+        ctx.skipReason = 'Review text empty or NO_CHANGE after cleanup'
+        return State.SKIP
+      }
       const commitShort = ctx.prInfo!.sourceCommit.slice(0, 12)
       const footer = buildReviewFooter(config.agentIdentity, config.anthropic.model, ctx.prompt!.source, ctx.reviewNumber, commitShort)
       const comment = cleaned + footer
@@ -315,6 +328,17 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         console.log(comment)
         console.log('\n=== End of review ===\n')
       } else {
+        // Pre-post dedup: re-fetch reviews to catch concurrent runs that posted while we were working
+        if (ctx.force === 'off') {
+          const freshReviews = await ctx.adapter.getPreviousReviewComments(ctx.prId)
+          const alreadyReviewed = freshReviews.some(r => extractCommitHash(r.body) === commitShort)
+          if (alreadyReviewed) {
+            console.log(`  Commit ${commitShort} already reviewed by another run — skipping post`)
+            ctx.action = 'DEDUP_SKIP'
+            ctx.skipReason = 'Another agent run already reviewed this commit (race condition avoided)'
+            return State.SKIP
+          }
+        }
         console.log('Posting review comment...')
         await ctx.adapter.postComment(ctx.prId, comment)
         console.log('Done. Review posted to PR.\n')

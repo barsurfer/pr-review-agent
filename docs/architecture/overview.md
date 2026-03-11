@@ -107,6 +107,19 @@ skip (reply limit reached), reply to developer, skip (NO_CHANGE), or post review
 separate judge model (`JUDGING_MODEL`) that validates each finding against the actual code
 before posting. When no judge is configured, this state is a no-op passthrough.
 
+### POST_REVIEW Safety Guards
+
+Before posting, `POST_REVIEW` applies two guards:
+
+1. **Empty/NO_CHANGE guard** — if the review text is empty or equals `"NO_CHANGE"` after
+   cleanup, the post is skipped. Prevents accidentally posting blank or literal `NO_CHANGE`
+   strings when `CHECK_NO_CHANGE` is bypassed or the model misbehaves.
+
+2. **Pre-post dedup** — on non-dry-run runs with `--force` off, the agent re-fetches the
+   latest review comments immediately before posting and checks whether another concurrent
+   run already reviewed the same commit. If a matching review is found, the post is skipped.
+   Prevents duplicate reviews from parallel Jenkins triggers on the same PR update.
+
 ### Delta Diff Pre-Check
 
 When a previous review exists with a different commit hash, the agent fetches the

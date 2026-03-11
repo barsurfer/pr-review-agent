@@ -23,7 +23,7 @@ program
   .option('--repo-slug <slug>', 'Repository slug')
   .option('--vcs <provider>', 'VCS provider: bitbucket | github | gitlab (overrides VCS_PROVIDER)')
   .option('--dry-run', 'Print the review to stdout without posting to the PR')
-  .option('--force [mode]', 'Force review: "clean" (no prior context) or "re-review" (keep context, bypass dedup)', 're-review')
+  .option('--force [mode]', 'Force review: "clean" (no prior context) or "re-review" (keep context, bypass dedup)')
   .option('--log-usage [bool]', 'Log usage data to results.jsonl (default: true)', (v: string) => v !== 'false', true)
   .option('--prompt <path>', 'Path to a local prompt file (overrides repo .agent-review-instructions.md)')
   .option('--validate-prompt', 'Validate prompt and exit (local via --prompt, or repo via --pr-id)')

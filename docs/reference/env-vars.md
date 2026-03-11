@@ -43,6 +43,19 @@ credentials in source code or commit them to version control.**
 > which override the env var values. `CLAUDE_MODEL` and `JUDGING_MODEL` can be
 > overridden with `--model` and `--judge-model` respectively.
 
+### `--force` CLI flag
+
+Controls dedup bypass behavior. The flag is optional-value — its behavior depends on how it is passed:
+
+| Invocation | `force` value | Effect |
+|------------|---------------|--------|
+| *(not passed)* | `off` | Normal dedup — skip if same commit already reviewed |
+| `--force` | `re-review` | Bypass dedup, keep prior review context |
+| `--force clean` | `clean` | Bypass dedup, strip prior review from context |
+
+> Note: prior to the fix, Commander's default value caused `--force` to behave as `re-review`
+> even when the flag was not passed at all, effectively disabling dedup on every run.
+
 ---
 
 ## Phase 3 — Inline Comments

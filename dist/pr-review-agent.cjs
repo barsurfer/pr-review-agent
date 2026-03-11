@@ -28821,7 +28821,11 @@ async function transition(state, ctx) {
     case 5 /* CHECK_REPLIES */: {
       const reviewIds = ctx.previousReviews.map((r2) => r2.id);
       const { replies, agentReplyCount } = await ctx.adapter.getRepliesToReviewComments(ctx.prId, reviewIds);
-      ctx.replies = replies;
+      const latestReviewDate = ctx.previousReviews[ctx.previousReviews.length - 1].createdOn;
+      ctx.replies = replies.filter((r2) => r2.createdOn > latestReviewDate);
+      if (ctx.replies.length < replies.length) {
+        console.log(`  Filtered ${replies.length - ctx.replies.length} reply(s) older than latest review (${latestReviewDate})`);
+      }
       if (ctx.replies.length > 0) {
         if (config.reply.maxComments > 0 && agentReplyCount >= config.reply.maxComments) {
           console.log(`  Found ${ctx.replies.length} unanswered reply(s), but agent already posted ${agentReplyCount}/${config.reply.maxComments} replies \u2014 skipping`);
@@ -28950,6 +28954,12 @@ async function transition(state, ctx) {
     }
     case 13 /* POST_REVIEW */: {
       const cleaned = stripDeltaStats(stripPreviousFooter(ctx.reviewText));
+      if (!cleaned.trim() || isNoChange(cleaned)) {
+        console.log("  Review text empty or NO_CHANGE after cleanup \u2014 skipping post");
+        ctx.action = "NO_CHANGE";
+        ctx.skipReason = "Review text empty or NO_CHANGE after cleanup";
+        return 14 /* SKIP */;
+      }
       const commitShort = ctx.prInfo.sourceCommit.slice(0, 12);
       const footer = buildReviewFooter(config.agentIdentity, config.anthropic.model, ctx.prompt.source, ctx.reviewNumber, commitShort);
       const comment = cleaned + footer;
@@ -28958,6 +28968,16 @@ async function transition(state, ctx) {
         console.log(comment);
         console.log("\n=== End of review ===\n");
       } else {
+        if (ctx.force === "off") {
+          const freshReviews = await ctx.adapter.getPreviousReviewComments(ctx.prId);
+          const alreadyReviewed = freshReviews.some((r2) => extractCommitHash(r2.body) === commitShort);
+          if (alreadyReviewed) {
+            console.log(`  Commit ${commitShort} already reviewed by another run \u2014 skipping post`);
+            ctx.action = "DEDUP_SKIP";
+            ctx.skipReason = "Another agent run already reviewed this commit (race condition avoided)";
+            return 14 /* SKIP */;
+          }
+        }
         console.log("Posting review comment...");
         await ctx.adapter.postComment(ctx.prId, comment);
         console.log("Done. Review posted to PR.\n");
@@ -29024,7 +29044,7 @@ if (major < 20) {
   process.exit(1);
 }
 var program2 = new Command();
-program2.name("pr-review-agent").description("Automated PR code review powered by Claude").option("--pr-id <id>", "Pull request ID").option("--workspace <workspace>", "VCS workspace / org (overrides BITBUCKET_WORKSPACE)").option("--repo-slug <slug>", "Repository slug").option("--vcs <provider>", "VCS provider: bitbucket | github | gitlab (overrides VCS_PROVIDER)").option("--dry-run", "Print the review to stdout without posting to the PR").option("--force [mode]", 'Force review: "clean" (no prior context) or "re-review" (keep context, bypass dedup)', "re-review").option("--log-usage [bool]", "Log usage data to results.jsonl (default: true)", (v2) => v2 !== "false", true).option("--prompt <path>", "Path to a local prompt file (overrides repo .agent-review-instructions.md)").option("--validate-prompt", "Validate prompt and exit (local via --prompt, or repo via --pr-id)").option("--model <id>", "Claude model ID (overrides CLAUDE_MODEL)").option("--judge-model <id>", "Judge model ID (overrides JUDGING_MODEL)").option("--min-changed-files <n>", "Skip review if fewer files changed (overrides MIN_CHANGED_FILES)").option("--max-changed-files <n>", "Skip review if more files changed (overrides MAX_CHANGED_FILES)").option("--min-changed-lines <n>", "Skip review if fewer lines changed (overrides MIN_CHANGED_LINES)").option("--max-changed-lines <n>", "Skip review if more lines changed (overrides MAX_CHANGED_LINES)").parse(process.argv);
+program2.name("pr-review-agent").description("Automated PR code review powered by Claude").option("--pr-id <id>", "Pull request ID").option("--workspace <workspace>", "VCS workspace / org (overrides BITBUCKET_WORKSPACE)").option("--repo-slug <slug>", "Repository slug").option("--vcs <provider>", "VCS provider: bitbucket | github | gitlab (overrides VCS_PROVIDER)").option("--dry-run", "Print the review to stdout without posting to the PR").option("--force [mode]", 'Force review: "clean" (no prior context) or "re-review" (keep context, bypass dedup)').option("--log-usage [bool]", "Log usage data to results.jsonl (default: true)", (v2) => v2 !== "false", true).option("--prompt <path>", "Path to a local prompt file (overrides repo .agent-review-instructions.md)").option("--validate-prompt", "Validate prompt and exit (local via --prompt, or repo via --pr-id)").option("--model <id>", "Claude model ID (overrides CLAUDE_MODEL)").option("--judge-model <id>", "Judge model ID (overrides JUDGING_MODEL)").option("--min-changed-files <n>", "Skip review if fewer files changed (overrides MIN_CHANGED_FILES)").option("--max-changed-files <n>", "Skip review if more files changed (overrides MAX_CHANGED_FILES)").option("--min-changed-lines <n>", "Skip review if fewer lines changed (overrides MIN_CHANGED_LINES)").option("--max-changed-lines <n>", "Skip review if more lines changed (overrides MAX_CHANGED_LINES)").parse(process.argv);
 var opts = program2.opts();
 async function main() {
   if (opts.validatePrompt) {

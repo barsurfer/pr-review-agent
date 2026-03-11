@@ -123,6 +123,9 @@ A reply is "unanswered" if:
 1. It is a child of one of our review comments (`parent.id` matches)
 2. It was NOT posted by the agent (doesn't contain "Reply by Claude" marker)
 3. It was posted AFTER the most recent agent reply (timestamp comparison)
+4. It was posted AFTER the latest review comment — replies predating the newest review
+   are ignored, as the new review supersedes that discussion thread. This prevents stale
+   replies from triggering an infinite reply loop when a PR is re-reviewed (PR 712 incident).
 
 ### Agent replies in delta review context
 
