@@ -28797,9 +28797,9 @@ async function transition(state, ctx) {
               const deltaLines = countChangedLines(filtered);
               console.log(`  Delta: ${countChangedLines(deltaDiff)} lines total, ${removedCount} file(s) filtered, ${deltaLines} lines remain`);
               if (deltaLines === 0) {
-                ctx.action = "NO_CHANGE";
-                ctx.skipReason = "New commits contain only excluded files (e.g. tests, lock files) \u2014 no reviewable changes";
-                return 14 /* SKIP */;
+                console.log("  No reviewable changes in delta \u2014 checking for unanswered replies...");
+                ctx.reviewNumber = ctx.previousReviews.length;
+                return 5 /* CHECK_REPLIES */;
               }
             } catch (err) {
               console.log(`  Delta diff fetch failed (${err.message}) \u2014 falling back to full PR diff`);

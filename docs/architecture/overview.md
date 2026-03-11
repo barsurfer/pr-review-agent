@@ -92,7 +92,9 @@ FETCH_PR_INFO → CHECK_BRANCHES
                                        ├─ [same commit] → CHECK_REPLIES
                                        │   ├─ [replies] → RESPOND_TO_REPLIES → DONE
                                        │   └─ [none] → SKIP → DONE
-                                       ├─ [delta diff empty after filter] → SKIP (NO_CHANGE) → DONE
+                                       ├─ [delta diff empty after filter] → CHECK_REPLIES
+                                       │   ├─ [replies] → RESPOND_TO_REPLIES → DONE
+                                       │   └─ [none] → SKIP → DONE
                                        └─ LOAD_PROMPT → FETCH_CONTEXT → CALL_CLAUDE
                                             → CHECK_NO_CHANGE
                                                ├─ [NO_CHANGE] → SKIP → DONE
@@ -102,8 +104,8 @@ FETCH_PR_INFO → CHECK_BRANCHES
 ```
 
 **15 states**, **7 possible outcomes**: skip (branch exclusion), skip (threshold),
-skip (same commit, no replies), skip (delta diff empty — only excluded files changed),
-skip (reply limit reached), reply to developer, skip (NO_CHANGE), or post review. The optional `JUDGE_REVIEW` state sends the review output and diff to a
+skip (same commit, no replies), skip (delta diff empty, no replies), skip (reply limit reached),
+reply to developer, skip (NO_CHANGE), or post review. The optional `JUDGE_REVIEW` state sends the review output and diff to a
 separate judge model (`JUDGING_MODEL`) that validates each finding against the actual code
 before posting. When no judge is configured, this state is a no-op passthrough.
 
@@ -124,9 +126,11 @@ Before posting, `POST_REVIEW` applies two guards:
 
 When a previous review exists with a different commit hash, the agent fetches the
 commit-to-commit diff (last reviewed commit → current head) before proceeding. After
-applying `DIFF_EXCLUDE_PATTERNS`, if zero lines remain, the review is skipped
-deterministically as `NO_CHANGE` — no API call needed. This catches cases where new
-commits only add excluded files (tests, lock files, translations).
+applying `DIFF_EXCLUDE_PATTERNS`, if zero lines remain, no review is produced — but the
+agent still falls through to `CHECK_REPLIES` to answer any unanswered developer questions
+before exiting. If there are no pending replies either, the run exits as `NO_CHANGE` with
+no API call. This catches cases where new commits only touch excluded files (tests, lock
+files, translations).
 
 ---
 
