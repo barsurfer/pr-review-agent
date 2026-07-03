@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildReviewFooter, buildReplyFooter, stripPreviousFooter, stripDeltaStats, isNoChange, extractCommitHash } from '../formatter.js'
+import { buildReviewFooter, buildReplyFooter, stripPreviousFooter, stripDeltaStats, stripPreamble, isNoChange, extractCommitHash } from '../formatter.js'
 
 // ---------------------------------------------------------------------------
 // buildReviewFooter
@@ -88,6 +88,48 @@ describe('isNoChange', () => {
 
   it('rejects other text', () => {
     expect(isNoChange('### Summary\nNO_CHANGE found')).toBe(false)
+  })
+
+  it('detects NO_CHANGE on a standalone line after a summary (PR 8718 regression)', () => {
+    expect(isNoChange('### Summary\n\nNo new findings. Cosmetic changes only.\n\nNO_CHANGE')).toBe(true)
+  })
+
+  it('rejects inline NO_CHANGE mention', () => {
+    expect(isNoChange('Found NO_CHANGE in the diff')).toBe(false)
+  })
+
+  it('rejects quoted NO_CHANGE line', () => {
+    expect(isNoChange('> NO_CHANGE\nsome reply text')).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// stripPreamble
+// ---------------------------------------------------------------------------
+
+describe('stripPreamble', () => {
+  it('drops judge deliberation before ### Summary (PR 45 regression)', () => {
+    const text = 'I need to validate each finding against the actual diff.\n\n**Finding 1: MEDIUM** — visible in the diff, keep.\n\n### Summary\nRefactor is risky.\n\n### Findings\n\nNone.'
+    expect(stripPreamble(text)).toBe('### Summary\nRefactor is risky.\n\n### Findings\n\nNone.')
+  })
+
+  it('returns text unchanged when it already starts with ### Summary', () => {
+    const text = '### Summary\nAll good.\n\n### Findings\n\nNone.'
+    expect(stripPreamble(text)).toBe(text)
+  })
+
+  it('returns text unchanged when no Summary heading exists', () => {
+    expect(stripPreamble('NO_CHANGE')).toBe('NO_CHANGE')
+    expect(stripPreamble('free-form review without headings')).toBe('free-form review without headings')
+  })
+
+  it('matches heading depth and case variations', () => {
+    expect(stripPreamble('preamble\n\n#### summary\ntext')).toBe('#### summary\ntext')
+  })
+
+  it('does not cut on inline "Summary" mention in the preamble', () => {
+    const text = 'Checking the Summary claim first.\n\n### Summary\nreal one'
+    expect(stripPreamble(text)).toBe('### Summary\nreal one')
   })
 })
 

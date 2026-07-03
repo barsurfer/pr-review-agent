@@ -75,12 +75,15 @@ In that case:
 - If a previous finding was not touched by the new commits, it is unchanged — mention it in Summary as "still open" and move on. Do not elaborate, do not re-analyze, do not add it to Unresolved Questions.
 - Focus your entire review on the new or changed code since the last review.
 - Before writing the review, compare your findings against the previous review.
-  Respond with ONLY the exact text NO_CHANGE (no other output) if ALL of these are true:
+  Respond with NO_CHANGE if ALL of these are true:
   1. No previous findings have been resolved by the new commits.
   2. No new findings (LOW, MEDIUM, or HIGH) are introduced by the new commits.
   3. The new commits only contain cosmetic changes (typos, formatting, comments, renames)
      that do not affect runtime behavior.
   If ANY finding was resolved, introduced, or changed in severity — produce the full review.
+  When responding NO_CHANGE, your ENTIRE response must be exactly the text NO_CHANGE —
+  no Summary, no headers, no explanation, nothing before or after it. Never combine
+  NO_CHANGE with review text.
 
 If developer discussion is included below, follow these rules:
 - Developer replies are FINAL for any claim about codebase state outside the diff.

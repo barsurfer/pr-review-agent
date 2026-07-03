@@ -33,6 +33,9 @@ You are a validation gate. Your ONLY function is to verify existing findings aga
 
 ## OUTPUT STRUCTURE
 
+Validate silently. Do NOT output your validation reasoning, per-finding analysis,
+or any preamble. Your response must START directly with the `### Summary` heading.
+
 Produce the final review in this exact format:
 
 ### Summary

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { extractCommitHash } from '../formatter.js'
+import { extractCommitHash, isNoChange } from '../formatter.js'
 import type { ReviewComment, CommentReply } from '../../vcs/adapter.js'
 
 // ---------------------------------------------------------------------------
@@ -100,7 +100,7 @@ describe('pre-post commit dedup', () => {
 describe('POST_REVIEW guard', () => {
   function shouldSkipPost(reviewText: string): boolean {
     const cleaned = reviewText.trim()
-    return !cleaned || cleaned === 'NO_CHANGE'
+    return !cleaned || isNoChange(cleaned)
   }
 
   it('skips empty string', () => {
@@ -125,5 +125,9 @@ describe('POST_REVIEW guard', () => {
 
   it('allows text containing NO_CHANGE as substring', () => {
     expect(shouldSkipPost('Found NO_CHANGE in the diff')).toBe(false)
+  })
+
+  it('skips summary followed by standalone NO_CHANGE line (PR 8718 regression)', () => {
+    expect(shouldSkipPost('### Summary\n\nNo new findings. Cosmetic changes only.\n\nNO_CHANGE')).toBe(true)
   })
 })

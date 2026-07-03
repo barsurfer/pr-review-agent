@@ -158,7 +158,9 @@ MAX_FILE_LINES=500
 The agent sends Claude **two things** for every review:
 
 1. **The filtered diff** — all changed hunks across all files in the PR, with lock files
-   stripped out (the raw diff is still used for line counting and threshold checks)
+   stripped out (size thresholds are also checked against the filtered diff — excluded
+   files don't count toward `MIN_/MAX_CHANGED_FILES/LINES`, and a PR with no reviewable
+   changes after exclusions is skipped)
 2. **Full file content** — for up to `MAX_CONTEXT_FILES` changed files (default: 20),
    fetched from the source branch. This gives Claude surrounding context beyond just
    the changed lines.

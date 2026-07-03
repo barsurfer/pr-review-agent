@@ -6,13 +6,14 @@ import { config } from '../config.js'
 import { loadPrompt } from '../prompt/loader.js'
 import { fetchContext } from '../context/fetcher.js'
 import { runReview, runCommentResponse, runJudge } from '../claude/client.js'
-import { filterDiff, countChangedLines, parseFindings } from './parsers.js'
-import { buildReviewFooter, buildReplyFooter, stripPreviousFooter, stripDeltaStats, isNoChange, extractCommitHash } from './formatter.js'
+import { filterDiff, countChangedLines, parseFindings, isPathExcluded } from './parsers.js'
+import { buildReviewFooter, buildReplyFooter, stripPreviousFooter, stripDeltaStats, stripPreamble, isNoChange, extractCommitHash } from './formatter.js'
 import { buildUsageRecord, logUsageRecord } from './usage.js'
 import { State } from './types.js'
 import type { ReviewContext } from './types.js'
 import type { VCSAdapter } from '../vcs/adapter.js'
 
+import type { UsageRecord } from './usage.js'
 export type { UsageRecord } from './usage.js'
 
 // ---------------------------------------------------------------------------
@@ -64,34 +65,44 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         console.log(`  Filtered ${removedCount} file(s) from diff (${config.diffExcludePatterns.join(', ')})`)
       }
 
-      console.log(`  ${ctx.changedFiles.length} changed file(s)`)
-      console.log(`  ${ctx.lineCount} changed line(s)`)
+      // Thresholds apply to reviewable content only — excluded files don't count
+      ctx.reviewableLineCount = countChangedLines(filtered)
+      ctx.reviewableFileCount = ctx.changedFiles.filter(f => !isPathExcluded(f.path, config.diffExcludePatterns)).length
+
+      console.log(`  ${ctx.changedFiles.length} changed file(s), ${ctx.reviewableFileCount} reviewable`)
+      console.log(`  ${ctx.lineCount} changed line(s), ${ctx.reviewableLineCount} reviewable`)
+
+      if (ctx.reviewableLineCount === 0) {
+        ctx.action = 'SKIP'
+        ctx.skipReason = 'no reviewable changes after exclusions'
+        return State.SKIP
+      }
       return State.CHECK_THRESHOLDS
     }
 
     case State.CHECK_THRESHOLDS: {
       const { minChangedFiles, maxChangedFiles, minChangedLines, maxChangedLines } = config.thresholds
-      const fileCount = ctx.changedFiles!.length
-      const lineCount = ctx.lineCount!
+      const fileCount = ctx.reviewableFileCount!
+      const lineCount = ctx.reviewableLineCount!
 
       if (minChangedFiles > 0 && fileCount < minChangedFiles) {
         ctx.action = 'SKIP'
-        ctx.skipReason = `PR has ${fileCount} changed file(s), minimum is ${minChangedFiles}`
+        ctx.skipReason = `PR has ${fileCount} reviewable file(s), minimum is ${minChangedFiles}`
         return State.SKIP
       }
       if (maxChangedFiles > 0 && fileCount > maxChangedFiles) {
         ctx.action = 'SKIP'
-        ctx.skipReason = `PR has ${fileCount} changed file(s), maximum is ${maxChangedFiles}`
+        ctx.skipReason = `PR has ${fileCount} reviewable file(s), maximum is ${maxChangedFiles}`
         return State.SKIP
       }
       if (minChangedLines > 0 && lineCount < minChangedLines) {
         ctx.action = 'SKIP'
-        ctx.skipReason = `PR has ${lineCount} changed line(s), minimum is ${minChangedLines}`
+        ctx.skipReason = `PR has ${lineCount} reviewable line(s), minimum is ${minChangedLines}`
         return State.SKIP
       }
       if (maxChangedLines > 0 && lineCount > maxChangedLines) {
         ctx.action = 'SKIP'
-        ctx.skipReason = `PR has ${lineCount} changed line(s), maximum is ${maxChangedLines}`
+        ctx.skipReason = `PR has ${lineCount} reviewable line(s), maximum is ${maxChangedLines}`
         return State.SKIP
       }
       return State.CHECK_PREVIOUS_REVIEWS
@@ -312,7 +323,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
     }
 
     case State.POST_REVIEW: {
-      const cleaned = stripDeltaStats(stripPreviousFooter(ctx.reviewText!))
+      const cleaned = stripPreamble(stripDeltaStats(stripPreviousFooter(ctx.reviewText!)))
       if (!cleaned.trim() || isNoChange(cleaned)) {
         console.log('  Review text empty or NO_CHANGE after cleanup — skipping post')
         ctx.action = 'NO_CHANGE'

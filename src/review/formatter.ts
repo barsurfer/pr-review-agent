@@ -28,9 +28,18 @@ export function stripDeltaStats(text: string): string {
   return text.replace(/\n*<!--\s*DELTA_STATS:.*?-->\s*/g, '').trimEnd()
 }
 
-/** Check whether Claude returned the NO_CHANGE stop word. */
+/** Check whether Claude returned the NO_CHANGE stop word — exact, or as a standalone
+ *  line when the model prepends a summary despite the prompt instruction. */
 export function isNoChange(text: string): boolean {
-  return text.trim() === 'NO_CHANGE'
+  return /^[ \t]*NO_CHANGE[ \t]*$/m.test(text)
+}
+
+/** Drop leaked model reasoning before the first "Summary" heading — reviewer and judge
+ *  are both instructed to start there, but models sometimes think out loud first. */
+export function stripPreamble(text: string): string {
+  const match = text.match(/^#{1,4}[ \t]*Summary\b/im)
+  if (!match || !match.index) return text
+  return text.slice(match.index)
 }
 
 /** Extract the short commit hash from a review comment footer. */

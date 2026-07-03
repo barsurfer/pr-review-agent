@@ -43,6 +43,8 @@ export interface ReviewContext {
   filteredDiff?: string
   changedFiles?: ChangedFile[]
   lineCount?: number
+  reviewableFileCount?: number
+  reviewableLineCount?: number
   previousReviews?: ReviewComment[]
   replies?: CommentReply[]
   prompt?: LoadedPrompt

@@ -43,12 +43,13 @@ vi.mock('../usage.js', async (importOriginal) => {
 // Import after mocks
 import { review } from '../index.js'
 import { config } from '../../config.js'
-import { runReview, runCommentResponse } from '../../claude/client.js'
+import { runReview, runCommentResponse, runJudge } from '../../claude/client.js'
 import { loadPrompt } from '../../prompt/loader.js'
 import { fetchContext } from '../../context/fetcher.js'
 
 const mockRunReview = vi.mocked(runReview)
 const mockRunCommentResponse = vi.mocked(runCommentResponse)
+const mockRunJudge = vi.mocked(runJudge)
 const mockLoadPrompt = vi.mocked(loadPrompt)
 const mockFetchContext = vi.mocked(fetchContext)
 const cfg = config as any
@@ -268,10 +269,10 @@ describe('new commit → RE_REVIEW', () => {
 })
 
 // ===========================================================================
-// Scenario 7: New commit but delta only excluded files → NO_CHANGE skip
+// Scenario 7: New commit but delta only excluded files → reply check → dedup skip
 // ===========================================================================
 
-describe('delta only excluded files → NO_CHANGE', () => {
+describe('delta only excluded files → dedup skip', () => {
   it('skips without calling Claude', async () => {
     const specDiff = `diff --git a/src/app.spec.ts b/src/app.spec.ts
 --- a/src/app.spec.ts
@@ -288,7 +289,7 @@ describe('delta only excluded files → NO_CHANGE', () => {
 
     const record = await review(adapter, '100', true)
 
-    expect(record!.action).toBe('NO_CHANGE')
+    expect(record!.action).toBe('DEDUP_SKIP')
     expect(mockRunReview).not.toHaveBeenCalled()
   })
 })
@@ -307,6 +308,40 @@ describe('Claude returns NO_CHANGE → skip', () => {
     expect(record!.action).toBe('NO_CHANGE')
     expect(adapter.postComment).not.toHaveBeenCalled()
   })
+
+  it('does not post summary + standalone NO_CHANGE line (PR 8718 regression)', async () => {
+    const adapter = makeAdapter()
+    setupClaudeMocks('### Summary\n\nNo new findings. New commits contain only cosmetic changes.\n\nNO_CHANGE')
+
+    const record = await review(adapter, '100', true)
+
+    expect(record!.action).toBe('NO_CHANGE')
+    expect(adapter.postComment).not.toHaveBeenCalled()
+  })
+})
+
+// ===========================================================================
+// Scenario 8b: Judge leaks validation reasoning before the review → stripped
+// ===========================================================================
+
+describe('judge preamble leak → stripped before posting', () => {
+  it('posts only from ### Summary onward (PR 45 regression)', async () => {
+    const adapter = makeAdapter()
+    setupClaudeMocks('### Summary\nRisky refactor.\n\n### Findings\n\n- **MEDIUM – Substring matching** (a.ts:1)\n  Over-matches rows.')
+    cfg.judge.model = 'judge-model'
+    mockRunJudge.mockResolvedValue({
+      text: 'I need to validate each finding against the actual diff. Let me check each one carefully.\n\n**Finding 1: MEDIUM** — visible in the diff, keep.\n\n### Summary\nRisky refactor, validated.\n\n### Findings\n\n- **MEDIUM – Substring matching** (a.ts:1)\n  Over-matches rows.',
+      usage: { input_tokens: 800, output_tokens: 300 },
+    })
+
+    const record = await review(adapter, '100', false)
+
+    expect(record!.action).toBe('REVIEW')
+    expect(adapter.postComment).toHaveBeenCalledTimes(1)
+    const body = vi.mocked(adapter.postComment).mock.calls[0][1] as string
+    expect(body.startsWith('### Summary')).toBe(true)
+    expect(body).not.toContain('I need to validate')
+  })
 })
 
 // ===========================================================================
@@ -322,6 +357,62 @@ describe('Claude returns empty → skip', () => {
 
     expect(record!.action).toBe('NO_CHANGE')
     expect(adapter.postComment).not.toHaveBeenCalled()
+  })
+})
+
+// ===========================================================================
+// Scenario 9b: Size thresholds count reviewable lines only (excluded bulk ignored)
+// ===========================================================================
+
+const SPEC_BULK = [
+  'diff --git a/src/big.spec.ts b/src/big.spec.ts',
+  '--- a/src/big.spec.ts',
+  '+++ b/src/big.spec.ts',
+  '@@ -1,3 +1,15 @@',
+  ...Array.from({ length: 12 }, (_, i) => `+spec line ${i}`),
+].join('\n')
+
+const SMALL_APP_CHANGE = [
+  'diff --git a/src/app.ts b/src/app.ts',
+  '--- a/src/app.ts',
+  '+++ b/src/app.ts',
+  '@@ -10,3 +10,6 @@',
+  '+const a = 1',
+  '+const b = 2',
+  '+const c = 3',
+].join('\n')
+
+describe('size thresholds after exclusions', () => {
+  it('reviews a PR whose raw size exceeds the max but reviewable size does not', async () => {
+    const adapter = makeAdapter({
+      getDiff: vi.fn().mockResolvedValue(SPEC_BULK + '\n' + SMALL_APP_CHANGE),
+      getChangedFiles: vi.fn().mockResolvedValue([
+        { path: 'src/big.spec.ts', status: 'modified' },
+        { path: 'src/app.ts', status: 'modified' },
+      ]),
+    })
+    cfg.thresholds = { minChangedFiles: 0, maxChangedFiles: 200, minChangedLines: 0, maxChangedLines: 10 }
+
+    const record = await review(adapter, '100', true)
+
+    // raw = 15 lines (> max 10), reviewable = 3 → must NOT skip
+    expect(record!.action).toBe('REVIEW')
+    expect(mockRunReview).toHaveBeenCalledTimes(1)
+  })
+
+  it('skips a PR with only excluded files without calling Claude', async () => {
+    const adapter = makeAdapter({
+      getDiff: vi.fn().mockResolvedValue(SPEC_BULK),
+      getChangedFiles: vi.fn().mockResolvedValue([
+        { path: 'src/big.spec.ts', status: 'modified' },
+      ]),
+    })
+
+    const record = await review(adapter, '100', true)
+
+    expect(record!.action).toBe('SKIP')
+    expect(record!.skip_reason).toBe('no reviewable changes after exclusions')
+    expect(mockRunReview).not.toHaveBeenCalled()
   })
 })
 

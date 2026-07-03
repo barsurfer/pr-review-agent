@@ -1,11 +1,33 @@
 import { describe, it, expect } from 'vitest'
-import { filterDiff, countChangedLines, parseVerdictScore, parseFindings, parseDeltaStats } from '../parsers.js'
+import { filterDiff, countChangedLines, parseVerdictScore, parseFindings, parseDeltaStats, isPathExcluded } from '../parsers.js'
 
 // ---------------------------------------------------------------------------
 // filterDiff
 // ---------------------------------------------------------------------------
 
 const DEFAULT_PATTERNS = ['*.lock', 'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', '*.json', '*.spec.ts']
+
+describe('isPathExcluded', () => {
+  const patterns = ['*.lock', 'package-lock.json', '*.spec.ts', 'public/i18n/*']
+
+  it('matches extension patterns', () => {
+    expect(isPathExcluded('src/app.spec.ts', patterns)).toBe(true)
+    expect(isPathExcluded('yarn.lock', patterns)).toBe(true)
+  })
+
+  it('matches exact filenames', () => {
+    expect(isPathExcluded('package-lock.json', patterns)).toBe(true)
+  })
+
+  it('matches directory wildcard patterns', () => {
+    expect(isPathExcluded('public/i18n/en.json', patterns)).toBe(true)
+  })
+
+  it('does not match reviewable paths', () => {
+    expect(isPathExcluded('src/app.ts', patterns)).toBe(false)
+    expect(isPathExcluded('src/spec-helper.ts', patterns)).toBe(false)
+  })
+})
 
 describe('filterDiff', () => {
   it('removes lock files with default patterns', () => {

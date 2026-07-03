@@ -11,6 +11,11 @@ function patternToRegex(pattern: string): RegExp {
   return new RegExp(escaped + '$')
 }
 
+/** Check whether a file path matches any exclusion pattern. */
+export function isPathExcluded(path: string, excludePatterns: string[]): boolean {
+  return excludePatterns.some(p => patternToRegex(p).test(path))
+}
+
 /** Strip diff sections for files matching exclusion patterns. */
 export function filterDiff(diff: string, excludePatterns: string[]): { filtered: string; removedCount: number } {
   const regexes = excludePatterns.map(patternToRegex)
