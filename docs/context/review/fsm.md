@@ -15,11 +15,12 @@ Related: [review/skip-logic.md](skip-logic.md) | [review/replies.md](replies.md)
 
 ```
 FETCH_PR_INFO
-  └─ FETCH_DIFF (+ filterDiff)
-       └─ CHECK_THRESHOLDS
-            ├─ [fail] → SKIP → DONE
-            └─ CHECK_BRANCHES
-                 ├─ [branch exclusion match] → SKIP → DONE
+  └─ CHECK_BRANCHES
+       ├─ [branch exclusion match] → SKIP → DONE
+       └─ FETCH_DIFF (+ filterDiff)
+            ├─ [no reviewable changes after exclusions] → SKIP → DONE
+            └─ CHECK_THRESHOLDS
+                 ├─ [fail] → SKIP → DONE
                  └─ CHECK_PREVIOUS_REVIEWS
                       ├─ [same commit] → CHECK_REPLIES
                       │    ├─ [unanswered replies] → RESPOND_TO_REPLIES → DONE
@@ -35,14 +36,16 @@ FETCH_PR_INFO
                                      └─ [no judge] → POST_REVIEW → DONE
 ```
 
-**15 states. 7 possible outcomes:**
+**15 states. 9 possible outcomes:**
 1. Skip — branch exclusion
-2. Skip — threshold (too few/many files or lines)
-3. Skip — same commit, no replies
-4. Skip — delta diff empty, no replies
-5. Skip — reply limit reached
-6. Reply — developer question answered
-7. Post review — new review comment
+2. Skip — no reviewable changes after exclusions
+3. Skip — threshold (too few/many reviewable files or lines)
+4. Skip — same commit, no replies
+5. Skip — delta diff empty, no replies
+6. Skip — reply limit reached
+7. Skip — NO_CHANGE stop word
+8. Reply — developer question answered
+9. Post review — new review comment
 
 ---
 
