@@ -73,6 +73,7 @@ results.jsonl
 
 # Temp folder for PR analysis
 tmp/
+docs/temp/
 
 # dotenv environment variable files
 .env
