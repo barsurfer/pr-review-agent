@@ -81,12 +81,15 @@ A `State` enum defines every node, a `ReviewContext` object carries accumulated 
 `transition(state, ctx)` function returns the next state. The runner loops until `DONE`.
 
 The `FETCH_DIFF` state also produces a **filtered diff** (lock files stripped) which is
-used for all Claude API calls. The raw diff is kept for line counting and threshold checks.
+used for all Claude API calls and for size-threshold checks — excluded files don't count
+toward `MIN/MAX_CHANGED_*`. The raw diff counts are kept for usage-record metrics.
 
 ```
 FETCH_PR_INFO → CHECK_BRANCHES
                   ├─ [source/target match skip patterns] → SKIP → DONE
-                  └─ FETCH_DIFF (+ filterDiff) → CHECK_THRESHOLDS
+                  └─ FETCH_DIFF (+ filterDiff)
+                                  ├─ [no reviewable changes after exclusions] → SKIP → DONE
+                                  └─ CHECK_THRESHOLDS
                                   ├─ [fail] → SKIP → DONE
                                   └─ CHECK_PREVIOUS_REVIEWS
                                        ├─ [same commit] → CHECK_REPLIES
@@ -103,9 +106,9 @@ FETCH_PR_INFO → CHECK_BRANCHES
                                                     └─ [no judge] → POST_REVIEW → DONE
 ```
 
-**15 states**, **7 possible outcomes**: skip (branch exclusion), skip (threshold),
-skip (same commit, no replies), skip (delta diff empty, no replies), skip (reply limit reached),
-reply to developer, skip (NO_CHANGE), or post review. The optional `JUDGE_REVIEW` state sends the review output and diff to a
+**15 states**, **9 possible outcomes**: skip (branch exclusion), skip (no reviewable changes),
+skip (threshold), skip (same commit, no replies), skip (delta diff empty, no replies),
+skip (reply limit reached), reply to developer, skip (NO_CHANGE), or post review. The optional `JUDGE_REVIEW` state sends the review output and diff to a
 separate judge model (`JUDGING_MODEL`) that validates each finding against the actual code
 before posting. When no judge is configured, this state is a no-op passthrough.
 
@@ -113,9 +116,11 @@ before posting. When no judge is configured, this state is a no-op passthrough.
 
 Before posting, `POST_REVIEW` applies two guards:
 
-1. **Empty/NO_CHANGE guard** — if the review text is empty or equals `"NO_CHANGE"` after
-   cleanup, the post is skipped. Prevents accidentally posting blank or literal `NO_CHANGE`
-   strings when `CHECK_NO_CHANGE` is bypassed or the model misbehaves.
+1. **Empty/NO_CHANGE guard** — cleanup strips prior footers, `DELTA_STATS`, and any leaked
+   preamble before the first `### Summary` heading; if the remaining text is empty or
+   contains a standalone `NO_CHANGE` line, the post is skipped. Prevents posting blank
+   comments, stop-word leftovers, or model reasoning when `CHECK_NO_CHANGE` is bypassed
+   or the model misbehaves.
 
 2. **Pre-post dedup** — on non-dry-run runs with `--force` off, the agent re-fetches the
    latest review comments immediately before posting and checks whether another concurrent

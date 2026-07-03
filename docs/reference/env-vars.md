@@ -28,10 +28,10 @@ credentials in source code or commit them to version control.**
 | `MAX_INPUT_TOKENS` | `150000` | Skip review if estimated input tokens exceed this value (0 = disabled) |
 | `MAX_CONTEXT_FILES` | `20` | Max number of files to fetch full content for |
 | `MAX_FILE_LINES` | `500` | Files over this line count get diff-only (no full content) |
-| `MIN_CHANGED_FILES` | `0` | Skip review if PR has fewer changed files (0 = disabled) |
-| `MAX_CHANGED_FILES` | `200` | Skip review if PR has more changed files (0 = disabled). Default: `200` |
-| `MIN_CHANGED_LINES` | `0` | Skip review if PR has fewer changed lines (0 = disabled) |
-| `MAX_CHANGED_LINES` | `3000` | Skip review if PR has more changed lines (0 = disabled). Default: `3000` |
+| `MIN_CHANGED_FILES` | `0` | Skip review if PR has fewer reviewable files (0 = disabled) |
+| `MAX_CHANGED_FILES` | `200` | Skip review if PR has more reviewable files (0 = disabled). Default: `200` |
+| `MIN_CHANGED_LINES` | `0` | Skip review if PR has fewer reviewable lines (0 = disabled) |
+| `MAX_CHANGED_LINES` | `3000` | Skip review if PR has more reviewable lines (0 = disabled). Default: `3000` |
 | `SKIP_SOURCE_BRANCHES` | `main,master,release/*` | Comma-separated branch patterns. Skip review if PR source branch matches. Default: `main,master,release/*,hotfix/*` |
 | `SKIP_TARGET_BRANCHES` | `main,master` | Comma-separated branch patterns. Skip review if PR target branch matches. Default: `main,master` |
 | `DIFF_EXCLUDE_PATTERNS` | `*.lock,*.json,*.spec.ts` | Comma-separated file patterns to strip from diff before sending to Claude. Default: `*.lock,package-lock.json,yarn.lock,pnpm-lock.yaml,*.json,*.spec.ts` |
@@ -42,6 +42,10 @@ credentials in source code or commit them to version control.**
 > Threshold variables can also be set via CLI flags (`--min-changed-files`, etc.)
 > which override the env var values. `CLAUDE_MODEL` and `JUDGING_MODEL` can be
 > overridden with `--model` and `--judge-model` respectively.
+>
+> Threshold counts are **reviewable** files/lines — computed after `DIFF_EXCLUDE_PATTERNS`
+> filtering, so excluded files never trip the limits. A PR with zero reviewable lines
+> after exclusions is skipped before any API call.
 
 ### `--force` CLI flag
 

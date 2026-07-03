@@ -62,7 +62,7 @@ Configurable via `DIFF_EXCLUDE_PATTERNS` env var (comma-separated). Defaults:
 *.lock, package-lock.json, yarn.lock, pnpm-lock.yaml, *.json, *.spec.ts
 ```
 
-Raw diff is kept for line counting and threshold checks. Only the filtered version goes to Claude.
+Size thresholds are checked against the filtered diff (excluded files don't count); raw counts are kept for the `changed_files`/`changed_lines` record fields. Only the filtered version goes to Claude.
 
 ---
 

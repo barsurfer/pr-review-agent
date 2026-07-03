@@ -39,8 +39,10 @@ Always include full content:
 ## Diff Filtering
 
 Before sending the diff to Claude, the agent strips sections for files that add noise
-without review value. The raw diff is still used for line counting and threshold checks —
-only the filtered version goes to the API.
+without review value. Size thresholds (`MIN/MAX_CHANGED_*`) are checked against the
+filtered diff — excluded files don't count toward limits, and a PR with zero reviewable
+lines after filtering is skipped outright. Only the filtered version goes to the API;
+raw counts are kept for usage-record metrics.
 
 ### Excluded from Diff
 
