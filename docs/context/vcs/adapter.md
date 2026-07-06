@@ -52,7 +52,8 @@ interface VCSAdapter {
 - **Auth:** HTTP Basic Auth — `BITBUCKET_USERNAME` (email) + `BITBUCKET_TOKEN` (Atlassian API token, starts with `ATATT3x...`)
 - **Diff endpoint:** Returns a 302 redirect. The adapter handles the redirect manually, preserving auth headers (axios default strips them on redirect).
 - **API token scopes required:** `read:repository:bitbucket`, `read:pullrequest:bitbucket`, `write:pullrequest:bitbucket`
-- **Cloud vs self-hosted:** `BITBUCKET_BASE_URL` — `https://api.bitbucket.org/2.0` for cloud, custom URL for self-hosted (Bitbucket Server/DC)
+- **Cloud only:** the adapter targets Bitbucket Cloud API 2.0 response shapes (`values` pagination, `content.raw`, diffstat redirects). Bitbucket Server/DC exposes a different v1 REST API — pointing `BITBUCKET_BASE_URL` at it fails on the first call; Server support would need its own adapter.
+- **Agent comment detection:** the agent's own comments are recognized by their exact footer line (`hasReviewFooter`/`hasReplyFooter` from `review/formatter.ts`), not by author — a comment quoting a full agent footer would still match (rare, accepted).
 
 ---
 

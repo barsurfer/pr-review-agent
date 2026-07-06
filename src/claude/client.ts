@@ -6,17 +6,43 @@ import type { PRInfo, ReviewComment, CommentReply } from '../vcs/adapter.js'
 import type { FileContext } from '../context/fetcher.js'
 import type { LoadedPrompt } from '../prompt/loader.js'
 
-const MAX_TOKENS = 4096
+const MAX_TOKENS = 16000
+const REPLY_MAX_TOKENS = 4096
 
 export interface ClaudeUsage {
   input_tokens: number
   output_tokens: number
+  cache_read_input_tokens?: number
+  cache_creation_input_tokens?: number
 }
 
 export interface ClaudeResult {
   text: string
   usage: ClaudeUsage
 }
+
+export interface JudgeResult extends ClaudeResult {
+  /** Validation reasoning — logged, never posted. */
+  notes?: string
+}
+
+// Structured output keeps validation reasoning physically separate from the
+// posted review — prompt-only suppression proved leaky (PR 8722)
+const JUDGE_OUTPUT_SCHEMA = {
+  type: 'object',
+  properties: {
+    review_markdown: {
+      type: 'string',
+      description: 'The final review comment exactly as it will be posted, starting with the "### Summary" heading. No validation reasoning, no preamble.',
+    },
+    judge_notes: {
+      type: 'string',
+      description: 'Validation reasoning: which findings were dropped or downgraded and why. Internal — never posted.',
+    },
+  },
+  required: ['review_markdown', 'judge_notes'],
+  additionalProperties: false,
+} as const
 
 export async function runReview(
   apiKey: string,
@@ -42,12 +68,18 @@ export async function runReview(
     messages: [{ role: 'user', content: userMessage }],
   })
 
+  if (response.stop_reason === 'max_tokens') {
+    throw new Error(`Review truncated at ${MAX_TOKENS} output tokens — refusing to post a cut-off review`)
+  }
+
   const block = response.content[0]
   if (block.type !== 'text') throw new Error('Unexpected response type from Claude')
 
   const usage: ClaudeUsage = {
     input_tokens: response.usage.input_tokens,
     output_tokens: response.usage.output_tokens,
+    cache_read_input_tokens: response.usage.cache_read_input_tokens ?? 0,
+    cache_creation_input_tokens: response.usage.cache_creation_input_tokens ?? 0,
   }
 
   console.log(`Review received (${usage.input_tokens} in / ${usage.output_tokens} out tokens)`)
@@ -115,7 +147,7 @@ export async function runJudge(
   maxRetries: number,
   diff: string,
   reviewText: string,
-): Promise<ClaudeResult> {
+): Promise<JudgeResult> {
   const client = new Anthropic({ apiKey, maxRetries })
 
   const parts: string[] = []
@@ -129,20 +161,34 @@ export async function runJudge(
     model,
     max_tokens: MAX_TOKENS,
     system: getJudgePrompt(),
+    output_config: { format: { type: 'json_schema', schema: JUDGE_OUTPUT_SCHEMA } },
     messages: [{ role: 'user', content: userMessage }],
   })
+
+  if (response.stop_reason === 'max_tokens') {
+    throw new Error(`Judge output truncated at ${MAX_TOKENS} output tokens — refusing to post a cut-off review`)
+  }
 
   const block = response.content[0]
   if (block.type !== 'text') throw new Error('Unexpected response type from Claude')
 
+  let parsed: { review_markdown: string; judge_notes: string }
+  try {
+    parsed = JSON.parse(block.text)
+  } catch {
+    throw new Error('Judge returned invalid JSON despite structured output — refusing to post')
+  }
+
   const usage: ClaudeUsage = {
     input_tokens: response.usage.input_tokens,
     output_tokens: response.usage.output_tokens,
+    cache_read_input_tokens: response.usage.cache_read_input_tokens ?? 0,
+    cache_creation_input_tokens: response.usage.cache_creation_input_tokens ?? 0,
   }
 
   console.log(`Judge received (${usage.input_tokens} in / ${usage.output_tokens} out tokens)`)
 
-  return { text: block.text, usage }
+  return { text: parsed.review_markdown, usage, notes: parsed.judge_notes }
 }
 
 function getReplyPrompt(): string {
@@ -179,10 +225,14 @@ export async function runCommentResponse(
 
   const response = await client.messages.create({
     model,
-    max_tokens: 2048,
+    max_tokens: REPLY_MAX_TOKENS,
     system: getReplyPrompt(),
     messages: [{ role: 'user', content: userMessage }],
   })
+
+  if (response.stop_reason === 'max_tokens') {
+    throw new Error(`Reply truncated at ${REPLY_MAX_TOKENS} output tokens — refusing to post a cut-off reply`)
+  }
 
   const block = response.content[0]
   if (block.type !== 'text') throw new Error('Unexpected response type from Claude')
@@ -190,6 +240,8 @@ export async function runCommentResponse(
   const usage: ClaudeUsage = {
     input_tokens: response.usage.input_tokens,
     output_tokens: response.usage.output_tokens,
+    cache_read_input_tokens: response.usage.cache_read_input_tokens ?? 0,
+    cache_creation_input_tokens: response.usage.cache_creation_input_tokens ?? 0,
   }
 
   console.log(`Reply received (${usage.input_tokens} in / ${usage.output_tokens} out tokens)`)

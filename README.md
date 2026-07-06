@@ -129,9 +129,7 @@ Open `.env` and fill in your values:
 # Which VCS to use — only 'bitbucket' is implemented
 VCS_PROVIDER=bitbucket
 
-# Bitbucket — get base URL from your Bitbucket instance
-# Cloud: https://api.bitbucket.org/2.0
-# Self-hosted (Bitbucket Server/DC): https://bitbucket.yourcompany.com/rest/api/1.0
+# Bitbucket Cloud only — Server/DC uses a different (v1) REST API and is not supported
 BITBUCKET_BASE_URL=https://api.bitbucket.org/2.0
 BITBUCKET_WORKSPACE=your-workspace-slug
 BITBUCKET_USERNAME=your-atlassian-email@company.com
@@ -301,7 +299,7 @@ All credentials and settings are provided via environment variables.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `VCS_PROVIDER` | `bitbucket` | Which VCS adapter to use (`bitbucket` \| `github` \| `gitlab`) |
-| `BITBUCKET_BASE_URL` | `https://api.bitbucket.org/2.0` | Bitbucket API base URL (change for self-hosted) |
+| `BITBUCKET_BASE_URL` | `https://api.bitbucket.org/2.0` | Bitbucket Cloud API base URL (Server/DC is not supported — different v1 API) |
 | `CLAUDE_MODEL` | `claude-sonnet-4-6` | Claude model ID to use for reviews |
 | `MAX_RETRIES` | `3` | Max retries on 429/5xx errors (exponential backoff) |
 | `MAX_INPUT_TOKENS` | `150000` | Skip review if estimated input tokens exceed this value (0 = disabled) |

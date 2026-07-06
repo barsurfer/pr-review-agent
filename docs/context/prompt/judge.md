@@ -65,6 +65,12 @@ at `### Summary`. As a code-side guard, `POST_REVIEW` runs `stripPreamble()` to 
 leaked validation reasoning before the first `### Summary` heading, so judge deliberation
 never reaches the posted comment.
 
+The posted review must read as if a single reviewer wrote it — dropped findings leave no
+trace in any section. The judge responds via **structured output** (JSON schema with two
+fields): `review_markdown` (the posted comment) and `judge_notes` (drop/downgrade rationale —
+logged to the run output, never posted). This physically separates validation reasoning from
+the comment; `stripPreamble()`/`stripJudgeNotes()` in POST_REVIEW remain as defense-in-depth.
+
 **Merge Confidence is NOT arithmetic.** The judge considers:
 - Number and severity of findings
 - Code scope and criticality

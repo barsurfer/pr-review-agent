@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildReviewFooter, buildReplyFooter, stripPreviousFooter, stripDeltaStats, stripPreamble, isNoChange, extractCommitHash } from '../formatter.js'
+import { buildReviewFooter, buildReplyFooter, stripPreviousFooter, stripDeltaStats, stripJudgeNotes, stripPreamble, isNoChange, extractCommitHash, hasReviewFooter, hasReplyFooter } from '../formatter.js'
 
 // ---------------------------------------------------------------------------
 // buildReviewFooter
@@ -100,6 +100,75 @@ describe('isNoChange', () => {
 
   it('rejects quoted NO_CHANGE line', () => {
     expect(isNoChange('> NO_CHANGE\nsome reply text')).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// hasReviewFooter / hasReplyFooter
+// ---------------------------------------------------------------------------
+
+describe('hasReviewFooter', () => {
+  it('matches the exact agent footer line', () => {
+    const body = '### Summary\nAll good.\n\n---\n*Reviewed by bot@co.com (claude-haiku-4-5-20251001) | Prompt: repo | Review #2 | Commit: bf2d9d912db9*'
+    expect(hasReviewFooter(body)).toBe(true)
+  })
+
+  it('does not match casual "Reviewed by" mentions', () => {
+    expect(hasReviewFooter('Reviewed by me, LGTM')).toBe(false)
+    expect(hasReviewFooter('This was *Reviewed by the team* already')).toBe(false)
+  })
+})
+
+describe('hasReplyFooter', () => {
+  it('matches the exact agent reply footer line', () => {
+    expect(hasReplyFooter('Thanks for clarifying.\n\n---\n*Reply by bot@co.com (claude-sonnet-4-6)*')).toBe(true)
+  })
+
+  it('does not match casual "Reply by" mentions', () => {
+    expect(hasReplyFooter('Reply by tomorrow please')).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Footer round-trip — builders and detectors must stay in sync, or the agent
+// stops recognizing its own comments (dedup breaks → re-review/self-reply loops)
+// ---------------------------------------------------------------------------
+
+describe('footer round-trip (builder ↔ detector)', () => {
+  const reviewBody = '### Summary\nAll good.' + buildReviewFooter('bot@co.com', 'claude-haiku-4-5-20251001', 'repo', 3, 'a1b2c3d4e5f6')
+  const replyBody = 'Because the null path is unguarded.' + buildReplyFooter('bot@co.com', 'claude-sonnet-4-6')
+
+  it('hasReviewFooter matches buildReviewFooter output', () => {
+    expect(hasReviewFooter(reviewBody)).toBe(true)
+  })
+
+  it('hasReplyFooter matches buildReplyFooter output', () => {
+    expect(hasReplyFooter(replyBody)).toBe(true)
+  })
+
+  it('review and reply footers never cross-match', () => {
+    expect(hasReplyFooter(reviewBody)).toBe(false)
+    expect(hasReviewFooter(replyBody)).toBe(false)
+  })
+
+  it('extractCommitHash round-trips buildReviewFooter output', () => {
+    expect(extractCommitHash(reviewBody)).toBe('a1b2c3d4e5f6')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// stripJudgeNotes
+// ---------------------------------------------------------------------------
+
+describe('stripJudgeNotes', () => {
+  it('strips a multi-line JUDGE_NOTES comment', () => {
+    const text = '### Summary\nSafe.\n\n### Findings\n\nNone.\n\n<!-- JUDGE_NOTES:\nDropped MEDIUM about @WithSpan — convention claim not verifiable from diff.\nDropped LOW about test mocking — style only.\n-->'
+    expect(stripJudgeNotes(text)).toBe('### Summary\nSafe.\n\n### Findings\n\nNone.')
+  })
+
+  it('leaves text without notes unchanged', () => {
+    const text = '### Summary\nSafe.\n\n### Findings\n\nNone.'
+    expect(stripJudgeNotes(text)).toBe(text)
   })
 })
 

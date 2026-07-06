@@ -7,7 +7,7 @@ import { loadPrompt } from '../prompt/loader.js'
 import { fetchContext } from '../context/fetcher.js'
 import { runReview, runCommentResponse, runJudge } from '../claude/client.js'
 import { filterDiff, countChangedLines, parseFindings, isPathExcluded } from './parsers.js'
-import { buildReviewFooter, buildReplyFooter, stripPreviousFooter, stripDeltaStats, stripPreamble, isNoChange, extractCommitHash } from './formatter.js'
+import { buildReviewFooter, buildReplyFooter, stripPreviousFooter, stripDeltaStats, stripJudgeNotes, stripPreamble, isNoChange, extractCommitHash } from './formatter.js'
 import { buildUsageRecord, logUsageRecord } from './usage.js'
 import { State } from './types.js'
 import type { ReviewContext } from './types.js'
@@ -206,6 +206,8 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       )
       ctx.usage.input_tokens += result.usage.input_tokens
       ctx.usage.output_tokens += result.usage.output_tokens
+      ctx.usage.cache_read += result.usage.cache_read_input_tokens ?? 0
+      ctx.usage.cache_write += result.usage.cache_creation_input_tokens ?? 0
 
       const replyBody = result.text.trimEnd() + buildReplyFooter(config.agentIdentity, config.anthropic.model)
 
@@ -279,6 +281,8 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       ctx.reviewText = result.text
       ctx.usage.input_tokens += result.usage.input_tokens
       ctx.usage.output_tokens += result.usage.output_tokens
+      ctx.usage.cache_read += result.usage.cache_read_input_tokens ?? 0
+      ctx.usage.cache_write += result.usage.cache_creation_input_tokens ?? 0
       return State.CHECK_NO_CHANGE
     }
 
@@ -315,15 +319,24 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       )
 
       ctx.reviewText = result.text
+      if (result.notes) {
+        console.log(`  Judge notes (not posted): ${result.notes}`)
+      }
       ctx.judgeUsage = { input_tokens: result.usage.input_tokens, output_tokens: result.usage.output_tokens }
       ctx.usage.input_tokens += result.usage.input_tokens
       ctx.usage.output_tokens += result.usage.output_tokens
+      ctx.usage.cache_read += result.usage.cache_read_input_tokens ?? 0
+      ctx.usage.cache_write += result.usage.cache_creation_input_tokens ?? 0
 
       return State.POST_REVIEW
     }
 
     case State.POST_REVIEW: {
-      const cleaned = stripPreamble(stripDeltaStats(stripPreviousFooter(ctx.reviewText!)))
+      const judgeNotes = ctx.reviewText!.match(/<!--\s*JUDGE_NOTES:([\s\S]*?)-->/)
+      if (judgeNotes) {
+        console.log(`  Judge notes (stripped from comment): ${judgeNotes[1].trim()}`)
+      }
+      const cleaned = stripPreamble(stripJudgeNotes(stripDeltaStats(stripPreviousFooter(ctx.reviewText!))))
       if (!cleaned.trim() || isNoChange(cleaned)) {
         console.log('  Review text empty or NO_CHANGE after cleanup — skipping post')
         ctx.action = 'NO_CHANGE'
@@ -378,7 +391,7 @@ export async function review(adapter: VCSAdapter, prId: string, dryRun = false, 
   const startTime = Date.now()
   const ctx: ReviewContext = {
     adapter, prId, dryRun, promptPath, force, logUsage, repoSlug,
-    usage: { input_tokens: 0, output_tokens: 0 },
+    usage: { input_tokens: 0, output_tokens: 0, cache_read: 0, cache_write: 0 },
     estimatedInputTokens: 0,
     action: 'ERROR',
     reviewNumber: 0,

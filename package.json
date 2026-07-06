@@ -8,7 +8,7 @@
   "scripts": {
     "dev": "tsx src/index.ts",
     "build": "tsc && npm run copy-assets",
-    "copy-assets": "node --input-type=module -e \"import{cpSync,mkdirSync}from'node:fs';mkdirSync('dist/prompt',{recursive:true});cpSync('src/prompt/base-prompt.txt','dist/prompt/base-prompt.txt');cpSync('src/prompt/reply-prompt.txt','dist/prompt/reply-prompt.txt');\"",
+    "copy-assets": "node --input-type=module -e \"import{cpSync,mkdirSync}from'node:fs';mkdirSync('dist/prompt',{recursive:true});cpSync('src/prompt/base-prompt.txt','dist/prompt/base-prompt.txt');cpSync('src/prompt/reply-prompt.txt','dist/prompt/reply-prompt.txt');cpSync('src/prompt/judge-prompt.txt','dist/prompt/judge-prompt.txt');\"",
     "bundle": "node scripts/bundle.mjs",
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit",
@@ -16,7 +16,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.36.3",
+    "@anthropic-ai/sdk": "^0.110.0",
     "axios": "^1.7.9",
     "commander": "^12.1.0",
     "dotenv": "^16.4.7"

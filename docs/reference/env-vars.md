@@ -18,7 +18,7 @@ credentials in source code or commit them to version control.**
 | Variable | Example | Description |
 |----------|---------|-------------|
 | `VCS_PROVIDER` | `bitbucket` | Which VCS adapter to use. Only `bitbucket` is implemented. |
-| `BITBUCKET_BASE_URL` | `https://api.bitbucket.org/2.0` | Bitbucket API base URL (use your self-hosted URL if applicable) |
+| `BITBUCKET_BASE_URL` | `https://api.bitbucket.org/2.0` | Bitbucket Cloud API base URL (Server/DC is not supported — different v1 API) |
 | `BITBUCKET_WORKSPACE` | `my-workspace` | Bitbucket workspace slug |
 | `BITBUCKET_USERNAME` | `you@company.com` | Your Atlassian account email (used for HTTP Basic Auth) |
 | `BITBUCKET_TOKEN` | `ATATT3x...` | Atlassian API token with Bitbucket scopes (replaces deprecated app passwords) |

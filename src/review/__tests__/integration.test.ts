@@ -342,6 +342,24 @@ describe('judge preamble leak → stripped before posting', () => {
     expect(body.startsWith('### Summary')).toBe(true)
     expect(body).not.toContain('I need to validate')
   })
+
+  it('strips JUDGE_NOTES from the posted comment (PR 8722 regression)', async () => {
+    const adapter = makeAdapter()
+    setupClaudeMocks('### Summary\nRisky.\n\n### Findings\n\n- **MEDIUM – Something** (a.ts:1)\n  Desc.')
+    cfg.judge.model = 'judge-model'
+    mockRunJudge.mockResolvedValue({
+      text: '### Summary\nLow-risk change.\n\n### Findings\n\n- **LOW – Fragile helper** (a.ts:1)\n  Desc.\n\n<!-- JUDGE_NOTES: Dropped MEDIUM — convention claim not verifiable from diff. -->',
+      usage: { input_tokens: 800, output_tokens: 300 },
+    })
+
+    const record = await review(adapter, '100', false)
+
+    expect(record!.action).toBe('REVIEW')
+    const body = vi.mocked(adapter.postComment).mock.calls[0][1] as string
+    expect(body).not.toContain('JUDGE_NOTES')
+    expect(body).not.toContain('Dropped MEDIUM')
+    expect(body).toContain('LOW – Fragile helper')
+  })
 })
 
 // ===========================================================================

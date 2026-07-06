@@ -28,6 +28,12 @@ export function stripDeltaStats(text: string): string {
   return text.replace(/\n*<!--\s*DELTA_STATS:.*?-->\s*/g, '').trimEnd()
 }
 
+/** Strip the judge's validation notes — its sanctioned outlet for drop rationale,
+ *  never meant to reach the PR. */
+export function stripJudgeNotes(text: string): string {
+  return text.replace(/\n*<!--\s*JUDGE_NOTES:[\s\S]*?-->\s*/g, '').trimEnd()
+}
+
 /** Check whether Claude returned the NO_CHANGE stop word — exact, or as a standalone
  *  line when the model prepends a summary despite the prompt instruction. */
 export function isNoChange(text: string): boolean {
@@ -46,4 +52,15 @@ export function stripPreamble(text: string): string {
 export function extractCommitHash(body: string): string | null {
   const match = body.match(/Commit: ([a-f0-9]+)/)
   return match ? match[1] : null
+}
+
+/** Detect the agent's exact review footer line — a casual "Reviewed by" mention
+ *  in a human comment must not match. */
+export function hasReviewFooter(body: string): boolean {
+  return /^\*Reviewed by .+ \(.+\) \| Prompt: .+ \| Review #\d+ \| Commit: [0-9a-f]+\*$/m.test(body)
+}
+
+/** Detect the agent's exact reply footer line. */
+export function hasReplyFooter(body: string): boolean {
+  return /^\*Reply by .+ \(.+\)\*$/m.test(body)
 }

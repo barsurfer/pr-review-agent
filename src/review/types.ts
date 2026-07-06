@@ -52,7 +52,7 @@ export interface ReviewContext {
   reviewText?: string
   reviewTextBeforeJudge?: string
   skipReason?: string
-  usage: { input_tokens: number; output_tokens: number }
+  usage: { input_tokens: number; output_tokens: number; cache_read: number; cache_write: number }
   judgeUsage?: { input_tokens: number; output_tokens: number }
   estimatedInputTokens: number
 

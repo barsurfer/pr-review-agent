@@ -1,4 +1,5 @@
 import axios, { AxiosInstance, AxiosRequestConfig } from 'axios'
+import { hasReviewFooter, hasReplyFooter } from '../review/formatter.js'
 import type { VCSAdapter, PRInfo, ChangedFile, ReviewComment, CommentReply, ReplyResult } from './adapter.js'
 
 export class BitbucketAdapter implements VCSAdapter {
@@ -124,8 +125,9 @@ export class BitbucketAdapter implements VCSAdapter {
       const { data }: { data: any } = await this.client.get(url)
       for (const c of data.values) {
         const body: string = c.content?.raw ?? ''
-        // Only include comments posted by this agent (footer always starts with "Reviewed by")
-        if (body.includes('Reviewed by ')) {
+        // Match the agent's exact footer line, not a substring — a human writing
+        // "Reviewed by me" must not be mistaken for an agent review
+        if (hasReviewFooter(body)) {
           comments.push({
             id: String(c.id),
             body,
@@ -153,7 +155,7 @@ export class BitbucketAdapter implements VCSAdapter {
         const parentId = c.parent?.id ? String(c.parent.id) : null
         if (!parentId || !parentIds.has(parentId)) continue
         const body: string = c.content?.raw ?? ''
-        if (body.includes('Reply by ')) {
+        if (hasReplyFooter(body)) {
           agentReplyCount++
           // Track agent reply IDs so we also find replies nested under them
           parentIds.add(String(c.id))
