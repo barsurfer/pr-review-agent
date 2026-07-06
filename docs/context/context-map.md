@@ -22,7 +22,7 @@ Rule: Each entry has a 1-sentence summary: key concepts, keywords, tech; ends wi
   - [review/replies.md](review/replies.md) — Reply detection algorithm, recursive parent tracking, PR 712 stale-reply fix, bundled response, reply footer, reply limit; read when working on comment threading.
 
 - [prompt/](prompt/)
-  - [prompt/composition.md](prompt/composition.md) — Prompt assembly: base template vs repo sections, resolution order, FORBIDDEN rules with rationale, delta review rules, developer trust rules, SCOPE LOCK, reply prompt; read when changing prompt logic or adding FORBIDDEN rules.
+  - [prompt/composition.md](prompt/composition.md) — Prompt assembly: base template vs repo sections, resolution order incl. monorepo module-dir fallback, FORBIDDEN rules with rationale, delta review rules, developer trust rules, SCOPE LOCK, reply prompt; read when changing prompt logic or adding FORBIDDEN rules.
   - [prompt/judge.md](prompt/judge.md) — Judge model: when it runs, what it validates, calibration rules, Merge Confidence score vs computed_score, judge prompt; read when configuring or modifying the generator-verifier pass.
 
 - [vcs/](vcs/)

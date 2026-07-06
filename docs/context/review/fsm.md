@@ -57,7 +57,7 @@ FETCH_PR_INFO
 | `CHECK_THRESHOLDS` | Compares reviewable (post-filter) line/file counts against `MIN/MAX_CHANGED_*` env vars |
 | `CHECK_BRANCHES` | Compares source/target branch names against `SKIP_SOURCE_BRANCHES` / `SKIP_TARGET_BRANCHES` glob patterns |
 | `CHECK_PREVIOUS_REVIEWS` | Parses commit hash from last review footer; triggers delta diff pre-check if different commit |
-| `LOAD_PROMPT` | Fetches `.agent-review-instructions.md` from target repo (source branch → target branch → CLI flag → defaults) |
+| `LOAD_PROMPT` | Fetches `.agent-review-instructions.md` from the target repo (CLI `--prompt` → source commit → target branch; each ref probes root → `docs/` → single-module-dir fallback; defaults last) |
 | `FETCH_CONTEXT` | Fetches full file content for changed files (see [fetching/strategy.md](../fetching/strategy.md)) |
 | `CALL_CLAUDE` | Assembles payload (PR info, prior review, developer discussion, diff, file context); calls reviewer model |
 | `CHECK_NO_CHANGE` | Inspects raw response for the `NO_CHANGE` stop word (exact, or as a standalone line when the model prepends a summary) before any further processing |

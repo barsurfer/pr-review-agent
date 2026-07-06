@@ -26,9 +26,16 @@ sections fall back to the defaults in `src/prompt/defaults.ts`.
 ## Resolution Order
 
 1. `--prompt <path>` CLI flag (local file)
-2. `.agent-review-instructions.md` from the PR's **source commit** — root, then `docs/`
-3. `.agent-review-instructions.md` from the PR's **target branch** — root, then `docs/`
+2. `.agent-review-instructions.md` from the PR's **source commit** — root, then `docs/`,
+   then the module fallback (below)
+3. `.agent-review-instructions.md` from the PR's **target branch** — same path list
 4. If not found, all four sections use defaults
+
+**Module fallback (monorepos):** when every changed file in the PR lives under a single
+top-level directory (e.g. `alice-web/`), the agent also probes
+`<dir>/.agent-review-instructions.md` and `<dir>/docs/.agent-review-instructions.md`.
+Root-level changed files don't disqualify the detection; a second top-level directory
+does — the agent never guesses on ambiguous PRs. Repo-root locations always win.
 
 ---
 
