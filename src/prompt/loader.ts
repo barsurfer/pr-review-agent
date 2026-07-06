@@ -1,7 +1,7 @@
 import { readFileSync } from 'fs'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
-import type { VCSAdapter, PRInfo } from '../vcs/adapter.js'
+import type { VCSAdapter, PRInfo, ChangedFile } from '../vcs/adapter.js'
 import { DEFAULT_ROLE, DEFAULT_REVIEW_PRIORITIES, DEFAULT_MENTAL_MODEL, DEFAULT_EXCEPTIONS } from './defaults.js'
 
 const REPO_PROMPT_FILE = '.agent-review-instructions.md'
@@ -117,6 +117,18 @@ function resolveSymlink(symlinkDir: string, target: string): string {
   return resolved.join('/')
 }
 
+/** When every changed file lives under one top-level directory (monorepo module,
+ *  e.g. alice-web/), that directory acts as the effective repo root for prompt lookup.
+ *  Root-level files don't disqualify the detection — only a second directory does. */
+function detectModuleDir(changedFiles: ChangedFile[]): string | null {
+  const dirs = new Set<string>()
+  for (const f of changedFiles) {
+    const slash = f.path.indexOf('/')
+    if (slash > 0) dirs.add(f.path.slice(0, slash))
+  }
+  return dirs.size === 1 ? [...dirs][0] : null
+}
+
 export type PromptSource = 'repo' | 'default' | string
 
 export interface LoadedPrompt {
@@ -124,7 +136,7 @@ export interface LoadedPrompt {
   source: PromptSource
 }
 
-export async function loadPrompt(adapter: VCSAdapter, prInfo: PRInfo, localPromptPath?: string): Promise<LoadedPrompt> {
+export async function loadPrompt(adapter: VCSAdapter, prInfo: PRInfo, localPromptPath?: string, changedFiles?: ChangedFile[]): Promise<LoadedPrompt> {
   const template = getBaseTemplate()
 
   // 1. If a local prompt file was provided via --prompt, use it
@@ -141,6 +153,13 @@ export async function loadPrompt(adapter: VCSAdapter, prInfo: PRInfo, localPromp
   //    Use sourceCommit (hash) instead of sourceBranch because branch names
   //    with slashes (e.g. feature/foo) break Bitbucket's src API URL routing.
   const paths = [REPO_PROMPT_FILE, `docs/${REPO_PROMPT_FILE}`]
+
+  // Fallback: PRs confined to one top-level module dir also check inside it
+  const moduleDir = changedFiles?.length ? detectModuleDir(changedFiles) : null
+  if (moduleDir) {
+    console.log(`  PR changes are confined to "${moduleDir}/" — will also check it for instructions`)
+    paths.push(`${moduleDir}/${REPO_PROMPT_FILE}`, `${moduleDir}/docs/${REPO_PROMPT_FILE}`)
+  }
   for (const ref of [prInfo.sourceCommit, prInfo.targetBranch]) {
     for (const path of paths) {
       let repoPrompt = await adapter.getRepoFileContent(path, ref)

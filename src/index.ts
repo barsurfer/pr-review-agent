@@ -107,7 +107,8 @@ async function main(): Promise<void> {
   // Remote prompt validation — adapter is set up, fetch PR info and load prompt
   if (opts.validatePrompt) {
     const prInfo = await adapter.getPullRequestInfo(opts.prId!)
-    const result = await loadPrompt(adapter, prInfo)
+    const changedFiles = await adapter.getChangedFiles(opts.prId!)
+    const result = await loadPrompt(adapter, prInfo, undefined, changedFiles)
     console.log(`\nFilled prompt length: ${result.content.length} chars (~${Math.ceil(result.content.length / 4).toLocaleString()} tokens)`)
     return
   }

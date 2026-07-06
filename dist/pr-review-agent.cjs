@@ -30293,7 +30293,15 @@ function resolveSymlink(symlinkDir, target) {
   }
   return resolved.join("/");
 }
-async function loadPrompt(adapter2, prInfo, localPromptPath) {
+function detectModuleDir(changedFiles) {
+  const dirs = /* @__PURE__ */ new Set();
+  for (const f of changedFiles) {
+    const slash = f.path.indexOf("/");
+    if (slash > 0) dirs.add(f.path.slice(0, slash));
+  }
+  return dirs.size === 1 ? [...dirs][0] : null;
+}
+async function loadPrompt(adapter2, prInfo, localPromptPath, changedFiles) {
   const template = getBaseTemplate();
   if (localPromptPath) {
     const content = (0, import_fs.readFileSync)(localPromptPath, "utf-8");
@@ -30304,6 +30312,11 @@ async function loadPrompt(adapter2, prInfo, localPromptPath) {
     return { content: filled2, source: localPromptPath };
   }
   const paths = [REPO_PROMPT_FILE, `docs/${REPO_PROMPT_FILE}`];
+  const moduleDir = changedFiles?.length ? detectModuleDir(changedFiles) : null;
+  if (moduleDir) {
+    console.log(`  PR changes are confined to "${moduleDir}/" \u2014 will also check it for instructions`);
+    paths.push(`${moduleDir}/${REPO_PROMPT_FILE}`, `${moduleDir}/docs/${REPO_PROMPT_FILE}`);
+  }
   for (const ref of [prInfo.sourceCommit, prInfo.targetBranch]) {
     for (const path5 of paths) {
       let repoPrompt = await adapter2.getRepoFileContent(path5, ref);
@@ -30657,7 +30670,7 @@ function getBuildCommit() {
     const dirty = (0, import_child_process.execSync)("git status --porcelain", opts2).toString().trim() ? "-dirty" : "";
     return hash + dirty;
   } catch {
-    if (true) return "919a10b";
+    if (true) return "57a4ca9";
     return "unknown";
   }
 }
@@ -30911,7 +30924,7 @@ async function transition(state, ctx) {
     }
     case 7 /* LOAD_PROMPT */: {
       console.log("Loading prompt...");
-      ctx.prompt = await loadPrompt(ctx.adapter, ctx.prInfo, ctx.promptPath);
+      ctx.prompt = await loadPrompt(ctx.adapter, ctx.prInfo, ctx.promptPath, ctx.changedFiles);
       console.log(`  Prompt source: ${ctx.prompt.source}`);
       return 8 /* FETCH_CONTEXT */;
     }
@@ -31143,7 +31156,8 @@ async function main() {
   }
   if (opts.validatePrompt) {
     const prInfo = await adapter2.getPullRequestInfo(opts.prId);
-    const result = await loadPrompt(adapter2, prInfo);
+    const changedFiles = await adapter2.getChangedFiles(opts.prId);
+    const result = await loadPrompt(adapter2, prInfo, void 0, changedFiles);
     console.log(`
 Filled prompt length: ${result.content.length} chars (~${Math.ceil(result.content.length / 4).toLocaleString()} tokens)`);
     return;

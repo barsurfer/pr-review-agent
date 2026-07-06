@@ -368,6 +368,10 @@ The agent uses a **base template** with shared rules (scope, mandatory rules, fo
 output format) and fills in four customisable sections per repo. To customise, add a file
 called `.agent-review-instructions.md` to the **root or `docs/` directory** of the target repo (not this repo). The agent checks the PR's source branch first, then the target branch.
 
+**Monorepo fallback:** if every changed file in the PR lives under a single top-level
+directory (e.g. `alice-web/`), the agent also checks `<dir>/.agent-review-instructions.md`
+and `<dir>/docs/.agent-review-instructions.md` after the repo-root locations.
+
 The file can include any combination of these sections:
 
 | Section | Purpose | Default if missing |

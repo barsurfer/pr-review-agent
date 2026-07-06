@@ -39,9 +39,15 @@ Final system prompt = base-prompt.txt + repo prompt sections
 ## Repo Prompt Resolution Order
 
 1. `--prompt <path>` CLI flag (local file)
-2. `.agent-review-instructions.md` from PR's **source commit** root → `docs/`
-3. `.agent-review-instructions.md` from PR's **target branch** root → `docs/`
+2. `.agent-review-instructions.md` from PR's **source commit**: root → `docs/` → module fallback
+3. `.agent-review-instructions.md` from PR's **target branch**: same path list
 4. All four sections default if file not found
+
+**Module fallback:** when every changed file in the PR lives under a single top-level
+directory (monorepo module, e.g. `alice-web/`), that directory is treated as an effective
+root and `<dir>/.agent-review-instructions.md` → `<dir>/docs/...` are probed after the
+repo-root paths. Root-level changed files don't disqualify detection; a second top-level
+directory does (no guessing on ambiguous PRs).
 
 YAML frontmatter in the file is stripped before parsing. Only the four `## SECTION` headers are extracted — all other content is ignored.
 
