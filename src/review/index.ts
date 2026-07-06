@@ -8,7 +8,7 @@ import { fetchContext } from '../context/fetcher.js'
 import { runReview, runCommentResponse, runJudge } from '../claude/client.js'
 import { filterDiff, countChangedLines, parseFindings, isPathExcluded } from './parsers.js'
 import { buildReviewFooter, buildReplyFooter, stripPreviousFooter, stripDeltaStats, stripJudgeNotes, stripPreamble, isNoChange, extractCommitHash } from './formatter.js'
-import { buildUsageRecord, logUsageRecord } from './usage.js'
+import { buildUsageRecord, logUsageRecord, getBuildCommit } from './usage.js'
 import { State } from './types.js'
 import type { ReviewContext } from './types.js'
 import type { VCSAdapter } from '../vcs/adapter.js'
@@ -344,7 +344,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         return State.SKIP
       }
       const commitShort = ctx.prInfo!.sourceCommit.slice(0, 12)
-      const footer = buildReviewFooter(config.agentIdentity, config.anthropic.model, ctx.prompt!.source, ctx.reviewNumber, commitShort)
+      const footer = buildReviewFooter(config.agentIdentity, config.anthropic.model, ctx.prompt!.source, ctx.reviewNumber, commitShort, getBuildCommit())
       const comment = cleaned + footer
 
       if (ctx.dryRun) {

@@ -8,9 +8,10 @@ export function buildReviewFooter(
   model: string,
   promptSource: string,
   reviewNumber: number,
-  commitShort: string
+  commitShort: string,
+  buildCommit: string
 ): string {
-  return `\n\n---\n*Reviewed by ${identity} (${model}) | Prompt: ${promptSource} | Review #${reviewNumber} | Commit: ${commitShort}*`
+  return `\n\n---\n*Reviewed by ${identity} (${model}) | Prompt: ${promptSource} | Review #${reviewNumber} | Commit: ${commitShort} | Build: ${buildCommit}*`
 }
 
 /** Build the footer appended to reply comments. */
@@ -55,9 +56,10 @@ export function extractCommitHash(body: string): string | null {
 }
 
 /** Detect the agent's exact review footer line — a casual "Reviewed by" mention
- *  in a human comment must not match. */
+ *  in a human comment must not match. The Build segment is optional so footers
+ *  posted before it existed keep matching (dedup must survive the format change). */
 export function hasReviewFooter(body: string): boolean {
-  return /^\*Reviewed by .+ \(.+\) \| Prompt: .+ \| Review #\d+ \| Commit: [0-9a-f]+\*$/m.test(body)
+  return /^\*Reviewed by .+ \(.+\) \| Prompt: .+ \| Review #\d+ \| Commit: [0-9a-f]+( \| Build: [\w.-]+)?\*$/m.test(body)
 }
 
 /** Detect the agent's exact reply footer line. */

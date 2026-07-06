@@ -32,7 +32,7 @@ function comment(id: number, body: string, createdOn: string, author = 'Dev One'
   }
 }
 
-const REVIEW_BODY = '### Summary\nAll good.' + buildReviewFooter('bot@co.com', 'claude-haiku-4-5-20251001', 'repo', 1, 'aabbcc112233')
+const REVIEW_BODY = '### Summary\nAll good.' + buildReviewFooter('bot@co.com', 'claude-haiku-4-5-20251001', 'repo', 1, 'aabbcc112233', '919a10b')
 const AGENT_REPLY_BODY = 'Because the null path is unguarded.' + buildReplyFooter('bot@co.com', 'claude-haiku-4-5-20251001')
 
 function makeAdapter(): BitbucketAdapter {

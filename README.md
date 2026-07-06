@@ -200,8 +200,12 @@ new or resolved findings, Claude returns a `NO_CHANGE` stop word and no comment 
 Every review comment includes a footer with the source commit hash:
 
 ```
-*Reviewed by Claude (claude-sonnet-4-6) | Prompt: .agent-review-instructions.md | Review #2 | Commit: a1b2c3d4e5f6*
+*Reviewed by Claude (claude-sonnet-4-6) | Prompt: .agent-review-instructions.md | Review #2 | Commit: a1b2c3d4e5f6 | Build: 919a10b*
 ```
+
+`Commit:` is the PR source commit used for dedup; `Build:` is the commit of the agent
+itself that posted the comment (resolved via `git rev-parse` in the agent's checkout at
+run time, with a `-dirty` suffix for uncommitted local builds).
 
 On re-trigger, the agent compares this hash against the current PR source commit. If
 they match (no new code pushed), it **skips the review API call entirely** — saving

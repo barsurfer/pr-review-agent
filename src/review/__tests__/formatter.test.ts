@@ -7,10 +7,11 @@ import { buildReviewFooter, buildReplyFooter, stripPreviousFooter, stripDeltaSta
 
 describe('buildReviewFooter', () => {
   it('includes all fields', () => {
-    const footer = buildReviewFooter('alice@co.com', 'claude-sonnet-4-6', 'repo', 2, 'a1b2c3d4e5f6')
+    const footer = buildReviewFooter('alice@co.com', 'claude-sonnet-4-6', 'repo', 2, 'a1b2c3d4e5f6', '919a10b')
     expect(footer).toContain('alice@co.com')
     expect(footer).toContain('claude-sonnet-4-6')
     expect(footer).toContain('Prompt: repo')
+    expect(footer).toContain('Build: 919a10b')
     expect(footer).toContain('Review #2')
     expect(footer).toContain('Commit: a1b2c3d4e5f6')
   })
@@ -135,7 +136,7 @@ describe('hasReplyFooter', () => {
 // ---------------------------------------------------------------------------
 
 describe('footer round-trip (builder ↔ detector)', () => {
-  const reviewBody = '### Summary\nAll good.' + buildReviewFooter('bot@co.com', 'claude-haiku-4-5-20251001', 'repo', 3, 'a1b2c3d4e5f6')
+  const reviewBody = '### Summary\nAll good.' + buildReviewFooter('bot@co.com', 'claude-haiku-4-5-20251001', 'repo', 3, 'a1b2c3d4e5f6', '919a10b-dirty')
   const replyBody = 'Because the null path is unguarded.' + buildReplyFooter('bot@co.com', 'claude-sonnet-4-6')
 
   it('hasReviewFooter matches buildReviewFooter output', () => {
@@ -153,6 +154,16 @@ describe('footer round-trip (builder ↔ detector)', () => {
 
   it('extractCommitHash round-trips buildReviewFooter output', () => {
     expect(extractCommitHash(reviewBody)).toBe('a1b2c3d4e5f6')
+  })
+
+  it('extractCommitHash returns the PR commit, never the build hash', () => {
+    // 'Build:' label must not shadow 'Commit:' — dedup anchors on the PR commit
+    expect(extractCommitHash(reviewBody)).not.toContain('919a10b')
+  })
+
+  it('hasReviewFooter still matches pre-Build footers already posted on PRs', () => {
+    const legacy = '### Summary\nOld.\n\n---\n*Reviewed by bot@co.com (claude-haiku-4-5-20251001) | Prompt: default | Review #1 | Commit: f65151592964*'
+    expect(hasReviewFooter(legacy)).toBe(true)
   })
 })
 

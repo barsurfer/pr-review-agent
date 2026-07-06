@@ -19579,10 +19579,10 @@ async function setupSkills(ctx) {
     try {
       const versionId = await resolveSkillVersion(client, skill.skill_id, skill.version);
       const version = await client.beta.skills.versions.retrieve(versionId, { skill_id: skill.skill_id });
-      let dirname6 = path3.basename(version.name.trim());
-      if (dirname6 === "" || dirname6 === "." || dirname6 === "..")
-        dirname6 = skill.skill_id;
-      const dest = path3.resolve(skillsRoot, dirname6);
+      let dirname7 = path3.basename(version.name.trim());
+      if (dirname7 === "" || dirname7 === "." || dirname7 === "..")
+        dirname7 = skill.skill_id;
+      const dest = path3.resolve(skillsRoot, dirname7);
       if (dest !== skillsRoot && !dest.startsWith(skillsRoot + path3.sep)) {
         log.warn("skill name escapes the skills dir; skipping", {
           component: "agent-tool-context",
@@ -29854,11 +29854,11 @@ var {
 } = axios_default;
 
 // src/review/formatter.ts
-function buildReviewFooter(identity, model, promptSource, reviewNumber, commitShort) {
+function buildReviewFooter(identity, model, promptSource, reviewNumber, commitShort, buildCommit) {
   return `
 
 ---
-*Reviewed by ${identity} (${model}) | Prompt: ${promptSource} | Review #${reviewNumber} | Commit: ${commitShort}*`;
+*Reviewed by ${identity} (${model}) | Prompt: ${promptSource} | Review #${reviewNumber} | Commit: ${commitShort} | Build: ${buildCommit}*`;
 }
 function buildReplyFooter(identity, model) {
   return `
@@ -29888,7 +29888,7 @@ function extractCommitHash(body) {
   return match ? match[1] : null;
 }
 function hasReviewFooter(body) {
-  return /^\*Reviewed by .+ \(.+\) \| Prompt: .+ \| Review #\d+ \| Commit: [0-9a-f]+\*$/m.test(body);
+  return /^\*Reviewed by .+ \(.+\) \| Prompt: .+ \| Review #\d+ \| Commit: [0-9a-f]+( \| Build: [\w.-]+)?\*$/m.test(body);
 }
 function hasReplyFooter(body) {
   return /^\*Reply by .+ \(.+\)\*$/m.test(body);
@@ -30618,6 +30618,8 @@ function parseDeltaStats(text) {
 
 // src/review/usage.ts
 var import_fs3 = require("fs");
+var import_child_process = require("child_process");
+var import_path27 = require("path");
 var import_url4 = require("url");
 var import_meta3 = {};
 var MODEL_PRICING = {
@@ -30644,6 +30646,18 @@ function getAgentVersion() {
     return pkg.version;
   } catch {
     if (true) return "1.0.0";
+    return "unknown";
+  }
+}
+function getBuildCommit() {
+  try {
+    const cwd = (0, import_path27.dirname)(process.argv[1] ?? ".");
+    const opts2 = { cwd, stdio: ["ignore", "pipe", "ignore"] };
+    const hash = (0, import_child_process.execSync)("git rev-parse --short HEAD", opts2).toString().trim();
+    const dirty = (0, import_child_process.execSync)("git status --porcelain", opts2).toString().trim() ? "-dirty" : "";
+    return hash + dirty;
+  } catch {
+    if (true) return "919a10b";
     return "unknown";
   }
 }
@@ -31002,7 +31016,7 @@ async function transition(state, ctx) {
         return 14 /* SKIP */;
       }
       const commitShort = ctx.prInfo.sourceCommit.slice(0, 12);
-      const footer = buildReviewFooter(config.agentIdentity, config.anthropic.model, ctx.prompt.source, ctx.reviewNumber, commitShort);
+      const footer = buildReviewFooter(config.agentIdentity, config.anthropic.model, ctx.prompt.source, ctx.reviewNumber, commitShort, getBuildCommit());
       const comment = cleaned + footer;
       if (ctx.dryRun) {
         console.log("\n=== DRY RUN \u2014 Review output (not posted) ===\n");

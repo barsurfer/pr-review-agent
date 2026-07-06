@@ -3,6 +3,8 @@
 // ---------------------------------------------------------------------------
 
 import { appendFileSync, readFileSync } from 'fs'
+import { execSync, type ExecSyncOptions } from 'child_process'
+import { dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { config } from '../config.js'
 import { parseVerdictScore, parseFindings, parseDeltaStats } from './parsers.js'
@@ -81,6 +83,24 @@ export function getAgentVersion(): string {
   } catch {
     // @ts-ignore — injected at bundle time by esbuild
     if (typeof __AGENT_VERSION__ !== 'undefined') return __AGENT_VERSION__ as string
+    return 'unknown'
+  }
+}
+
+/** Commit hash of the agent deployment, for the review footer.
+ *  Runtime git wins — Jenkins runs the bundle from a clean checkout, so this is the
+ *  exact deployed commit. The bundle-time fallback is one commit behind by nature
+ *  (the bundle is committed together with the source that produced it). */
+export function getBuildCommit(): string {
+  try {
+    const cwd = dirname(process.argv[1] ?? '.')
+    const opts: ExecSyncOptions = { cwd, stdio: ['ignore', 'pipe', 'ignore'] }
+    const hash = execSync('git rev-parse --short HEAD', opts).toString().trim()
+    const dirty = execSync('git status --porcelain', opts).toString().trim() ? '-dirty' : ''
+    return hash + dirty
+  } catch {
+    // @ts-ignore — injected at bundle time by esbuild
+    if (typeof __BUILD_COMMIT__ !== 'undefined') return __BUILD_COMMIT__ as string
     return 'unknown'
   }
 }
