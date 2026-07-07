@@ -8,14 +8,11 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        node: [20, 22]   # 20 = engines floor, 22 = Jenkins deploy target
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
         with:
-          node-version: ${{ matrix.node }}
+          node-version-file: .nvmrc   # 22 — matches the Jenkins deploy target
           cache: npm
       - run: npm ci
       - run: npm run typecheck

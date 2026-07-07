@@ -56,7 +56,7 @@ See [prompt/composition.md](prompt/composition.md).
 
 ## Build & Deploy
 
-The agent ships as a single-file CJS bundle (`dist/pr-review-agent.cjs`) built with esbuild. All dependencies are baked in; only Node.js 20+ is required on the host. Rebuild with `npm run bundle` after source changes. The bundle is committed to the repo so Jenkins requires no `npm install`.
+The agent ships as a single-file CJS bundle (`dist/pr-review-agent.cjs`) built with esbuild. All dependencies are baked in; only Node.js 22+ is required on the host. Rebuild with `npm run bundle` after source changes. The bundle is committed to the repo so Jenkins requires no `npm install`.
 
 ## Versioning & Releases
 

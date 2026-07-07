@@ -16,7 +16,7 @@ await build({
   entryPoints: ['src/index.ts'],
   bundle: true,
   platform: 'node',
-  target: 'node20',
+  target: 'node22',
   format: 'cjs',
   outfile: 'dist/pr-review-agent.cjs',
   minify: false,          // keep readable for debugging

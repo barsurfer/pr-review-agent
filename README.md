@@ -27,7 +27,7 @@ and posts a structured review comment directly on the PR.
 
 Install these before anything else:
 
-### 1. Node.js (v20) via NVM (recommended)
+### 1. Node.js (v22) via NVM (recommended)
 
 Using NVM lets you match the exact Node version this project requires.
 
@@ -35,18 +35,18 @@ Using NVM lets you match the exact Node version this project requires.
 (download `nvm-setup.exe`), then in a new terminal:
 
 ```bash
-nvm install 20
-nvm use 20
+nvm install 22
+nvm use 22
 ```
 
 **macOS/Linux** — install [nvm](https://github.com/nvm-sh/nvm), then:
 
 ```bash
-nvm install 20
-nvm use 20
+nvm install 22
+nvm use 22
 ```
 
-The repo includes a `.nvmrc` file pinned to Node 20, so you can also just run:
+The repo includes a `.nvmrc` file pinned to Node 22, so you can also just run:
 
 ```bash
 nvm use       # reads .nvmrc automatically
@@ -54,7 +54,7 @@ nvm use       # reads .nvmrc automatically
 
 Verify:
 ```bash
-node --version   # should print v20.x.x
+node --version   # should print v22.x.x
 npm --version    # should print 10.x or higher
 ```
 
@@ -240,7 +240,7 @@ npm run dev -- \
 ### From the bundle (production — no npm install needed)
 
 The repo includes a pre-built single-file bundle at `dist/pr-review-agent.cjs`.
-It has all dependencies baked in — only Node.js 20+ is required.
+It has all dependencies baked in — only Node.js 22+ is required.
 
 ```bash
 node dist/pr-review-agent.cjs \

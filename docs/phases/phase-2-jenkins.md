@@ -49,7 +49,7 @@ target repos required — everything is configured in the Jenkins UI.
 ### Prerequisites
 
 - **Generic Webhook Trigger** plugin installed in Jenkins
-- **NodeJS** plugin installed (or Node 20+ available on the agent)
+- **NodeJS** plugin installed (or Node 22+ available on the agent)
 - Jenkins endpoint accessible from Bitbucket Cloud (see [Network Requirements](#network-requirements))
 
 ### Step-by-Step Setup
@@ -289,7 +289,7 @@ when re-reviews happen, so it will be sparser than the other 3 charts.
 ## Key Design Decisions
 
 - **`catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE')`** — agent failure never breaks the build
-- **`nodejs()` wrapper** — uses the Jenkins NodeJS plugin to ensure Node 20+
+- **`nodejs()` wrapper** — uses the Jenkins NodeJS plugin to ensure Node 22+
 - **Model IDs as CLI flags, not credentials** — Jenkins masks credential values everywhere (including API calls), corrupting model IDs
 - **Single entry point** — the agent's state machine handles all event types (create, update, comment) with the same CLI invocation
 - **Optional filter at trigger level** — non-matching repos don't even queue a build

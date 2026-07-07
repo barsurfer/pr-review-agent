@@ -30673,7 +30673,7 @@ function getBuildCommit() {
     const dirty = (0, import_child_process.execSync)("git status --porcelain", opts2).toString().trim() ? "-dirty" : "";
     return hash + dirty;
   } catch {
-    if (true) return "20fb89d";
+    if (true) return "600d422";
     return "unknown";
   }
 }
@@ -31131,8 +31131,8 @@ ${JSON.stringify(record, null, 2)}`);
 
 // src/index.ts
 var [major] = process.versions.node.split(".").map(Number);
-if (major < 20) {
-  console.error(`Node.js 20+ required. Current: ${process.version}`);
+if (major < 22) {
+  console.error(`Node.js 22+ required. Current: ${process.version}`);
   process.exit(1);
 }
 var program2 = new Command();
