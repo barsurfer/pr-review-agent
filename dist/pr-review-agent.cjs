@@ -29910,28 +29910,48 @@ function hasReplyFooter(body) {
 }
 
 // src/vcs/bitbucket.ts
+var REQUEST_TIMEOUT_MS = 3e4;
 var BitbucketAdapter = class {
   client;
   workspace;
   authHeader;
+  baseHost;
   constructor(baseUrl, workspace, username, token) {
     this.workspace = workspace;
     this.authHeader = "Basic " + Buffer.from(`${username}:${token}`).toString("base64");
+    try {
+      this.baseHost = new URL(baseUrl).host;
+    } catch {
+      this.baseHost = "";
+    }
     this.client = axios_default.create({
       baseURL: baseUrl,
+      timeout: REQUEST_TIMEOUT_MS,
       headers: {
         Authorization: this.authHeader,
         "Content-Type": "application/json"
       }
     });
   }
-  /** Follow 302 redirects while preserving auth (axios strips auth on redirect). */
+  /** Follow 302 redirects while preserving auth (axios strips auth on redirect).
+   *  Only re-attach auth on same-host redirects — never leak the token to another host. */
   async getFollowingRedirects(url2, config2 = {}) {
-    const res = await this.client.get(url2, { ...config2, maxRedirects: 0, validateStatus: (s) => s < 400 || s === 302 });
+    const res = await this.client.get(url2, { ...config2, maxRedirects: 0, timeout: REQUEST_TIMEOUT_MS, validateStatus: (s) => s < 400 || s === 302 });
     if (res.status === 302 && res.headers.location) {
-      return axios_default.get(res.headers.location, {
+      const location = res.headers.location;
+      let sameHost = false;
+      try {
+        sameHost = new URL(location).host === this.baseHost;
+      } catch {
+        sameHost = false;
+      }
+      if (!sameHost) {
+        console.warn(`  Redirect to a different host \u2014 not forwarding auth`);
+      }
+      return axios_default.get(location, {
         ...config2,
-        headers: { ...config2.headers, Authorization: this.authHeader }
+        timeout: REQUEST_TIMEOUT_MS,
+        headers: sameHost ? { ...config2.headers, Authorization: this.authHeader } : { ...config2.headers }
       });
     }
     return res;
@@ -30719,7 +30739,7 @@ function getBuildCommit() {
     const dirty = (0, import_child_process.execSync)("git status --porcelain", opts2).toString().trim() ? "-dirty" : "";
     return hash + dirty;
   } catch {
-    if (true) return "8ce4a55";
+    if (true) return "ee697ef";
     return "unknown";
   }
 }

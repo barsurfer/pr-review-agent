@@ -2,16 +2,22 @@ import axios, { AxiosInstance, AxiosRequestConfig } from 'axios'
 import { hasReviewFooter, hasReplyFooter } from '../review/formatter.js'
 import type { VCSAdapter, PRInfo, ChangedFile, ReviewComment, CommentReply, ReplyResult } from './adapter.js'
 
+// Bound every Bitbucket call so a hung request fails fast instead of stalling the whole run
+const REQUEST_TIMEOUT_MS = 30_000
+
 export class BitbucketAdapter implements VCSAdapter {
   private readonly client: AxiosInstance
   private readonly workspace: string
   private readonly authHeader: string
+  private readonly baseHost: string
 
   constructor(baseUrl: string, workspace: string, username: string, token: string) {
     this.workspace = workspace
     this.authHeader = 'Basic ' + Buffer.from(`${username}:${token}`).toString('base64')
+    try { this.baseHost = new URL(baseUrl).host } catch { this.baseHost = '' }
     this.client = axios.create({
       baseURL: baseUrl,
+      timeout: REQUEST_TIMEOUT_MS,
       headers: {
         Authorization: this.authHeader,
         'Content-Type': 'application/json',
@@ -19,13 +25,21 @@ export class BitbucketAdapter implements VCSAdapter {
     })
   }
 
-  /** Follow 302 redirects while preserving auth (axios strips auth on redirect). */
+  /** Follow 302 redirects while preserving auth (axios strips auth on redirect).
+   *  Only re-attach auth on same-host redirects — never leak the token to another host. */
   private async getFollowingRedirects(url: string, config: AxiosRequestConfig = {}): Promise<any> {
-    const res = await this.client.get(url, { ...config, maxRedirects: 0, validateStatus: s => s < 400 || s === 302 })
+    const res = await this.client.get(url, { ...config, maxRedirects: 0, timeout: REQUEST_TIMEOUT_MS, validateStatus: s => s < 400 || s === 302 })
     if (res.status === 302 && res.headers.location) {
-      return axios.get(res.headers.location, {
+      const location = res.headers.location as string
+      let sameHost = false
+      try { sameHost = new URL(location).host === this.baseHost } catch { sameHost = false }
+      if (!sameHost) {
+        console.warn(`  Redirect to a different host — not forwarding auth`)
+      }
+      return axios.get(location, {
         ...config,
-        headers: { ...config.headers, Authorization: this.authHeader },
+        timeout: REQUEST_TIMEOUT_MS,
+        headers: sameHost ? { ...config.headers, Authorization: this.authHeader } : { ...config.headers },
       })
     }
     return res
