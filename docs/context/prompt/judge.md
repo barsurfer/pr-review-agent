@@ -46,9 +46,12 @@ Implements the **generator-verifier** pattern: the reviewer model generates cand
 |------|--------|
 | Style/formatting findings | Dropped |
 | LOW findings with no runtime impact (style preference, configurability opinion) | Dropped |
+| Already-handled concern (guard/annotation/test/framework guarantee covers it; "for awareness") | Dropped |
+| Low-value anti-patterns (docstring/type-hint/comment adds, unused-import removal, missing-import, "use a more specific exception", "verify/ensure X") | Dropped |
 | HIGH without confirmed runtime failure in diff | Downgraded to MEDIUM |
 | Findings requiring 3+ chained hypotheticals | Downgraded to LOW |
 | Framework/library uncertainty | Moved to Unresolved Questions |
+| Verbose / multi-paragraph finding | Trimmed to a terse flag (problem, why, fix) |
 
 These rules are cherry-picked from the reviewer's FORBIDDEN section to ensure the judge applies the same calibration. If a finding survives after calibration, it's included in the output.
 

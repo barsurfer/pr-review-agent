@@ -16,8 +16,9 @@ Final system prompt = base-prompt.txt + repo prompt sections
 ```
 
 **Base template** (`src/prompt/base-prompt.txt`): shared rules that apply to all reviews and cannot be overridden:
-- SCOPE — "review only added or modified code in the diff"
+- SCOPE — "review only added or modified code in the diff"; hunk boundaries (a shown segment ending at a scope-opening `{`/`if`/`for`/`try`) are NOT truncation — never flag them as incomplete
 - MANDATORY RULES — concise bullets, no assumptions, developer trust
+- DETERMINING WHAT TO FLAG — confidence calibration (thorough on bugs/security even with a narrow trigger; certain before flagging low-severity; high-impact + low-confidence reported WITH a caveat, not silently dropped) + the **reviewability finding** (when correctness can't be judged from the diff + changed files as a human reviewer would, raise that as a finding — missing tests / scope too large / undocumented intent / unshown runtime state — instead of speculating or wishing for the whole codebase)
 - FORBIDDEN — hardened rules from production incidents
 - OUTPUT FORMAT — bullets on new lines, markdown structure
 - SCOPE LOCK — prompt injection defense
@@ -66,6 +67,9 @@ Each rule has a documented reason:
 | Never contradict yourself across sections | Opus was observed marking an item resolved in Findings but questioning it in Unresolved Questions |
 | Do not recommend fixes for non-existent features | Model was suggesting "track open conversation ID" when devs said conversation view doesn't exist yet |
 | Do not re-raise findings after developer addressed them | If developer acknowledges a limitation as a known trade-off, that is not an open question |
+| Do not raise a finding the code already handles | A guard/annotation/test/framework guarantee already covers it — "for awareness / already mitigated" is noise, not a finding (observed on alice-platform PR 8722) |
+| Keep findings terse; no essays | Reviewer/judge were writing multi-paragraph descriptions restating what the code does — a finding is a flag, not a report |
+| No praise, filler, or nitpicks | "Great job" / style-naming preferences are not review value (from PR-Agent + OpenReview prompt conventions) |
 
 The orchestrator also strips any hallucinated footer via regex before appending the real one.
 
