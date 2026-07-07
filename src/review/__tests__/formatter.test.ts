@@ -156,6 +156,22 @@ describe('footer round-trip (builder ↔ detector)', () => {
     expect(extractCommitHash(reviewBody)).toBe('a1b2c3d4e5f6')
   })
 
+  it('CI-linked review footer is still detected and hash still extractable', () => {
+    const url = 'https://ci/job/x/5094/'
+    const linked = '### Summary\nAll good.' + buildReviewFooter('bot', 'model', 'repo', 2, 'abc123def456', 'deadbee', url)
+    expect(linked).toContain('[Review #2](https://ci/job/x/5094/)')
+    expect(hasReviewFooter(linked)).toBe(true)
+    expect(extractCommitHash(linked)).toBe('abc123def456')
+  })
+
+  it('CI-linked reply footer is detected and never cross-matches a review', () => {
+    const url = 'https://ci/job/x/5094/'
+    const linked = 'ok.' + buildReplyFooter('bot', 'model', url)
+    expect(linked).toContain('[Reply by bot (model)](https://ci/job/x/5094/)')
+    expect(hasReplyFooter(linked)).toBe(true)
+    expect(hasReviewFooter(linked)).toBe(false)
+  })
+
   it('extractCommitHash returns the PR commit, never the build hash', () => {
     // 'Build:' label must not shadow 'Commit:' — dedup anchors on the PR commit
     expect(extractCommitHash(reviewBody)).not.toContain('919a10b')

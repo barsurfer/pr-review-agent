@@ -17,8 +17,11 @@ Every review comment ends with a footer:
 ```
 `Commit:` is the PR source commit (dedup anchor); `Build:` is the agent's own deployed
 commit (runtime `git rev-parse` in its checkout, `-dirty` suffix on local uncommitted runs).
-Detection accepts footers with or without `Build:` — comments posted before the field
-existed still dedup correctly.
+When a CI job URL is available (`BUILD_URL`), `Review #N` is a markdown link to that build —
+Bitbucket renders HTML comments as visible text, so the job link rides on the footer instead
+of a hidden comment. Off-CI it's plain `Review #N`.
+Detection (`hasReviewFooter`) accepts footers with or without `Build:` **and** with or without
+the `Review #N` link — older and non-CI footers still dedup correctly.
 
 On re-trigger, `CHECK_PREVIOUS_REVIEWS` parses this footer and compares the commit hash against the current PR source commit (`PRInfo.sourceCommit`). If they match: same commit, no new code → fall through to `CHECK_REPLIES` instead of calling Claude.
 

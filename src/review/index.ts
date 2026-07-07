@@ -8,7 +8,7 @@ import { fetchContext } from '../context/fetcher.js'
 import { runReview, runCommentResponse, runJudge } from '../claude/client.js'
 import { filterDiff, countChangedLines, parseFindings, parseVerdictScore, isPathExcluded, scanTodos } from './parsers.js'
 import { buildReviewFooter, buildReplyFooter, stripPreviousFooter, stripDeltaStats, stripJudgeNotes, stripJenkinsMeta, stripPreamble, isNoChange, extractCommitHash } from './formatter.js'
-import { buildUsageRecord, logUsageRecord, getBuildCommit, buildJenkinsComment } from './usage.js'
+import { buildUsageRecord, logUsageRecord, getBuildCommit, getJobUrl } from './usage.js'
 import { State } from './types.js'
 import type { ReviewContext } from './types.js'
 import type { VCSAdapter } from '../vcs/adapter.js'
@@ -209,7 +209,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       ctx.usage.cache_read += result.usage.cache_read_input_tokens ?? 0
       ctx.usage.cache_write += result.usage.cache_creation_input_tokens ?? 0
 
-      const replyBody = result.text.trimEnd() + buildReplyFooter(config.agentIdentity, config.anthropic.model)
+      const replyBody = result.text.trimEnd() + buildReplyFooter(config.agentIdentity, config.anthropic.model, getJobUrl())
 
       if (ctx.dryRun) {
         console.log('\n=== DRY RUN — Reply output (not posted) ===\n')
@@ -393,8 +393,8 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       }
 
       const commitShort = ctx.prInfo!.sourceCommit.slice(0, 12)
-      const footer = buildReviewFooter(config.agentIdentity, config.anthropic.model, ctx.prompt!.source, ctx.reviewNumber, commitShort, getBuildCommit())
-      const comment = cleaned + todoSection + footer + buildJenkinsComment()
+      const footer = buildReviewFooter(config.agentIdentity, config.anthropic.model, ctx.prompt!.source, ctx.reviewNumber, commitShort, getBuildCommit(), getJobUrl())
+      const comment = cleaned + todoSection + footer
 
       if (ctx.dryRun) {
         console.log('\n=== DRY RUN — Review output (not posted) ===\n')

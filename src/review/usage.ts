@@ -116,13 +116,10 @@ export function getJenkinsMeta(): { job: string; build: string; url: string } | 
   return { job, build, url }
 }
 
-/** Hidden HTML comment appended to the posted review — invisible on the rendered PR,
- *  readable via the raw comment body to map a comment back to its Jenkins run. */
-export function buildJenkinsComment(): string {
-  const meta = getJenkinsMeta()
-  if (!meta) return ''
-  const parts = [meta.job, meta.build ? `#${meta.build}` : '', meta.url].filter(Boolean)
-  return `\n\n<!-- jenkins: ${parts.join(' ')} -->`
+/** CI job URL for linking the footer's "Review #N" / "Reply by" to the build that posted it.
+ *  Null off-CI or when no build URL is exposed (non-Jenkins pipelines get a plain footer). */
+export function getJobUrl(): string | undefined {
+  return getJenkinsMeta()?.url || undefined
 }
 
 // ---------------------------------------------------------------------------

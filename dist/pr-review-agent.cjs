@@ -29861,17 +29861,22 @@ var {
 } = axios_default;
 
 // src/review/formatter.ts
-function buildReviewFooter(identity, model, promptSource, reviewNumber, commitShort, buildCommit) {
+function buildReviewFooter(identity, model, promptSource, reviewNumber, commitShort, buildCommit, jobUrl) {
+  const review2 = jobUrl ? `[Review #${reviewNumber}](${jobUrl})` : `Review #${reviewNumber}`;
   return `
 
 ---
-*Reviewed by ${identity} (${model}) | Prompt: ${promptSource} | Review #${reviewNumber} | Commit: ${commitShort} | Build: ${buildCommit}*`;
+*Reviewed by ${identity} (${model}) | Prompt: ${promptSource} | ${review2} | Commit: ${commitShort} | Build: ${buildCommit}*`;
 }
-function buildReplyFooter(identity, model) {
-  return `
+function buildReplyFooter(identity, model, jobUrl) {
+  const label = `Reply by ${identity} (${model})`;
+  return jobUrl ? `
 
 ---
-*Reply by ${identity} (${model})*`;
+*[${label}](${jobUrl})*` : `
+
+---
+*${label}*`;
 }
 function stripPreviousFooter(text) {
   return text.replace(/\n---\n\*Reviewed by .*?\*\s*/g, "").trimEnd();
@@ -29898,10 +29903,10 @@ function extractCommitHash(body) {
   return match ? match[1] : null;
 }
 function hasReviewFooter(body) {
-  return /^\*Reviewed by .+ \(.+\) \| Prompt: .+ \| Review #\d+ \| Commit: [0-9a-f]+( \| Build: [\w.-]+)?\*$/m.test(body);
+  return /^\*Reviewed by .+ \(.+\) \| Prompt: .+ \| (?:Review #\d+|\[Review #\d+\]\([^)]+\)) \| Commit: [0-9a-f]+( \| Build: [\w.-]+)?\*$/m.test(body);
 }
 function hasReplyFooter(body) {
-  return /^\*Reply by .+ \(.+\)\*$/m.test(body);
+  return /^\*(?:Reply by .+ \(.+\)|\[Reply by .+ \(.+\)\]\([^)]+\))\*$/m.test(body);
 }
 
 // src/vcs/bitbucket.ts
@@ -30714,7 +30719,7 @@ function getBuildCommit() {
     const dirty = (0, import_child_process.execSync)("git status --porcelain", opts2).toString().trim() ? "-dirty" : "";
     return hash + dirty;
   } catch {
-    if (true) return "4efbc60";
+    if (true) return "a31cc2b";
     return "unknown";
   }
 }
@@ -30725,13 +30730,8 @@ function getJenkinsMeta() {
   if (!job && !build && !url2) return null;
   return { job, build, url: url2 };
 }
-function buildJenkinsComment() {
-  const meta = getJenkinsMeta();
-  if (!meta) return "";
-  const parts = [meta.job, meta.build ? `#${meta.build}` : "", meta.url].filter(Boolean);
-  return `
-
-<!-- jenkins: ${parts.join(" ")} -->`;
+function getJobUrl() {
+  return getJenkinsMeta()?.url || void 0;
 }
 function buildUsageRecord(ctx, durationMs, error) {
   const commitShort = ctx.prInfo?.sourceCommit?.slice(0, 12) ?? "unknown";
@@ -30969,7 +30969,7 @@ async function transition(state, ctx) {
       ctx.usage.output_tokens += result.usage.output_tokens;
       ctx.usage.cache_read += result.usage.cache_read_input_tokens ?? 0;
       ctx.usage.cache_write += result.usage.cache_creation_input_tokens ?? 0;
-      const replyBody = result.text.trimEnd() + buildReplyFooter(config.agentIdentity, config.anthropic.model);
+      const replyBody = result.text.trimEnd() + buildReplyFooter(config.agentIdentity, config.anthropic.model, getJobUrl());
       if (ctx.dryRun) {
         console.log("\n=== DRY RUN \u2014 Reply output (not posted) ===\n");
         console.log(replyBody);
@@ -31129,8 +31129,8 @@ If this PR spans multiple independent themes that could each be a separate, inde
         todoSection = "\n\n### TODOs Introduced\n" + todos.map((t) => `- \`${t.file}:${t.line}\` \u2014 ${t.text}`).join("\n");
       }
       const commitShort = ctx.prInfo.sourceCommit.slice(0, 12);
-      const footer = buildReviewFooter(config.agentIdentity, config.anthropic.model, ctx.prompt.source, ctx.reviewNumber, commitShort, getBuildCommit());
-      const comment = cleaned + todoSection + footer + buildJenkinsComment();
+      const footer = buildReviewFooter(config.agentIdentity, config.anthropic.model, ctx.prompt.source, ctx.reviewNumber, commitShort, getBuildCommit(), getJobUrl());
+      const comment = cleaned + todoSection + footer;
       if (ctx.dryRun) {
         console.log("\n=== DRY RUN \u2014 Review output (not posted) ===\n");
         console.log(comment);

@@ -397,11 +397,9 @@ describe('cut guard — truncated review not posted', () => {
 // Scenario 8d: Jenkins metadata appended to posted comment
 // ===========================================================================
 
-describe('jenkins metadata in comment', () => {
-  it('appends a hidden jenkins comment when CI env is present', async () => {
-    const prev = { JOB_NAME: process.env.JOB_NAME, BUILD_NUMBER: process.env.BUILD_NUMBER, BUILD_URL: process.env.BUILD_URL }
-    process.env.JOB_NAME = 'pr-review'
-    process.env.BUILD_NUMBER = '709'
+describe('CI job link in footer', () => {
+  it('links Review #N to the build URL when a CI URL is present', async () => {
+    const prev = process.env.BUILD_URL
     process.env.BUILD_URL = 'https://ci/job/pr-review/709/'
     try {
       const adapter = makeAdapter()
@@ -410,13 +408,28 @@ describe('jenkins metadata in comment', () => {
       await review(adapter, '100', false)
 
       const body = vi.mocked(adapter.postComment).mock.calls[0][1] as string
-      expect(body).toContain('<!-- jenkins: pr-review #709 https://ci/job/pr-review/709/ -->')
-      // stays after the footer, so footer detection is unaffected
-      expect(body.indexOf('Reviewed by')).toBeLessThan(body.indexOf('<!-- jenkins:'))
+      expect(body).toContain('[Review #1](https://ci/job/pr-review/709/)')
+      expect(body).not.toContain('<!-- jenkins')   // no visible HTML comment
     } finally {
-      process.env.JOB_NAME = prev.JOB_NAME
-      process.env.BUILD_NUMBER = prev.BUILD_NUMBER
-      process.env.BUILD_URL = prev.BUILD_URL
+      if (prev === undefined) delete process.env.BUILD_URL
+      else process.env.BUILD_URL = prev
+    }
+  })
+
+  it('uses a plain Review #N when no CI URL is present', async () => {
+    const prev = process.env.BUILD_URL
+    delete process.env.BUILD_URL
+    try {
+      const adapter = makeAdapter()
+      setupClaudeMocks()
+
+      await review(adapter, '100', false)
+
+      const body = vi.mocked(adapter.postComment).mock.calls[0][1] as string
+      expect(body).toContain('| Review #1 |')
+      expect(body).not.toContain('[Review #1]')
+    } finally {
+      if (prev !== undefined) process.env.BUILD_URL = prev
     }
   })
 })

@@ -2,21 +2,26 @@
 // Comment & footer formatting — string builders, no I/O
 // ---------------------------------------------------------------------------
 
-/** Build the footer appended to review comments. */
+/** Build the footer appended to review comments. When a CI job URL is available, the
+ *  "Review #N" label links to the build that posted the comment (Bitbucket renders HTML
+ *  comments as visible text, so a markdown link is the clean way to carry the job link). */
 export function buildReviewFooter(
   identity: string,
   model: string,
   promptSource: string,
   reviewNumber: number,
   commitShort: string,
-  buildCommit: string
+  buildCommit: string,
+  jobUrl?: string
 ): string {
-  return `\n\n---\n*Reviewed by ${identity} (${model}) | Prompt: ${promptSource} | Review #${reviewNumber} | Commit: ${commitShort} | Build: ${buildCommit}*`
+  const review = jobUrl ? `[Review #${reviewNumber}](${jobUrl})` : `Review #${reviewNumber}`
+  return `\n\n---\n*Reviewed by ${identity} (${model}) | Prompt: ${promptSource} | ${review} | Commit: ${commitShort} | Build: ${buildCommit}*`
 }
 
-/** Build the footer appended to reply comments. */
-export function buildReplyFooter(identity: string, model: string): string {
-  return `\n\n---\n*Reply by ${identity} (${model})*`
+/** Build the footer appended to reply comments. Links "Reply by …" to the CI job when available. */
+export function buildReplyFooter(identity: string, model: string, jobUrl?: string): string {
+  const label = `Reply by ${identity} (${model})`
+  return jobUrl ? `\n\n---\n*[${label}](${jobUrl})*` : `\n\n---\n*${label}*`
 }
 
 /** Remove a previous review footer so it isn't duplicated on re-reviews. */
@@ -65,10 +70,10 @@ export function extractCommitHash(body: string): string | null {
  *  in a human comment must not match. The Build segment is optional so footers
  *  posted before it existed keep matching (dedup must survive the format change). */
 export function hasReviewFooter(body: string): boolean {
-  return /^\*Reviewed by .+ \(.+\) \| Prompt: .+ \| Review #\d+ \| Commit: [0-9a-f]+( \| Build: [\w.-]+)?\*$/m.test(body)
+  return /^\*Reviewed by .+ \(.+\) \| Prompt: .+ \| (?:Review #\d+|\[Review #\d+\]\([^)]+\)) \| Commit: [0-9a-f]+( \| Build: [\w.-]+)?\*$/m.test(body)
 }
 
-/** Detect the agent's exact reply footer line. */
+/** Detect the agent's exact reply footer line (plain or CI-linked). */
 export function hasReplyFooter(body: string): boolean {
-  return /^\*Reply by .+ \(.+\)\*$/m.test(body)
+  return /^\*(?:Reply by .+ \(.+\)|\[Reply by .+ \(.+\)\]\([^)]+\))\*$/m.test(body)
 }
