@@ -28,7 +28,7 @@ export const config = {
   },
 
   judge: {
-    model: optional('JUDGING_MODEL', ''),
+    model: optional('JUDGING_MODEL', 'claude-sonnet-5'),   // on by default; set empty to disable
     maxRetries: parseInt(optional('MAX_RETRIES', '3'), 10),
   },
 
@@ -40,8 +40,8 @@ export const config = {
 
   review: {
     maxFindings: parseInt(optional('MAX_FINDINGS', '0'), 10),   // 0 = unlimited
-    splitCheck: optional('ENABLE_SPLIT_CHECK', 'false') === 'true',
-    todoScan: optional('ENABLE_TODO_SCAN', 'true') === 'true',
+    splitCheck: optional('ENABLE_SPLIT_CHECK', 'true') !== 'false',
+    todoScan: optional('ENABLE_TODO_SCAN', 'true') !== 'false',
   },
 
   context: {

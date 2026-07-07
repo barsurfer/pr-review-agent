@@ -36,7 +36,7 @@ pipeline {
                                         --repo-slug "\$REPO_SLUG" \
                                         --pr-id "\$PR_ID" \
                                         --model "claude-haiku-4-5-20251001" \
-                                        --judge-model "claude-sonnet-4-6"
+                                        --judge-model "claude-sonnet-5"
                                 """
                             }
                             // Generate plot data from results (needs Node)
