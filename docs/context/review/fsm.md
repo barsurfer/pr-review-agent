@@ -69,11 +69,13 @@ FETCH_PR_INFO
 
 ## POST_REVIEW Safety Guards
 
-Two guards run before every post, even on `--force`:
+Three guards run before every post, even on `--force`:
 
-1. **Empty/NO_CHANGE guard** — cleanup strips prior footers, `DELTA_STATS`, and any leaked preamble before the first `### Summary` heading (`stripPreamble()` — models occasionally think out loud before the review); if what remains is empty or contains a standalone `NO_CHANGE` line, skip. Catches model misbehavior when `CHECK_NO_CHANGE` is bypassed.
+1. **Empty/NO_CHANGE guard** — cleanup strips prior footers, `DELTA_STATS`, leaked preamble before the first `### Summary` heading (`stripPreamble()`), and any echoed jenkins comment; if what remains is empty or contains a standalone `NO_CHANGE` line, skip. Catches model misbehavior when `CHECK_NO_CHANGE` is bypassed.
 
-2. **Pre-post dedup** — on non-dry-run runs without `--force`, re-fetches review comments immediately before posting and checks if a concurrent agent run already reviewed the same commit. Prevents race conditions from parallel Jenkins triggers.
+2. **Cut guard** — a complete review ends with its final mandatory section (judge path → `Merge Confidence`; reviewer-only path → `Unresolved Questions`). A truncated model response — valid JSON envelope with a cut-off `review_markdown` string — slips past the `max_tokens` guard; this throws (run → `ERROR`, nothing posted, retries next trigger) so a half-review is never posted.
+
+3. **Pre-post dedup** — on non-dry-run runs without `--force`, re-fetches review comments immediately before posting and checks if a concurrent agent run already reviewed the same commit. Prevents race conditions from parallel Jenkins triggers.
 
 ---
 

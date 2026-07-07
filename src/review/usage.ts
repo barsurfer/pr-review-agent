@@ -44,6 +44,7 @@ export interface UsageRecord {
   findings: { high: number; medium: number; low: number } | null
   touch_rate: number | null
   delta: { developer_replies: number; resolved: number; still_open: number; new_findings: number } | null
+  jenkins: { job: string; build: string; url: string } | null
   error: { type: string; message: string; status: number | null } | null
 }
 
@@ -103,6 +104,25 @@ export function getBuildCommit(): string {
     if (typeof __BUILD_COMMIT__ !== 'undefined') return __BUILD_COMMIT__ as string
     return 'unknown'
   }
+}
+
+/** Jenkins build metadata for comment ↔ run ↔ artifact traceability. Jenkins injects
+ *  these into the build env; the node process inherits them. Null off-CI. */
+export function getJenkinsMeta(): { job: string; build: string; url: string } | null {
+  const job = process.env.JOB_NAME ?? ''
+  const build = process.env.BUILD_NUMBER ?? ''
+  const url = process.env.BUILD_URL ?? ''
+  if (!job && !build && !url) return null
+  return { job, build, url }
+}
+
+/** Hidden HTML comment appended to the posted review — invisible on the rendered PR,
+ *  readable via the raw comment body to map a comment back to its Jenkins run. */
+export function buildJenkinsComment(): string {
+  const meta = getJenkinsMeta()
+  if (!meta) return ''
+  const parts = [meta.job, meta.build ? `#${meta.build}` : '', meta.url].filter(Boolean)
+  return `\n\n<!-- jenkins: ${parts.join(' ')} -->`
 }
 
 // ---------------------------------------------------------------------------
@@ -182,6 +202,7 @@ export function buildUsageRecord(
         new_findings: stats?.new_findings ?? 0,
       }
     })() : null,
+    jenkins: getJenkinsMeta(),
     error,
   }
 }

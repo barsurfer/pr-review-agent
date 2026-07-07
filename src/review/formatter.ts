@@ -35,6 +35,12 @@ export function stripJudgeNotes(text: string): string {
   return text.replace(/\n*<!--\s*JUDGE_NOTES:[\s\S]*?-->\s*/g, '').trimEnd()
 }
 
+/** Strip any Jenkins metadata comment the model may have echoed from a prior review —
+ *  the current run appends its own. */
+export function stripJenkinsMeta(text: string): string {
+  return text.replace(/\n*<!--\s*jenkins:[\s\S]*?-->\s*/gi, '').trimEnd()
+}
+
 /** Check whether Claude returned the NO_CHANGE stop word — exact, or as a standalone
  *  line when the model prepends a summary despite the prompt instruction. */
 export function isNoChange(text: string): boolean {

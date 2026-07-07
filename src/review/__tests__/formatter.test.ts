@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildReviewFooter, buildReplyFooter, stripPreviousFooter, stripDeltaStats, stripJudgeNotes, stripPreamble, isNoChange, extractCommitHash, hasReviewFooter, hasReplyFooter } from '../formatter.js'
+import { buildReviewFooter, buildReplyFooter, stripPreviousFooter, stripDeltaStats, stripJudgeNotes, stripJenkinsMeta, stripPreamble, isNoChange, extractCommitHash, hasReviewFooter, hasReplyFooter } from '../formatter.js'
 
 // ---------------------------------------------------------------------------
 // buildReviewFooter
@@ -180,6 +180,18 @@ describe('stripJudgeNotes', () => {
   it('leaves text without notes unchanged', () => {
     const text = '### Summary\nSafe.\n\n### Findings\n\nNone.'
     expect(stripJudgeNotes(text)).toBe(text)
+  })
+})
+
+describe('stripJenkinsMeta', () => {
+  it('strips an echoed jenkins comment', () => {
+    const text = '### Summary\nSafe.\n\n<!-- jenkins: pr-review #709 https://ci/x/709/ -->'
+    expect(stripJenkinsMeta(text)).toBe('### Summary\nSafe.')
+  })
+
+  it('leaves text without a jenkins comment unchanged', () => {
+    const text = '### Summary\nSafe.\n\n### Merge Confidence: 90%'
+    expect(stripJenkinsMeta(text)).toBe(text)
   })
 })
 

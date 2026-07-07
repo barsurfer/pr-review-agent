@@ -95,7 +95,7 @@ function makeAdapter(overrides: Partial<VCSAdapter> = {}): VCSAdapter {
   }
 }
 
-function setupClaudeMocks(reviewText = '### Summary\nAll good.\n\n### Findings\n\nNo findings.') {
+function setupClaudeMocks(reviewText = '### Summary\nAll good.\n\n### Findings\n\nNo findings.\n\n### Unresolved Questions\nNone.') {
   mockLoadPrompt.mockResolvedValue({ content: 'System prompt here', source: 'repo' })
   mockFetchContext.mockResolvedValue([])
   mockRunReview.mockResolvedValue({ text: reviewText, usage: { input_tokens: 1000, output_tokens: 200 } })
@@ -330,7 +330,7 @@ describe('judge preamble leak → stripped before posting', () => {
     setupClaudeMocks('### Summary\nRisky refactor.\n\n### Findings\n\n- **MEDIUM – Substring matching** (a.ts:1)\n  Over-matches rows.')
     cfg.judge.model = 'judge-model'
     mockRunJudge.mockResolvedValue({
-      text: 'I need to validate each finding against the actual diff. Let me check each one carefully.\n\n**Finding 1: MEDIUM** — visible in the diff, keep.\n\n### Summary\nRisky refactor, validated.\n\n### Findings\n\n- **MEDIUM – Substring matching** (a.ts:1)\n  Over-matches rows.',
+      text: 'I need to validate each finding against the actual diff. Let me check each one carefully.\n\n**Finding 1: MEDIUM** — visible in the diff, keep.\n\n### Summary\nRisky refactor, validated.\n\n### Findings\n\n- **MEDIUM – Substring matching** (a.ts:1)\n  Over-matches rows.\n\n### Merge Confidence: 78%',
       usage: { input_tokens: 800, output_tokens: 300 },
     })
 
@@ -348,7 +348,7 @@ describe('judge preamble leak → stripped before posting', () => {
     setupClaudeMocks('### Summary\nRisky.\n\n### Findings\n\n- **MEDIUM – Something** (a.ts:1)\n  Desc.')
     cfg.judge.model = 'judge-model'
     mockRunJudge.mockResolvedValue({
-      text: '### Summary\nLow-risk change.\n\n### Findings\n\n- **LOW – Fragile helper** (a.ts:1)\n  Desc.\n\n<!-- JUDGE_NOTES: Dropped MEDIUM — convention claim not verifiable from diff. -->',
+      text: '### Summary\nLow-risk change.\n\n### Findings\n\n- **LOW – Fragile helper** (a.ts:1)\n  Desc.\n\n### Merge Confidence: 80%\n\n<!-- JUDGE_NOTES: Dropped MEDIUM — convention claim not verifiable from diff. -->',
       usage: { input_tokens: 800, output_tokens: 300 },
     })
 
@@ -359,6 +359,63 @@ describe('judge preamble leak → stripped before posting', () => {
     expect(body).not.toContain('JUDGE_NOTES')
     expect(body).not.toContain('Dropped MEDIUM')
     expect(body).toContain('LOW – Fragile helper')
+  })
+})
+
+// ===========================================================================
+// Scenario 8c: Cut guard — truncated review must not be posted (PR 8722)
+// ===========================================================================
+
+describe('cut guard — truncated review not posted', () => {
+  it('rejects a judged review missing the Merge Confidence tail', async () => {
+    const adapter = makeAdapter()
+    setupClaudeMocks('### Summary\nRisky.\n\n### Findings\n\n- **MEDIUM – X** (a.ts:1)\n  Desc.')
+    cfg.judge.model = 'judge-model'
+    // Judge output truncated mid-Behavioral-Diff — no Merge Confidence section
+    mockRunJudge.mockResolvedValue({
+      text: '### Summary\nRisky.\n\n### Findings\n\n- **LOW – Y** (a.ts:1)\n  Desc.\n\n### Behavioral Diff\n- changed the thing and it cuts off here',
+      usage: { input_tokens: 800, output_tokens: 300 },
+    })
+
+    await expect(review(adapter, '100', false)).rejects.toThrow(/truncated/i)
+    expect(adapter.postComment).not.toHaveBeenCalled()
+  })
+
+  it('rejects a reviewer-only review missing the Unresolved Questions tail', async () => {
+    const adapter = makeAdapter()
+    // No judge; reviewer output cut off before Unresolved Questions
+    setupClaudeMocks('### Summary\nAll good.\n\n### Findings\n\n- **LOW – Z** (a.ts:1)\n  Desc.\n\n### Behavioral Diff\n- cut off here')
+
+    await expect(review(adapter, '100', false)).rejects.toThrow(/truncated/i)
+    expect(adapter.postComment).not.toHaveBeenCalled()
+  })
+})
+
+// ===========================================================================
+// Scenario 8d: Jenkins metadata appended to posted comment
+// ===========================================================================
+
+describe('jenkins metadata in comment', () => {
+  it('appends a hidden jenkins comment when CI env is present', async () => {
+    const prev = { JOB_NAME: process.env.JOB_NAME, BUILD_NUMBER: process.env.BUILD_NUMBER, BUILD_URL: process.env.BUILD_URL }
+    process.env.JOB_NAME = 'pr-review'
+    process.env.BUILD_NUMBER = '709'
+    process.env.BUILD_URL = 'https://ci/job/pr-review/709/'
+    try {
+      const adapter = makeAdapter()
+      setupClaudeMocks()
+
+      await review(adapter, '100', false)
+
+      const body = vi.mocked(adapter.postComment).mock.calls[0][1] as string
+      expect(body).toContain('<!-- jenkins: pr-review #709 https://ci/job/pr-review/709/ -->')
+      // stays after the footer, so footer detection is unaffected
+      expect(body.indexOf('Reviewed by')).toBeLessThan(body.indexOf('<!-- jenkins:'))
+    } finally {
+      process.env.JOB_NAME = prev.JOB_NAME
+      process.env.BUILD_NUMBER = prev.BUILD_NUMBER
+      process.env.BUILD_URL = prev.BUILD_URL
+    }
   })
 })
 

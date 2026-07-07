@@ -6,9 +6,9 @@ import { config } from '../config.js'
 import { loadPrompt } from '../prompt/loader.js'
 import { fetchContext } from '../context/fetcher.js'
 import { runReview, runCommentResponse, runJudge } from '../claude/client.js'
-import { filterDiff, countChangedLines, parseFindings, isPathExcluded } from './parsers.js'
-import { buildReviewFooter, buildReplyFooter, stripPreviousFooter, stripDeltaStats, stripJudgeNotes, stripPreamble, isNoChange, extractCommitHash } from './formatter.js'
-import { buildUsageRecord, logUsageRecord, getBuildCommit } from './usage.js'
+import { filterDiff, countChangedLines, parseFindings, parseVerdictScore, isPathExcluded } from './parsers.js'
+import { buildReviewFooter, buildReplyFooter, stripPreviousFooter, stripDeltaStats, stripJudgeNotes, stripJenkinsMeta, stripPreamble, isNoChange, extractCommitHash } from './formatter.js'
+import { buildUsageRecord, logUsageRecord, getBuildCommit, buildJenkinsComment } from './usage.js'
 import { State } from './types.js'
 import type { ReviewContext } from './types.js'
 import type { VCSAdapter } from '../vcs/adapter.js'
@@ -336,16 +336,29 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       if (judgeNotes) {
         console.log(`  Judge notes (stripped from comment): ${judgeNotes[1].trim()}`)
       }
-      const cleaned = stripPreamble(stripJudgeNotes(stripDeltaStats(stripPreviousFooter(ctx.reviewText!))))
+      const cleaned = stripJenkinsMeta(stripPreamble(stripJudgeNotes(stripDeltaStats(stripPreviousFooter(ctx.reviewText!)))))
       if (!cleaned.trim() || isNoChange(cleaned)) {
         console.log('  Review text empty or NO_CHANGE after cleanup — skipping post')
         ctx.action = 'NO_CHANGE'
         ctx.skipReason = 'Review text empty or NO_CHANGE after cleanup'
         return State.SKIP
       }
+
+      // Cut guard: a complete review ends with its final mandatory section. The judge
+      // path ends with "Merge Confidence"; the reviewer-only path ends with "Unresolved
+      // Questions". A truncated model response (valid JSON envelope, cut string value)
+      // slips past the max_tokens guard — this catches it so we never post a half-review.
+      const judged = ctx.judgeUsage !== undefined
+      const tailOk = judged
+        ? parseVerdictScore(cleaned) !== null
+        : /^#{1,4}\s*Unresolved Questions\b/im.test(cleaned)
+      if (!tailOk) {
+        throw new Error(`Review appears truncated — missing ${judged ? 'Merge Confidence' : 'Unresolved Questions'} section; refusing to post a partial review`)
+      }
+
       const commitShort = ctx.prInfo!.sourceCommit.slice(0, 12)
       const footer = buildReviewFooter(config.agentIdentity, config.anthropic.model, ctx.prompt!.source, ctx.reviewNumber, commitShort, getBuildCommit())
-      const comment = cleaned + footer
+      const comment = cleaned + footer + buildJenkinsComment()
 
       if (ctx.dryRun) {
         console.log('\n=== DRY RUN — Review output (not posted) ===\n')

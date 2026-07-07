@@ -113,6 +113,7 @@ The record is also printed to stdout at the end of every run regardless of the f
 | `findings` | `object \| null` | `{ high, medium, low }` — final findings (from judge if used, from reviewer otherwise) |
 | `touch_rate` | `number \| null` | Re-review only: `resolved / (resolved + still_open) × 100` — percentage of previous findings addressed by the developer |
 | `delta` | `object \| null` | Re-review only: `{ developer_replies, resolved, still_open, new_findings }` |
+| `jenkins` | `object \| null` | `{ job, build, url }` from Jenkins env (`JOB_NAME`/`BUILD_NUMBER`/`BUILD_URL`), or null off-CI — maps a run to its build/artifact |
 | `error` | `object \| null` | `{ type, message, status }` on failure |
 
 ### Action Values
@@ -125,7 +126,7 @@ The record is also printed to stdout at the end of every run regardless of the f
 | `NO_CHANGE` | Claude determined only cosmetic changes — comment suppressed |
 | `SKIP` | PR out of scope (size thresholds) — no API call |
 | `DEDUP_SKIP` | Commit hash matched previous review, no unanswered replies — no API call |
-| `ERROR` | Agent failed — see `error` field |
+| `ERROR` | Agent failed — see `error` field. Includes the **cut guard**: a review truncated before its final section (judge → Merge Confidence; reviewer → Unresolved Questions) is refused rather than posted partial, and retries on the next trigger. |
 
 ### Cost Estimation
 
