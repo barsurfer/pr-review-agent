@@ -26,7 +26,7 @@ Rule: Each entry has a 1-sentence summary: key concepts, keywords, tech; ends wi
   - [prompt/judge.md](prompt/judge.md) — Judge model: when it runs, what it validates, calibration rules, Merge Confidence score vs computed_score, judge prompt; read when configuring or modifying the generator-verifier pass.
 
 - [vcs/](vcs/)
-  - [vcs/adapter.md](vcs/adapter.md) — VCSAdapter interface, Bitbucket implementation (auth, redirect handling, required scopes), provider selection, supporting types, Phase 4 inline comment extension; read when changing VCS behavior or adding a new adapter.
+  - [vcs/adapter.md](vcs/adapter.md) — VCSAdapter interface, Bitbucket implementation (auth, redirect handling, required scopes), Azure DevOps adapter (WIP — diff reconstruction, thread model, composite IDs, base-URL config), provider selection, supporting types, Phase 4 inline comment extension; read when changing VCS behavior or adding a new adapter.
 
 - [fetching/](fetching/)
   - [fetching/strategy.md](fetching/strategy.md) — Two-form diff (raw vs filtered), full file context exclusion rules, high-churn priority, MAX_CONTEXT_FILES/MAX_FILE_LINES, full payload format for review and reply; read when changing what context is sent to Claude.

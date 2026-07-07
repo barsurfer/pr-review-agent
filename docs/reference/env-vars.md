@@ -17,7 +17,7 @@ credentials in source code or commit them to version control.**
 
 | Variable | Example | Description |
 |----------|---------|-------------|
-| `VCS_PROVIDER` | `bitbucket` | Which VCS adapter to use. Only `bitbucket` is implemented. |
+| `VCS_PROVIDER` | `bitbucket` | Which VCS adapter to use. `bitbucket` is production; `azure` is experimental/WIP (see below); `github`/`gitlab` are stubs. |
 | `BITBUCKET_BASE_URL` | `https://api.bitbucket.org/2.0` | Bitbucket Cloud API base URL (Server/DC is not supported — different v1 API) |
 | `BITBUCKET_WORKSPACE` | `my-workspace` | Bitbucket workspace slug |
 | `BITBUCKET_USERNAME` | `you@company.com` | Your Atlassian account email (used for HTTP Basic Auth) |
@@ -65,6 +65,26 @@ Controls dedup bypass behavior. The flag is optional-value — its behavior depe
 
 ---
 
+## Azure DevOps (Experimental / WIP)
+
+Selected with `--vcs azure` or `VCS_PROVIDER=azure`. Implements the full adapter interface
+but is validated against mocked API shapes only — **not yet exercised against a live
+instance**. Prints a one-line WIP warning on construction.
+
+| Variable | Example | Description |
+|----------|---------|-------------|
+| `AZURE_BASE_URL` | `https://dev.azure.com` | API base URL. Default is cloud Services; set to an on-prem **Server** collection URL for self-hosted. |
+| `AZURE_ORG` | `my-org` | Organization / collection name (required). Can also be set via `--workspace`. |
+| `AZURE_PROJECT` | `my-project` | Project name (required). |
+| `AZURE_PAT` | `xxxxxxxx...` | Personal Access Token (required). Scopes: Code (read) + Threads (read & write). Sent as HTTP Basic `base64(":{PAT}")` (empty username). |
+
+Repository is passed via `--repo-slug` (repo name or GUID). All calls send `?api-version=7.1`.
+The diff is reconstructed from the `diffs/commits` change list + per-file blob content
+(no native unified-diff endpoint), using the `diff` (jsdiff) library. `validateAzureConfig()`
+throws on any missing required var, mirroring `validateBitbucketConfig()`.
+
+---
+
 ## Phase 3 — Inline Comments
 
 | Variable | Example | Description |
@@ -90,6 +110,12 @@ BITBUCKET_BASE_URL=https://api.bitbucket.org/2.0
 BITBUCKET_WORKSPACE=
 BITBUCKET_USERNAME=
 BITBUCKET_TOKEN=
+
+# Azure DevOps (experimental / WIP) — set VCS_PROVIDER=azure to use
+# AZURE_BASE_URL=https://dev.azure.com
+# AZURE_ORG=
+# AZURE_PROJECT=
+# AZURE_PAT=
 
 # Claude
 ANTHROPIC_API_KEY=

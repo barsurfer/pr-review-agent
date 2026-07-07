@@ -4,7 +4,7 @@ Automated pull request code reviewer powered by Claude. When a PR is opened or u
 the agent fetches the diff and relevant file context from your VCS, sends it to Claude,
 and posts a structured review comment directly on the PR.
 
-**Current VCS support:** Bitbucket (GitHub and GitLab planned)
+**Current VCS support:** Bitbucket; Azure DevOps — experimental/WIP (GitHub and GitLab planned)
 
 ### What it does
 
@@ -299,9 +299,9 @@ bundle build on every push to `main` and every PR — the gate that keeps `main`
 | Flag | Required | Description |
 |------|----------|-------------|
 | `--pr-id <id>` | **Yes**\* | Pull request ID to review |
-| `--repo-slug <slug>` | **Yes** (Bitbucket) | Repository slug |
-| `--workspace <workspace>` | No | Overrides `BITBUCKET_WORKSPACE` env var |
-| `--vcs <provider>` | No | `bitbucket` \| `github` \| `gitlab` — overrides `VCS_PROVIDER` env var (default: `bitbucket`) |
+| `--repo-slug <slug>` | **Yes** (Bitbucket, Azure) | Repository slug (Azure: repo name or GUID) |
+| `--workspace <workspace>` | No | Overrides `BITBUCKET_WORKSPACE` (or `AZURE_ORG` when `--vcs azure`) |
+| `--vcs <provider>` | No | `bitbucket` \| `azure` (WIP) \| `github` \| `gitlab` — overrides `VCS_PROVIDER` env var (default: `bitbucket`) |
 | `--dry-run` | No | Print the review to stdout instead of posting to the PR |
 | `--force` | No | Ignore previous reviews and produce a fresh review |
 | `--log-usage [bool]` | No | Log usage record to `results.jsonl` (default: `true`, use `--log-usage false` to disable). See [docs/reference/usage-logging.md](docs/reference/usage-logging.md) for schema. |
@@ -336,7 +336,7 @@ All credentials and settings are provided via environment variables.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `VCS_PROVIDER` | `bitbucket` | Which VCS adapter to use (`bitbucket` \| `github` \| `gitlab`) |
+| `VCS_PROVIDER` | `bitbucket` | Which VCS adapter to use (`bitbucket` \| `azure` \| `github` \| `gitlab`) |
 | `BITBUCKET_BASE_URL` | `https://api.bitbucket.org/2.0` | Bitbucket Cloud API base URL (Server/DC is not supported — different v1 API) |
 | `CLAUDE_MODEL` | `claude-sonnet-4-6` | Claude model ID to use for reviews |
 | `MAX_RETRIES` | `3` | Max retries on 429/5xx errors (exponential backoff) |
@@ -351,6 +351,32 @@ All credentials and settings are provided via environment variables.
 | `ENABLE_SPLIT_CHECK` | `true` | Reviewer adds a "Can Be Split" section when the PR spans independent themes (set `false` to disable) |
 | `ENABLE_TODO_SCAN` | `true` | Scan added lines for `TODO`/`FIXME`/`HACK` and append a "TODOs Introduced" section |
 | `AGENT_IDENTITY` | `BITBUCKET_USERNAME` | Name shown in review footers. Falls back to `BITBUCKET_USERNAME`, then `'Claude'` |
+
+### Azure DevOps (experimental / WIP)
+
+Select the adapter with `--vcs azure` or `VCS_PROVIDER=azure`. It implements the full
+adapter interface but has been validated against mocked API shapes only — **not yet a
+live instance**. Confirm end-to-end before production use. On construction it prints a
+one-line WIP warning.
+
+Azure has no native unified-diff endpoint, so the adapter reconstructs the diff from the
+`diffs/commits` change list plus per-file blob content (via the [`diff`](https://www.npmjs.com/package/diff)
+library). Comments are modeled as threads. Authentication is a Personal Access Token over
+HTTP Basic (`base64(":{PAT}")`).
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AZURE_BASE_URL` | `https://dev.azure.com` | API base URL. Point at an on-prem **Server** collection URL for self-hosted instances |
+| `AZURE_ORG` | *(required)* | Organization / collection name (can also use `--workspace`) |
+| `AZURE_PROJECT` | *(required)* | Project name |
+| `AZURE_PAT` | *(required)* | Personal Access Token — scopes: Code (read) + Threads (read & write). Sent as HTTP Basic `base64(":{PAT}")` |
+
+Repository is passed via `--repo-slug` (repo name or GUID). Example:
+
+```bash
+AZURE_ORG=my-org AZURE_PROJECT=my-project AZURE_PAT=xxxx \
+  node dist/pr-review-agent.cjs --vcs azure --repo-slug my-repo --pr-id 42 --dry-run
+```
 
 ### How to Provide Environment Variables
 

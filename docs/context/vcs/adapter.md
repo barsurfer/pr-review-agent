@@ -42,8 +42,11 @@ interface VCSAdapter {
 | Value | Class | Status |
 |-------|-------|--------|
 | `bitbucket` | `BitbucketAdapter` | Production — fully implemented |
+| `azure` | `AzureDevOpsAdapter` | **Experimental / WIP** — all 10 methods implemented, validated against mocked API shapes only (not yet a live instance) |
 | `github` | `GitHubAdapter` | Stub — throws `NotImplementedError` |
 | `gitlab` | `GitLabAdapter` | Stub — throws `NotImplementedError` |
+
+`--vcs azure` (or `VCS_PROVIDER=azure`) selects it. Prints a one-line WIP warning on construction.
 
 ---
 
@@ -54,6 +57,21 @@ interface VCSAdapter {
 - **API token scopes required:** `read:repository:bitbucket`, `read:pullrequest:bitbucket`, `write:pullrequest:bitbucket`
 - **Cloud only:** the adapter targets Bitbucket Cloud API 2.0 response shapes (`values` pagination, `content.raw`, diffstat redirects). Bitbucket Server/DC exposes a different v1 REST API — pointing `BITBUCKET_BASE_URL` at it fails on the first call; Server support would need its own adapter.
 - **Agent comment detection:** the agent's own comments are recognized by their exact footer line (`hasReviewFooter`/`hasReplyFooter` from `review/formatter.ts`), not by author — a comment quoting a full agent footer would still match (rare, accepted).
+
+---
+
+## Azure DevOps Implementation Details (WIP)
+
+`src/vcs/azure.ts` — experimental. Purely additive: no existing adapter, the interface, or `review/*` was touched. Validated against mocked API shapes only; confirm against a live Services org (cloud) and a Server collection (on-prem) before production.
+
+- **Auth:** HTTP Basic with an empty username — `Authorization: Basic base64(":{PAT}")`. `?api-version=7.1` is sent on every call (axios instance default param).
+- **Config / base URL:** `AZURE_BASE_URL` (default `https://dev.azure.com`, point at an on-prem Server collection URL for self-hosted) + `AZURE_ORG` + `AZURE_PROJECT` + `AZURE_PAT`; repo via `--repo-slug`. `--workspace` aliases `AZURE_ORG`. Base URL is built as `{baseUrl}/{org}/{project}/_apis/git`. Mirrors the Bitbucket config pattern (`optional()` defaults + `validateAzureConfig()`).
+- **Diff reconstruction (the crux):** Azure has **no native unified-diff endpoint**. `getDiff`/`getCommitDiff` rebuild one: `GET diffs/commits` yields a file-level change list (filtered to `gitObjectType: 'blob'`, folders/trees dropped); for each changed blob the old + new content is fetched via the Items API; `diff` (jsdiff) `structuredPatch` produces hunks which are formatted into `diff --git a/… b/…` + `--- a/…` / `+++ b/…` (`/dev/null` for the missing side of an add/delete) + `@@` headers — **byte-compatible** with `filterDiff` / `countChangedLines` / `scanTodos`. add → all `+`; delete → all `-`; rename uses `originalPath`; binaries (NUL byte) and files over `MAX_DIFF_FILE_CHARS` are skipped. `getDiff` uses `diffCommonCommit=true` (three-dot, PR semantics); `getCommitDiff` uses two-dot. Costs ~2 content fetches per changed blob.
+- **Comments are threads:** `postComment` = `POST …/pullRequests/{id}/threads` (new thread, `commentType:1`, `status:1`); `postReply` = `POST …/threads/{threadId}/comments` with `{content, parentCommentId, commentType:1}`; reads = `GET …/threads` with nested `comments[]`. Replies live in the **same** thread as the review they answer.
+- **Composite IDs:** the interface uses single-string IDs but Azure identifies a comment by `(threadId, commentId)`. Encoded as `"{threadId}:{commentId}"` in `ReviewComment.id`/`CommentReply.parentId` and split back apart in `postReply`. Contained to the adapter.
+- **Agent comment detection:** same footer matching as Bitbucket (`hasReviewFooter`/`hasReplyFooter` on comment `content`) — imported and reused, not reimplemented.
+- **PR info:** `sourceRefName`/`targetRefName` strip `refs/heads/`; source commit = `lastMergeSourceCommit.commitId`; PR-diff base/target = `lastMergeTargetCommit`/`lastMergeSourceCommit`.
+- **Dependency:** adds `diff` (jsdiff) + `@types/diff`; esbuild bundles it automatically.
 
 ---
 
