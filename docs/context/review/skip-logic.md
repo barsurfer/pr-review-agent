@@ -86,6 +86,6 @@ All can be overridden via CLI flags (`--min-changed-files`, etc.). `0` disables 
 
 ## 5. Reply Limit
 
-Once the agent has replied `MAX_REPLY_COMMENTS` times (default: 3) on a PR, further developer questions are logged but not answered. Prevents runaway token usage on contentious PRs or adversarial follow-ups.
+Once the agent has replied `MAX_REPLY_COMMENTS` times (default: 5) on a PR, further developer questions are logged but not answered. Prevents runaway token usage on contentious PRs or adversarial follow-ups.
 
 Set `MAX_REPLY_COMMENTS=0` to disable.

@@ -26179,7 +26179,7 @@ var config = {
   },
   agentIdentity: process.env.AGENT_IDENTITY || process.env.BITBUCKET_USERNAME || "Claude",
   reply: {
-    maxComments: parseInt(optional("MAX_REPLY_COMMENTS", "3"), 10)
+    maxComments: parseInt(optional("MAX_REPLY_COMMENTS", "5"), 10)
   },
   review: {
     maxFindings: parseInt(optional("MAX_FINDINGS", "0"), 10),
@@ -30719,7 +30719,7 @@ function getBuildCommit() {
     const dirty = (0, import_child_process.execSync)("git status --porcelain", opts2).toString().trim() ? "-dirty" : "";
     return hash + dirty;
   } catch {
-    if (true) return "a31cc2b";
+    if (true) return "8ce4a55";
     return "unknown";
   }
 }

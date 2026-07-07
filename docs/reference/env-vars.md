@@ -36,7 +36,7 @@ credentials in source code or commit them to version control.**
 | `SKIP_TARGET_BRANCHES` | `main,master` | Comma-separated branch patterns. Skip review if PR target branch matches. Default: `main,master` |
 | `DIFF_EXCLUDE_PATTERNS` | `*.lock,*.json,*.spec.ts` | Comma-separated file patterns to strip from diff before sending to Claude. Default: `*.lock,package-lock.json,yarn.lock,pnpm-lock.yaml,*.json,*.spec.ts` |
 | `JUDGING_MODEL` | `claude-sonnet-5` | Judge model for finding validation — **on by default**. Set empty to disable the judge pass. |
-| `MAX_REPLY_COMMENTS` | `3` | Max agent reply comments per PR (0 = unlimited). Prevents runaway token usage on extended conversations. Default: `3` |
+| `MAX_REPLY_COMMENTS` | `5` | Max agent reply comments per PR (0 = unlimited). Prevents runaway token usage on extended conversations. Default: `5` |
 | `MAX_FINDINGS` | `0` | Cap the number of findings the reviewer reports (0 = unlimited). When set, appends a findings-limit instruction to the reviewer prompt. |
 | `ENABLE_SPLIT_CHECK` | `true` | Reviewer adds a "Can Be Split" section when the PR spans independent themes that could be separate PRs. Set `false` to disable. |
 | `ENABLE_TODO_SCAN` | `true` | Deterministically scan added lines for `TODO`/`FIXME`/`HACK` markers and append a "TODOs Introduced" section (file:line) to the review. |
@@ -101,7 +101,7 @@ MAX_RETRIES=3
 # AGENT_IDENTITY=
 
 # Reply limit — max agent reply comments per PR (0 = unlimited)
-# MAX_REPLY_COMMENTS=3
+# MAX_REPLY_COMMENTS=5
 
 # Context limits
 MAX_CONTEXT_FILES=20

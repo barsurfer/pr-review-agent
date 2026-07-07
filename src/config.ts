@@ -35,7 +35,7 @@ export const config = {
   agentIdentity: process.env.AGENT_IDENTITY || process.env.BITBUCKET_USERNAME || 'Claude',
 
   reply: {
-    maxComments: parseInt(optional('MAX_REPLY_COMMENTS', '3'), 10),
+    maxComments: parseInt(optional('MAX_REPLY_COMMENTS', '5'), 10),
   },
 
   review: {
