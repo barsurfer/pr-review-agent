@@ -38,6 +38,12 @@ export const config = {
     maxComments: parseInt(optional('MAX_REPLY_COMMENTS', '3'), 10),
   },
 
+  review: {
+    maxFindings: parseInt(optional('MAX_FINDINGS', '0'), 10),   // 0 = unlimited
+    splitCheck: optional('ENABLE_SPLIT_CHECK', 'false') === 'true',
+    todoScan: optional('ENABLE_TODO_SCAN', 'true') === 'true',
+  },
+
   context: {
     maxFiles: parseInt(optional('MAX_CONTEXT_FILES', '20'), 10),
     maxFileLines: parseInt(optional('MAX_FILE_LINES', '500'), 10),

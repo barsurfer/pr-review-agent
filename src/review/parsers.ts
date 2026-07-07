@@ -67,3 +67,39 @@ export function parseDeltaStats(text: string): { resolved: number; still_open: n
     new_findings: parseInt(match[3], 10),
   }
 }
+
+export interface TodoItem {
+  file: string
+  line: number
+  text: string
+}
+
+/** Scan added (`+`) lines in a unified diff for TODO/FIXME/HACK markers, tracking the
+ *  new-file line number from hunk headers. Deterministic — catches breadcrumbs the model
+ *  might miss. */
+export function scanTodos(diff: string): TodoItem[] {
+  const todos: TodoItem[] = []
+  const marker = /\b(TODO|FIXME|HACK)\b:?\s*(.*)/i
+  let file = ''
+  let newLine = 0
+
+  for (const raw of diff.split('\n')) {
+    if (raw.startsWith('diff --git')) { file = ''; continue }
+    if (raw.startsWith('+++ b/')) { file = raw.slice(6).trim(); continue }
+    if (raw.startsWith('--- ')) continue
+    const hunk = raw.match(/^@@ -\d+(?:,\d+)? \+(\d+)/)
+    if (hunk) { newLine = parseInt(hunk[1], 10); continue }
+    if (raw.startsWith('-')) continue                // removed — new-file counter unchanged
+    if (raw.startsWith('+')) {                       // added line
+      const m = raw.slice(1).match(marker)
+      if (m && file) {
+        const body = m[2].trim()
+        todos.push({ file, line: newLine, text: (body ? `${m[1].toUpperCase()}: ${body}` : m[1].toUpperCase()).slice(0, 140) })
+      }
+      newLine++
+      continue
+    }
+    newLine++                                        // context line advances the counter
+  }
+  return todos
+}

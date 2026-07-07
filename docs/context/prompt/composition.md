@@ -26,6 +26,12 @@ Final system prompt = base-prompt.txt + repo prompt sections
 - Developer discussion trust rules
 - OUTPUT STRUCTURE — Summary, Findings, Behavioral Diff, Production Risk, Unresolved Questions
 
+**Runtime add-ons** (appended to the assembled system prompt in `CALL_CLAUDE`, opt-in, never touch the base template):
+- `MAX_FINDINGS` > 0 → a `## FINDINGS LIMIT` instruction capping reported findings
+- `ENABLE_SPLIT_CHECK` → a `## SPLIT CHECK` instruction (adds a "Can Be Split" section for multi-theme PRs)
+
+Separately, a deterministic `TODO`/`FIXME`/`HACK` scan (`scanTodos`, `ENABLE_TODO_SCAN` default on) appends a "TODOs Introduced" section to the posted comment in `POST_REVIEW` — not model-driven, so it can't be missed or hallucinated.
+
 **Repo prompt sections** (from `.agent-review-instructions.md` in the target repo):
 
 | Section header | Placeholder | Default if missing |

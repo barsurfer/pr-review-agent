@@ -26180,6 +26180,12 @@ var config = {
   reply: {
     maxComments: parseInt(optional("MAX_REPLY_COMMENTS", "3"), 10)
   },
+  review: {
+    maxFindings: parseInt(optional("MAX_FINDINGS", "0"), 10),
+    // 0 = unlimited
+    splitCheck: optional("ENABLE_SPLIT_CHECK", "false") === "true",
+    todoScan: optional("ENABLE_TODO_SCAN", "true") === "true"
+  },
   context: {
     maxFiles: parseInt(optional("MAX_CONTEXT_FILES", "20"), 10),
     maxFileLines: parseInt(optional("MAX_FILE_LINES", "500"), 10)
@@ -30631,6 +30637,40 @@ function parseDeltaStats(text) {
     new_findings: parseInt(match[3], 10)
   };
 }
+function scanTodos(diff) {
+  const todos = [];
+  const marker = /\b(TODO|FIXME|HACK)\b:?\s*(.*)/i;
+  let file = "";
+  let newLine = 0;
+  for (const raw of diff.split("\n")) {
+    if (raw.startsWith("diff --git")) {
+      file = "";
+      continue;
+    }
+    if (raw.startsWith("+++ b/")) {
+      file = raw.slice(6).trim();
+      continue;
+    }
+    if (raw.startsWith("--- ")) continue;
+    const hunk = raw.match(/^@@ -\d+(?:,\d+)? \+(\d+)/);
+    if (hunk) {
+      newLine = parseInt(hunk[1], 10);
+      continue;
+    }
+    if (raw.startsWith("-")) continue;
+    if (raw.startsWith("+")) {
+      const m = raw.slice(1).match(marker);
+      if (m && file) {
+        const body = m[2].trim();
+        todos.push({ file, line: newLine, text: (body ? `${m[1].toUpperCase()}: ${body}` : m[1].toUpperCase()).slice(0, 140) });
+      }
+      newLine++;
+      continue;
+    }
+    newLine++;
+  }
+  return todos;
+}
 
 // src/review/usage.ts
 var import_fs3 = require("fs");
@@ -30673,7 +30713,7 @@ function getBuildCommit() {
     const dirty = (0, import_child_process.execSync)("git status --porcelain", opts2).toString().trim() ? "-dirty" : "";
     return hash + dirty;
   } catch {
-    if (true) return "2299d7b";
+    if (true) return "9b73d85";
     return "unknown";
   }
 }
@@ -30979,6 +31019,20 @@ async function transition(state, ctx) {
       return 10 /* CALL_CLAUDE */;
     }
     case 10 /* CALL_CLAUDE */: {
+      let content = ctx.prompt.content;
+      if (config.review.maxFindings > 0) {
+        content += `
+
+## FINDINGS LIMIT
+Report at most ${config.review.maxFindings} findings, prioritized by severity and impact. If more exist, include only the most important and omit the rest.`;
+      }
+      if (config.review.splitCheck) {
+        content += `
+
+## SPLIT CHECK
+If this PR spans multiple independent themes that could each be a separate, independently-reviewable PR, add a "### Can Be Split" section listing them (one line each). If the PR is cohesive, omit the section entirely.`;
+      }
+      const reviewPrompt = { ...ctx.prompt, content };
       const result = await runReview(
         config.anthropic.apiKey,
         config.anthropic.model,
@@ -30986,7 +31040,7 @@ async function transition(state, ctx) {
         ctx.prInfo,
         ctx.filteredDiff,
         ctx.fileContexts,
-        ctx.prompt,
+        reviewPrompt,
         ctx.previousReviews ?? [],
         ctx.replies ?? []
       );
@@ -31067,9 +31121,15 @@ async function transition(state, ctx) {
       if (!tailOk) {
         throw new Error(`Review appears truncated \u2014 missing ${judged ? "Merge Confidence" : "Unresolved Questions"} section; refusing to post a partial review`);
       }
+      const todos = config.review.todoScan ? scanTodos(ctx.filteredDiff) : [];
+      let todoSection = "";
+      if (todos.length > 0) {
+        console.log(`  Found ${todos.length} TODO/FIXME/HACK marker(s) in added lines`);
+        todoSection = "\n\n### TODOs Introduced\n" + todos.map((t) => `- \`${t.file}:${t.line}\` \u2014 ${t.text}`).join("\n");
+      }
       const commitShort = ctx.prInfo.sourceCommit.slice(0, 12);
       const footer = buildReviewFooter(config.agentIdentity, config.anthropic.model, ctx.prompt.source, ctx.reviewNumber, commitShort, getBuildCommit());
-      const comment = cleaned + footer + buildJenkinsComment();
+      const comment = cleaned + todoSection + footer + buildJenkinsComment();
       if (ctx.dryRun) {
         console.log("\n=== DRY RUN \u2014 Review output (not posted) ===\n");
         console.log(comment);

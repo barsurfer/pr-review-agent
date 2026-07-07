@@ -37,6 +37,9 @@ credentials in source code or commit them to version control.**
 | `DIFF_EXCLUDE_PATTERNS` | `*.lock,*.json,*.spec.ts` | Comma-separated file patterns to strip from diff before sending to Claude. Default: `*.lock,package-lock.json,yarn.lock,pnpm-lock.yaml,*.json,*.spec.ts` |
 | `JUDGING_MODEL` | `claude-sonnet-4-6` | Optional judge model for finding validation. Empty = skip judge pass. |
 | `MAX_REPLY_COMMENTS` | `3` | Max agent reply comments per PR (0 = unlimited). Prevents runaway token usage on extended conversations. Default: `3` |
+| `MAX_FINDINGS` | `0` | Cap the number of findings the reviewer reports (0 = unlimited). When set, appends a findings-limit instruction to the reviewer prompt. |
+| `ENABLE_SPLIT_CHECK` | `false` | When `true`, the reviewer adds a "Can Be Split" section if the PR spans independent themes that could be separate PRs. |
+| `ENABLE_TODO_SCAN` | `true` | Deterministically scan added lines for `TODO`/`FIXME`/`HACK` markers and append a "TODOs Introduced" section (file:line) to the review. |
 | `AGENT_IDENTITY` | *(BITBUCKET_USERNAME)* | Name shown in review/reply footers. Falls back to `BITBUCKET_USERNAME`, then `'Claude'` |
 
 > Threshold variables can also be set via CLI flags (`--min-changed-files`, etc.)

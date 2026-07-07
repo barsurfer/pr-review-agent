@@ -1,5 +1,48 @@
 import { describe, it, expect } from 'vitest'
-import { filterDiff, countChangedLines, parseVerdictScore, parseFindings, parseDeltaStats, isPathExcluded } from '../parsers.js'
+import { filterDiff, countChangedLines, parseVerdictScore, parseFindings, parseDeltaStats, isPathExcluded, scanTodos } from '../parsers.js'
+
+describe('scanTodos', () => {
+  it('finds a TODO in an added line with the correct new-file line number', () => {
+    const diff = [
+      'diff --git a/src/app.ts b/src/app.ts',
+      '--- a/src/app.ts',
+      '+++ b/src/app.ts',
+      '@@ -10,3 +10,5 @@',
+      ' context line',
+      '+const x = 1 // TODO: fix this',
+      '+const y = 2',
+      ' another context',
+    ].join('\n')
+    expect(scanTodos(diff)).toEqual([{ file: 'src/app.ts', line: 11, text: 'TODO: fix this' }])
+  })
+
+  it('ignores markers in removed and context lines', () => {
+    const diff = [
+      'diff --git a/a.ts b/a.ts',
+      '+++ b/a.ts',
+      '@@ -1,2 +1,2 @@',
+      '-const old = 1 // TODO: removed',
+      ' const ctx = 2 // TODO: context',
+    ].join('\n')
+    expect(scanTodos(diff)).toHaveLength(0)
+  })
+
+  it('matches FIXME and HACK case-insensitively', () => {
+    const diff = [
+      'diff --git a/a.ts b/a.ts',
+      '+++ b/a.ts',
+      '@@ -1 +1,2 @@',
+      '+// fixme handle null',
+      '+// HACK: temporary',
+    ].join('\n')
+    expect(scanTodos(diff).map(t => t.text)).toEqual(['FIXME: handle null', 'HACK: temporary'])
+  })
+
+  it('returns empty for a clean diff', () => {
+    const diff = 'diff --git a/a.ts b/a.ts\n+++ b/a.ts\n@@ -1 +1,2 @@\n+const x = 1'
+    expect(scanTodos(diff)).toEqual([])
+  })
+})
 
 // ---------------------------------------------------------------------------
 // filterDiff

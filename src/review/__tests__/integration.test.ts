@@ -11,6 +11,7 @@ vi.mock('../../config.js', () => ({
     judge: { model: '', maxRetries: 1 },
     agentIdentity: 'test-bot',
     reply: { maxComments: 3 },
+    review: { maxFindings: 0, splitCheck: false, todoScan: true },
     context: { maxFiles: 20, maxFileLines: 500 },
     skipSourceBranches: ['main', 'master', 'release/*', 'hotfix/*'],
     skipTargetBranches: ['main', 'master'],
@@ -108,6 +109,7 @@ beforeEach(() => {
   setupClaudeMocks()
   cfg.judge.model = ''
   cfg.reply.maxComments = 3
+  cfg.review = { maxFindings: 0, splitCheck: false, todoScan: true }
   cfg.skipSourceBranches = ['main', 'master', 'release/*', 'hotfix/*']
   cfg.skipTargetBranches = ['main', 'master']
   cfg.diffExcludePatterns = ['*.lock', 'package-lock.json', '*.spec.ts']
@@ -416,6 +418,66 @@ describe('jenkins metadata in comment', () => {
       process.env.BUILD_NUMBER = prev.BUILD_NUMBER
       process.env.BUILD_URL = prev.BUILD_URL
     }
+  })
+})
+
+// ===========================================================================
+// Scenario 8e: MAX_FINDINGS cap injects a findings limit into the reviewer prompt
+// ===========================================================================
+
+describe('MAX_FINDINGS cap', () => {
+  it('appends a findings limit to the reviewer prompt when set', async () => {
+    const adapter = makeAdapter()
+    setupClaudeMocks()
+    cfg.review.maxFindings = 3
+
+    await review(adapter, '100', true)
+
+    const promptArg = mockRunReview.mock.calls[0][6] as { content: string }
+    expect(promptArg.content).toContain('FINDINGS LIMIT')
+    expect(promptArg.content).toContain('at most 3')
+  })
+
+  it('does not append anything when MAX_FINDINGS is 0', async () => {
+    const adapter = makeAdapter()
+    setupClaudeMocks()
+
+    await review(adapter, '100', true)
+
+    const promptArg = mockRunReview.mock.calls[0][6] as { content: string }
+    expect(promptArg.content).not.toContain('FINDINGS LIMIT')
+  })
+})
+
+// ===========================================================================
+// Scenario 8f: TODO scan appends a deterministic section
+// ===========================================================================
+
+describe('TODO scan', () => {
+  it('appends a TODOs Introduced section for markers in added lines', async () => {
+    const todoDiff = 'diff --git a/src/app.ts b/src/app.ts\n--- a/src/app.ts\n+++ b/src/app.ts\n@@ -1 +1,2 @@\n+const x = 1 // TODO: handle error\n'
+    const adapter = makeAdapter({ getDiff: vi.fn().mockResolvedValue(todoDiff) })
+    setupClaudeMocks()
+
+    const record = await review(adapter, '100', false)
+
+    expect(record!.action).toBe('REVIEW')
+    const body = vi.mocked(adapter.postComment).mock.calls[0][1] as string
+    expect(body).toContain('### TODOs Introduced')
+    expect(body).toContain('`src/app.ts:1`')
+    expect(body).toContain('TODO: handle error')
+  })
+
+  it('omits the section when todoScan is disabled', async () => {
+    const todoDiff = 'diff --git a/src/app.ts b/src/app.ts\n--- a/src/app.ts\n+++ b/src/app.ts\n@@ -1 +1,2 @@\n+const x = 1 // TODO: handle error\n'
+    const adapter = makeAdapter({ getDiff: vi.fn().mockResolvedValue(todoDiff) })
+    setupClaudeMocks()
+    cfg.review.todoScan = false
+
+    await review(adapter, '100', false)
+
+    const body = vi.mocked(adapter.postComment).mock.calls[0][1] as string
+    expect(body).not.toContain('TODOs Introduced')
   })
 })
 

@@ -6,7 +6,7 @@ import { config } from '../config.js'
 import { loadPrompt } from '../prompt/loader.js'
 import { fetchContext } from '../context/fetcher.js'
 import { runReview, runCommentResponse, runJudge } from '../claude/client.js'
-import { filterDiff, countChangedLines, parseFindings, parseVerdictScore, isPathExcluded } from './parsers.js'
+import { filterDiff, countChangedLines, parseFindings, parseVerdictScore, isPathExcluded, scanTodos } from './parsers.js'
 import { buildReviewFooter, buildReplyFooter, stripPreviousFooter, stripDeltaStats, stripJudgeNotes, stripJenkinsMeta, stripPreamble, isNoChange, extractCommitHash } from './formatter.js'
 import { buildUsageRecord, logUsageRecord, getBuildCommit, buildJenkinsComment } from './usage.js'
 import { State } from './types.js'
@@ -267,6 +267,16 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
     }
 
     case State.CALL_CLAUDE: {
+      // Runtime prompt add-ons (opt-in) — appended without touching the base template
+      let content = ctx.prompt!.content
+      if (config.review.maxFindings > 0) {
+        content += `\n\n## FINDINGS LIMIT\nReport at most ${config.review.maxFindings} findings, prioritized by severity and impact. If more exist, include only the most important and omit the rest.`
+      }
+      if (config.review.splitCheck) {
+        content += `\n\n## SPLIT CHECK\nIf this PR spans multiple independent themes that could each be a separate, independently-reviewable PR, add a "### Can Be Split" section listing them (one line each). If the PR is cohesive, omit the section entirely.`
+      }
+      const reviewPrompt = { ...ctx.prompt!, content }
+
       const result = await runReview(
         config.anthropic.apiKey,
         config.anthropic.model,
@@ -274,7 +284,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         ctx.prInfo!,
         ctx.filteredDiff!,
         ctx.fileContexts!,
-        ctx.prompt!,
+        reviewPrompt,
         ctx.previousReviews ?? [],
         ctx.replies ?? []
       )
@@ -374,9 +384,17 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         throw new Error(`Review appears truncated — missing ${judged ? 'Merge Confidence' : 'Unresolved Questions'} section; refusing to post a partial review`)
       }
 
+      // Deterministic TODO/FIXME/HACK scan of added lines — reliably catches breadcrumbs
+      const todos = config.review.todoScan ? scanTodos(ctx.filteredDiff!) : []
+      let todoSection = ''
+      if (todos.length > 0) {
+        console.log(`  Found ${todos.length} TODO/FIXME/HACK marker(s) in added lines`)
+        todoSection = '\n\n### TODOs Introduced\n' + todos.map(t => `- \`${t.file}:${t.line}\` — ${t.text}`).join('\n')
+      }
+
       const commitShort = ctx.prInfo!.sourceCommit.slice(0, 12)
       const footer = buildReviewFooter(config.agentIdentity, config.anthropic.model, ctx.prompt!.source, ctx.reviewNumber, commitShort, getBuildCommit())
-      const comment = cleaned + footer + buildJenkinsComment()
+      const comment = cleaned + todoSection + footer + buildJenkinsComment()
 
       if (ctx.dryRun) {
         console.log('\n=== DRY RUN — Review output (not posted) ===\n')
