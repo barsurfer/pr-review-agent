@@ -30673,7 +30673,7 @@ function getBuildCommit() {
     const dirty = (0, import_child_process.execSync)("git status --porcelain", opts2).toString().trim() ? "-dirty" : "";
     return hash + dirty;
   } catch {
-    if (true) return "600d422";
+    if (true) return "c72fb6d";
     return "unknown";
   }
 }
@@ -31040,7 +31040,22 @@ async function transition(state, ctx) {
       if (judgeNotes) {
         console.log(`  Judge notes (stripped from comment): ${judgeNotes[1].trim()}`);
       }
-      const cleaned = stripJenkinsMeta(stripPreamble(stripJudgeNotes(stripDeltaStats(stripPreviousFooter(ctx.reviewText)))));
+      const raw = ctx.reviewText;
+      const s1 = stripPreviousFooter(raw);
+      const s2 = stripDeltaStats(s1);
+      const s3 = stripJudgeNotes(s2);
+      const s4 = stripPreamble(s3);
+      const cleaned = stripJenkinsMeta(s4);
+      const cuts = [
+        ["footer", raw.length - s1.length],
+        ["delta-stats", s1.length - s2.length],
+        ["judge-notes", s2.length - s3.length],
+        ["preamble", s3.length - s4.length],
+        ["jenkins", s4.length - cleaned.length]
+      ].filter(([, n]) => n > 0).map(([name, n]) => `${name} -${n}`);
+      if (cuts.length) {
+        console.log(`  Cleanup removed ${raw.length - cleaned.length} chars (${raw.length} \u2192 ${cleaned.length}): ${cuts.join(", ")}`);
+      }
       if (!cleaned.trim() || isNoChange(cleaned)) {
         console.log("  Review text empty or NO_CHANGE after cleanup \u2014 skipping post");
         ctx.action = "NO_CHANGE";

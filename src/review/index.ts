@@ -336,7 +336,25 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       if (judgeNotes) {
         console.log(`  Judge notes (stripped from comment): ${judgeNotes[1].trim()}`)
       }
-      const cleaned = stripJenkinsMeta(stripPreamble(stripJudgeNotes(stripDeltaStats(stripPreviousFooter(ctx.reviewText!)))))
+
+      // Apply cleanup in stages and log what each removes, so we can confirm cleanup
+      // never over-eats (a large cut from anything but preamble is a red flag)
+      const raw = ctx.reviewText!
+      const s1 = stripPreviousFooter(raw)
+      const s2 = stripDeltaStats(s1)
+      const s3 = stripJudgeNotes(s2)
+      const s4 = stripPreamble(s3)
+      const cleaned = stripJenkinsMeta(s4)
+      const cuts = [
+        ['footer', raw.length - s1.length],
+        ['delta-stats', s1.length - s2.length],
+        ['judge-notes', s2.length - s3.length],
+        ['preamble', s3.length - s4.length],
+        ['jenkins', s4.length - cleaned.length],
+      ].filter(([, n]) => (n as number) > 0).map(([name, n]) => `${name} -${n}`)
+      if (cuts.length) {
+        console.log(`  Cleanup removed ${raw.length - cleaned.length} chars (${raw.length} → ${cleaned.length}): ${cuts.join(', ')}`)
+      }
       if (!cleaned.trim() || isNoChange(cleaned)) {
         console.log('  Review text empty or NO_CHANGE after cleanup — skipping post')
         ctx.action = 'NO_CHANGE'
