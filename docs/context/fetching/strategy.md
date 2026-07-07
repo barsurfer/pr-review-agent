@@ -48,7 +48,11 @@ Always include full content regardless of size:
 
 ### Ordering
 
-High-churn files are fetched first. Low-churn files fill remaining capacity up to `MAX_CONTEXT_FILES` (default: 20).
+High-churn files are fetched first. Low-churn files fill remaining capacity up to `MAX_CONTEXT_FILES` (default: 20). Fetches run in **concurrency-bounded batches** (5 at a time) rather than one-at-a-time, preserving churn order, the skip-large-low-churn filter, and the cap.
+
+### Degradation before skip
+
+If the estimated input exceeds `MAX_INPUT_TOKENS` in `ESTIMATE_TOKENS`, the agent **drops the file contexts** (the largest optional payload) and reviews **diff-only** rather than skipping the PR — the usage record's `degraded` flag records this. It only skips outright if the diff alone still exceeds the budget.
 
 ### Limits
 

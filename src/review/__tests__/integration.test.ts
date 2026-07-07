@@ -109,6 +109,7 @@ beforeEach(() => {
   setupClaudeMocks()
   cfg.judge.model = ''
   cfg.reply.maxComments = 3
+  cfg.anthropic.maxInputTokens = 150000
   cfg.review = { maxFindings: 0, splitCheck: false, todoScan: true }
   cfg.skipSourceBranches = ['main', 'master', 'release/*', 'hotfix/*']
   cfg.skipTargetBranches = ['main', 'master']
@@ -491,6 +492,40 @@ describe('TODO scan', () => {
 
     const body = vi.mocked(adapter.postComment).mock.calls[0][1] as string
     expect(body).not.toContain('TODOs Introduced')
+  })
+})
+
+// ===========================================================================
+// Scenario 8g: Token-budget degradation — drop file contexts before skipping
+// ===========================================================================
+
+describe('token-budget degradation', () => {
+  it('drops file contexts and reviews diff-only when over MAX_INPUT_TOKENS', async () => {
+    const adapter = makeAdapter()
+    setupClaudeMocks()
+    mockFetchContext.mockResolvedValue([{ path: 'big.ts', content: 'x'.repeat(8000) }])
+    cfg.anthropic.maxInputTokens = 100   // tiny budget — contexts blow it
+
+    const record = await review(adapter, '100', false)
+
+    expect(record!.action).toBe('REVIEW')            // reviewed, not skipped
+    expect(record!.degraded).toBe(true)
+    expect(record!.context_files_fetched).toBe(0)    // contexts dropped
+    expect(mockRunReview).toHaveBeenCalledTimes(1)
+  })
+
+  it('skips only when even the diff alone exceeds the budget', async () => {
+    const bigDiff = 'diff --git a/x.ts b/x.ts\n--- a/x.ts\n+++ b/x.ts\n@@ -1 +1,6 @@\n' + Array(6).fill('+' + 'a'.repeat(80)).join('\n') + '\n'
+    const adapter = makeAdapter({ getDiff: vi.fn().mockResolvedValue(bigDiff) })
+    setupClaudeMocks()
+    mockFetchContext.mockResolvedValue([{ path: 'big.ts', content: 'y'.repeat(8000) }])
+    cfg.anthropic.maxInputTokens = 100
+
+    const record = await review(adapter, '100', false)
+
+    expect(record!.action).toBe('SKIP')              // diff alone still over budget
+    expect(record!.degraded).toBe(true)              // it tried degrading first
+    expect(mockRunReview).not.toHaveBeenCalled()
   })
 })
 

@@ -25,6 +25,7 @@ export interface UsageRecord {
   changed_files: number
   changed_lines: number
   context_files_fetched: number
+  degraded: boolean
   review_number: number
   action: string
   skip_reason: string | null
@@ -157,6 +158,7 @@ export function buildUsageRecord(
     changed_files: ctx.changedFiles?.length ?? 0,
     changed_lines: ctx.lineCount ?? 0,
     context_files_fetched: ctx.fileContexts?.length ?? 0,
+    degraded: ctx.degraded ?? false,
     review_number: ctx.reviewNumber,
     action: ctx.action,
     skip_reason: ctx.skipReason ?? null,

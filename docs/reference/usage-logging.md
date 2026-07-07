@@ -88,7 +88,8 @@ The record is also printed to stdout at the end of every run regardless of the f
 | `target_branch` | `string` | e.g. `main`, `develop` |
 | `changed_files` | `number` | Number of files changed in the PR |
 | `changed_lines` | `number` | Total lines changed (additions + deletions) |
-| `context_files_fetched` | `number` | Number of files fetched for full context |
+| `context_files_fetched` | `number` | Number of files fetched for full context (0 if dropped by degradation) |
+| `degraded` | `boolean` | `true` if file contexts were dropped to fit `MAX_INPUT_TOKENS` — the review ran diff-only instead of being skipped |
 | `review_number` | `number` | 1 = initial review, 2+ = re-review |
 | `action` | `string` | `REVIEW` \| `RE_REVIEW` \| `REPLY` \| `NO_CHANGE` \| `SKIP` \| `DEDUP_SKIP` \| `ERROR` |
 | `skip_reason` | `string \| null` | Human-readable reason when action is not `REVIEW` |

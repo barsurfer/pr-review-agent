@@ -64,22 +64,30 @@ export async function fetchContext(
   })
 
   const results: FileContext[] = []
+  const CONCURRENCY = 5
 
-  for (const file of sorted) {
-    if (results.length >= maxFiles) break
+  // Fetch in concurrency-bounded batches (was one-at-a-time) — preserves churn order,
+  // the skip-large-low-churn filter, and the maxFiles cap.
+  for (let i = 0; i < sorted.length && results.length < maxFiles; i += CONCURRENCY) {
+    const batch = sorted.slice(i, i + CONCURRENCY)
+    const fetched = await Promise.all(batch.map(async (file) => {
+      try {
+        return { file, content: await adapter.getFileContent(file.path, sourceCommit) }
+      } catch (err: unknown) {
+        console.warn(`Could not fetch content for ${file.path}:`, (err as Error).message)
+        return null
+      }
+    }))
 
-    try {
-      const content = await adapter.getFileContent(file.path, sourceCommit)
-      const lineCount = countLines(content)
-
-      if (lineCount > maxFileLines && !highChurnInDiff(file.path, diff)) {
-        console.log(`Skipping ${file.path} — ${lineCount} lines (over limit, low churn)`)
+    for (const item of fetched) {
+      if (!item) continue
+      if (results.length >= maxFiles) break
+      const lineCount = countLines(item.content)
+      if (lineCount > maxFileLines && !highChurnInDiff(item.file.path, diff)) {
+        console.log(`Skipping ${item.file.path} — ${lineCount} lines (over limit, low churn)`)
         continue
       }
-
-      results.push({ path: file.path, content })
-    } catch (err: unknown) {
-      console.warn(`Could not fetch content for ${file.path}:`, (err as Error).message)
+      results.push({ path: item.file.path, content: item.content })
     }
   }
 

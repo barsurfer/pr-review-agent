@@ -246,21 +246,32 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
     }
 
     case State.ESTIMATE_TOKENS: {
-      const promptChars = ctx.prompt!.content.length
-      const diffChars = ctx.filteredDiff!.length
-      const contextChars = ctx.fileContexts!.reduce((sum, f) => sum + f.content.length, 0)
-      const reviewChars = (ctx.previousReviews ?? []).reduce((sum, r) => sum + r.body.length, 0)
-      const replyChars = (ctx.replies ?? []).reduce((sum, r) => sum + r.body.length, 0)
-      const totalChars = promptChars + diffChars + contextChars + reviewChars + replyChars
-      const estimatedTokens = Math.ceil(totalChars / 4)
+      const estimate = () => {
+        const contextChars = ctx.fileContexts!.reduce((sum, f) => sum + f.content.length, 0)
+        const reviewChars = (ctx.previousReviews ?? []).reduce((sum, r) => sum + r.body.length, 0)
+        const replyChars = (ctx.replies ?? []).reduce((sum, r) => sum + r.body.length, 0)
+        return Math.ceil((ctx.prompt!.content.length + ctx.filteredDiff!.length + contextChars + reviewChars + replyChars) / 4)
+      }
+
+      let estimatedTokens = estimate()
+      const max = config.anthropic.maxInputTokens
+      console.log(`  Estimated input: ~${estimatedTokens.toLocaleString()} tokens`)
+
+      // Degrade before skipping: file contexts are the largest optional payload —
+      // drop them and review diff-only rather than skip a large PR entirely.
+      if (max > 0 && estimatedTokens > max && ctx.fileContexts!.length > 0) {
+        console.log(`  Over MAX_INPUT_TOKENS (${max.toLocaleString()}) — dropping ${ctx.fileContexts!.length} file context(s), reviewing diff-only`)
+        ctx.fileContexts = []
+        ctx.degraded = true
+        estimatedTokens = estimate()
+        console.log(`  Re-estimated input: ~${estimatedTokens.toLocaleString()} tokens (diff-only)`)
+      }
 
       ctx.estimatedInputTokens = estimatedTokens
-      console.log(`  Estimated input: ~${estimatedTokens.toLocaleString()} tokens (${totalChars.toLocaleString()} chars)`)
 
-      const max = config.anthropic.maxInputTokens
       if (max > 0 && estimatedTokens > max) {
         ctx.action = 'SKIP'
-        ctx.skipReason = `Estimated input ~${estimatedTokens.toLocaleString()} tokens exceeds MAX_INPUT_TOKENS (${max.toLocaleString()})`
+        ctx.skipReason = `Estimated input ~${estimatedTokens.toLocaleString()} tokens exceeds MAX_INPUT_TOKENS (${max.toLocaleString()}) even without file context`
         return State.SKIP
       }
       return State.CALL_CLAUDE

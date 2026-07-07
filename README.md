@@ -340,7 +340,7 @@ All credentials and settings are provided via environment variables.
 | `BITBUCKET_BASE_URL` | `https://api.bitbucket.org/2.0` | Bitbucket Cloud API base URL (Server/DC is not supported — different v1 API) |
 | `CLAUDE_MODEL` | `claude-sonnet-4-6` | Claude model ID to use for reviews |
 | `MAX_RETRIES` | `3` | Max retries on 429/5xx errors (exponential backoff) |
-| `MAX_INPUT_TOKENS` | `150000` | Skip review if estimated input tokens exceed this value (0 = disabled) |
+| `MAX_INPUT_TOKENS` | `150000` | Over budget → drop file contexts and review diff-only; skip only if the diff alone still exceeds it (0 = disabled) |
 | `MAX_CONTEXT_FILES` | `20` | Max files to fetch full content for |
 | `MAX_FILE_LINES` | `500` | Files over this line count get diff-only context |
 | `MIN_CHANGED_FILES` | `0` (disabled) | Skip review if PR has fewer changed files |

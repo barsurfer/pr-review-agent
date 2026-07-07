@@ -30418,18 +30418,26 @@ async function fetchContext(adapter2, changedFiles, sourceCommit, diff, maxFiles
     return aChurn - bChurn;
   });
   const results = [];
-  for (const file of sorted) {
-    if (results.length >= maxFiles) break;
-    try {
-      const content = await adapter2.getFileContent(file.path, sourceCommit);
-      const lineCount = countLines(content);
-      if (lineCount > maxFileLines && !highChurnInDiff(file.path, diff)) {
-        console.log(`Skipping ${file.path} \u2014 ${lineCount} lines (over limit, low churn)`);
+  const CONCURRENCY = 5;
+  for (let i = 0; i < sorted.length && results.length < maxFiles; i += CONCURRENCY) {
+    const batch = sorted.slice(i, i + CONCURRENCY);
+    const fetched = await Promise.all(batch.map(async (file) => {
+      try {
+        return { file, content: await adapter2.getFileContent(file.path, sourceCommit) };
+      } catch (err) {
+        console.warn(`Could not fetch content for ${file.path}:`, err.message);
+        return null;
+      }
+    }));
+    for (const item of fetched) {
+      if (!item) continue;
+      if (results.length >= maxFiles) break;
+      const lineCount = countLines(item.content);
+      if (lineCount > maxFileLines && !highChurnInDiff(item.file.path, diff)) {
+        console.log(`Skipping ${item.file.path} \u2014 ${lineCount} lines (over limit, low churn)`);
         continue;
       }
-      results.push({ path: file.path, content });
-    } catch (err) {
-      console.warn(`Could not fetch content for ${file.path}:`, err.message);
+      results.push({ path: item.file.path, content: item.content });
     }
   }
   return results;
@@ -30739,7 +30747,7 @@ function getBuildCommit() {
     const dirty = (0, import_child_process.execSync)("git status --porcelain", opts2).toString().trim() ? "-dirty" : "";
     return hash + dirty;
   } catch {
-    if (true) return "ee697ef";
+    if (true) return "23a2b9e";
     return "unknown";
   }
 }
@@ -30779,6 +30787,7 @@ function buildUsageRecord(ctx, durationMs, error) {
     changed_files: ctx.changedFiles?.length ?? 0,
     changed_lines: ctx.lineCount ?? 0,
     context_files_fetched: ctx.fileContexts?.length ?? 0,
+    degraded: ctx.degraded ?? false,
     review_number: ctx.reviewNumber,
     action: ctx.action,
     skip_reason: ctx.skipReason ?? null,
@@ -31022,19 +31031,26 @@ async function transition(state, ctx) {
       return 9 /* ESTIMATE_TOKENS */;
     }
     case 9 /* ESTIMATE_TOKENS */: {
-      const promptChars = ctx.prompt.content.length;
-      const diffChars = ctx.filteredDiff.length;
-      const contextChars = ctx.fileContexts.reduce((sum, f) => sum + f.content.length, 0);
-      const reviewChars = (ctx.previousReviews ?? []).reduce((sum, r) => sum + r.body.length, 0);
-      const replyChars = (ctx.replies ?? []).reduce((sum, r) => sum + r.body.length, 0);
-      const totalChars = promptChars + diffChars + contextChars + reviewChars + replyChars;
-      const estimatedTokens = Math.ceil(totalChars / 4);
-      ctx.estimatedInputTokens = estimatedTokens;
-      console.log(`  Estimated input: ~${estimatedTokens.toLocaleString()} tokens (${totalChars.toLocaleString()} chars)`);
+      const estimate = () => {
+        const contextChars = ctx.fileContexts.reduce((sum, f) => sum + f.content.length, 0);
+        const reviewChars = (ctx.previousReviews ?? []).reduce((sum, r) => sum + r.body.length, 0);
+        const replyChars = (ctx.replies ?? []).reduce((sum, r) => sum + r.body.length, 0);
+        return Math.ceil((ctx.prompt.content.length + ctx.filteredDiff.length + contextChars + reviewChars + replyChars) / 4);
+      };
+      let estimatedTokens = estimate();
       const max = config.anthropic.maxInputTokens;
+      console.log(`  Estimated input: ~${estimatedTokens.toLocaleString()} tokens`);
+      if (max > 0 && estimatedTokens > max && ctx.fileContexts.length > 0) {
+        console.log(`  Over MAX_INPUT_TOKENS (${max.toLocaleString()}) \u2014 dropping ${ctx.fileContexts.length} file context(s), reviewing diff-only`);
+        ctx.fileContexts = [];
+        ctx.degraded = true;
+        estimatedTokens = estimate();
+        console.log(`  Re-estimated input: ~${estimatedTokens.toLocaleString()} tokens (diff-only)`);
+      }
+      ctx.estimatedInputTokens = estimatedTokens;
       if (max > 0 && estimatedTokens > max) {
         ctx.action = "SKIP";
-        ctx.skipReason = `Estimated input ~${estimatedTokens.toLocaleString()} tokens exceeds MAX_INPUT_TOKENS (${max.toLocaleString()})`;
+        ctx.skipReason = `Estimated input ~${estimatedTokens.toLocaleString()} tokens exceeds MAX_INPUT_TOKENS (${max.toLocaleString()}) even without file context`;
         return 14 /* SKIP */;
       }
       return 10 /* CALL_CLAUDE */;

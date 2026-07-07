@@ -59,4 +59,5 @@ export interface ReviewContext {
   // Tracking
   action: string
   reviewNumber: number
+  degraded?: boolean   // file contexts dropped to fit MAX_INPUT_TOKENS (diff-only review)
 }
