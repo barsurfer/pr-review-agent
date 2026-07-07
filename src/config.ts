@@ -11,13 +11,22 @@ function optional(name: string, defaultValue: string): string {
 }
 
 export const config = {
-  vcsProvider: optional('VCS_PROVIDER', 'bitbucket') as 'bitbucket' | 'github' | 'gitlab',
+  vcsProvider: optional('VCS_PROVIDER', 'bitbucket') as 'bitbucket' | 'github' | 'gitlab' | 'azure',
 
   bitbucket: {
     baseUrl: optional('BITBUCKET_BASE_URL', 'https://api.bitbucket.org/2.0'),
     workspace: optional('BITBUCKET_WORKSPACE', ''),
     username: optional('BITBUCKET_USERNAME', ''),
     token: optional('BITBUCKET_TOKEN', ''),
+  },
+
+  // Azure DevOps (experimental / WIP). baseUrl defaults to cloud Services; point it at
+  // an on-prem Server collection URL for self-hosted. org may be aliased by --workspace.
+  azure: {
+    baseUrl: optional('AZURE_BASE_URL', 'https://dev.azure.com'),
+    org: optional('AZURE_ORG', ''),
+    project: optional('AZURE_PROJECT', ''),
+    pat: optional('AZURE_PAT', ''),
   },
 
   anthropic: {
@@ -72,4 +81,10 @@ export function validateBitbucketConfig(): void {
   if (!config.bitbucket.workspace) throw new Error('Missing required environment variable: BITBUCKET_WORKSPACE')
   if (!config.bitbucket.username) throw new Error('Missing required environment variable: BITBUCKET_USERNAME')
   if (!config.bitbucket.token) throw new Error('Missing required environment variable: BITBUCKET_TOKEN')
+}
+
+export function validateAzureConfig(): void {
+  if (!config.azure.org) throw new Error('Missing required environment variable: AZURE_ORG')
+  if (!config.azure.project) throw new Error('Missing required environment variable: AZURE_PROJECT')
+  if (!config.azure.pat) throw new Error('Missing required environment variable: AZURE_PAT')
 }
