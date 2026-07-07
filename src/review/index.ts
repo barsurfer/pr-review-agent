@@ -260,7 +260,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       // Degrade before skipping: file contexts are the largest optional payload —
       // drop them and review diff-only rather than skip a large PR entirely.
       if (max > 0 && estimatedTokens > max && ctx.fileContexts!.length > 0) {
-        console.log(`  Over MAX_INPUT_TOKENS (${max.toLocaleString()}) — dropping ${ctx.fileContexts!.length} file context(s), reviewing diff-only`)
+        console.warn(`  Over MAX_INPUT_TOKENS (${max.toLocaleString()}) — dropping ${ctx.fileContexts!.length} file context(s), reviewing diff-only`)
         ctx.fileContexts = []
         ctx.degraded = true
         estimatedTokens = estimate()

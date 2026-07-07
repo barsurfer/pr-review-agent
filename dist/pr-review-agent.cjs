@@ -30747,7 +30747,7 @@ function getBuildCommit() {
     const dirty = (0, import_child_process.execSync)("git status --porcelain", opts2).toString().trim() ? "-dirty" : "";
     return hash + dirty;
   } catch {
-    if (true) return "23a2b9e";
+    if (true) return "7389190";
     return "unknown";
   }
 }
@@ -31041,7 +31041,7 @@ async function transition(state, ctx) {
       const max = config.anthropic.maxInputTokens;
       console.log(`  Estimated input: ~${estimatedTokens.toLocaleString()} tokens`);
       if (max > 0 && estimatedTokens > max && ctx.fileContexts.length > 0) {
-        console.log(`  Over MAX_INPUT_TOKENS (${max.toLocaleString()}) \u2014 dropping ${ctx.fileContexts.length} file context(s), reviewing diff-only`);
+        console.warn(`  Over MAX_INPUT_TOKENS (${max.toLocaleString()}) \u2014 dropping ${ctx.fileContexts.length} file context(s), reviewing diff-only`);
         ctx.fileContexts = [];
         ctx.degraded = true;
         estimatedTokens = estimate();
