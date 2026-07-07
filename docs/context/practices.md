@@ -57,3 +57,11 @@ See [prompt/composition.md](prompt/composition.md).
 ## Build & Deploy
 
 The agent ships as a single-file CJS bundle (`dist/pr-review-agent.cjs`) built with esbuild. All dependencies are baked in; only Node.js 20+ is required on the host. Rebuild with `npm run bundle` after source changes. The bundle is committed to the repo so Jenkins requires no `npm install`.
+
+## Versioning & Releases
+
+Because the bundle is committed, any git ref serves a downloadable build via `raw.githubusercontent.com/<owner>/<repo>/<ref>/dist/pr-review-agent.cjs` — the ref is the version selector (branch, tag, or commit SHA). No release infrastructure needed. Pin production Jenkins to a **tag** (immutable, no CDN lag); `main` is the moving latest channel. Cut a version with `npm version patch` — a `version` lifecycle script rebuilds and stages the bundle during the bump, so the embedded `__AGENT_VERSION__` (hence `agent_version` in `results.jsonl` and nothing in the footer contradicts it) always matches the tag. The footer's `Build: <hash>` maps any comment back to the exact bundle commit.
+
+## CI
+
+`.github/workflows/ci.yml` runs typecheck + the vitest suite + a bundle build on every push to `main` and every PR. It is the gate that keeps `main` releasable; it does not publish anything (releases are git tags, see above). No strict `dist/` drift check — the bundle embeds a per-commit build hash, so a rebuilt bundle always differs; correctness relies on the discipline of rebuilding and committing `dist/` alongside source changes.

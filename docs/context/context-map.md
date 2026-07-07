@@ -10,7 +10,7 @@ Rule: Each entry has a 1-sentence summary: key concepts, keywords, tech; ends wi
 
 - [summary.md](summary.md) — One-paragraph snapshot of the agent: what it does, stack, VCS support, model; read for orientation.
 - [terminology.md](terminology.md) — Domain glossary: PR Review, Delta Review, NO_CHANGE, commit hash dedup, generator-verifier, repo prompt sections; read when vocabulary is ambiguous.
-- [practices.md](practices.md) — Project-wide patterns: stateless design, FSM orchestration, API-only, footer-based dedup, generator-verifier, VCS adapter, reply bundling, FORBIDDEN rules, bundle/deploy; read before making architectural decisions.
+- [practices.md](practices.md) — Project-wide patterns: stateless design, FSM orchestration, API-only, footer-based dedup, generator-verifier, VCS adapter, reply bundling, FORBIDDEN rules, bundle/deploy, versioning/releases (raw-URL by tag), CI test gate; read before making architectural decisions.
 
 ---
 

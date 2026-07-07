@@ -260,6 +260,40 @@ npm run bundle
 
 ---
 
+## Versioning & Releases
+
+The bundle is committed to the repo, so any git ref serves a downloadable build via
+`raw.githubusercontent.com` — the ref **is** the version selector. No release infra required.
+
+| Want | URL |
+|------|-----|
+| Latest on `main` | `https://raw.githubusercontent.com/<owner>/<repo>/main/dist/pr-review-agent.cjs` |
+| A pinned version | `https://raw.githubusercontent.com/<owner>/<repo>/v0.0.3/dist/pr-review-agent.cjs` |
+| An exact build | `https://raw.githubusercontent.com/<owner>/<repo>/<commit-sha>/dist/pr-review-agent.cjs` |
+
+Pin production Jenkins to a **tag** (immutable content, no CDN lag); use `main` only for a
+bleeding-edge test job. Parameterize the ref as a Jenkins job parameter (`AGENT_REF`) to A/B builds.
+Every review footer ends with `Build: <hash>` — put that commit in the URL to fetch the exact
+bundle that produced any given comment.
+
+### Cutting a version
+
+```bash
+npm version patch        # bumps package.json, rebuilds+stages the bundle, commits, tags v0.0.4
+git push --follow-tags   # the vX.Y.Z raw URL now serves that exact build
+```
+
+The `version` lifecycle script (`npm run bundle && git add dist/pr-review-agent.cjs`) guarantees
+the tagged bundle embeds the matching version — `agent_version` in `results.jsonl` and the footer
+always agree with the tag. Requires a clean working tree.
+
+### CI
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs typecheck, the test suite, and a
+bundle build on every push to `main` and every PR — the gate that keeps `main` releasable.
+
+---
+
 ## CLI Flags
 
 | Flag | Required | Description |
