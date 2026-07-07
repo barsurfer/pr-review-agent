@@ -30661,7 +30661,7 @@ function getAgentVersion() {
     const pkg = JSON.parse((0, import_fs3.readFileSync)(pkgPath, "utf-8"));
     return pkg.version;
   } catch {
-    if (true) return "1.0.0";
+    if (true) return "0.0.3";
     return "unknown";
   }
 }
@@ -30673,7 +30673,7 @@ function getBuildCommit() {
     const dirty = (0, import_child_process.execSync)("git status --porcelain", opts2).toString().trim() ? "-dirty" : "";
     return hash + dirty;
   } catch {
-    if (true) return "61021fc";
+    if (true) return "20fb89d";
     return "unknown";
   }
 }
