@@ -40,9 +40,13 @@ export class AzureDevOpsAdapter implements VCSAdapter {
   private readonly authHeader: string
   private repoSlug = ''
 
-  constructor(baseUrl: string, org: string, project: string, pat: string) {
-    // PAT auth is HTTP Basic with an empty username: base64(":{PAT}").
-    this.authHeader = 'Basic ' + Buffer.from(`:${pat}`).toString('base64')
+  constructor(baseUrl: string, org: string, project: string, pat: string, accessToken = '') {
+    // Auth precedence: AZURE_ACCESS_TOKEN (OAuth Bearer — e.g. an Azure Pipelines
+    // System.AccessToken, no PAT needed) wins over AZURE_PAT (HTTP Basic with an
+    // empty username: base64(":{PAT}")). One of the two must be supplied.
+    this.authHeader = accessToken
+      ? `Bearer ${accessToken}`
+      : 'Basic ' + Buffer.from(`:${pat}`).toString('base64')
     this.client = axios.create({
       baseURL: `${baseUrl}/${encodeURIComponent(org)}/${encodeURIComponent(project)}/_apis/git`,
       headers: {

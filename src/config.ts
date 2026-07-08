@@ -27,6 +27,7 @@ export const config = {
     org: optional('AZURE_ORG', ''),
     project: optional('AZURE_PROJECT', ''),
     pat: optional('AZURE_PAT', ''),
+    accessToken: optional('AZURE_ACCESS_TOKEN', ''),   // OAuth Bearer (e.g. pipeline System.AccessToken); preferred over PAT
   },
 
   anthropic: {
@@ -86,5 +87,8 @@ export function validateBitbucketConfig(): void {
 export function validateAzureConfig(): void {
   if (!config.azure.org) throw new Error('Missing required environment variable: AZURE_ORG')
   if (!config.azure.project) throw new Error('Missing required environment variable: AZURE_PROJECT')
-  if (!config.azure.pat) throw new Error('Missing required environment variable: AZURE_PAT')
+  // At least one credential: AZURE_ACCESS_TOKEN (Bearer) or AZURE_PAT (Basic).
+  if (!config.azure.pat && !config.azure.accessToken) {
+    throw new Error('Missing required environment variable: AZURE_PAT or AZURE_ACCESS_TOKEN')
+  }
 }

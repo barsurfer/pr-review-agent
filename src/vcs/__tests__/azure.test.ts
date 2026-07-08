@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import axios from 'axios'
 import { AzureDevOpsAdapter } from '../azure.js'
+import { config, validateAzureConfig } from '../../config.js'
 import { buildReviewFooter, buildReplyFooter } from '../../review/formatter.js'
 import { filterDiff, countChangedLines, scanTodos } from '../../review/parsers.js'
 
@@ -11,9 +13,11 @@ import { filterDiff, countChangedLines, scanTodos } from '../../review/parsers.j
 // thread ⇄ composite-id comment handling never loops on the agent's own replies.
 // ---------------------------------------------------------------------------
 
-const { clientMock } = vi.hoisted(() => ({
-  clientMock: { get: vi.fn(), post: vi.fn() },
-}))
+const { clientMock } = vi.hoisted(() => {
+  // config.ts (imported, not mocked here) requires ANTHROPIC_API_KEY at load.
+  process.env.ANTHROPIC_API_KEY ??= 'test-key'
+  return { clientMock: { get: vi.fn(), post: vi.fn() } }
+})
 
 vi.mock('axios', () => ({
   default: {
@@ -88,6 +92,50 @@ function makeAdapter(): AzureDevOpsAdapter {
 beforeEach(() => {
   vi.clearAllMocks()
   vi.spyOn(console, 'warn').mockImplementation(() => {})   // silence the WIP banner
+})
+
+// --- Auth selection --------------------------------------------------------
+
+describe('auth header — Bearer (zero-PAT) vs Basic PAT', () => {
+  const authOf = () => (axios.create as any).mock.calls.at(-1)[0].headers.Authorization
+
+  it('uses Bearer when an access token is provided', () => {
+    new AzureDevOpsAdapter('https://dev.azure.com', 'org', 'proj', '', 'oauth-tok')
+    expect(authOf()).toBe('Bearer oauth-tok')
+  })
+
+  it('uses Basic base64(":{PAT}") when only a PAT is provided', () => {
+    new AzureDevOpsAdapter('https://dev.azure.com', 'org', 'proj', 'mypat', '')
+    expect(authOf()).toBe('Basic ' + Buffer.from(':mypat').toString('base64'))
+  })
+
+  it('prefers the access token when both are set', () => {
+    new AzureDevOpsAdapter('https://dev.azure.com', 'org', 'proj', 'mypat', 'oauth-tok')
+    expect(authOf()).toBe('Bearer oauth-tok')
+  })
+})
+
+describe('validateAzureConfig — org, project, and at least one credential', () => {
+  beforeEach(() => {
+    config.azure.org = 'o'
+    config.azure.project = 'p'
+    config.azure.pat = ''
+    config.azure.accessToken = ''
+  })
+
+  it('throws when neither PAT nor access token is set', () => {
+    expect(() => validateAzureConfig()).toThrow(/AZURE_PAT or AZURE_ACCESS_TOKEN/)
+  })
+
+  it('passes with only a PAT', () => {
+    config.azure.pat = 'x'
+    expect(() => validateAzureConfig()).not.toThrow()
+  })
+
+  it('passes with only an access token', () => {
+    config.azure.accessToken = 'x'
+    expect(() => validateAzureConfig()).not.toThrow()
+  })
 })
 
 // --- PR info ---------------------------------------------------------------

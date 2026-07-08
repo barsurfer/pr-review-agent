@@ -26172,7 +26172,9 @@ var config = {
     baseUrl: optional("AZURE_BASE_URL", "https://dev.azure.com"),
     org: optional("AZURE_ORG", ""),
     project: optional("AZURE_PROJECT", ""),
-    pat: optional("AZURE_PAT", "")
+    pat: optional("AZURE_PAT", ""),
+    accessToken: optional("AZURE_ACCESS_TOKEN", "")
+    // OAuth Bearer (e.g. pipeline System.AccessToken); preferred over PAT
   },
   anthropic: {
     apiKey: required("ANTHROPIC_API_KEY"),
@@ -26217,7 +26219,9 @@ function validateBitbucketConfig() {
 function validateAzureConfig() {
   if (!config.azure.org) throw new Error("Missing required environment variable: AZURE_ORG");
   if (!config.azure.project) throw new Error("Missing required environment variable: AZURE_PROJECT");
-  if (!config.azure.pat) throw new Error("Missing required environment variable: AZURE_PAT");
+  if (!config.azure.pat && !config.azure.accessToken) {
+    throw new Error("Missing required environment variable: AZURE_PAT or AZURE_ACCESS_TOKEN");
+  }
 }
 
 // node_modules/axios/lib/helpers/bind.js
@@ -30881,8 +30885,8 @@ var AzureDevOpsAdapter = class {
   client;
   authHeader;
   repoSlug = "";
-  constructor(baseUrl, org, project, pat) {
-    this.authHeader = "Basic " + Buffer.from(`:${pat}`).toString("base64");
+  constructor(baseUrl, org, project, pat, accessToken = "") {
+    this.authHeader = accessToken ? `Bearer ${accessToken}` : "Basic " + Buffer.from(`:${pat}`).toString("base64");
     this.client = axios_default.create({
       baseURL: `${baseUrl}/${encodeURIComponent(org)}/${encodeURIComponent(project)}/_apis/git`,
       headers: {
@@ -31786,7 +31790,7 @@ function getBuildCommit() {
     const dirty = (0, import_child_process.execSync)("git status --porcelain", opts2).toString().trim() ? "-dirty" : "";
     return hash + dirty;
   } catch {
-    if (true) return "ee697ef";
+    if (true) return "edf3a02";
     return "unknown";
   }
 }
@@ -32320,7 +32324,8 @@ async function main() {
       config.azure.baseUrl,
       config.azure.org,
       config.azure.project,
-      config.azure.pat
+      config.azure.pat,
+      config.azure.accessToken
     );
     if (!opts.repoSlug) {
       console.error("Error: --repo-slug is required for Azure DevOps");

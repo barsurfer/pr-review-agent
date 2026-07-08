@@ -1,0 +1,76 @@
+# PR Review Agent — Azure DevOps build-validation pipeline (experimental / WIP)
+#
+# ── HOW THIS GETS TRIGGERED (read this first) ────────────────────────────────
+# The YAML `pr:` trigger does NOT work for Azure Repos Git. To run the agent on
+# pull requests you MUST wire this pipeline as a **Branch Policy → Build Validation**
+# on the target branch:
+#   Repo → Branches → {target branch} ⋯ → Branch policies → Build Validation →
+#   "+ Add" → pick this pipeline. Set the policy to **Optional** so a failed/blocked
+#   agent run never blocks the PR from merging.
+#
+# ── PREREQUISITES ────────────────────────────────────────────────────────────
+#   1. "Allow scripts to access the OAuth token" must be enabled for the job, so
+#      $(System.AccessToken) is exposed to the script (zero-PAT auth). In the
+#      classic editor it's Agent job → Additional options; in YAML it's honored per
+#      job — confirm it's on for the pipeline.
+#   2. Grant the build service identity **"{Project} Build Service ({Org})"** the
+#      permission **"Contribute to Pull Requests" = Allow** on the repository, so the
+#      agent can post review threads/comments.
+#   3. Add ANTHROPIC_API_KEY as a **secret** pipeline variable (secrets are NOT
+#      auto-injected into the script env — they must be mapped explicitly, see below).
+#
+# ── AUTH (pick one) ──────────────────────────────────────────────────────────
+#   • Zero-PAT (recommended in pipelines): AZURE_ACCESS_TOKEN = $(System.AccessToken)
+#     → Bearer auth, nothing to store or rotate.
+#   • Stored PAT (local / other CI): set AZURE_PAT instead (Code read + Threads
+#     read&write scopes) → HTTP Basic auth. If both are set, the access token wins.
+
+trigger: none   # do not run on CI pushes — this is PR build-validation only
+pr: none        # `pr:` triggers are ignored for Azure Repos; use a Branch Policy (above)
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  # Pin to an immutable release tag — raw.githubusercontent serves the committed
+  # bundle at any ref, so the tag IS the version selector. Bump to roll forward.
+  AGENT_TAG: v0.0.3
+
+steps:
+  - task: NodeTool@0
+    displayName: 'Use Node.js 22'
+    inputs:
+      versionSpec: '22.x'
+
+  - script: |
+      set -euo pipefail
+
+      curl -fsSL "https://raw.githubusercontent.com/barsurfer/pr-review-agent/$(AGENT_TAG)/dist/pr-review-agent.cjs" -o agent.cjs
+
+      # Split System.CollectionUri into { base URL, org/collection } for the adapter:
+      #   cloud:   https://dev.azure.com/myorg/                 → base=https://dev.azure.com        org=myorg
+      #   on-prem: https://tfs.company/tfs/DefaultCollection/   → base=https://tfs.company/tfs       org=DefaultCollection
+      COLL="${SYSTEM_COLLECTIONURI%/}"
+      export AZURE_ORG="${COLL##*/}"
+      export AZURE_BASE_URL="${COLL%/*}"
+
+      node agent.cjs \
+        --vcs azure \
+        --repo-slug "$(Build.Repository.Name)" \
+        --pr-id "$(System.PullRequest.PullRequestId)"
+    displayName: 'PR Review Agent (WIP)'
+    continueOnError: true   # never fail the build on agent error (pair with an Optional policy)
+    env:
+      # Zero-PAT OAuth token from the pipeline (needs "Allow scripts to access the
+      # OAuth token"). To use a stored PAT instead, replace this with: AZURE_PAT: $(AZURE_PAT)
+      AZURE_ACCESS_TOKEN: $(System.AccessToken)
+      AZURE_PROJECT: $(System.TeamProject)
+      ANTHROPIC_API_KEY: $(ANTHROPIC_API_KEY)   # secret pipeline variable — mapped explicitly
+
+  - task: PublishPipelineArtifact@1
+    displayName: 'Archive results.jsonl'
+    condition: always()
+    continueOnError: true
+    inputs:
+      targetPath: results.jsonl
+      artifact: pr-review-results

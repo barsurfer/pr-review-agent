@@ -105,7 +105,8 @@ async function main(): Promise<void> {
       config.azure.baseUrl,
       config.azure.org,
       config.azure.project,
-      config.azure.pat
+      config.azure.pat,
+      config.azure.accessToken
     )
 
     if (!opts.repoSlug) {
