@@ -76,12 +76,18 @@ instance**. Prints a one-line WIP warning on construction.
 | `AZURE_BASE_URL` | `https://dev.azure.com` | API base URL. Default is cloud Services; set to an on-prem **Server** collection URL for self-hosted. |
 | `AZURE_ORG` | `my-org` | Organization / collection name (required). Can also be set via `--workspace`. |
 | `AZURE_PROJECT` | `my-project` | Project name (required). |
-| `AZURE_PAT` | `xxxxxxxx...` | Personal Access Token (required). Scopes: Code (read) + Threads (read & write). Sent as HTTP Basic `base64(":{PAT}")` (empty username). |
+| `AZURE_ACCESS_TOKEN` | `$(System.AccessToken)` | OAuth Bearer token — e.g. the Azure Pipelines built-in `System.AccessToken`. Zero-PAT auth. **One of this or `AZURE_PAT` is required.** |
+| `AZURE_PAT` | `xxxxxxxx...` | Personal Access Token. Scopes: Code (read) + Threads (read & write). Sent as HTTP Basic `base64(":{PAT}")` (empty username). **One of this or `AZURE_ACCESS_TOKEN` is required.** |
+
+**Auth selection:** if `AZURE_ACCESS_TOKEN` is set it is used as `Authorization: Bearer …`
+(preferred in pipelines); otherwise `AZURE_PAT` is used as HTTP Basic. `validateAzureConfig()`
+requires `AZURE_ORG`, `AZURE_PROJECT`, and **at least one** of the two credentials — otherwise
+it throws `Missing required environment variable: AZURE_PAT or AZURE_ACCESS_TOKEN`.
 
 Repository is passed via `--repo-slug` (repo name or GUID). All calls send `?api-version=7.1`.
 The diff is reconstructed from the `diffs/commits` change list + per-file blob content
-(no native unified-diff endpoint), using the `diff` (jsdiff) library. `validateAzureConfig()`
-throws on any missing required var, mirroring `validateBitbucketConfig()`.
+(no native unified-diff endpoint), using the `diff` (jsdiff) library. See
+[`azure/azure-pipelines.yml`](../../azure/azure-pipelines.yml) for a ready-to-use CI pipeline.
 
 ---
 
@@ -111,10 +117,13 @@ BITBUCKET_WORKSPACE=
 BITBUCKET_USERNAME=
 BITBUCKET_TOKEN=
 
-# Azure DevOps (experimental / WIP) — set VCS_PROVIDER=azure to use
+# Azure DevOps (experimental / WIP) — set VCS_PROVIDER=azure to use.
+# Provide ONE credential: AZURE_ACCESS_TOKEN (Bearer, e.g. pipeline System.AccessToken)
+# OR AZURE_PAT (Basic). Access token wins if both are set.
 # AZURE_BASE_URL=https://dev.azure.com
 # AZURE_ORG=
 # AZURE_PROJECT=
+# AZURE_ACCESS_TOKEN=
 # AZURE_PAT=
 
 # Claude

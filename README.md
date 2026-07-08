@@ -361,15 +361,17 @@ one-line WIP warning.
 
 Azure has no native unified-diff endpoint, so the adapter reconstructs the diff from the
 `diffs/commits` change list plus per-file blob content (via the [`diff`](https://www.npmjs.com/package/diff)
-library). Comments are modeled as threads. Authentication is a Personal Access Token over
-HTTP Basic (`base64(":{PAT}")`).
+library). Comments are modeled as threads. Two auth modes, selected by config: an OAuth
+**Bearer** token (zero-PAT — e.g. a pipeline's `System.AccessToken`) or a **PAT** over HTTP
+Basic. Provide one of `AZURE_ACCESS_TOKEN` or `AZURE_PAT`; the access token wins if both are set.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `AZURE_BASE_URL` | `https://dev.azure.com` | API base URL. Point at an on-prem **Server** collection URL for self-hosted instances |
 | `AZURE_ORG` | *(required)* | Organization / collection name (can also use `--workspace`) |
 | `AZURE_PROJECT` | *(required)* | Project name |
-| `AZURE_PAT` | *(required)* | Personal Access Token — scopes: Code (read) + Threads (read & write). Sent as HTTP Basic `base64(":{PAT}")` |
+| `AZURE_ACCESS_TOKEN` | *(one required)* | OAuth Bearer token — e.g. the Azure Pipelines built-in `System.AccessToken`. Zero-PAT. |
+| `AZURE_PAT` | *(one required)* | Personal Access Token — scopes: Code (read) + Threads (read & write). Sent as HTTP Basic `base64(":{PAT}")` |
 
 Repository is passed via `--repo-slug` (repo name or GUID). Example:
 
@@ -377,6 +379,28 @@ Repository is passed via `--repo-slug` (repo name or GUID). Example:
 AZURE_ORG=my-org AZURE_PROJECT=my-project AZURE_PAT=xxxx \
   node dist/pr-review-agent.cjs --vcs azure --repo-slug my-repo --pr-id 42 --dry-run
 ```
+
+#### CI integration (Azure Pipelines)
+
+The Azure-native equivalent of the Jenkins hook: an [`azure/azure-pipelines.yml`](azure/azure-pipelines.yml)
+build-validation pipeline that runs the agent on every PR, auto-filling repo / PR id / project /
+org from built-in pipeline variables. Zero-PAT — it authenticates with the pipeline's own
+`System.AccessToken`.
+
+Setup:
+
+1. **Trigger** — wire the pipeline as a **Branch Policy → Build Validation** on the target
+   branch. ⚠️ The YAML `pr:` trigger does **not** fire for Azure Repos; you must use a branch
+   policy. Set it **Optional** so an agent failure never blocks the PR.
+2. **OAuth token** — enable **"Allow scripts to access the OAuth token"** on the job so
+   `System.AccessToken` is exposed (this is the `AZURE_ACCESS_TOKEN` the agent reads).
+3. **Permission** — grant the build service identity (`{Project} Build Service ({Org})`)
+   **"Contribute to Pull Requests" = Allow** on the repo so it can post review comments.
+4. **Secret** — add `ANTHROPIC_API_KEY` as a secret pipeline variable (mapped explicitly in
+   the YAML `env:`; secrets are not auto-injected).
+
+Prefer a stored PAT instead of the OAuth token? Swap `AZURE_ACCESS_TOKEN: $(System.AccessToken)`
+for `AZURE_PAT: $(AZURE_PAT)` in the pipeline's `env:` block.
 
 ### How to Provide Environment Variables
 
