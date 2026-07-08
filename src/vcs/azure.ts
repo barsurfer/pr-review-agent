@@ -107,9 +107,11 @@ export class AzureDevOpsAdapter implements VCSAdapter {
     const repo = this.getRepoSlug()
     const params: Record<string, string> = { path: withLeadingSlash(filePath) }
     // 'HEAD' is not an Azure version type — omit the descriptor to hit the default branch tip.
+    // Otherwise pick the version type by ref shape: a hex SHA is a commit, anything else
+    // (e.g. a branch name like "main") must be queried as a branch or Azure returns 400.
     if (ref && ref !== 'HEAD') {
       params['versionDescriptor.version'] = ref
-      params['versionDescriptor.versionType'] = 'commit'
+      params['versionDescriptor.versionType'] = /^[0-9a-f]{7,40}$/i.test(ref) ? 'commit' : 'branch'
     }
     try {
       const { data } = await this.client.get(`/repositories/${encodeURIComponent(repo)}/items`, {
@@ -119,7 +121,9 @@ export class AzureDevOpsAdapter implements VCSAdapter {
       })
       return data as string
     } catch (err: unknown) {
-      if (axios.isAxiosError(err) && err.response?.status === 404) return null
+      // Missing file (404) or an unresolvable ref (400) → no repo prompt here; caller defaults.
+      const status = axios.isAxiosError(err) ? err.response?.status : undefined
+      if (status === 404 || status === 400) return null
       throw err
     }
   }
