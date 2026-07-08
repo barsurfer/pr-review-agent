@@ -75,6 +75,9 @@ async function main(): Promise<void> {
   }
 
   const provider = (opts.vcs ?? config.vcsProvider) as 'bitbucket' | 'github' | 'gitlab' | 'azure'
+  // Make the resolved provider authoritative so usage logging (vcs, run_id) matches the
+  // adapter actually used when --vcs overrides VCS_PROVIDER.
+  config.vcsProvider = provider
 
   let adapter: VCSAdapter
 

@@ -31791,7 +31791,7 @@ function getBuildCommit() {
     const dirty = (0, import_child_process.execSync)("git status --porcelain", opts2).toString().trim() ? "-dirty" : "";
     return hash + dirty;
   } catch {
-    if (true) return "b1fe255";
+    if (true) return "a2b91f3";
     return "unknown";
   }
 }
@@ -31821,7 +31821,7 @@ function buildUsageRecord(ctx, durationMs, error) {
     timestamp: (/* @__PURE__ */ new Date()).toISOString(),
     agent_version: getAgentVersion(),
     vcs: config.vcsProvider,
-    workspace: config.bitbucket.workspace,
+    workspace: config.vcsProvider === "azure" ? config.azure.org : config.bitbucket.workspace,
     repo_slug: ctx.repoSlug,
     pr_id: ctx.prId,
     pr_author: ctx.prInfo?.author ?? "unknown",
@@ -32302,6 +32302,7 @@ async function main() {
     process.exit(1);
   }
   const provider = opts.vcs ?? config.vcsProvider;
+  config.vcsProvider = provider;
   let adapter2;
   if (provider === "bitbucket") {
     if (opts.workspace) config.bitbucket.workspace = opts.workspace;

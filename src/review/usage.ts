@@ -147,7 +147,7 @@ export function buildUsageRecord(
     timestamp: new Date().toISOString(),
     agent_version: getAgentVersion(),
     vcs: config.vcsProvider,
-    workspace: config.bitbucket.workspace,
+    workspace: config.vcsProvider === 'azure' ? config.azure.org : config.bitbucket.workspace,
     repo_slug: ctx.repoSlug,
     pr_id: ctx.prId,
     pr_author: ctx.prInfo?.author ?? 'unknown',
