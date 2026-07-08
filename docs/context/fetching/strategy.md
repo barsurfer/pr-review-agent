@@ -77,7 +77,11 @@ High-churn files are fetched first. Low-churn files fill remaining capacity up t
  sees its prior conclusions and does not re-raise findings it already conceded}
 
 ## Diff:
-{filtered diff}
+{filtered diff — the whole PR vs target}
+
+## Changes Since Your Last Review:      ← re-reviews only
+{the delta diff since the last-reviewed commit, so the model sees exactly which
+ lines are new/fixed instead of inferring changes from the review prose above}
 
 ## Full file context:
 ### src/some/File.ts
@@ -86,6 +90,8 @@ High-churn files are fetched first. Low-churn files fill remaining capacity up t
 ```
 
 **Only the most recent review** is included (not the full history). Developer discussion includes all replies across all reviews so the model sees what it already conceded as false positives.
+
+On re-reviews, a **"Changes Since Your Last Review"** section carries the delta diff since the last-reviewed commit — the same diff computed for the skip-gate ([review/skip-logic.md](../review/skip-logic.md)), retained instead of discarded. The full PR diff is the whole PR vs target and does **not** mark which lines are new since the last review, so this delta lets the model ground "resolved vs new" in concrete changed lines rather than the previous review's prose.
 
 ---
 

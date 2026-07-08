@@ -31528,9 +31528,9 @@ var JUDGE_OUTPUT_SCHEMA = {
   required: ["review_markdown", "judge_notes"],
   additionalProperties: false
 };
-async function runReview(apiKey, model, maxRetries, prInfo, diff2, fileContexts, prompt, previousReviews, developerReplies = []) {
+async function runReview(apiKey, model, maxRetries, prInfo, diff2, fileContexts, prompt, previousReviews, developerReplies = [], changesSinceLastReview = "") {
   const client = new Anthropic({ apiKey, maxRetries });
-  const userMessage = buildUserMessage(prInfo, diff2, fileContexts, previousReviews, developerReplies);
+  const userMessage = buildUserMessage(prInfo, diff2, fileContexts, previousReviews, developerReplies, changesSinceLastReview);
   console.log(`Sending request to Claude (${model}, maxRetries: ${maxRetries})...`);
   const response = await client.messages.create({
     model,
@@ -31552,7 +31552,7 @@ async function runReview(apiKey, model, maxRetries, prInfo, diff2, fileContexts,
   console.log(`Review received (${usage.input_tokens} in / ${usage.output_tokens} out tokens)`);
   return { text: block.text, usage };
 }
-function buildUserMessage(prInfo, diff2, fileContexts, previousReviews, developerReplies) {
+function buildUserMessage(prInfo, diff2, fileContexts, previousReviews, developerReplies, changesSinceLastReview = "") {
   const parts = [];
   parts.push(`## Pull Request: ${prInfo.title}`);
   parts.push(`## Branch: ${prInfo.sourceBranch} \u2192 ${prInfo.targetBranch}`);
@@ -31579,6 +31579,13 @@ ${latest.body}`);
 \`\`\`diff
 ${diff2}
 \`\`\``);
+  if (changesSinceLastReview && previousReviews.length > 0) {
+    parts.push(`## Changes Since Your Last Review:
+The diff below is ONLY the lines changed since your previous review above \u2014 use it to see exactly what was added or fixed. Credit findings these changes resolve, and assess anything new. The complete PR diff is above for full context.
+\`\`\`diff
+${changesSinceLastReview}
+\`\`\``);
+  }
   if (fileContexts.length > 0) {
     parts.push("## Full file context:");
     for (const file of fileContexts) {
@@ -31809,7 +31816,7 @@ function getBuildCommit() {
     const dirty = (0, import_child_process.execSync)("git status --porcelain", opts2).toString().trim() ? "-dirty" : "";
     return hash + dirty;
   } catch {
-    if (true) return "ed12918";
+    if (true) return "ef0a141";
     return "unknown";
   }
 }
@@ -32006,6 +32013,7 @@ async function transition(state, ctx) {
                 ctx.reviewNumber = ctx.previousReviews.length;
                 return 5 /* CHECK_REPLIES */;
               }
+              ctx.deltaDiff = filtered;
             } catch (err) {
               console.log(`  Delta diff fetch failed (${err.message}) \u2014 falling back to full PR diff`);
             }
@@ -32133,7 +32141,8 @@ If this PR spans multiple independent themes that could each be a separate, inde
         ctx.fileContexts,
         reviewPrompt,
         ctx.previousReviews ?? [],
-        ctx.replies ?? []
+        ctx.replies ?? [],
+        ctx.deltaDiff ?? ""
       );
       ctx.reviewText = result.text;
       ctx.usage.input_tokens += result.usage.input_tokens;

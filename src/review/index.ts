@@ -146,6 +146,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
                 ctx.reviewNumber = ctx.previousReviews!.length
                 return State.CHECK_REPLIES
               }
+              ctx.deltaDiff = filtered   // feed the exact changes-since-last-review to the reviewer
             } catch (err: unknown) {
               console.log(`  Delta diff fetch failed (${(err as Error).message}) — falling back to full PR diff`)
             }
@@ -286,7 +287,8 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         ctx.fileContexts!,
         reviewPrompt,
         ctx.previousReviews ?? [],
-        ctx.replies ?? []
+        ctx.replies ?? [],
+        ctx.deltaDiff ?? ''
       )
       ctx.reviewText = result.text
       ctx.usage.input_tokens += result.usage.input_tokens

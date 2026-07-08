@@ -53,11 +53,12 @@ export async function runReview(
   fileContexts: FileContext[],
   prompt: LoadedPrompt,
   previousReviews: ReviewComment[],
-  developerReplies: CommentReply[] = []
+  developerReplies: CommentReply[] = [],
+  changesSinceLastReview = ''
 ): Promise<ClaudeResult> {
   const client = new Anthropic({ apiKey, maxRetries })
 
-  const userMessage = buildUserMessage(prInfo, diff, fileContexts, previousReviews, developerReplies)
+  const userMessage = buildUserMessage(prInfo, diff, fileContexts, previousReviews, developerReplies, changesSinceLastReview)
 
   console.log(`Sending request to Claude (${model}, maxRetries: ${maxRetries})...`)
 
@@ -92,7 +93,8 @@ function buildUserMessage(
   diff: string,
   fileContexts: FileContext[],
   previousReviews: ReviewComment[],
-  developerReplies: CommentReply[]
+  developerReplies: CommentReply[],
+  changesSinceLastReview = ''
 ): string {
   const parts: string[] = []
 
@@ -119,6 +121,13 @@ function buildUserMessage(
   }
 
   parts.push(`## Diff:\n\`\`\`diff\n${diff}\n\`\`\``)
+
+  // The full diff above is the whole PR vs target — it doesn't mark which lines are new since the
+  // last review, so on re-reviews scope the actual changes so fixes are visible without inferring
+  // them from the previous review's prose.
+  if (changesSinceLastReview && previousReviews.length > 0) {
+    parts.push(`## Changes Since Your Last Review:\nThe diff below is ONLY the lines changed since your previous review above — use it to see exactly what was added or fixed. Credit findings these changes resolve, and assess anything new. The complete PR diff is above for full context.\n\`\`\`diff\n${changesSinceLastReview}\n\`\`\``)
+  }
 
   if (fileContexts.length > 0) {
     parts.push('## Full file context:')

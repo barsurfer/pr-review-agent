@@ -41,6 +41,7 @@ export interface ReviewContext {
   prInfo?: PRInfo
   diff?: string
   filteredDiff?: string
+  deltaDiff?: string   // changes since the last-reviewed commit; fed to re-reviews so fixes are visible
   changedFiles?: ChangedFile[]
   lineCount?: number
   reviewableFileCount?: number

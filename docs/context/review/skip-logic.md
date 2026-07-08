@@ -38,7 +38,7 @@ When the commit hash has changed (new commits pushed), before calling Claude, th
 
 After applying `filterDiff()` with `DIFF_EXCLUDE_PATTERNS`:
 - **Zero lines remain** → deterministic `NO_CHANGE` skip. No API call. No tokens.
-- **Lines remain** → proceed with full delta review.
+- **Lines remain** → proceed with the delta review, and retain the delta (`ctx.deltaDiff`) to feed the reviewer as a **"Changes Since Your Last Review"** section (see [fetching/strategy.md](../fetching/strategy.md)) so the model sees exactly which lines are new/fixed, not just the full PR diff.
 
 This is deterministic — it does not rely on Claude to detect that nothing changed. Catches commits that only add tests, lock files, translations, or other excluded file types.
 

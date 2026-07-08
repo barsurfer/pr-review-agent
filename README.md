@@ -183,7 +183,10 @@ generate candidate findings, then a stronger model (Sonnet) to validate them.
 ### Re-reviews and Delta Logic
 
 On re-reviews (PR updated after a previous review), the agent sends its **most recent**
-review comment and **all developer replies** across all previous reviews. Claude produces
+review comment and **all developer replies** across all previous reviews, plus a
+**"Changes Since Your Last Review"** section — the diff *since the last-reviewed commit* — so
+Claude sees exactly which lines are new or fixed rather than inferring changes from the
+previous review's prose (the full PR diff is still included for context). Claude produces
 a **delta review** focused on new code only — previous findings are briefly referenced in
 the Summary ("still open" or "fixed") but not re-listed in Findings or Unresolved Questions.
 
