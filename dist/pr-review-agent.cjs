@@ -31541,8 +31541,8 @@ async function runReview(apiKey, model, maxRetries, prInfo, diff2, fileContexts,
   if (response.stop_reason === "max_tokens") {
     throw new Error(`Review truncated at ${MAX_TOKENS} output tokens \u2014 refusing to post a cut-off review`);
   }
-  const block = response.content[0];
-  if (block.type !== "text") throw new Error("Unexpected response type from Claude");
+  const block = response.content.find((b) => b.type === "text");
+  if (!block || block.type !== "text") throw new Error("Unexpected response type from Claude (no text block)");
   const usage = {
     input_tokens: response.usage.input_tokens,
     output_tokens: response.usage.output_tokens,
@@ -31627,8 +31627,8 @@ ${reviewText}`);
   if (response.stop_reason === "max_tokens") {
     throw new Error(`Judge output truncated at ${MAX_TOKENS} output tokens \u2014 refusing to post a cut-off review`);
   }
-  const block = response.content[0];
-  if (block.type !== "text") throw new Error("Unexpected response type from Claude");
+  const block = response.content.find((b) => b.type === "text");
+  if (!block || block.type !== "text") throw new Error("Unexpected response type from Claude (no text block)");
   let parsed;
   try {
     parsed = JSON.parse(block.text);
@@ -31678,8 +31678,8 @@ ${diff2}
   if (response.stop_reason === "max_tokens") {
     throw new Error(`Reply truncated at ${REPLY_MAX_TOKENS} output tokens \u2014 refusing to post a cut-off reply`);
   }
-  const block = response.content[0];
-  if (block.type !== "text") throw new Error("Unexpected response type from Claude");
+  const block = response.content.find((b) => b.type === "text");
+  if (!block || block.type !== "text") throw new Error("Unexpected response type from Claude (no text block)");
   const usage = {
     input_tokens: response.usage.input_tokens,
     output_tokens: response.usage.output_tokens,
@@ -31816,7 +31816,7 @@ function getBuildCommit() {
     const dirty = (0, import_child_process.execSync)("git status --porcelain", opts2).toString().trim() ? "-dirty" : "";
     return hash + dirty;
   } catch {
-    if (true) return "ef0a141";
+    if (true) return "070fc0a";
     return "unknown";
   }
 }

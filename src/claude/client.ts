@@ -73,8 +73,10 @@ export async function runReview(
     throw new Error(`Review truncated at ${MAX_TOKENS} output tokens — refusing to post a cut-off review`)
   }
 
-  const block = response.content[0]
-  if (block.type !== 'text') throw new Error('Unexpected response type from Claude')
+  // Find the text block rather than assuming it's first — newer models can emit a
+  // thinking (or other) block ahead of the text.
+  const block = response.content.find(b => b.type === 'text')
+  if (!block || block.type !== 'text') throw new Error('Unexpected response type from Claude (no text block)')
 
   const usage: ClaudeUsage = {
     input_tokens: response.usage.input_tokens,
@@ -178,8 +180,10 @@ export async function runJudge(
     throw new Error(`Judge output truncated at ${MAX_TOKENS} output tokens — refusing to post a cut-off review`)
   }
 
-  const block = response.content[0]
-  if (block.type !== 'text') throw new Error('Unexpected response type from Claude')
+  // Find the text block rather than assuming it's first — newer models can emit a
+  // thinking (or other) block ahead of the text.
+  const block = response.content.find(b => b.type === 'text')
+  if (!block || block.type !== 'text') throw new Error('Unexpected response type from Claude (no text block)')
 
   let parsed: { review_markdown: string; judge_notes: string }
   try {
@@ -243,8 +247,10 @@ export async function runCommentResponse(
     throw new Error(`Reply truncated at ${REPLY_MAX_TOKENS} output tokens — refusing to post a cut-off reply`)
   }
 
-  const block = response.content[0]
-  if (block.type !== 'text') throw new Error('Unexpected response type from Claude')
+  // Find the text block rather than assuming it's first — newer models can emit a
+  // thinking (or other) block ahead of the text.
+  const block = response.content.find(b => b.type === 'text')
+  if (!block || block.type !== 'text') throw new Error('Unexpected response type from Claude (no text block)')
 
   const usage: ClaudeUsage = {
     input_tokens: response.usage.input_tokens,
