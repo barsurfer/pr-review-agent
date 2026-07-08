@@ -31809,7 +31809,7 @@ function getBuildCommit() {
     const dirty = (0, import_child_process.execSync)("git status --porcelain", opts2).toString().trim() ? "-dirty" : "";
     return hash + dirty;
   } catch {
-    if (true) return "58409ad";
+    if (true) return "4585bfb";
     return "unknown";
   }
 }
