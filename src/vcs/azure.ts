@@ -79,8 +79,11 @@ export class AzureDevOpsAdapter implements VCSAdapter {
   }
 
   async getCommitDiff(fromCommit: string, toCommit: string): Promise<string> {
+    // Delta re-reviews pass the previous commit from the review footer, which is abbreviated.
+    // Azure's diffs/commits rejects short SHAs, so resolve it to a full 40-char id first.
+    const base = await this.resolveCommit(fromCommit, toCommit)
     // Two-dot diff: exactly the changes introduced between the two commits.
-    return this.buildDiff(fromCommit, toCommit, false)
+    return this.buildDiff(base, toCommit, false)
   }
 
   async getChangedFiles(prId: string): Promise<ChangedFile[]> {
@@ -215,6 +218,24 @@ export class AzureDevOpsAdapter implements VCSAdapter {
       base: data.lastMergeTargetCommit?.commitId ?? '',
       target: data.lastMergeSourceCommit?.commitId ?? '',
     }
+  }
+
+  /** Azure's diffs/commits requires full 40-char SHAs, but review footers carry an abbreviated
+   *  hash. Resolve it by prefix-matching the commits reachable from `reachableFrom` — a full SHA
+   *  we already hold (the current PR source commit) — so no PR id or extra context is needed. */
+  private async resolveCommit(ref: string, reachableFrom: string): Promise<string> {
+    if (/^[0-9a-f]{40}$/i.test(ref)) return ref
+    const repo = this.getRepoSlug()
+    const { data }: { data: any } = await this.client.get(`/repositories/${encodeURIComponent(repo)}/commits`, {
+      params: {
+        'searchCriteria.itemVersion.version': reachableFrom,
+        'searchCriteria.itemVersion.versionType': 'commit',
+        'searchCriteria.$top': 200,
+      },
+    })
+    const match = (data.value ?? []).find((c: any) => typeof c.commitId === 'string' && c.commitId.startsWith(ref))
+    if (!match) throw new Error(`cannot resolve abbreviated commit ${ref} within the ${(data.value ?? []).length} most recent commits`)
+    return match.commitId as string
   }
 
   private async fetchThreads(prId: string): Promise<any[]> {

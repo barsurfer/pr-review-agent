@@ -72,6 +72,7 @@ function routeGet(url: string, config: any = {}): Promise<any> {
     return Promise.reject({ isAxiosError: true, response: { status: 404 } })
   }
   if (url.includes('/diffs/commits')) return Promise.resolve({ data: COMMIT_DIFF })
+  if (url.includes('/commits')) return Promise.resolve({ data: { value: [{ commitId: 'BASE' }] } })
   if (url.includes('/pullRequests/')) return Promise.resolve({ data: PR })
   return Promise.reject(new Error('unexpected url ' + url))
 }

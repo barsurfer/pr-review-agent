@@ -30916,7 +30916,8 @@ var AzureDevOpsAdapter = class {
     return this.buildDiff(base, target, true);
   }
   async getCommitDiff(fromCommit, toCommit) {
-    return this.buildDiff(fromCommit, toCommit, false);
+    const base = await this.resolveCommit(fromCommit, toCommit);
+    return this.buildDiff(base, toCommit, false);
   }
   async getChangedFiles(prId) {
     const { base, target } = await this.getPrCommits(prId);
@@ -31031,6 +31032,23 @@ var AzureDevOpsAdapter = class {
       base: data.lastMergeTargetCommit?.commitId ?? "",
       target: data.lastMergeSourceCommit?.commitId ?? ""
     };
+  }
+  /** Azure's diffs/commits requires full 40-char SHAs, but review footers carry an abbreviated
+   *  hash. Resolve it by prefix-matching the commits reachable from `reachableFrom` — a full SHA
+   *  we already hold (the current PR source commit) — so no PR id or extra context is needed. */
+  async resolveCommit(ref, reachableFrom) {
+    if (/^[0-9a-f]{40}$/i.test(ref)) return ref;
+    const repo = this.getRepoSlug();
+    const { data } = await this.client.get(`/repositories/${encodeURIComponent(repo)}/commits`, {
+      params: {
+        "searchCriteria.itemVersion.version": reachableFrom,
+        "searchCriteria.itemVersion.versionType": "commit",
+        "searchCriteria.$top": 200
+      }
+    });
+    const match = (data.value ?? []).find((c) => typeof c.commitId === "string" && c.commitId.startsWith(ref));
+    if (!match) throw new Error(`cannot resolve abbreviated commit ${ref} within the ${(data.value ?? []).length} most recent commits`);
+    return match.commitId;
   }
   async fetchThreads(prId) {
     const repo = this.getRepoSlug();
@@ -31791,7 +31809,7 @@ function getBuildCommit() {
     const dirty = (0, import_child_process.execSync)("git status --porcelain", opts2).toString().trim() ? "-dirty" : "";
     return hash + dirty;
   } catch {
-    if (true) return "a2b91f3";
+    if (true) return "58409ad";
     return "unknown";
   }
 }
