@@ -78,8 +78,8 @@ The record is also printed to stdout at the end of every run regardless of the f
 | `run_id` | `string` | Deterministic key: `{vcs}-{repo_slug}-{pr_id}-{commit_short}` |
 | `timestamp` | `string` | ISO 8601 UTC |
 | `agent_version` | `string` | From `package.json` (injected at bundle time) |
-| `vcs` | `string` | VCS provider (e.g. `bitbucket`) |
-| `workspace` | `string` | Bitbucket workspace slug |
+| `vcs` | `string` | VCS provider actually used — a `--vcs` flag override is authoritative (also drives `run_id`) |
+| `workspace` | `string` | Bitbucket workspace slug; the Azure **org** on `azure` runs |
 | `repo_slug` | `string` | Repository slug |
 | `pr_id` | `string` | Pull request ID |
 | `pr_author` | `string` | PR author display name |

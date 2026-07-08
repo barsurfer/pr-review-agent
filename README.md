@@ -355,13 +355,19 @@ All credentials and settings are provided via environment variables.
 ### Azure DevOps (experimental / WIP)
 
 Select the adapter with `--vcs azure` or `VCS_PROVIDER=azure`. It implements the full
-adapter interface but has been validated against mocked API shapes only — **not yet a
-live instance**. Confirm end-to-end before production use. On construction it prints a
-one-line WIP warning.
+adapter interface and has been validated **end-to-end against a live Azure DevOps Services
+(cloud) org** — PR info, diff reconstruction, context fetch, comment posting, and footer
+dedup all confirmed. Still flagged WIP: not yet exercised on **Server / on-prem**, in a real
+pipeline via `System.AccessToken`, or on the reply / delta-review paths against a live
+instance. On construction it prints a one-line WIP warning.
 
-Azure has no native unified-diff endpoint, so the adapter reconstructs the diff from the
-`diffs/commits` change list plus per-file blob content (via the [`diff`](https://www.npmjs.com/package/diff)
-library). Comments are modeled as threads. Two auth modes, selected by config: an OAuth
+**Why the adapter reconstructs the diff.** Azure has no unified-diff REST endpoint — the
+[`diffs/commits`](https://learn.microsoft.com/en-us/rest/api/azure/devops/git/diffs/get?view=azure-devops-rest-7.1)
+API returns only a **file-level change list** (paths + change types, no line content), and the
+PR web UI renders its +/- view client-side via an internal, undocumented endpoint. So the
+adapter reconstructs a git-style unified diff from the `diffs/commits` list plus per-file blob
+content (via the [`diff`](https://www.npmjs.com/package/diff) library) — the same approach
+Microsoft's own tooling uses. Comments are modeled as threads. Two auth modes, selected by config: an OAuth
 **Bearer** token (zero-PAT — e.g. a pipeline's `System.AccessToken`) or a **PAT** over HTTP
 Basic. Provide one of `AZURE_ACCESS_TOKEN` or `AZURE_PAT`; the access token wins if both are set.
 
