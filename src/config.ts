@@ -32,7 +32,7 @@ export const config = {
 
   anthropic: {
     apiKey: required('ANTHROPIC_API_KEY'),
-    model: optional('CLAUDE_MODEL', 'claude-sonnet-4-6'),
+    model: optional('CLAUDE_MODEL', 'claude-haiku-4-5-20251001'),
     maxRetries: parseInt(optional('MAX_RETRIES', '3'), 10),
     maxInputTokens: parseInt(optional('MAX_INPUT_TOKENS', '150000'), 10),
   },

@@ -23,7 +23,7 @@ credentials in source code or commit them to version control.**
 | `BITBUCKET_USERNAME` | `you@company.com` | Your Atlassian account email (used for HTTP Basic Auth) |
 | `BITBUCKET_TOKEN` | `ATATT3x...` | Atlassian API token with Bitbucket scopes (replaces deprecated app passwords) |
 | `ANTHROPIC_API_KEY` | `sk-ant-...` | Anthropic API key (billed separately from Claude.ai subscriptions) |
-| `CLAUDE_MODEL` | `claude-sonnet-4-6` | Claude model ID to use for reviews |
+| `CLAUDE_MODEL` | `claude-haiku-4-5-20251001` | Claude model ID for reviews (a cheap reviewer paired with a stronger `JUDGING_MODEL` gives the generator-verifier pattern) |
 | `MAX_RETRIES` | `3` | Max retries on 429/5xx errors (SDK built-in exponential backoff). Default: `3` |
 | `MAX_INPUT_TOKENS` | `150000` | Skip review if estimated input tokens exceed this value (0 = disabled) |
 | `MAX_CONTEXT_FILES` | `20` | Max number of files to fetch full content for |
@@ -128,7 +128,7 @@ BITBUCKET_TOKEN=
 
 # Claude
 ANTHROPIC_API_KEY=
-CLAUDE_MODEL=claude-sonnet-4-6
+CLAUDE_MODEL=claude-haiku-4-5-20251001
 MAX_RETRIES=3
 # MAX_INPUT_TOKENS=150000
 
