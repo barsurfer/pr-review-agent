@@ -408,45 +408,9 @@ Setup:
 Prefer a stored PAT instead of the OAuth token? Swap `AZURE_ACCESS_TOKEN: $(System.AccessToken)`
 for `AZURE_PAT: $(AZURE_PAT)` in the pipeline's `env:` block.
 
-**Status (verified live).** The **created + updated** paths are validated end-to-end against a
-cloud Azure DevOps Services org: a PR push queues the build validation, the agent authenticates
-with the zero-PAT `System.AccessToken`, posts the review as the *Build Service* identity, and
-re-queues on every new commit (delta reviews). **Reply-to-comments is not yet wired** — see
-"Open questions" below.
-
-First-setup gotchas:
-- **`AGENT_TAG`** — the pinned `v0.0.3` tag predates the Azure adapter. Until a release tag ships,
-  point it at the adapter branch (`feature/azure-devops-adapter`). Sanity-check a ref with
-  `curl …/<ref>/dist/pr-review-agent.cjs | grep -c AzureDevOpsAdapter` (must be > 0).
-- **`SKIP_TARGET_BRANCHES`** defaults to `main,master`, so a PR into `main` is skipped. Set
-  `SKIP_TARGET_BRANCHES: ''` in the pipeline `env:` to review PRs into `main`.
-- **YAML location** — build validation resolves the pipeline YAML from the PR's *source branch*,
-  so that branch must contain `azure-pipelines.yml` (merge `main` in if the branch predates it).
-
-**Repo-specific prompt in CI.** `--prompt` takes a *local* path and the pipeline only downloads
-the agent bundle (not the `prompts/` dir), so it can't be used in CI. Instead commit a
-`.agent-review-instructions.md` (same `## ROLE / ## REVIEW PRIORITIES / …` format as the
-`prompts/*.txt` templates) to the reviewed repo — the agent auto-loads it (`prompt_source: repo`)
-and the pipeline stays generic across repos.
-
-#### Open questions — answering comments (reply flow)
-
-Build validation fires on PR **create/update** but **not on comments**, so the agent's
-reply-to-developer flow is not triggered in CI yet. Wiring it (unbuilt / untested) would use:
-
-1. a **Service Hook** on `ms.vss-code.git-pullrequest-comment-event` →
-2. an Azure Pipelines **Incoming Webhook** trigger (`resources.webhooks`) →
-3. a reply pipeline that reads the PR id from the webhook payload
-   (`resource.pullRequest.pullRequestId`) — `System.PullRequest.*` is not set on webhook runs.
-
-The agent's FSM already decides review-vs-reply in one entrypoint, so no agent code change is
-expected — it's purely trigger wiring. Open items before building it:
-- Agent-authored comments also fire the event → one cheap no-op run per comment (the FSM dedups
-  by footer/timestamp, so there is **no loop**). Accept the no-ops, or filter agent comments in
-  the subscription?
-- Verify the exact `resources.webhooks` payload-path syntax against a real comment payload.
-- Keep hybrid (build-validation for reviews + webhook for replies) or move all three events onto
-  a single incoming-webhook pipeline?
+> **Verified-live status, first-setup gotchas, the CI repo-prompt mechanism, and the
+> reply-flow open questions** live in the dedicated doc:
+> [docs/reference/azure-devops.md](docs/reference/azure-devops.md).
 
 ### How to Provide Environment Variables
 
