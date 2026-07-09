@@ -1,8 +1,13 @@
-# RUNBOOK — Azure DevOps reply-to-comments flow (WIP)
+# RUNBOOK — Azure DevOps reply-to-comments flow (validated live, WIP)
 
 **Target repo:** `barsurfer/pr-review-agent` (branch: `feature/azure-devops-adapter`)
 **Intended final location in repo:** `docs/reference/azure-reply-flow-runbook.md`
 **Depends on:** PR #1 (`feat(vcs): Azure DevOps adapter`) already merged/checked out.
+
+> **Validated live** end-to-end on an Azure DevOps Services test org: PR comment → Service Hook →
+> Incoming Webhook → reply pipeline → agent posts a reply. Confirmed. The phases below are kept
+> as the executable runbook, with inline notes on what was confirmed and the bugs fixed along the
+> way.
 
 > Executable runbook for an agent working on a **different machine** with (a) a checkout of
 > `pr-review-agent` and (b) admin access to an Azure DevOps Services org/project. Do the phases
@@ -50,13 +55,16 @@ The pipeline reads the PR id out of the webhook payload with **compile-time** te
 So confirm the exact shape before writing YAML.
 
 1. Go to `https://webhook.site` → copy your unique URL.
+   > Alternative (self-hosted): a tiny local receiver + `cloudflared tunnel --protocol http2
+   > --url http://localhost:<port>`. Use `--protocol http2` — the default QUIC was flaky and its
+   > `trycloudflare.com` DNS failed from Azure.
 2. In Azure DevOps: **Project Settings → Service Hooks → `+`**
    - Service: **Web Hooks**
    - Trigger: **Pull request commented on** (`ms.vss-code.git-pullrequest-comment-event`)
    - Filters: (optional) scope to the test repo.
-   - Action → URL: paste the webhook.site URL. Finish.
-3. Open a PR, add a comment. Inspect the captured JSON at webhook.site.
-4. **Record the real paths** (expected, but VERIFY):
+   - Action → URL: paste the webhook.site (or cloudflared) URL. Finish.
+3. Open a PR, add a comment. Inspect the captured JSON.
+4. **Record the real paths** (confirmed against a live payload):
    - PR id:      `resource.pullRequest.pullRequestId`
    - repo name:  `resource.pullRequest.repository.name`
    - comment author id: `resource.comment.author.id`  (needed for Phase 4 guard)
@@ -64,8 +72,7 @@ So confirm the exact shape before writing YAML.
    - comment body: `resource.comment.content`
 5. **Delete this webhook.site subscription** once paths are confirmed.
 
-> ⛔ Do not proceed to Phase 2/3 until the four paths above are confirmed against a real payload.
-> If any differs, substitute the real path everywhere it appears below.
+> ✅ Confirmed against a real payload — Phase 2/3 below use these paths as-is.
 
 ---
 
@@ -74,16 +81,22 @@ So confirm the exact shape before writing YAML.
 **Project Settings → Service connections → New service connection → Incoming WebHook.**
 
 - **Webhook Name:** `pr-comment`   ← this is the `name` the Service Hook targets in its URL.
-- **Secret:** generate a strong random string, store it (used for HMAC verification). Call it
-  `<WEBHOOK_SECRET>` below.
-- **HTTP Header:** `X-Signature` (Azure verifies the payload HMAC-SHA1 against this header).
-- **Service connection name:** `pr-comment` (referenced by `connection:` in the pipeline).
+  Hyphens are fine here.
+- **Secret:** leave **blank** for WIP — validated: the generic Web Hooks service hook still POSTs
+  and the pipeline fires with no HMAC/signature check. For production, front it with a relay that
+  signs the payload.
+- **Service connection name:** `pr-comment` (referenced by `connection:` in the pipeline; hyphens
+  are fine here too).
 
-> The Service Hook (Phase 3) must send header `X-Signature: <HMAC-SHA1(secret, body)>`. Azure's
-> generic Web Hooks consumer supports an HTTP header + basic auth but **does not compute HMAC for
-> you**. If HMAC proves awkward from the Web Hooks consumer, fall back to a shared-secret header
-> match (set the same header value on both sides) for WIP — tighten later. Note this tradeoff in
-> the PR.
+> **HMAC (resolved, validated):** a blank secret works — Azure's Web Hooks consumer doesn't
+> compute HMAC on its own, and skipping auth entirely is fine for a throwaway/test repo. Only
+> harden this (shared-secret header, or a signing relay) before pointing it at a repo that
+> matters.
+
+> **Alias rule:** the pipeline's `resources.webhooks[].webhook:` alias (Phase 2, `prComment`)
+> **must be hyphen-free** — it's referenced as `${{ parameters.<alias>.* }}` and a hyphen parses
+> as minus in Azure template expressions. Hyphens are fine everywhere else (Webhook Name,
+> `connection:`, service-connection name, trigger URL) — just not that alias.
 
 ---
 
@@ -92,7 +105,7 @@ So confirm the exact shape before writing YAML.
 **New file:** `azure/azure-reply-pipeline.yml`
 
 ```yaml
-# PR Review Agent — Azure DevOps REPLY pipeline (experimental / WIP)
+# PR Review Agent — Azure DevOps REPLY pipeline (validated live / WIP)
 #
 # Fires on PR COMMENTS (not pushes). Triggered by a Service Hook on
 # ms.vss-code.git-pullrequest-comment-event -> an Incoming Webhook service connection.
@@ -100,7 +113,8 @@ So confirm the exact shape before writing YAML.
 # and early-exits (no Claude call) when there is nothing new to answer.
 #
 # SETUP: see docs/reference/azure-reply-flow-runbook.md
-#   1. Incoming Webhook service connection named "pr-comment" (with secret).
+#   1. Incoming Webhook service connection named "pr-comment". Secret can be BLANK for WIP —
+#      validated (see Phase 1). The `webhook:` alias below (prComment) must be hyphen-free.
 #   2. Register this YAML as a pipeline. Service Hooks fire the pipeline's DEFAULT-branch YAML,
 #      so this file must exist on the repo's default branch (unlike build-validation, which
 #      resolves YAML from the PR source branch).
@@ -108,7 +122,7 @@ So confirm the exact shape before writing YAML.
 
 resources:
   webhooks:
-    - webhook: prComment          # alias used in ${{ parameters.prComment.* }}
+    - webhook: prComment          # alias used in ${{ parameters.prComment.* }} — hyphen-free
       connection: pr-comment      # Incoming Webhook service connection name
 
 trigger: none     # never on CI push
@@ -137,20 +151,23 @@ steps:
       export AZURE_ORG="${COLL##*/}"
       export AZURE_BASE_URL="${COLL%/*}"
 
+      # PR_ID/REPO_NAME are step env vars (mapped from the webhook payload) — read as $VAR in
+      # bash, NOT $(VAR) which is Azure's pipeline-variable macro and won't resolve them.
       node agent.cjs \
         --vcs azure \
-        --repo-slug "$(REPO_NAME)" \
-        --pr-id "$(PR_ID)"
+        --repo-slug "$REPO_NAME" \
+        --pr-id "$PR_ID"
     displayName: 'PR Review Agent — reply (WIP)'
     continueOnError: true
     env:
-      # PR id + repo come from the webhook payload (verified in Phase 0). Compile-time expansion:
+      # PR id + repo come from the webhook payload (confirmed in Phase 0). Compile-time expansion:
       PR_ID:      ${{ parameters.prComment.resource.pullRequest.pullRequestId }}
       REPO_NAME:  ${{ parameters.prComment.resource.pullRequest.repository.name }}
       # Auth — identical to the review pipeline (zero-PAT).
       AZURE_ACCESS_TOKEN: $(System.AccessToken)
       AZURE_PROJECT: $(System.TeamProject)
       ANTHROPIC_API_KEY: $(ANTHROPIC_API_KEY)   # secret pipeline variable — mapped explicitly
+      SKIP_TARGET_BRANCHES: ''                   # default "main,master" would skip PRs into main
 
   - task: PublishPipelineArtifact@1
     displayName: 'Archive results.jsonl'
@@ -164,8 +181,12 @@ steps:
 **Gotchas to bake in:**
 - `System.PullRequest.*` variables are **NOT set** on webhook-triggered runs — that is why PR id
   comes from the payload, not `$(System.PullRequest.PullRequestId)`.
-- `${{ parameters.prComment.* }}` is **template (compile-time)** expansion; assign to a normal
-  pipeline variable/env (`PR_ID`) then reference `$(PR_ID)` at runtime as shown.
+- `${{ parameters.prComment.* }}` is **template (compile-time)** expansion; it lands in the step
+  as an **env var** (`PR_ID`, `REPO_NAME`). Read it in bash as `$PR_ID`/`$REPO_NAME` —
+  `$(PR_ID)` is Azure's *pipeline-variable* macro, doesn't resolve step env vars, and fails
+  silently (empty string → "--pr-id is required"). This bit us live; fixed in the YAML above.
+- Set `SKIP_TARGET_BRANCHES: ''` in the step `env:` — the default `main,master` skips every PR
+  into main.
 - Commit this file to the repo **default branch** so the Service Hook can resolve it.
 
 **Register the pipeline:** Pipelines → New pipeline → point at `azure/azure-reply-pipeline.yml` →
@@ -189,8 +210,8 @@ Save (do not run). Note its **definitionId** (in the URL) if the Service Hook as
   https://dev.azure.com/{ORG}/_apis/public/distributedtask/webhooks/pr-comment?api-version=6.0-preview
   ```
   Replace `{ORG}`; `pr-comment` must match the Incoming Webhook service-connection **Webhook Name**.
-- HTTP Headers: add the secret/HMAC header expected by the service connection (`X-Signature` +
-  `<WEBHOOK_SECRET>`; see Phase 1 note on HMAC vs shared-secret fallback).
+- HTTP Headers: none needed if the Incoming Webhook secret is left blank (validated — see
+  Phase 1). Only add a signature header if you hardened the service connection with a real secret.
 - **Resource details to send:** All.
 - Test → Finish.
 
@@ -252,19 +273,29 @@ Update `docs/context/vcs/adapter.md` (Knowhere) if it documents the trigger mode
 
 ## Known limitations / flag in PR
 
-- **Concurrency:** every comment = one pipeline run; a burst (or push+comment together) spawns
-  parallel runs racing on the same PR threads. FSM footer/timestamp dedup keeps correctness, but
-  runs are wasted. No native per-PR batching for incoming-webhook triggers. Accept for WIP; note it.
-- **HMAC:** Azure's Web Hooks consumer does not compute payload HMAC automatically — verify the
-  service-connection secret mechanism actually validates, or use a shared-secret header for WIP.
+- **Throttling:** none native — every comment fires one pipeline run (no debounce/cooldown). A
+  burst (or push+comment together) spawns parallel runs racing on the same PR threads; FSM
+  footer/timestamp dedup keeps correctness, and the FSM early-exits before any Claude call when
+  there's nothing new, so redundant runs cost CI minutes, not tokens. Options if noise matters:
+  skip agent-authored comments via a pipeline `condition` on the comment author (kills the main
+  noise source — self-reply re-fires); an Environment exclusive lock to serialize runs; the
+  free-tier single parallel job naturally queues them; or an external relay (Azure
+  Function/Logic App) for real rate-limiting.
+- **Review-vs-reply priority:** the FSM handles new commits before answering comments. If the PR
+  has commits newer than the last review, a comment triggers a delta **review**, not a reply. A
+  **reply** posts only when the current commit is already reviewed (no new commits) and there's
+  an unanswered human question in a review thread.
+- **HMAC:** resolved — a **blank** Incoming Webhook secret works (validated); the Web Hooks
+  consumer doesn't compute HMAC on its own, and skipping auth is fine for a throwaway/test repo.
+  Front it with a signing relay before pointing at a repo that matters.
 - **On-prem Server:** untested; Service Hooks + incoming webhooks differ on Server/DC.
 - **Default-branch YAML:** the reply pipeline resolves from the repo default branch (Service Hook
   behavior), so changes to `azure-reply-pipeline.yml` only take effect once merged to default.
 
 ## Unresolved questions (confirm with maintainer)
 
-1. Does the org's Web Hooks consumer actually enforce HMAC, or is a shared-secret header the
-   pragmatic WIP path?
+1. ~~Does the org's Web Hooks consumer actually enforce HMAC, or is a shared-secret header the
+   pragmatic WIP path?~~ **Resolved:** neither — a blank secret works for WIP; no HMAC enforced.
 2. Exact `resource.comment.author.id` value for the Build Service identity (fill in Phase 4).
 3. Is CI-minute cost of no-op runs acceptable, or is the Phase-4 guard required for v1?
 4. Any need to gate replies to specific threads (e.g. only replies under agent-authored review

@@ -10,8 +10,8 @@ reconstruction, thread model, auth precedence) see Knowhere
 The **created + updated** paths are validated end-to-end against a cloud Azure DevOps Services
 org: a PR push queues build validation, the agent authenticates with the zero-PAT
 `System.AccessToken`, posts the review as the *Build Service* identity, and re-queues on every
-new commit (delta reviews). Still WIP: on-prem **Server**, and the **reply-to-comments** flow
-(designed, not yet live-validated — see below).
+new commit (delta reviews). The **reply-to-comments** flow is also validated live (WIP — see
+below). Still WIP: on-prem **Server**.
 
 ## CI integration (Azure Pipelines)
 
@@ -38,11 +38,11 @@ grant the **{Project} Build Service ({Org})** identity **Contribute to pull requ
 reviewed repo — the agent auto-loads it (`prompt_source: repo`) and the pipeline stays generic
 across repos.
 
-## Answering comments (reply flow) — designed, pending live validation
+## Answering comments (reply flow) — validated live (WIP)
 
 Build validation fires on PR **create/update** but **not on comments**, so the agent's
-reply-to-developer flow needs a second trigger. The design is now captured in
-[azure-reply-flow-runbook.md](azure-reply-flow-runbook.md) and
+reply-to-developer flow needs a second trigger. Validated end-to-end on an Azure DevOps Services
+test org — captured in [azure-reply-flow-runbook.md](azure-reply-flow-runbook.md) and
 [`azure/azure-reply-pipeline.yml`](../../azure/azure-reply-pipeline.yml):
 
 1. a **Service Hook** on `ms.vss-code.git-pullrequest-comment-event` →
@@ -59,8 +59,32 @@ needed — it's purely trigger wiring. Resolved decisions:
   means no loop); an optional pipeline-level guard can skip them if the no-op runs become noise.
 - Comment-command triggers (`/azp run`) are **GitHub-only** — not usable for Azure Repos.
 
-Still unverified before this can ship — see the runbook's Phase 0/1:
-- The HMAC handshake between the Web Hooks service hook and the Incoming Webhook connection
-  (Azure's Web Hooks consumer doesn't compute HMAC for you; may need a shared-secret fallback).
-- The exact webhook payload paths (`resource.pullRequest.pullRequestId` etc.) against a real
-  comment payload — a wrong path expands to empty silently.
+Confirmed live:
+- **HMAC is a non-issue** — the Incoming Webhook service connection works with a **blank secret**
+  (no authentication); the generic Web Hooks service hook POSTs and the pipeline fires. Fine for
+  a throwaway/test repo; front it with a signing relay for production.
+- Payload paths confirmed against a real comment: `resource.pullRequest.pullRequestId`,
+  `resource.pullRequest.repository.name`, `resource.comment.author.displayName`,
+  `resource.comment.author.id`, `resource.comment.content`.
+
+Two pipeline-YAML bugs found and fixed:
+- Webhook payload values arrive as **step env vars** — read them in bash as
+  `$PR_ID`/`$REPO_NAME`, not `$(PR_ID)` (Azure's *pipeline-variable* macro; doesn't resolve step
+  env vars and fails silently — empty string → "--pr-id is required").
+- Set `SKIP_TARGET_BRANCHES: ''` in the reply pipeline's `env:`, or the default `main,master`
+  skips every PR into main.
+- The `webhook:` alias (`prComment`) must be **hyphen-free** — it's used as
+  `${{ parameters.<alias>.* }}` and a hyphen parses as minus in Azure expressions. Hyphens are
+  fine in the `connection:` value and service-connection name.
+
+**Review-vs-reply priority:** the review FSM handles new commits before answering comments. If
+the PR has commits newer than the last review, a comment triggers a delta **review** of the new
+code, not a reply. A **reply** posts only when the current commit is already reviewed (no new
+commits) and there's an unanswered human question in a review thread.
+
+**Throttling:** none native — every comment fires one pipeline run. Cheap though: the FSM
+early-exits before any Claude call when there's nothing new, so redundant runs cost CI minutes,
+not tokens. Options if noise matters: skip agent-authored comments via a pipeline `condition` on
+the comment author (kills the main noise — self-reply re-fires); an Environment exclusive lock to
+serialize runs; the free-tier single parallel job naturally queues them; or an external relay
+(Azure Function/Logic App) for real rate-limiting.

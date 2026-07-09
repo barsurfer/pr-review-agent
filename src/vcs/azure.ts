@@ -4,8 +4,8 @@
 // Implements the full VCSAdapter interface against the Azure DevOps REST API
 // v7.1 (cloud Services and on-prem Server share the API; only the base URL
 // differs). Validated end-to-end against a live cloud Services org (PR info, diff
-// reconstruction, context fetch, posting, footer dedup, delta re-review); still WIP
-// for on-prem Server and the reply-flow trigger.
+// reconstruction, context fetch, posting, footer dedup, delta re-review, and the
+// comment-triggered reply flow); still WIP for on-prem Server.
 //
 // The crux is diff reconstruction: Azure has no native unified-diff endpoint, so
 // getDiff/getCommitDiff rebuild a git-style unified diff from the `diffs/commits`
@@ -56,7 +56,7 @@ export class AzureDevOpsAdapter implements VCSAdapter {
       },
       params: { 'api-version': '7.1' },   // required on every Azure DevOps call
     })
-    console.warn('Azure DevOps adapter is experimental (WIP) — validated live on cloud Services; on-prem Server and the reply-flow trigger are unverified.')
+    console.warn('Azure DevOps adapter is experimental (WIP) — validated live on cloud Services (reviews + reply flow); on-prem Server is unverified.')
   }
 
   async getPullRequestInfo(prId: string): Promise<PRInfo> {
