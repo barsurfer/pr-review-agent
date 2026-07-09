@@ -13,6 +13,10 @@ function optional(name: string, defaultValue: string): string {
 export const config = {
   vcsProvider: optional('VCS_PROVIDER', 'bitbucket') as 'bitbucket' | 'github' | 'gitlab' | 'azure',
 
+  // Which LLM backend the reviewer/judge use. Only 'anthropic' is implemented; the seam
+  // (src/llm/provider.ts) exists so a second provider is a new impl, not a re-plumb.
+  llmProvider: optional('LLM_PROVIDER', 'anthropic') as 'anthropic',
+
   bitbucket: {
     baseUrl: optional('BITBUCKET_BASE_URL', 'https://api.bitbucket.org/2.0'),
     workspace: optional('BITBUCKET_WORKSPACE', ''),
