@@ -65,6 +65,7 @@ steps:
       AZURE_ACCESS_TOKEN: $(System.AccessToken)
       AZURE_PROJECT: $(System.TeamProject)
       ANTHROPIC_API_KEY: $(ANTHROPIC_API_KEY)   # secret pipeline variable — mapped explicitly
+      SKIP_TARGET_BRANCHES: ''                   # default "main,master" would skip PRs into main
 
   - task: PublishPipelineArtifact@1
     displayName: 'Archive results.jsonl'
