@@ -11,7 +11,7 @@ The **created + updated** paths are validated end-to-end against a cloud Azure D
 org: a PR push queues build validation, the agent authenticates with the zero-PAT
 `System.AccessToken`, posts the review as the *Build Service* identity, and re-queues on every
 new commit (delta reviews). Still WIP: on-prem **Server**, and the **reply-to-comments** flow
-(not yet wired — see Open questions).
+(designed, not yet live-validated — see below).
 
 ## CI integration (Azure Pipelines)
 
@@ -38,10 +38,12 @@ grant the **{Project} Build Service ({Org})** identity **Contribute to pull requ
 reviewed repo — the agent auto-loads it (`prompt_source: repo`) and the pipeline stays generic
 across repos.
 
-## Open questions — answering comments (reply flow)
+## Answering comments (reply flow) — designed, pending live validation
 
 Build validation fires on PR **create/update** but **not on comments**, so the agent's
-reply-to-developer flow is not triggered in CI yet. Wiring it (unbuilt / untested) would use:
+reply-to-developer flow needs a second trigger. The design is now captured in
+[azure-reply-flow-runbook.md](azure-reply-flow-runbook.md) and
+[`azure/azure-reply-pipeline.yml`](../../azure/azure-reply-pipeline.yml):
 
 1. a **Service Hook** on `ms.vss-code.git-pullrequest-comment-event` →
 2. an Azure Pipelines **Incoming Webhook** trigger (`resources.webhooks`) →
@@ -49,12 +51,16 @@ reply-to-developer flow is not triggered in CI yet. Wiring it (unbuilt / unteste
    (`resource.pullRequest.pullRequestId`) — `System.PullRequest.*` is not set on webhook runs.
 
 The agent's FSM already decides review-vs-reply in one entrypoint, so no agent code change is
-expected — it's purely trigger wiring. Open items before building it:
+needed — it's purely trigger wiring. Resolved decisions:
 
-- Agent-authored comments also fire the event → one cheap no-op run per comment (the FSM dedups
-  by footer/timestamp, so there is **no loop**). Accept the no-ops, or filter agent comments in
-  the subscription?
-- Verify the exact `resources.webhooks` payload-path syntax against a real comment payload.
-- Keep hybrid (build-validation for reviews + webhook for replies) or move all three events
-  onto a single incoming-webhook pipeline?
+- **Hybrid kept** — build-validation for reviews (merge-gating, `System.PullRequest.*`, delta
+  ordering) + webhook for replies. Not unified into one pipeline.
+- Agent-authored comments also fire the event → a cheap no-op run (FSM footer/timestamp dedup
+  means no loop); an optional pipeline-level guard can skip them if the no-op runs become noise.
 - Comment-command triggers (`/azp run`) are **GitHub-only** — not usable for Azure Repos.
+
+Still unverified before this can ship — see the runbook's Phase 0/1:
+- The HMAC handshake between the Web Hooks service hook and the Incoming Webhook connection
+  (Azure's Web Hooks consumer doesn't compute HMAC for you; may need a shared-secret fallback).
+- The exact webhook payload paths (`resource.pullRequest.pullRequestId` etc.) against a real
+  comment payload — a wrong path expands to empty silently.
