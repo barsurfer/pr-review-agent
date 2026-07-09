@@ -30896,7 +30896,7 @@ var AzureDevOpsAdapter = class {
       params: { "api-version": "7.1" }
       // required on every Azure DevOps call
     });
-    console.warn("Azure DevOps adapter is experimental (WIP) \u2014 validated against mocked API shapes only; confirm against a live instance before production use.");
+    console.warn("Azure DevOps adapter is experimental (WIP) \u2014 validated live on cloud Services; on-prem Server and the reply-flow trigger are unverified.");
   }
   async getPullRequestInfo(prId) {
     const repo = this.getRepoSlug();
@@ -31816,7 +31816,7 @@ function getBuildCommit() {
     const dirty = (0, import_child_process.execSync)("git status --porcelain", opts2).toString().trim() ? "-dirty" : "";
     return hash + dirty;
   } catch {
-    if (true) return "070fc0a";
+    if (true) return "0cb91a1";
     return "unknown";
   }
 }
