@@ -47,10 +47,14 @@ steps:
       export AZURE_ORG="${COLL##*/}"
       export AZURE_BASE_URL="${COLL%/*}"
 
+      # PR_ID/REPO_NAME are step env vars (mapped from the webhook payload) — read as $VAR in
+      # bash, NOT $(VAR) which is Azure's pipeline-variable macro and won't resolve them.
+      echo "reply trigger: PR_ID='$PR_ID' REPO_NAME='$REPO_NAME'"
+
       node agent.cjs \
         --vcs azure \
-        --repo-slug "$(REPO_NAME)" \
-        --pr-id "$(PR_ID)"
+        --repo-slug "$REPO_NAME" \
+        --pr-id "$PR_ID"
     displayName: 'PR Review Agent — reply (WIP)'
     continueOnError: true
     env:
