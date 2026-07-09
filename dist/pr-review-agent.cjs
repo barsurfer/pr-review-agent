@@ -19465,7 +19465,7 @@ async function realpathOrSelf(p) {
     return p;
   }
 }
-async function canonicalize(abs) {
+async function canonicalize2(abs) {
   const tail = [];
   let prefix = abs;
   let hops = 0;
@@ -19502,7 +19502,7 @@ async function confineToRoot(root, p, opts2) {
   const abs = path2.resolve(realRoot, p);
   if (allowOutside)
     return abs;
-  const real = await canonicalize(abs);
+  const real = await canonicalize2(abs);
   if (real !== realRoot && !real.startsWith(realRoot + path2.sep)) {
     throw new ToolError(`path ${JSON.stringify(p)} escapes workdir`);
   }
@@ -21676,10 +21676,10 @@ var init_streaming2 = __esm({
 });
 
 // node_modules/@anthropic-ai/sdk/_vendor/partial-json-parser/parser.mjs
-var tokenize, strip, unstrip, generate, partialParse;
+var tokenize2, strip, unstrip, generate, partialParse;
 var init_parser = __esm({
   "node_modules/@anthropic-ai/sdk/_vendor/partial-json-parser/parser.mjs"() {
-    tokenize = (input) => {
+    tokenize2 = (input) => {
       let current = 0;
       let tokens = [];
       while (current < input.length) {
@@ -21898,7 +21898,7 @@ var init_parser = __esm({
       });
       return output;
     };
-    partialParse = (input) => JSON.parse(generate(unstrip(strip(tokenize(input)))));
+    partialParse = (input) => JSON.parse(generate(unstrip(strip(tokenize2(input)))));
   }
 });
 
@@ -26166,9 +26166,19 @@ var config = {
     username: optional("BITBUCKET_USERNAME", ""),
     token: optional("BITBUCKET_TOKEN", "")
   },
+  // Azure DevOps (experimental / WIP). baseUrl defaults to cloud Services; point it at
+  // an on-prem Server collection URL for self-hosted. org may be aliased by --workspace.
+  azure: {
+    baseUrl: optional("AZURE_BASE_URL", "https://dev.azure.com"),
+    org: optional("AZURE_ORG", ""),
+    project: optional("AZURE_PROJECT", ""),
+    pat: optional("AZURE_PAT", ""),
+    accessToken: optional("AZURE_ACCESS_TOKEN", "")
+    // OAuth Bearer (e.g. pipeline System.AccessToken); preferred over PAT
+  },
   anthropic: {
     apiKey: required("ANTHROPIC_API_KEY"),
-    model: optional("CLAUDE_MODEL", "claude-sonnet-4-6"),
+    model: optional("CLAUDE_MODEL", "claude-haiku-4-5-20251001"),
     maxRetries: parseInt(optional("MAX_RETRIES", "3"), 10),
     maxInputTokens: parseInt(optional("MAX_INPUT_TOKENS", "150000"), 10)
   },
@@ -26205,6 +26215,13 @@ function validateBitbucketConfig() {
   if (!config.bitbucket.workspace) throw new Error("Missing required environment variable: BITBUCKET_WORKSPACE");
   if (!config.bitbucket.username) throw new Error("Missing required environment variable: BITBUCKET_USERNAME");
   if (!config.bitbucket.token) throw new Error("Missing required environment variable: BITBUCKET_TOKEN");
+}
+function validateAzureConfig() {
+  if (!config.azure.org) throw new Error("Missing required environment variable: AZURE_ORG");
+  if (!config.azure.project) throw new Error("Missing required environment variable: AZURE_PROJECT");
+  if (!config.azure.pat && !config.azure.accessToken) {
+    throw new Error("Missing required environment variable: AZURE_PAT or AZURE_ACCESS_TOKEN");
+  }
 }
 
 // node_modules/axios/lib/helpers/bind.js
@@ -30130,6 +30147,1079 @@ var BitbucketAdapter = class {
   }
 };
 
+// node_modules/diff/lib/index.mjs
+function Diff() {
+}
+Diff.prototype = {
+  diff: function diff(oldString, newString) {
+    var _options$timeout;
+    var options = arguments.length > 2 && arguments[2] !== void 0 ? arguments[2] : {};
+    var callback = options.callback;
+    if (typeof options === "function") {
+      callback = options;
+      options = {};
+    }
+    var self2 = this;
+    function done(value) {
+      value = self2.postProcess(value, options);
+      if (callback) {
+        setTimeout(function() {
+          callback(value);
+        }, 0);
+        return true;
+      } else {
+        return value;
+      }
+    }
+    oldString = this.castInput(oldString, options);
+    newString = this.castInput(newString, options);
+    oldString = this.removeEmpty(this.tokenize(oldString, options));
+    newString = this.removeEmpty(this.tokenize(newString, options));
+    var newLen = newString.length, oldLen = oldString.length;
+    var editLength = 1;
+    var maxEditLength = newLen + oldLen;
+    if (options.maxEditLength != null) {
+      maxEditLength = Math.min(maxEditLength, options.maxEditLength);
+    }
+    var maxExecutionTime = (_options$timeout = options.timeout) !== null && _options$timeout !== void 0 ? _options$timeout : Infinity;
+    var abortAfterTimestamp = Date.now() + maxExecutionTime;
+    var bestPath = [{
+      oldPos: -1,
+      lastComponent: void 0
+    }];
+    var newPos = this.extractCommon(bestPath[0], newString, oldString, 0, options);
+    if (bestPath[0].oldPos + 1 >= oldLen && newPos + 1 >= newLen) {
+      return done(buildValues(self2, bestPath[0].lastComponent, newString, oldString, self2.useLongestToken));
+    }
+    var minDiagonalToConsider = -Infinity, maxDiagonalToConsider = Infinity;
+    function execEditLength() {
+      for (var diagonalPath = Math.max(minDiagonalToConsider, -editLength); diagonalPath <= Math.min(maxDiagonalToConsider, editLength); diagonalPath += 2) {
+        var basePath = void 0;
+        var removePath = bestPath[diagonalPath - 1], addPath = bestPath[diagonalPath + 1];
+        if (removePath) {
+          bestPath[diagonalPath - 1] = void 0;
+        }
+        var canAdd = false;
+        if (addPath) {
+          var addPathNewPos = addPath.oldPos - diagonalPath;
+          canAdd = addPath && 0 <= addPathNewPos && addPathNewPos < newLen;
+        }
+        var canRemove = removePath && removePath.oldPos + 1 < oldLen;
+        if (!canAdd && !canRemove) {
+          bestPath[diagonalPath] = void 0;
+          continue;
+        }
+        if (!canRemove || canAdd && removePath.oldPos < addPath.oldPos) {
+          basePath = self2.addToPath(addPath, true, false, 0, options);
+        } else {
+          basePath = self2.addToPath(removePath, false, true, 1, options);
+        }
+        newPos = self2.extractCommon(basePath, newString, oldString, diagonalPath, options);
+        if (basePath.oldPos + 1 >= oldLen && newPos + 1 >= newLen) {
+          return done(buildValues(self2, basePath.lastComponent, newString, oldString, self2.useLongestToken));
+        } else {
+          bestPath[diagonalPath] = basePath;
+          if (basePath.oldPos + 1 >= oldLen) {
+            maxDiagonalToConsider = Math.min(maxDiagonalToConsider, diagonalPath - 1);
+          }
+          if (newPos + 1 >= newLen) {
+            minDiagonalToConsider = Math.max(minDiagonalToConsider, diagonalPath + 1);
+          }
+        }
+      }
+      editLength++;
+    }
+    if (callback) {
+      (function exec() {
+        setTimeout(function() {
+          if (editLength > maxEditLength || Date.now() > abortAfterTimestamp) {
+            return callback();
+          }
+          if (!execEditLength()) {
+            exec();
+          }
+        }, 0);
+      })();
+    } else {
+      while (editLength <= maxEditLength && Date.now() <= abortAfterTimestamp) {
+        var ret = execEditLength();
+        if (ret) {
+          return ret;
+        }
+      }
+    }
+  },
+  addToPath: function addToPath(path5, added, removed, oldPosInc, options) {
+    var last = path5.lastComponent;
+    if (last && !options.oneChangePerToken && last.added === added && last.removed === removed) {
+      return {
+        oldPos: path5.oldPos + oldPosInc,
+        lastComponent: {
+          count: last.count + 1,
+          added,
+          removed,
+          previousComponent: last.previousComponent
+        }
+      };
+    } else {
+      return {
+        oldPos: path5.oldPos + oldPosInc,
+        lastComponent: {
+          count: 1,
+          added,
+          removed,
+          previousComponent: last
+        }
+      };
+    }
+  },
+  extractCommon: function extractCommon(basePath, newString, oldString, diagonalPath, options) {
+    var newLen = newString.length, oldLen = oldString.length, oldPos = basePath.oldPos, newPos = oldPos - diagonalPath, commonCount = 0;
+    while (newPos + 1 < newLen && oldPos + 1 < oldLen && this.equals(oldString[oldPos + 1], newString[newPos + 1], options)) {
+      newPos++;
+      oldPos++;
+      commonCount++;
+      if (options.oneChangePerToken) {
+        basePath.lastComponent = {
+          count: 1,
+          previousComponent: basePath.lastComponent,
+          added: false,
+          removed: false
+        };
+      }
+    }
+    if (commonCount && !options.oneChangePerToken) {
+      basePath.lastComponent = {
+        count: commonCount,
+        previousComponent: basePath.lastComponent,
+        added: false,
+        removed: false
+      };
+    }
+    basePath.oldPos = oldPos;
+    return newPos;
+  },
+  equals: function equals(left, right, options) {
+    if (options.comparator) {
+      return options.comparator(left, right);
+    } else {
+      return left === right || options.ignoreCase && left.toLowerCase() === right.toLowerCase();
+    }
+  },
+  removeEmpty: function removeEmpty(array) {
+    var ret = [];
+    for (var i = 0; i < array.length; i++) {
+      if (array[i]) {
+        ret.push(array[i]);
+      }
+    }
+    return ret;
+  },
+  castInput: function castInput(value) {
+    return value;
+  },
+  tokenize: function tokenize(value) {
+    return Array.from(value);
+  },
+  join: function join(chars) {
+    return chars.join("");
+  },
+  postProcess: function postProcess(changeObjects) {
+    return changeObjects;
+  }
+};
+function buildValues(diff2, lastComponent, newString, oldString, useLongestToken) {
+  var components = [];
+  var nextComponent;
+  while (lastComponent) {
+    components.push(lastComponent);
+    nextComponent = lastComponent.previousComponent;
+    delete lastComponent.previousComponent;
+    lastComponent = nextComponent;
+  }
+  components.reverse();
+  var componentPos = 0, componentLen = components.length, newPos = 0, oldPos = 0;
+  for (; componentPos < componentLen; componentPos++) {
+    var component = components[componentPos];
+    if (!component.removed) {
+      if (!component.added && useLongestToken) {
+        var value = newString.slice(newPos, newPos + component.count);
+        value = value.map(function(value2, i) {
+          var oldValue = oldString[oldPos + i];
+          return oldValue.length > value2.length ? oldValue : value2;
+        });
+        component.value = diff2.join(value);
+      } else {
+        component.value = diff2.join(newString.slice(newPos, newPos + component.count));
+      }
+      newPos += component.count;
+      if (!component.added) {
+        oldPos += component.count;
+      }
+    } else {
+      component.value = diff2.join(oldString.slice(oldPos, oldPos + component.count));
+      oldPos += component.count;
+    }
+  }
+  return components;
+}
+var characterDiff = new Diff();
+function longestCommonPrefix(str1, str2) {
+  var i;
+  for (i = 0; i < str1.length && i < str2.length; i++) {
+    if (str1[i] != str2[i]) {
+      return str1.slice(0, i);
+    }
+  }
+  return str1.slice(0, i);
+}
+function longestCommonSuffix(str1, str2) {
+  var i;
+  if (!str1 || !str2 || str1[str1.length - 1] != str2[str2.length - 1]) {
+    return "";
+  }
+  for (i = 0; i < str1.length && i < str2.length; i++) {
+    if (str1[str1.length - (i + 1)] != str2[str2.length - (i + 1)]) {
+      return str1.slice(-i);
+    }
+  }
+  return str1.slice(-i);
+}
+function replacePrefix(string, oldPrefix, newPrefix) {
+  if (string.slice(0, oldPrefix.length) != oldPrefix) {
+    throw Error("string ".concat(JSON.stringify(string), " doesn't start with prefix ").concat(JSON.stringify(oldPrefix), "; this is a bug"));
+  }
+  return newPrefix + string.slice(oldPrefix.length);
+}
+function replaceSuffix(string, oldSuffix, newSuffix) {
+  if (!oldSuffix) {
+    return string + newSuffix;
+  }
+  if (string.slice(-oldSuffix.length) != oldSuffix) {
+    throw Error("string ".concat(JSON.stringify(string), " doesn't end with suffix ").concat(JSON.stringify(oldSuffix), "; this is a bug"));
+  }
+  return string.slice(0, -oldSuffix.length) + newSuffix;
+}
+function removePrefix(string, oldPrefix) {
+  return replacePrefix(string, oldPrefix, "");
+}
+function removeSuffix(string, oldSuffix) {
+  return replaceSuffix(string, oldSuffix, "");
+}
+function maximumOverlap(string1, string2) {
+  return string2.slice(0, overlapCount(string1, string2));
+}
+function overlapCount(a, b) {
+  var startA = 0;
+  if (a.length > b.length) {
+    startA = a.length - b.length;
+  }
+  var endB = b.length;
+  if (a.length < b.length) {
+    endB = a.length;
+  }
+  var map = Array(endB);
+  var k = 0;
+  map[0] = 0;
+  for (var j = 1; j < endB; j++) {
+    if (b[j] == b[k]) {
+      map[j] = map[k];
+    } else {
+      map[j] = k;
+    }
+    while (k > 0 && b[j] != b[k]) {
+      k = map[k];
+    }
+    if (b[j] == b[k]) {
+      k++;
+    }
+  }
+  k = 0;
+  for (var i = startA; i < a.length; i++) {
+    while (k > 0 && a[i] != b[k]) {
+      k = map[k];
+    }
+    if (a[i] == b[k]) {
+      k++;
+    }
+  }
+  return k;
+}
+var extendedWordChars = "a-zA-Z0-9_\\u{C0}-\\u{FF}\\u{D8}-\\u{F6}\\u{F8}-\\u{2C6}\\u{2C8}-\\u{2D7}\\u{2DE}-\\u{2FF}\\u{1E00}-\\u{1EFF}";
+var tokenizeIncludingWhitespace = new RegExp("[".concat(extendedWordChars, "]+|\\s+|[^").concat(extendedWordChars, "]"), "ug");
+var wordDiff = new Diff();
+wordDiff.equals = function(left, right, options) {
+  if (options.ignoreCase) {
+    left = left.toLowerCase();
+    right = right.toLowerCase();
+  }
+  return left.trim() === right.trim();
+};
+wordDiff.tokenize = function(value) {
+  var options = arguments.length > 1 && arguments[1] !== void 0 ? arguments[1] : {};
+  var parts;
+  if (options.intlSegmenter) {
+    if (options.intlSegmenter.resolvedOptions().granularity != "word") {
+      throw new Error('The segmenter passed must have a granularity of "word"');
+    }
+    parts = Array.from(options.intlSegmenter.segment(value), function(segment) {
+      return segment.segment;
+    });
+  } else {
+    parts = value.match(tokenizeIncludingWhitespace) || [];
+  }
+  var tokens = [];
+  var prevPart = null;
+  parts.forEach(function(part) {
+    if (/\s/.test(part)) {
+      if (prevPart == null) {
+        tokens.push(part);
+      } else {
+        tokens.push(tokens.pop() + part);
+      }
+    } else if (/\s/.test(prevPart)) {
+      if (tokens[tokens.length - 1] == prevPart) {
+        tokens.push(tokens.pop() + part);
+      } else {
+        tokens.push(prevPart + part);
+      }
+    } else {
+      tokens.push(part);
+    }
+    prevPart = part;
+  });
+  return tokens;
+};
+wordDiff.join = function(tokens) {
+  return tokens.map(function(token, i) {
+    if (i == 0) {
+      return token;
+    } else {
+      return token.replace(/^\s+/, "");
+    }
+  }).join("");
+};
+wordDiff.postProcess = function(changes, options) {
+  if (!changes || options.oneChangePerToken) {
+    return changes;
+  }
+  var lastKeep = null;
+  var insertion = null;
+  var deletion = null;
+  changes.forEach(function(change) {
+    if (change.added) {
+      insertion = change;
+    } else if (change.removed) {
+      deletion = change;
+    } else {
+      if (insertion || deletion) {
+        dedupeWhitespaceInChangeObjects(lastKeep, deletion, insertion, change);
+      }
+      lastKeep = change;
+      insertion = null;
+      deletion = null;
+    }
+  });
+  if (insertion || deletion) {
+    dedupeWhitespaceInChangeObjects(lastKeep, deletion, insertion, null);
+  }
+  return changes;
+};
+function dedupeWhitespaceInChangeObjects(startKeep, deletion, insertion, endKeep) {
+  if (deletion && insertion) {
+    var oldWsPrefix = deletion.value.match(/^\s*/)[0];
+    var oldWsSuffix = deletion.value.match(/\s*$/)[0];
+    var newWsPrefix = insertion.value.match(/^\s*/)[0];
+    var newWsSuffix = insertion.value.match(/\s*$/)[0];
+    if (startKeep) {
+      var commonWsPrefix = longestCommonPrefix(oldWsPrefix, newWsPrefix);
+      startKeep.value = replaceSuffix(startKeep.value, newWsPrefix, commonWsPrefix);
+      deletion.value = removePrefix(deletion.value, commonWsPrefix);
+      insertion.value = removePrefix(insertion.value, commonWsPrefix);
+    }
+    if (endKeep) {
+      var commonWsSuffix = longestCommonSuffix(oldWsSuffix, newWsSuffix);
+      endKeep.value = replacePrefix(endKeep.value, newWsSuffix, commonWsSuffix);
+      deletion.value = removeSuffix(deletion.value, commonWsSuffix);
+      insertion.value = removeSuffix(insertion.value, commonWsSuffix);
+    }
+  } else if (insertion) {
+    if (startKeep) {
+      insertion.value = insertion.value.replace(/^\s*/, "");
+    }
+    if (endKeep) {
+      endKeep.value = endKeep.value.replace(/^\s*/, "");
+    }
+  } else if (startKeep && endKeep) {
+    var newWsFull = endKeep.value.match(/^\s*/)[0], delWsStart = deletion.value.match(/^\s*/)[0], delWsEnd = deletion.value.match(/\s*$/)[0];
+    var newWsStart = longestCommonPrefix(newWsFull, delWsStart);
+    deletion.value = removePrefix(deletion.value, newWsStart);
+    var newWsEnd = longestCommonSuffix(removePrefix(newWsFull, newWsStart), delWsEnd);
+    deletion.value = removeSuffix(deletion.value, newWsEnd);
+    endKeep.value = replacePrefix(endKeep.value, newWsFull, newWsEnd);
+    startKeep.value = replaceSuffix(startKeep.value, newWsFull, newWsFull.slice(0, newWsFull.length - newWsEnd.length));
+  } else if (endKeep) {
+    var endKeepWsPrefix = endKeep.value.match(/^\s*/)[0];
+    var deletionWsSuffix = deletion.value.match(/\s*$/)[0];
+    var overlap = maximumOverlap(deletionWsSuffix, endKeepWsPrefix);
+    deletion.value = removeSuffix(deletion.value, overlap);
+  } else if (startKeep) {
+    var startKeepWsSuffix = startKeep.value.match(/\s*$/)[0];
+    var deletionWsPrefix = deletion.value.match(/^\s*/)[0];
+    var _overlap = maximumOverlap(startKeepWsSuffix, deletionWsPrefix);
+    deletion.value = removePrefix(deletion.value, _overlap);
+  }
+}
+var wordWithSpaceDiff = new Diff();
+wordWithSpaceDiff.tokenize = function(value) {
+  var regex = new RegExp("(\\r?\\n)|[".concat(extendedWordChars, "]+|[^\\S\\n\\r]+|[^").concat(extendedWordChars, "]"), "ug");
+  return value.match(regex) || [];
+};
+var lineDiff = new Diff();
+lineDiff.tokenize = function(value, options) {
+  if (options.stripTrailingCr) {
+    value = value.replace(/\r\n/g, "\n");
+  }
+  var retLines = [], linesAndNewlines = value.split(/(\n|\r\n)/);
+  if (!linesAndNewlines[linesAndNewlines.length - 1]) {
+    linesAndNewlines.pop();
+  }
+  for (var i = 0; i < linesAndNewlines.length; i++) {
+    var line = linesAndNewlines[i];
+    if (i % 2 && !options.newlineIsToken) {
+      retLines[retLines.length - 1] += line;
+    } else {
+      retLines.push(line);
+    }
+  }
+  return retLines;
+};
+lineDiff.equals = function(left, right, options) {
+  if (options.ignoreWhitespace) {
+    if (!options.newlineIsToken || !left.includes("\n")) {
+      left = left.trim();
+    }
+    if (!options.newlineIsToken || !right.includes("\n")) {
+      right = right.trim();
+    }
+  } else if (options.ignoreNewlineAtEof && !options.newlineIsToken) {
+    if (left.endsWith("\n")) {
+      left = left.slice(0, -1);
+    }
+    if (right.endsWith("\n")) {
+      right = right.slice(0, -1);
+    }
+  }
+  return Diff.prototype.equals.call(this, left, right, options);
+};
+function diffLines(oldStr, newStr, callback) {
+  return lineDiff.diff(oldStr, newStr, callback);
+}
+var sentenceDiff = new Diff();
+sentenceDiff.tokenize = function(value) {
+  return value.split(/(\S.+?[.!?])(?=\s+|$)/);
+};
+var cssDiff = new Diff();
+cssDiff.tokenize = function(value) {
+  return value.split(/([{}:;,]|\s+)/);
+};
+function ownKeys(e, r) {
+  var t = Object.keys(e);
+  if (Object.getOwnPropertySymbols) {
+    var o = Object.getOwnPropertySymbols(e);
+    r && (o = o.filter(function(r2) {
+      return Object.getOwnPropertyDescriptor(e, r2).enumerable;
+    })), t.push.apply(t, o);
+  }
+  return t;
+}
+function _objectSpread2(e) {
+  for (var r = 1; r < arguments.length; r++) {
+    var t = null != arguments[r] ? arguments[r] : {};
+    r % 2 ? ownKeys(Object(t), true).forEach(function(r2) {
+      _defineProperty(e, r2, t[r2]);
+    }) : Object.getOwnPropertyDescriptors ? Object.defineProperties(e, Object.getOwnPropertyDescriptors(t)) : ownKeys(Object(t)).forEach(function(r2) {
+      Object.defineProperty(e, r2, Object.getOwnPropertyDescriptor(t, r2));
+    });
+  }
+  return e;
+}
+function _toPrimitive(t, r) {
+  if ("object" != typeof t || !t) return t;
+  var e = t[Symbol.toPrimitive];
+  if (void 0 !== e) {
+    var i = e.call(t, r || "default");
+    if ("object" != typeof i) return i;
+    throw new TypeError("@@toPrimitive must return a primitive value.");
+  }
+  return ("string" === r ? String : Number)(t);
+}
+function _toPropertyKey(t) {
+  var i = _toPrimitive(t, "string");
+  return "symbol" == typeof i ? i : i + "";
+}
+function _typeof(o) {
+  "@babel/helpers - typeof";
+  return _typeof = "function" == typeof Symbol && "symbol" == typeof Symbol.iterator ? function(o2) {
+    return typeof o2;
+  } : function(o2) {
+    return o2 && "function" == typeof Symbol && o2.constructor === Symbol && o2 !== Symbol.prototype ? "symbol" : typeof o2;
+  }, _typeof(o);
+}
+function _defineProperty(obj, key, value) {
+  key = _toPropertyKey(key);
+  if (key in obj) {
+    Object.defineProperty(obj, key, {
+      value,
+      enumerable: true,
+      configurable: true,
+      writable: true
+    });
+  } else {
+    obj[key] = value;
+  }
+  return obj;
+}
+function _toConsumableArray(arr) {
+  return _arrayWithoutHoles(arr) || _iterableToArray(arr) || _unsupportedIterableToArray(arr) || _nonIterableSpread();
+}
+function _arrayWithoutHoles(arr) {
+  if (Array.isArray(arr)) return _arrayLikeToArray(arr);
+}
+function _iterableToArray(iter) {
+  if (typeof Symbol !== "undefined" && iter[Symbol.iterator] != null || iter["@@iterator"] != null) return Array.from(iter);
+}
+function _unsupportedIterableToArray(o, minLen) {
+  if (!o) return;
+  if (typeof o === "string") return _arrayLikeToArray(o, minLen);
+  var n = Object.prototype.toString.call(o).slice(8, -1);
+  if (n === "Object" && o.constructor) n = o.constructor.name;
+  if (n === "Map" || n === "Set") return Array.from(o);
+  if (n === "Arguments" || /^(?:Ui|I)nt(?:8|16|32)(?:Clamped)?Array$/.test(n)) return _arrayLikeToArray(o, minLen);
+}
+function _arrayLikeToArray(arr, len) {
+  if (len == null || len > arr.length) len = arr.length;
+  for (var i = 0, arr2 = new Array(len); i < len; i++) arr2[i] = arr[i];
+  return arr2;
+}
+function _nonIterableSpread() {
+  throw new TypeError("Invalid attempt to spread non-iterable instance.\nIn order to be iterable, non-array objects must have a [Symbol.iterator]() method.");
+}
+var jsonDiff = new Diff();
+jsonDiff.useLongestToken = true;
+jsonDiff.tokenize = lineDiff.tokenize;
+jsonDiff.castInput = function(value, options) {
+  var undefinedReplacement = options.undefinedReplacement, _options$stringifyRep = options.stringifyReplacer, stringifyReplacer = _options$stringifyRep === void 0 ? function(k, v) {
+    return typeof v === "undefined" ? undefinedReplacement : v;
+  } : _options$stringifyRep;
+  return typeof value === "string" ? value : JSON.stringify(canonicalize(value, null, null, stringifyReplacer), stringifyReplacer, "  ");
+};
+jsonDiff.equals = function(left, right, options) {
+  return Diff.prototype.equals.call(jsonDiff, left.replace(/,([\r\n])/g, "$1"), right.replace(/,([\r\n])/g, "$1"), options);
+};
+function canonicalize(obj, stack, replacementStack, replacer, key) {
+  stack = stack || [];
+  replacementStack = replacementStack || [];
+  if (replacer) {
+    obj = replacer(key, obj);
+  }
+  var i;
+  for (i = 0; i < stack.length; i += 1) {
+    if (stack[i] === obj) {
+      return replacementStack[i];
+    }
+  }
+  var canonicalizedObj;
+  if ("[object Array]" === Object.prototype.toString.call(obj)) {
+    stack.push(obj);
+    canonicalizedObj = new Array(obj.length);
+    replacementStack.push(canonicalizedObj);
+    for (i = 0; i < obj.length; i += 1) {
+      canonicalizedObj[i] = canonicalize(obj[i], stack, replacementStack, replacer, key);
+    }
+    stack.pop();
+    replacementStack.pop();
+    return canonicalizedObj;
+  }
+  if (obj && obj.toJSON) {
+    obj = obj.toJSON();
+  }
+  if (_typeof(obj) === "object" && obj !== null) {
+    stack.push(obj);
+    canonicalizedObj = {};
+    replacementStack.push(canonicalizedObj);
+    var sortedKeys = [], _key;
+    for (_key in obj) {
+      if (Object.prototype.hasOwnProperty.call(obj, _key)) {
+        sortedKeys.push(_key);
+      }
+    }
+    sortedKeys.sort();
+    for (i = 0; i < sortedKeys.length; i += 1) {
+      _key = sortedKeys[i];
+      canonicalizedObj[_key] = canonicalize(obj[_key], stack, replacementStack, replacer, _key);
+    }
+    stack.pop();
+    replacementStack.pop();
+  } else {
+    canonicalizedObj = obj;
+  }
+  return canonicalizedObj;
+}
+var arrayDiff = new Diff();
+arrayDiff.tokenize = function(value) {
+  return value.slice();
+};
+arrayDiff.join = arrayDiff.removeEmpty = function(value) {
+  return value;
+};
+function structuredPatch(oldFileName, newFileName, oldStr, newStr, oldHeader, newHeader, options) {
+  if (!options) {
+    options = {};
+  }
+  if (typeof options === "function") {
+    options = {
+      callback: options
+    };
+  }
+  if (typeof options.context === "undefined") {
+    options.context = 4;
+  }
+  if (options.newlineIsToken) {
+    throw new Error("newlineIsToken may not be used with patch-generation functions, only with diffing functions");
+  }
+  if (!options.callback) {
+    return diffLinesResultToPatch(diffLines(oldStr, newStr, options));
+  } else {
+    var _options = options, _callback = _options.callback;
+    diffLines(oldStr, newStr, _objectSpread2(_objectSpread2({}, options), {}, {
+      callback: function callback(diff2) {
+        var patch = diffLinesResultToPatch(diff2);
+        _callback(patch);
+      }
+    }));
+  }
+  function diffLinesResultToPatch(diff2) {
+    if (!diff2) {
+      return;
+    }
+    diff2.push({
+      value: "",
+      lines: []
+    });
+    function contextLines(lines) {
+      return lines.map(function(entry) {
+        return " " + entry;
+      });
+    }
+    var hunks = [];
+    var oldRangeStart = 0, newRangeStart = 0, curRange = [], oldLine = 1, newLine = 1;
+    var _loop = function _loop2() {
+      var current = diff2[i], lines = current.lines || splitLines(current.value);
+      current.lines = lines;
+      if (current.added || current.removed) {
+        var _curRange;
+        if (!oldRangeStart) {
+          var prev = diff2[i - 1];
+          oldRangeStart = oldLine;
+          newRangeStart = newLine;
+          if (prev) {
+            curRange = options.context > 0 ? contextLines(prev.lines.slice(-options.context)) : [];
+            oldRangeStart -= curRange.length;
+            newRangeStart -= curRange.length;
+          }
+        }
+        (_curRange = curRange).push.apply(_curRange, _toConsumableArray(lines.map(function(entry) {
+          return (current.added ? "+" : "-") + entry;
+        })));
+        if (current.added) {
+          newLine += lines.length;
+        } else {
+          oldLine += lines.length;
+        }
+      } else {
+        if (oldRangeStart) {
+          if (lines.length <= options.context * 2 && i < diff2.length - 2) {
+            var _curRange2;
+            (_curRange2 = curRange).push.apply(_curRange2, _toConsumableArray(contextLines(lines)));
+          } else {
+            var _curRange3;
+            var contextSize = Math.min(lines.length, options.context);
+            (_curRange3 = curRange).push.apply(_curRange3, _toConsumableArray(contextLines(lines.slice(0, contextSize))));
+            var _hunk = {
+              oldStart: oldRangeStart,
+              oldLines: oldLine - oldRangeStart + contextSize,
+              newStart: newRangeStart,
+              newLines: newLine - newRangeStart + contextSize,
+              lines: curRange
+            };
+            hunks.push(_hunk);
+            oldRangeStart = 0;
+            newRangeStart = 0;
+            curRange = [];
+          }
+        }
+        oldLine += lines.length;
+        newLine += lines.length;
+      }
+    };
+    for (var i = 0; i < diff2.length; i++) {
+      _loop();
+    }
+    for (var _i = 0, _hunks = hunks; _i < _hunks.length; _i++) {
+      var hunk = _hunks[_i];
+      for (var _i2 = 0; _i2 < hunk.lines.length; _i2++) {
+        if (hunk.lines[_i2].endsWith("\n")) {
+          hunk.lines[_i2] = hunk.lines[_i2].slice(0, -1);
+        } else {
+          hunk.lines.splice(_i2 + 1, 0, "\\ No newline at end of file");
+          _i2++;
+        }
+      }
+    }
+    return {
+      oldFileName,
+      newFileName,
+      oldHeader,
+      newHeader,
+      hunks
+    };
+  }
+}
+function splitLines(text) {
+  var hasTrailingNl = text.endsWith("\n");
+  var result = text.split("\n").map(function(line) {
+    return line + "\n";
+  });
+  if (hasTrailingNl) {
+    result.pop();
+  } else {
+    result.push(result.pop().slice(0, -1));
+  }
+  return result;
+}
+
+// src/vcs/azure.ts
+var MAX_DIFF_FILE_CHARS = 4e5;
+var AzureDevOpsAdapter = class {
+  client;
+  authHeader;
+  repoSlug = "";
+  constructor(baseUrl, org, project, pat, accessToken = "") {
+    this.authHeader = accessToken ? `Bearer ${accessToken}` : "Basic " + Buffer.from(`:${pat}`).toString("base64");
+    this.client = axios_default.create({
+      baseURL: `${baseUrl}/${encodeURIComponent(org)}/${encodeURIComponent(project)}/_apis/git`,
+      headers: {
+        Authorization: this.authHeader,
+        "Content-Type": "application/json"
+      },
+      params: { "api-version": "7.1" }
+      // required on every Azure DevOps call
+    });
+    console.warn("Azure DevOps adapter is experimental (WIP) \u2014 validated live on cloud Services (reviews + reply flow); on-prem Server is unverified.");
+  }
+  async getPullRequestInfo(prId) {
+    const repo = this.getRepoSlug();
+    const { data } = await this.client.get(`/repositories/${encodeURIComponent(repo)}/pullRequests/${prId}`);
+    return {
+      id: String(data.pullRequestId),
+      title: data.title,
+      description: data.description ?? "",
+      author: data.createdBy?.displayName ?? "Unknown",
+      sourceBranch: stripRefsHeads(data.sourceRefName),
+      targetBranch: stripRefsHeads(data.targetRefName),
+      sourceCommit: data.lastMergeSourceCommit?.commitId ?? ""
+    };
+  }
+  async getDiff(prId) {
+    const { base, target } = await this.getPrCommits(prId);
+    return this.buildDiff(base, target, true);
+  }
+  async getCommitDiff(fromCommit, toCommit) {
+    const base = await this.resolveCommit(fromCommit, toCommit);
+    return this.buildDiff(base, toCommit, false);
+  }
+  async getChangedFiles(prId) {
+    const { base, target } = await this.getPrCommits(prId);
+    const { changes } = await this.fetchCommitDiff(base, target, true);
+    return changes.map((c) => ({ path: c.path, status: mapStatus(c.changeType) }));
+  }
+  async getFileContent(filePath, ref) {
+    const repo = this.getRepoSlug();
+    const { data } = await this.client.get(`/repositories/${encodeURIComponent(repo)}/items`, {
+      params: {
+        path: withLeadingSlash(filePath),
+        "versionDescriptor.version": ref,
+        "versionDescriptor.versionType": "commit"
+      },
+      headers: { Accept: "text/plain" },
+      responseType: "text"
+    });
+    return data;
+  }
+  async getRepoFileContent(filePath, ref = "HEAD") {
+    const repo = this.getRepoSlug();
+    const params = { path: withLeadingSlash(filePath) };
+    if (ref && ref !== "HEAD") {
+      params["versionDescriptor.version"] = ref;
+      params["versionDescriptor.versionType"] = /^[0-9a-f]{7,40}$/i.test(ref) ? "commit" : "branch";
+    }
+    try {
+      const { data } = await this.client.get(`/repositories/${encodeURIComponent(repo)}/items`, {
+        params,
+        headers: { Accept: "text/plain" },
+        responseType: "text"
+      });
+      return data;
+    } catch (err) {
+      const status = axios_default.isAxiosError(err) ? err.response?.status : void 0;
+      if (status === 404 || status === 400) return null;
+      throw err;
+    }
+  }
+  async postComment(prId, body) {
+    const repo = this.getRepoSlug();
+    await this.client.post(`/repositories/${encodeURIComponent(repo)}/pullRequests/${prId}/threads`, {
+      comments: [{ parentCommentId: 0, content: body, commentType: 1 }],
+      status: 1
+    });
+  }
+  async getPreviousReviewComments(prId) {
+    const comments = [];
+    for (const thread of await this.fetchThreads(prId)) {
+      for (const c of thread.comments ?? []) {
+        const body = c.content ?? "";
+        if (hasReviewFooter(body)) {
+          comments.push({ id: `${thread.id}:${c.id}`, body, createdOn: c.publishedDate });
+        }
+      }
+    }
+    return comments;
+  }
+  async getRepliesToReviewComments(prId, reviewCommentIds, includeAnswered = false) {
+    const reviewIds = new Set(reviewCommentIds);
+    const threadIds = new Set(reviewCommentIds.map((id) => id.split(":")[0]));
+    const humanReplies = [];
+    let agentReplyCount = 0;
+    let latestAgentReply = "";
+    for (const thread of await this.fetchThreads(prId)) {
+      const tid = String(thread.id);
+      if (!threadIds.has(tid)) continue;
+      const parentReviewId = reviewCommentIds.find((id) => id.split(":")[0] === tid);
+      for (const c of thread.comments ?? []) {
+        const compositeId = `${tid}:${c.id}`;
+        if (reviewIds.has(compositeId)) continue;
+        const body = c.content ?? "";
+        const createdOn = c.publishedDate;
+        if (hasReplyFooter(body)) {
+          agentReplyCount++;
+          if (createdOn > latestAgentReply) latestAgentReply = createdOn;
+          if (includeAnswered) {
+            humanReplies.push({ id: compositeId, parentId: parentReviewId, author: "Agent (prior reply)", body, createdOn });
+          }
+          continue;
+        }
+        humanReplies.push({ id: compositeId, parentId: parentReviewId, author: c.author?.displayName ?? "Unknown", body, createdOn });
+      }
+    }
+    if (includeAnswered) return { replies: humanReplies, agentReplyCount };
+    if (!latestAgentReply) return { replies: humanReplies, agentReplyCount };
+    return { replies: humanReplies.filter((r) => r.createdOn > latestAgentReply), agentReplyCount };
+  }
+  async postReply(prId, parentId, body) {
+    const repo = this.getRepoSlug();
+    const [threadId, commentId] = parentId.split(":");
+    await this.client.post(
+      `/repositories/${encodeURIComponent(repo)}/pullRequests/${prId}/threads/${threadId}/comments`,
+      { content: body, parentCommentId: Number(commentId), commentType: 1 }
+    );
+  }
+  setRepoSlug(slug) {
+    this.repoSlug = slug;
+  }
+  // -------------------------------------------------------------------------
+  // Internals
+  // -------------------------------------------------------------------------
+  getRepoSlug() {
+    if (!this.repoSlug) throw new Error("repo slug not set on AzureDevOpsAdapter");
+    return this.repoSlug;
+  }
+  /** Resolve the PR's base (target branch) and target (source branch) commit SHAs. */
+  async getPrCommits(prId) {
+    const repo = this.getRepoSlug();
+    const { data } = await this.client.get(`/repositories/${encodeURIComponent(repo)}/pullRequests/${prId}`);
+    return {
+      base: data.lastMergeTargetCommit?.commitId ?? "",
+      target: data.lastMergeSourceCommit?.commitId ?? ""
+    };
+  }
+  /** Azure's diffs/commits requires full 40-char SHAs, but review footers carry an abbreviated
+   *  hash. Resolve it by prefix-matching the commits reachable from `reachableFrom` — a full SHA
+   *  we already hold (the current PR source commit) — so no PR id or extra context is needed. */
+  async resolveCommit(ref, reachableFrom) {
+    if (/^[0-9a-f]{40}$/i.test(ref)) return ref;
+    const repo = this.getRepoSlug();
+    const { data } = await this.client.get(`/repositories/${encodeURIComponent(repo)}/commits`, {
+      params: {
+        "searchCriteria.itemVersion.version": reachableFrom,
+        "searchCriteria.itemVersion.versionType": "commit",
+        "searchCriteria.$top": 200
+      }
+    });
+    const match = (data.value ?? []).find((c) => typeof c.commitId === "string" && c.commitId.startsWith(ref));
+    if (!match) throw new Error(`cannot resolve abbreviated commit ${ref} within the ${(data.value ?? []).length} most recent commits`);
+    return match.commitId;
+  }
+  async fetchThreads(prId) {
+    const repo = this.getRepoSlug();
+    const { data } = await this.client.get(`/repositories/${encodeURIComponent(repo)}/pullRequests/${prId}/threads`);
+    return data.value ?? [];
+  }
+  /** GET diffs/commits and normalize to blob-only changes (folders/trees dropped). */
+  async fetchCommitDiff(baseVersion, targetVersion, diffCommonCommit) {
+    const repo = this.getRepoSlug();
+    const changes = [];
+    let baseCommit = baseVersion;
+    let targetCommit = targetVersion;
+    let skip = 0;
+    for (; ; ) {
+      const { data } = await this.client.get(`/repositories/${encodeURIComponent(repo)}/diffs/commits`, {
+        params: {
+          baseVersion,
+          baseVersionType: "commit",
+          targetVersion,
+          targetVersionType: "commit",
+          diffCommonCommit,
+          "$top": 1e3,
+          "$skip": skip
+        }
+      });
+      baseCommit = data.baseCommit ?? baseCommit;
+      targetCommit = data.targetCommit ?? targetCommit;
+      const batch = data.changes ?? [];
+      for (const entry of batch) {
+        const item = entry.item ?? {};
+        if (item.isFolder || item.gitObjectType && item.gitObjectType !== "blob") continue;
+        const changeType = mapChangeType(String(entry.changeType ?? ""));
+        if (!changeType) continue;
+        const path5 = stripLeadingSlash(item.path ?? "");
+        if (!path5) continue;
+        const originalPath = item.originalPath ?? entry.sourceServerItem;
+        changes.push({ path: path5, changeType, originalPath: originalPath ? stripLeadingSlash(originalPath) : void 0 });
+      }
+      if (data.allChangesIncluded !== false || batch.length === 0) break;
+      skip += batch.length;
+    }
+    return { baseCommit, targetCommit, changes };
+  }
+  /** Reconstruct a unified diff by fetching old/new blob content and running jsdiff. */
+  async buildDiff(baseVersion, targetVersion, diffCommonCommit) {
+    const { baseCommit, targetCommit, changes } = await this.fetchCommitDiff(baseVersion, targetVersion, diffCommonCommit);
+    const parts = [];
+    for (const change of changes) {
+      const patch = await this.buildFilePatch(change, baseCommit, targetCommit);
+      if (patch) parts.push(patch);
+    }
+    return parts.join("");
+  }
+  async buildFilePatch(change, oldRef, newRef) {
+    let oldPath;
+    let newPath;
+    let oldContent;
+    let newContent;
+    switch (change.changeType) {
+      case "add":
+        oldPath = null;
+        newPath = change.path;
+        oldContent = "";
+        newContent = await this.contentForDiff(change.path, newRef);
+        break;
+      case "delete":
+        oldPath = change.path;
+        newPath = null;
+        oldContent = await this.contentForDiff(change.path, oldRef);
+        newContent = "";
+        break;
+      case "rename": {
+        const from = change.originalPath ?? change.path;
+        oldPath = from;
+        newPath = change.path;
+        oldContent = await this.contentForDiff(from, oldRef);
+        newContent = await this.contentForDiff(change.path, newRef);
+        break;
+      }
+      default:
+        oldPath = change.path;
+        newPath = change.path;
+        oldContent = await this.contentForDiff(change.path, oldRef);
+        newContent = await this.contentForDiff(change.path, newRef);
+    }
+    if (oldContent === null || newContent === null) return "";
+    return buildUnifiedFilePatch(oldPath, newPath, oldContent, newContent);
+  }
+  /** Fetch blob text for diffing; null for binary/oversized/missing (caller skips it). */
+  async contentForDiff(path5, ref) {
+    try {
+      const content = await this.getFileContent(path5, ref);
+      if (content.length > MAX_DIFF_FILE_CHARS) return null;
+      if (isBinary(content)) return null;
+      return content;
+    } catch (err) {
+      if (axios_default.isAxiosError(err) && err.response?.status === 404) return null;
+      throw err;
+    }
+  }
+};
+function stripRefsHeads(ref) {
+  return (ref ?? "").replace(/^refs\/heads\//, "");
+}
+function withLeadingSlash(path5) {
+  return path5.startsWith("/") ? path5 : "/" + path5;
+}
+function stripLeadingSlash(path5) {
+  return path5.replace(/^\//, "");
+}
+function isBinary(content) {
+  for (let i = 0; i < content.length; i++) {
+    if (content.charCodeAt(i) === 0) return true;
+  }
+  return false;
+}
+function mapChangeType(ct) {
+  const s = ct.toLowerCase();
+  if (s.includes("rename")) return "rename";
+  if (s.includes("delete")) return "delete";
+  if (s.includes("add")) return "add";
+  if (s.includes("edit")) return "edit";
+  return null;
+}
+function mapStatus(ct) {
+  switch (ct) {
+    case "add":
+      return "added";
+    case "delete":
+      return "deleted";
+    case "rename":
+      return "renamed";
+    default:
+      return "modified";
+  }
+}
+function buildUnifiedFilePatch(oldPath, newPath, oldContent, newContent) {
+  const aPath = oldPath ?? newPath;
+  const bPath = newPath ?? oldPath;
+  const patch = structuredPatch(aPath, bPath, oldContent, newContent, "", "");
+  if (patch.hunks.length === 0) return "";
+  const lines = [`diff --git a/${aPath} b/${bPath}`];
+  lines.push(`--- ${oldPath ? `a/${oldPath}` : "/dev/null"}`);
+  lines.push(`+++ ${newPath ? `b/${newPath}` : "/dev/null"}`);
+  for (const h of patch.hunks) {
+    lines.push(`@@ -${h.oldStart},${h.oldLines} +${h.newStart},${h.newLines} @@`);
+    for (const l of h.lines) lines.push(l);
+  }
+  return lines.join("\n") + "\n";
+}
+
 // src/vcs/github.ts
 var GitHubAdapter = class {
   getPullRequestInfo(_prId) {
@@ -30395,26 +31485,26 @@ function isExcluded(filePath) {
 function countLines(content) {
   return content.split("\n").length;
 }
-function highChurnInDiff(filePath, diff) {
-  const fileSection = extractFileDiff(filePath, diff);
+function highChurnInDiff(filePath, diff2) {
+  const fileSection = extractFileDiff(filePath, diff2);
   if (!fileSection) return false;
   const lines = fileSection.split("\n");
   const changed = lines.filter((l) => l.startsWith("+") || l.startsWith("-")).length;
   const total = lines.filter((l) => !l.startsWith("@@") && !l.startsWith("---") && !l.startsWith("+++")).length;
   return total > 0 && changed / total > 0.3;
 }
-function extractFileDiff(filePath, diff) {
+function extractFileDiff(filePath, diff2) {
   const escaped = filePath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const match = diff.match(new RegExp(`--- a/${escaped}[\\s\\S]*?(?=^--- a/|$)`, "m"));
+  const match = diff2.match(new RegExp(`--- a/${escaped}[\\s\\S]*?(?=^--- a/|$)`, "m"));
   return match ? match[0] : null;
 }
-async function fetchContext(adapter2, changedFiles, sourceCommit, diff, maxFiles, maxFileLines) {
+async function fetchContext(adapter2, changedFiles, sourceCommit, diff2, maxFiles, maxFileLines) {
   const candidates = changedFiles.filter(
     (f) => f.status !== "deleted" && !isExcluded(f.path)
   );
   const sorted = candidates.sort((a, b) => {
-    const aChurn = highChurnInDiff(a.path, diff) ? 0 : 1;
-    const bChurn = highChurnInDiff(b.path, diff) ? 0 : 1;
+    const aChurn = highChurnInDiff(a.path, diff2) ? 0 : 1;
+    const bChurn = highChurnInDiff(b.path, diff2) ? 0 : 1;
     return aChurn - bChurn;
   });
   const results = [];
@@ -30433,7 +31523,7 @@ async function fetchContext(adapter2, changedFiles, sourceCommit, diff, maxFiles
       if (!item) continue;
       if (results.length >= maxFiles) break;
       const lineCount = countLines(item.content);
-      if (lineCount > maxFileLines && !highChurnInDiff(item.file.path, diff)) {
+      if (lineCount > maxFileLines && !highChurnInDiff(item.file.path, diff2)) {
         console.log(`Skipping ${item.file.path} \u2014 ${lineCount} lines (over limit, low churn)`);
         continue;
       }
@@ -30466,9 +31556,9 @@ var JUDGE_OUTPUT_SCHEMA = {
   required: ["review_markdown", "judge_notes"],
   additionalProperties: false
 };
-async function runReview(apiKey, model, maxRetries, prInfo, diff, fileContexts, prompt, previousReviews, developerReplies = []) {
+async function runReview(apiKey, model, maxRetries, prInfo, diff2, fileContexts, prompt, previousReviews, developerReplies = [], changesSinceLastReview = "") {
   const client = new Anthropic({ apiKey, maxRetries });
-  const userMessage = buildUserMessage(prInfo, diff, fileContexts, previousReviews, developerReplies);
+  const userMessage = buildUserMessage(prInfo, diff2, fileContexts, previousReviews, developerReplies, changesSinceLastReview);
   console.log(`Sending request to Claude (${model}, maxRetries: ${maxRetries})...`);
   const response = await client.messages.create({
     model,
@@ -30479,8 +31569,8 @@ async function runReview(apiKey, model, maxRetries, prInfo, diff, fileContexts, 
   if (response.stop_reason === "max_tokens") {
     throw new Error(`Review truncated at ${MAX_TOKENS} output tokens \u2014 refusing to post a cut-off review`);
   }
-  const block = response.content[0];
-  if (block.type !== "text") throw new Error("Unexpected response type from Claude");
+  const block = response.content.find((b) => b.type === "text");
+  if (!block || block.type !== "text") throw new Error("Unexpected response type from Claude (no text block)");
   const usage = {
     input_tokens: response.usage.input_tokens,
     output_tokens: response.usage.output_tokens,
@@ -30490,7 +31580,7 @@ async function runReview(apiKey, model, maxRetries, prInfo, diff, fileContexts, 
   console.log(`Review received (${usage.input_tokens} in / ${usage.output_tokens} out tokens)`);
   return { text: block.text, usage };
 }
-function buildUserMessage(prInfo, diff, fileContexts, previousReviews, developerReplies) {
+function buildUserMessage(prInfo, diff2, fileContexts, previousReviews, developerReplies, changesSinceLastReview = "") {
   const parts = [];
   parts.push(`## Pull Request: ${prInfo.title}`);
   parts.push(`## Branch: ${prInfo.sourceBranch} \u2192 ${prInfo.targetBranch}`);
@@ -30515,8 +31605,15 @@ ${latest.body}`);
   }
   parts.push(`## Diff:
 \`\`\`diff
-${diff}
+${diff2}
 \`\`\``);
+  if (changesSinceLastReview && previousReviews.length > 0) {
+    parts.push(`## Changes Since Your Last Review:
+The diff below is ONLY the lines changed since your previous review above \u2014 use it to see exactly what was added or fixed. Credit findings these changes resolve, and assess anything new. The complete PR diff is above for full context.
+\`\`\`diff
+${changesSinceLastReview}
+\`\`\``);
+  }
   if (fileContexts.length > 0) {
     parts.push("## Full file context:");
     for (const file of fileContexts) {
@@ -30537,12 +31634,12 @@ function getJudgePrompt() {
     throw new Error("Cannot load judge prompt: file not found and no embedded copy");
   }
 }
-async function runJudge(apiKey, model, maxRetries, diff, reviewText) {
+async function runJudge(apiKey, model, maxRetries, diff2, reviewText) {
   const client = new Anthropic({ apiKey, maxRetries });
   const parts = [];
   parts.push(`## Diff:
 \`\`\`diff
-${diff}
+${diff2}
 \`\`\``);
   parts.push(`## Review to Validate:
 ${reviewText}`);
@@ -30558,8 +31655,8 @@ ${reviewText}`);
   if (response.stop_reason === "max_tokens") {
     throw new Error(`Judge output truncated at ${MAX_TOKENS} output tokens \u2014 refusing to post a cut-off review`);
   }
-  const block = response.content[0];
-  if (block.type !== "text") throw new Error("Unexpected response type from Claude");
+  const block = response.content.find((b) => b.type === "text");
+  if (!block || block.type !== "text") throw new Error("Unexpected response type from Claude (no text block)");
   let parsed;
   try {
     parsed = JSON.parse(block.text);
@@ -30584,14 +31681,14 @@ function getReplyPrompt() {
     throw new Error("Cannot load reply prompt: file not found and no embedded copy");
   }
 }
-async function runCommentResponse(apiKey, model, maxRetries, diff, originalReview, replies) {
+async function runCommentResponse(apiKey, model, maxRetries, diff2, originalReview, replies) {
   const client = new Anthropic({ apiKey, maxRetries });
   const parts = [];
   parts.push(`## Your Original Review:
 ${originalReview}`);
   parts.push(`## Diff:
 \`\`\`diff
-${diff}
+${diff2}
 \`\`\``);
   parts.push(`## Developer Replies (answer all of these):`);
   for (const r of replies) {
@@ -30609,8 +31706,8 @@ ${diff}
   if (response.stop_reason === "max_tokens") {
     throw new Error(`Reply truncated at ${REPLY_MAX_TOKENS} output tokens \u2014 refusing to post a cut-off reply`);
   }
-  const block = response.content[0];
-  if (block.type !== "text") throw new Error("Unexpected response type from Claude");
+  const block = response.content.find((b) => b.type === "text");
+  if (!block || block.type !== "text") throw new Error("Unexpected response type from Claude (no text block)");
   const usage = {
     input_tokens: response.usage.input_tokens,
     output_tokens: response.usage.output_tokens,
@@ -30630,9 +31727,9 @@ function patternToRegex(pattern) {
 function isPathExcluded(path5, excludePatterns) {
   return excludePatterns.some((p) => patternToRegex(p).test(path5));
 }
-function filterDiff(diff, excludePatterns) {
+function filterDiff(diff2, excludePatterns) {
   const regexes = excludePatterns.map(patternToRegex);
-  const sections = diff.split(/(?=^diff --git )/m);
+  const sections = diff2.split(/(?=^diff --git )/m);
   const kept = sections.filter((section) => {
     const match = section.match(/^diff --git a\/(.+?) b\//);
     if (!match) return true;
@@ -30640,9 +31737,9 @@ function filterDiff(diff, excludePatterns) {
   });
   return { filtered: kept.join(""), removedCount: sections.length - kept.length };
 }
-function countChangedLines(diff) {
+function countChangedLines(diff2) {
   let count = 0;
-  for (const line of diff.split("\n")) {
+  for (const line of diff2.split("\n")) {
     if (line.startsWith("+") && !line.startsWith("+++") || line.startsWith("-") && !line.startsWith("---")) {
       count++;
     }
@@ -30671,12 +31768,12 @@ function parseDeltaStats(text) {
     new_findings: parseInt(match[3], 10)
   };
 }
-function scanTodos(diff) {
+function scanTodos(diff2) {
   const todos = [];
   const marker = /\b(TODO|FIXME|HACK)\b:?\s*(.*)/i;
   let file = "";
   let newLine = 0;
-  for (const raw of diff.split("\n")) {
+  for (const raw of diff2.split("\n")) {
     if (raw.startsWith("diff --git")) {
       file = "";
       continue;
@@ -30735,7 +31832,7 @@ function getAgentVersion() {
     const pkg = JSON.parse((0, import_fs3.readFileSync)(pkgPath, "utf-8"));
     return pkg.version;
   } catch {
-    if (true) return "0.0.3";
+    if (true) return "0.0.4";
     return "unknown";
   }
 }
@@ -30747,7 +31844,7 @@ function getBuildCommit() {
     const dirty = (0, import_child_process.execSync)("git status --porcelain", opts2).toString().trim() ? "-dirty" : "";
     return hash + dirty;
   } catch {
-    if (true) return "7389190";
+    if (true) return "00f6f2c";
     return "unknown";
   }
 }
@@ -30777,7 +31874,7 @@ function buildUsageRecord(ctx, durationMs, error) {
     timestamp: (/* @__PURE__ */ new Date()).toISOString(),
     agent_version: getAgentVersion(),
     vcs: config.vcsProvider,
-    workspace: config.bitbucket.workspace,
+    workspace: config.vcsProvider === "azure" ? config.azure.org : config.bitbucket.workspace,
     repo_slug: ctx.repoSlug,
     pr_id: ctx.prId,
     pr_author: ctx.prInfo?.author ?? "unknown",
@@ -30945,6 +32042,7 @@ async function transition(state, ctx) {
                 ctx.reviewNumber = ctx.previousReviews.length;
                 return 5 /* CHECK_REPLIES */;
               }
+              ctx.deltaDiff = filtered;
             } catch (err) {
               console.log(`  Delta diff fetch failed (${err.message}) \u2014 falling back to full PR diff`);
             }
@@ -31079,7 +32177,8 @@ If this PR spans multiple independent themes that could each be a separate, inde
         ctx.fileContexts,
         reviewPrompt,
         ctx.previousReviews ?? [],
-        ctx.replies ?? []
+        ctx.replies ?? [],
+        ctx.deltaDiff ?? ""
       );
       ctx.reviewText = result.text;
       ctx.usage.input_tokens += result.usage.input_tokens;
@@ -31248,7 +32347,7 @@ if (major < 22) {
   process.exit(1);
 }
 var program2 = new Command();
-program2.name("pr-review-agent").description("Automated PR code review powered by Claude").option("--pr-id <id>", "Pull request ID").option("--workspace <workspace>", "VCS workspace / org (overrides BITBUCKET_WORKSPACE)").option("--repo-slug <slug>", "Repository slug").option("--vcs <provider>", "VCS provider: bitbucket | github | gitlab (overrides VCS_PROVIDER)").option("--dry-run", "Print the review to stdout without posting to the PR").option("--force [mode]", 'Force review: "clean" (no prior context) or "re-review" (keep context, bypass dedup)').option("--log-usage [bool]", "Log usage data to results.jsonl (default: true)", (v) => v !== "false", true).option("--prompt <path>", "Path to a local prompt file (overrides repo .agent-review-instructions.md)").option("--validate-prompt", "Validate prompt and exit (local via --prompt, or repo via --pr-id)").option("--model <id>", "Claude model ID (overrides CLAUDE_MODEL)").option("--judge-model <id>", "Judge model ID (overrides JUDGING_MODEL)").option("--min-changed-files <n>", "Skip review if fewer files changed (overrides MIN_CHANGED_FILES)").option("--max-changed-files <n>", "Skip review if more files changed (overrides MAX_CHANGED_FILES)").option("--min-changed-lines <n>", "Skip review if fewer lines changed (overrides MIN_CHANGED_LINES)").option("--max-changed-lines <n>", "Skip review if more lines changed (overrides MAX_CHANGED_LINES)").parse(process.argv);
+program2.name("pr-review-agent").description("Automated PR code review powered by Claude").option("--pr-id <id>", "Pull request ID").option("--workspace <workspace>", "VCS workspace / org (overrides BITBUCKET_WORKSPACE)").option("--repo-slug <slug>", "Repository slug").option("--vcs <provider>", "VCS provider: bitbucket | azure (WIP) | github | gitlab (overrides VCS_PROVIDER)").option("--dry-run", "Print the review to stdout without posting to the PR").option("--force [mode]", 'Force review: "clean" (no prior context) or "re-review" (keep context, bypass dedup)').option("--log-usage [bool]", "Log usage data to results.jsonl (default: true)", (v) => v !== "false", true).option("--prompt <path>", "Path to a local prompt file (overrides repo .agent-review-instructions.md)").option("--validate-prompt", "Validate prompt and exit (local via --prompt, or repo via --pr-id)").option("--model <id>", "Claude model ID (overrides CLAUDE_MODEL)").option("--judge-model <id>", "Judge model ID (overrides JUDGING_MODEL)").option("--min-changed-files <n>", "Skip review if fewer files changed (overrides MIN_CHANGED_FILES)").option("--max-changed-files <n>", "Skip review if more files changed (overrides MAX_CHANGED_FILES)").option("--min-changed-lines <n>", "Skip review if fewer lines changed (overrides MIN_CHANGED_LINES)").option("--max-changed-lines <n>", "Skip review if more lines changed (overrides MAX_CHANGED_LINES)").parse(process.argv);
 var opts = program2.opts();
 async function main() {
   if (opts.validatePrompt) {
@@ -31266,6 +32365,7 @@ async function main() {
     process.exit(1);
   }
   const provider = opts.vcs ?? config.vcsProvider;
+  config.vcsProvider = provider;
   let adapter2;
   if (provider === "bitbucket") {
     if (opts.workspace) config.bitbucket.workspace = opts.workspace;
@@ -31282,6 +32382,22 @@ async function main() {
     }
     bb.setRepoSlug(opts.repoSlug);
     adapter2 = bb;
+  } else if (provider === "azure") {
+    if (opts.workspace) config.azure.org = opts.workspace;
+    validateAzureConfig();
+    const az = new AzureDevOpsAdapter(
+      config.azure.baseUrl,
+      config.azure.org,
+      config.azure.project,
+      config.azure.pat,
+      config.azure.accessToken
+    );
+    if (!opts.repoSlug) {
+      console.error("Error: --repo-slug is required for Azure DevOps");
+      process.exit(1);
+    }
+    az.setRepoSlug(opts.repoSlug);
+    adapter2 = az;
   } else if (provider === "github") {
     adapter2 = new GitHubAdapter();
   } else if (provider === "gitlab") {
