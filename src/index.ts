@@ -5,8 +5,9 @@ if (major < 22) {
 }
 
 import { Command } from 'commander'
-import { config, validateBitbucketConfig } from './config.js'
+import { config, validateBitbucketConfig, validateAzureConfig } from './config.js'
 import { BitbucketAdapter } from './vcs/bitbucket.js'
+import { AzureDevOpsAdapter } from './vcs/azure.js'
 import { GitHubAdapter } from './vcs/github.js'
 import { GitLabAdapter } from './vcs/gitlab.js'
 import { review } from './review/index.js'
@@ -21,7 +22,7 @@ program
   .option('--pr-id <id>', 'Pull request ID')
   .option('--workspace <workspace>', 'VCS workspace / org (overrides BITBUCKET_WORKSPACE)')
   .option('--repo-slug <slug>', 'Repository slug')
-  .option('--vcs <provider>', 'VCS provider: bitbucket | github | gitlab (overrides VCS_PROVIDER)')
+  .option('--vcs <provider>', 'VCS provider: bitbucket | azure (WIP) | github | gitlab (overrides VCS_PROVIDER)')
   .option('--dry-run', 'Print the review to stdout without posting to the PR')
   .option('--force [mode]', 'Force review: "clean" (no prior context) or "re-review" (keep context, bypass dedup)')
   .option('--log-usage [bool]', 'Log usage data to results.jsonl (default: true)', (v: string) => v !== 'false', true)
@@ -73,7 +74,10 @@ async function main(): Promise<void> {
     process.exit(1)
   }
 
-  const provider = (opts.vcs ?? config.vcsProvider) as 'bitbucket' | 'github' | 'gitlab'
+  const provider = (opts.vcs ?? config.vcsProvider) as 'bitbucket' | 'github' | 'gitlab' | 'azure'
+  // Make the resolved provider authoritative so usage logging (vcs, run_id) matches the
+  // adapter actually used when --vcs overrides VCS_PROVIDER.
+  config.vcsProvider = provider
 
   let adapter: VCSAdapter
 
@@ -95,6 +99,25 @@ async function main(): Promise<void> {
     }
     bb.setRepoSlug(opts.repoSlug)
     adapter = bb
+  } else if (provider === 'azure') {
+    // Azure DevOps — experimental / WIP. --workspace aliases AZURE_ORG for one-off runs.
+    if (opts.workspace) config.azure.org = opts.workspace
+    validateAzureConfig()
+
+    const az = new AzureDevOpsAdapter(
+      config.azure.baseUrl,
+      config.azure.org,
+      config.azure.project,
+      config.azure.pat,
+      config.azure.accessToken
+    )
+
+    if (!opts.repoSlug) {
+      console.error('Error: --repo-slug is required for Azure DevOps')
+      process.exit(1)
+    }
+    az.setRepoSlug(opts.repoSlug)
+    adapter = az
   } else if (provider === 'github') {
     adapter = new GitHubAdapter()
   } else if (provider === 'gitlab') {

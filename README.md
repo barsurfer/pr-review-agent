@@ -4,7 +4,7 @@ Automated pull request code reviewer powered by Claude. When a PR is opened or u
 the agent fetches the diff and relevant file context from your VCS, sends it to Claude,
 and posts a structured review comment directly on the PR.
 
-**Current VCS support:** Bitbucket (GitHub and GitLab planned)
+**Current VCS support:** Bitbucket; Azure DevOps — experimental/WIP (GitHub and GitLab planned)
 
 ### What it does
 
@@ -183,7 +183,10 @@ generate candidate findings, then a stronger model (Sonnet) to validate them.
 ### Re-reviews and Delta Logic
 
 On re-reviews (PR updated after a previous review), the agent sends its **most recent**
-review comment and **all developer replies** across all previous reviews. Claude produces
+review comment and **all developer replies** across all previous reviews, plus a
+**"Changes Since Your Last Review"** section — the diff *since the last-reviewed commit* — so
+Claude sees exactly which lines are new or fixed rather than inferring changes from the
+previous review's prose (the full PR diff is still included for context). Claude produces
 a **delta review** focused on new code only — previous findings are briefly referenced in
 the Summary ("still open" or "fixed") but not re-listed in Findings or Unresolved Questions.
 
@@ -299,9 +302,9 @@ bundle build on every push to `main` and every PR — the gate that keeps `main`
 | Flag | Required | Description |
 |------|----------|-------------|
 | `--pr-id <id>` | **Yes**\* | Pull request ID to review |
-| `--repo-slug <slug>` | **Yes** (Bitbucket) | Repository slug |
-| `--workspace <workspace>` | No | Overrides `BITBUCKET_WORKSPACE` env var |
-| `--vcs <provider>` | No | `bitbucket` \| `github` \| `gitlab` — overrides `VCS_PROVIDER` env var (default: `bitbucket`) |
+| `--repo-slug <slug>` | **Yes** (Bitbucket, Azure) | Repository slug (Azure: repo name or GUID) |
+| `--workspace <workspace>` | No | Overrides `BITBUCKET_WORKSPACE` (or `AZURE_ORG` when `--vcs azure`) |
+| `--vcs <provider>` | No | `bitbucket` \| `azure` (WIP) \| `github` \| `gitlab` — overrides `VCS_PROVIDER` env var (default: `bitbucket`) |
 | `--dry-run` | No | Print the review to stdout instead of posting to the PR |
 | `--force` | No | Ignore previous reviews and produce a fresh review |
 | `--log-usage [bool]` | No | Log usage record to `results.jsonl` (default: `true`, use `--log-usage false` to disable). See [docs/reference/usage-logging.md](docs/reference/usage-logging.md) for schema. |
@@ -336,7 +339,7 @@ All credentials and settings are provided via environment variables.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `VCS_PROVIDER` | `bitbucket` | Which VCS adapter to use (`bitbucket` \| `github` \| `gitlab`) |
+| `VCS_PROVIDER` | `bitbucket` | Which VCS adapter to use (`bitbucket` \| `azure` \| `github` \| `gitlab`) |
 | `BITBUCKET_BASE_URL` | `https://api.bitbucket.org/2.0` | Bitbucket Cloud API base URL (Server/DC is not supported — different v1 API) |
 | `CLAUDE_MODEL` | `claude-sonnet-4-6` | Claude model ID to use for reviews |
 | `MAX_RETRIES` | `3` | Max retries on 429/5xx errors (exponential backoff) |
@@ -351,6 +354,66 @@ All credentials and settings are provided via environment variables.
 | `ENABLE_SPLIT_CHECK` | `true` | Reviewer adds a "Can Be Split" section when the PR spans independent themes (set `false` to disable) |
 | `ENABLE_TODO_SCAN` | `true` | Scan added lines for `TODO`/`FIXME`/`HACK` and append a "TODOs Introduced" section |
 | `AGENT_IDENTITY` | `BITBUCKET_USERNAME` | Name shown in review footers. Falls back to `BITBUCKET_USERNAME`, then `'Claude'` |
+
+### Azure DevOps (experimental / WIP)
+
+Select the adapter with `--vcs azure` or `VCS_PROVIDER=azure`. It implements the full
+adapter interface and has been validated **end-to-end against a live Azure DevOps Services
+(cloud) org** — PR info, diff reconstruction, context fetch, comment posting, and footer
+dedup all confirmed. Still flagged WIP: not yet exercised on **Server / on-prem**, in a real
+pipeline via `System.AccessToken`, or on the reply / delta-review paths against a live
+instance. On construction it prints a one-line WIP warning.
+
+**Why the adapter reconstructs the diff.** Azure has no unified-diff REST endpoint — the
+[`diffs/commits`](https://learn.microsoft.com/en-us/rest/api/azure/devops/git/diffs/get?view=azure-devops-rest-7.1)
+API returns only a **file-level change list** (paths + change types, no line content), and the
+PR web UI renders its +/- view client-side via an internal, undocumented endpoint. So the
+adapter reconstructs a git-style unified diff from the `diffs/commits` list plus per-file blob
+content (via the [`diff`](https://www.npmjs.com/package/diff) library) — the same approach
+Microsoft's own tooling uses. Comments are modeled as threads. Two auth modes, selected by config: an OAuth
+**Bearer** token (zero-PAT — e.g. a pipeline's `System.AccessToken`) or a **PAT** over HTTP
+Basic. Provide one of `AZURE_ACCESS_TOKEN` or `AZURE_PAT`; the access token wins if both are set.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AZURE_BASE_URL` | `https://dev.azure.com` | API base URL. Point at an on-prem **Server** collection URL for self-hosted instances |
+| `AZURE_ORG` | *(required)* | Organization / collection name (can also use `--workspace`) |
+| `AZURE_PROJECT` | *(required)* | Project name |
+| `AZURE_ACCESS_TOKEN` | *(one required)* | OAuth Bearer token — e.g. the Azure Pipelines built-in `System.AccessToken`. Zero-PAT. |
+| `AZURE_PAT` | *(one required)* | Personal Access Token — scopes: Code (read) + Threads (read & write). Sent as HTTP Basic `base64(":{PAT}")` |
+
+Repository is passed via `--repo-slug` (repo name or GUID). Example:
+
+```bash
+AZURE_ORG=my-org AZURE_PROJECT=my-project AZURE_PAT=xxxx \
+  node dist/pr-review-agent.cjs --vcs azure --repo-slug my-repo --pr-id 42 --dry-run
+```
+
+#### CI integration (Azure Pipelines)
+
+The Azure-native equivalent of the Jenkins hook: an [`azure/azure-pipelines.yml`](azure/azure-pipelines.yml)
+build-validation pipeline that runs the agent on every PR, auto-filling repo / PR id / project /
+org from built-in pipeline variables. Zero-PAT — it authenticates with the pipeline's own
+`System.AccessToken`.
+
+Setup:
+
+1. **Trigger** — wire the pipeline as a **Branch Policy → Build Validation** on the target
+   branch. ⚠️ The YAML `pr:` trigger does **not** fire for Azure Repos; you must use a branch
+   policy. Set it **Optional** so an agent failure never blocks the PR.
+2. **OAuth token** — enable **"Allow scripts to access the OAuth token"** on the job so
+   `System.AccessToken` is exposed (this is the `AZURE_ACCESS_TOKEN` the agent reads).
+3. **Permission** — grant the build service identity (`{Project} Build Service ({Org})`)
+   **"Contribute to Pull Requests" = Allow** on the repo so it can post review comments.
+4. **Secret** — add `ANTHROPIC_API_KEY` as a secret pipeline variable (mapped explicitly in
+   the YAML `env:`; secrets are not auto-injected).
+
+Prefer a stored PAT instead of the OAuth token? Swap `AZURE_ACCESS_TOKEN: $(System.AccessToken)`
+for `AZURE_PAT: $(AZURE_PAT)` in the pipeline's `env:` block.
+
+> **Verified-live status, first-setup gotchas, the CI repo-prompt mechanism, and the
+> reply-flow open questions** live in the dedicated doc:
+> [docs/reference/azure-devops.md](docs/reference/azure-devops.md).
 
 ### How to Provide Environment Variables
 

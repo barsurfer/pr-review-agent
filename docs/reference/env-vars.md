@@ -17,13 +17,13 @@ credentials in source code or commit them to version control.**
 
 | Variable | Example | Description |
 |----------|---------|-------------|
-| `VCS_PROVIDER` | `bitbucket` | Which VCS adapter to use. Only `bitbucket` is implemented. |
+| `VCS_PROVIDER` | `bitbucket` | Which VCS adapter to use. `bitbucket` is production; `azure` is experimental/WIP (see below); `github`/`gitlab` are stubs. |
 | `BITBUCKET_BASE_URL` | `https://api.bitbucket.org/2.0` | Bitbucket Cloud API base URL (Server/DC is not supported — different v1 API) |
 | `BITBUCKET_WORKSPACE` | `my-workspace` | Bitbucket workspace slug |
 | `BITBUCKET_USERNAME` | `you@company.com` | Your Atlassian account email (used for HTTP Basic Auth) |
 | `BITBUCKET_TOKEN` | `ATATT3x...` | Atlassian API token with Bitbucket scopes (replaces deprecated app passwords) |
 | `ANTHROPIC_API_KEY` | `sk-ant-...` | Anthropic API key (billed separately from Claude.ai subscriptions) |
-| `CLAUDE_MODEL` | `claude-sonnet-4-6` | Claude model ID to use for reviews |
+| `CLAUDE_MODEL` | `claude-haiku-4-5-20251001` | Claude model ID for reviews (a cheap reviewer paired with a stronger `JUDGING_MODEL` gives the generator-verifier pattern) |
 | `MAX_RETRIES` | `3` | Max retries on 429/5xx errors (SDK built-in exponential backoff). Default: `3` |
 | `MAX_INPUT_TOKENS` | `150000` | If estimated input exceeds this, first drop file contexts and review diff-only; skip only if the diff alone still exceeds it (0 = disabled) |
 | `MAX_CONTEXT_FILES` | `20` | Max number of files to fetch full content for |
@@ -65,6 +65,32 @@ Controls dedup bypass behavior. The flag is optional-value — its behavior depe
 
 ---
 
+## Azure DevOps (Experimental / WIP)
+
+Selected with `--vcs azure` or `VCS_PROVIDER=azure`. Implements the full adapter interface
+but is validated against mocked API shapes only — **not yet exercised against a live
+instance**. Prints a one-line WIP warning on construction.
+
+| Variable | Example | Description |
+|----------|---------|-------------|
+| `AZURE_BASE_URL` | `https://dev.azure.com` | API base URL. Default is cloud Services; set to an on-prem **Server** collection URL for self-hosted. |
+| `AZURE_ORG` | `my-org` | Organization / collection name (required). Can also be set via `--workspace`. |
+| `AZURE_PROJECT` | `my-project` | Project name (required). |
+| `AZURE_ACCESS_TOKEN` | `$(System.AccessToken)` | OAuth Bearer token — e.g. the Azure Pipelines built-in `System.AccessToken`. Zero-PAT auth. **One of this or `AZURE_PAT` is required.** |
+| `AZURE_PAT` | `xxxxxxxx...` | Personal Access Token. Scopes: Code (read) + Threads (read & write). Sent as HTTP Basic `base64(":{PAT}")` (empty username). **One of this or `AZURE_ACCESS_TOKEN` is required.** |
+
+**Auth selection:** if `AZURE_ACCESS_TOKEN` is set it is used as `Authorization: Bearer …`
+(preferred in pipelines); otherwise `AZURE_PAT` is used as HTTP Basic. `validateAzureConfig()`
+requires `AZURE_ORG`, `AZURE_PROJECT`, and **at least one** of the two credentials — otherwise
+it throws `Missing required environment variable: AZURE_PAT or AZURE_ACCESS_TOKEN`.
+
+Repository is passed via `--repo-slug` (repo name or GUID). All calls send `?api-version=7.1`.
+The diff is reconstructed from the `diffs/commits` change list + per-file blob content
+(no native unified-diff endpoint), using the `diff` (jsdiff) library. See
+[`azure/azure-pipelines.yml`](../../azure/azure-pipelines.yml) for a ready-to-use CI pipeline.
+
+---
+
 ## Phase 3 — Inline Comments
 
 | Variable | Example | Description |
@@ -91,9 +117,18 @@ BITBUCKET_WORKSPACE=
 BITBUCKET_USERNAME=
 BITBUCKET_TOKEN=
 
+# Azure DevOps (experimental / WIP) — set VCS_PROVIDER=azure to use.
+# Provide ONE credential: AZURE_ACCESS_TOKEN (Bearer, e.g. pipeline System.AccessToken)
+# OR AZURE_PAT (Basic). Access token wins if both are set.
+# AZURE_BASE_URL=https://dev.azure.com
+# AZURE_ORG=
+# AZURE_PROJECT=
+# AZURE_ACCESS_TOKEN=
+# AZURE_PAT=
+
 # Claude
 ANTHROPIC_API_KEY=
-CLAUDE_MODEL=claude-sonnet-4-6
+CLAUDE_MODEL=claude-haiku-4-5-20251001
 MAX_RETRIES=3
 # MAX_INPUT_TOKENS=150000
 

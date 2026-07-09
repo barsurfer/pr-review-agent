@@ -53,11 +53,12 @@ export async function runReview(
   fileContexts: FileContext[],
   prompt: LoadedPrompt,
   previousReviews: ReviewComment[],
-  developerReplies: CommentReply[] = []
+  developerReplies: CommentReply[] = [],
+  changesSinceLastReview = ''
 ): Promise<ClaudeResult> {
   const client = new Anthropic({ apiKey, maxRetries })
 
-  const userMessage = buildUserMessage(prInfo, diff, fileContexts, previousReviews, developerReplies)
+  const userMessage = buildUserMessage(prInfo, diff, fileContexts, previousReviews, developerReplies, changesSinceLastReview)
 
   console.log(`Sending request to Claude (${model}, maxRetries: ${maxRetries})...`)
 
@@ -72,8 +73,10 @@ export async function runReview(
     throw new Error(`Review truncated at ${MAX_TOKENS} output tokens — refusing to post a cut-off review`)
   }
 
-  const block = response.content[0]
-  if (block.type !== 'text') throw new Error('Unexpected response type from Claude')
+  // Find the text block rather than assuming it's first — newer models can emit a
+  // thinking (or other) block ahead of the text.
+  const block = response.content.find(b => b.type === 'text')
+  if (!block || block.type !== 'text') throw new Error('Unexpected response type from Claude (no text block)')
 
   const usage: ClaudeUsage = {
     input_tokens: response.usage.input_tokens,
@@ -92,7 +95,8 @@ function buildUserMessage(
   diff: string,
   fileContexts: FileContext[],
   previousReviews: ReviewComment[],
-  developerReplies: CommentReply[]
+  developerReplies: CommentReply[],
+  changesSinceLastReview = ''
 ): string {
   const parts: string[] = []
 
@@ -119,6 +123,13 @@ function buildUserMessage(
   }
 
   parts.push(`## Diff:\n\`\`\`diff\n${diff}\n\`\`\``)
+
+  // The full diff above is the whole PR vs target — it doesn't mark which lines are new since the
+  // last review, so on re-reviews scope the actual changes so fixes are visible without inferring
+  // them from the previous review's prose.
+  if (changesSinceLastReview && previousReviews.length > 0) {
+    parts.push(`## Changes Since Your Last Review:\nThe diff below is ONLY the lines changed since your previous review above — use it to see exactly what was added or fixed. Credit findings these changes resolve, and assess anything new. The complete PR diff is above for full context.\n\`\`\`diff\n${changesSinceLastReview}\n\`\`\``)
+  }
 
   if (fileContexts.length > 0) {
     parts.push('## Full file context:')
@@ -169,8 +180,10 @@ export async function runJudge(
     throw new Error(`Judge output truncated at ${MAX_TOKENS} output tokens — refusing to post a cut-off review`)
   }
 
-  const block = response.content[0]
-  if (block.type !== 'text') throw new Error('Unexpected response type from Claude')
+  // Find the text block rather than assuming it's first — newer models can emit a
+  // thinking (or other) block ahead of the text.
+  const block = response.content.find(b => b.type === 'text')
+  if (!block || block.type !== 'text') throw new Error('Unexpected response type from Claude (no text block)')
 
   let parsed: { review_markdown: string; judge_notes: string }
   try {
@@ -234,8 +247,10 @@ export async function runCommentResponse(
     throw new Error(`Reply truncated at ${REPLY_MAX_TOKENS} output tokens — refusing to post a cut-off reply`)
   }
 
-  const block = response.content[0]
-  if (block.type !== 'text') throw new Error('Unexpected response type from Claude')
+  // Find the text block rather than assuming it's first — newer models can emit a
+  // thinking (or other) block ahead of the text.
+  const block = response.content.find(b => b.type === 'text')
+  if (!block || block.type !== 'text') throw new Error('Unexpected response type from Claude (no text block)')
 
   const usage: ClaudeUsage = {
     input_tokens: response.usage.input_tokens,

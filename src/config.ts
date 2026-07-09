@@ -11,7 +11,7 @@ function optional(name: string, defaultValue: string): string {
 }
 
 export const config = {
-  vcsProvider: optional('VCS_PROVIDER', 'bitbucket') as 'bitbucket' | 'github' | 'gitlab',
+  vcsProvider: optional('VCS_PROVIDER', 'bitbucket') as 'bitbucket' | 'github' | 'gitlab' | 'azure',
 
   bitbucket: {
     baseUrl: optional('BITBUCKET_BASE_URL', 'https://api.bitbucket.org/2.0'),
@@ -20,9 +20,19 @@ export const config = {
     token: optional('BITBUCKET_TOKEN', ''),
   },
 
+  // Azure DevOps (experimental / WIP). baseUrl defaults to cloud Services; point it at
+  // an on-prem Server collection URL for self-hosted. org may be aliased by --workspace.
+  azure: {
+    baseUrl: optional('AZURE_BASE_URL', 'https://dev.azure.com'),
+    org: optional('AZURE_ORG', ''),
+    project: optional('AZURE_PROJECT', ''),
+    pat: optional('AZURE_PAT', ''),
+    accessToken: optional('AZURE_ACCESS_TOKEN', ''),   // OAuth Bearer (e.g. pipeline System.AccessToken); preferred over PAT
+  },
+
   anthropic: {
     apiKey: required('ANTHROPIC_API_KEY'),
-    model: optional('CLAUDE_MODEL', 'claude-sonnet-4-6'),
+    model: optional('CLAUDE_MODEL', 'claude-haiku-4-5-20251001'),
     maxRetries: parseInt(optional('MAX_RETRIES', '3'), 10),
     maxInputTokens: parseInt(optional('MAX_INPUT_TOKENS', '150000'), 10),
   },
@@ -72,4 +82,13 @@ export function validateBitbucketConfig(): void {
   if (!config.bitbucket.workspace) throw new Error('Missing required environment variable: BITBUCKET_WORKSPACE')
   if (!config.bitbucket.username) throw new Error('Missing required environment variable: BITBUCKET_USERNAME')
   if (!config.bitbucket.token) throw new Error('Missing required environment variable: BITBUCKET_TOKEN')
+}
+
+export function validateAzureConfig(): void {
+  if (!config.azure.org) throw new Error('Missing required environment variable: AZURE_ORG')
+  if (!config.azure.project) throw new Error('Missing required environment variable: AZURE_PROJECT')
+  // At least one credential: AZURE_ACCESS_TOKEN (Bearer) or AZURE_PAT (Basic).
+  if (!config.azure.pat && !config.azure.accessToken) {
+    throw new Error('Missing required environment variable: AZURE_PAT or AZURE_ACCESS_TOKEN')
+  }
 }

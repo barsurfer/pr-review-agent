@@ -1,0 +1,79 @@
+# PR Review Agent — Azure DevOps REPLY pipeline (validated live / WIP)
+#
+# Fires on PR COMMENTS (not pushes). Triggered by a Service Hook on
+# ms.vss-code.git-pullrequest-comment-event -> an Incoming Webhook service connection.
+# A reply run is the SAME invocation as a review run; the agent FSM decides review-vs-reply
+# and early-exits (no Claude call) when there is nothing new to answer.
+#
+# Validated end-to-end on an Azure DevOps Services test org: comment -> Service Hook ->
+# Incoming Webhook -> this pipeline -> agent posts a reply. Payload paths below are confirmed.
+#
+# SETUP: see docs/reference/azure-reply-flow-runbook.md
+#   1. Incoming Webhook service connection named "pr-comment". Secret can be BLANK for WIP —
+#      the Web Hooks service hook still POSTs and this pipeline fires with no HMAC/signature
+#      check (validated). Front it with a signing relay before pointing at a repo that matters.
+#      The `webhook:` alias below (prComment) must be hyphen-free (used as
+#      ${{ parameters.prComment.* }}; a hyphen parses as minus in Azure expressions).
+#   2. Register this YAML as a pipeline. Service Hooks fire the pipeline's DEFAULT-branch YAML,
+#      so this file must exist on the repo's default branch (unlike build-validation, which
+#      resolves YAML from the PR source branch).
+#   3. Service Hook (Web Hooks) -> the incoming-webhook URL (Phase 3).
+
+resources:
+  webhooks:
+    - webhook: prComment          # alias used in ${{ parameters.prComment.* }}
+      connection: pr-comment      # Incoming Webhook service connection name
+
+trigger: none     # never on CI push
+pr: none          # pr: triggers are ignored for Azure Repos anyway
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  # MUST include the Azure adapter. v0.0.3 predates it — use the adapter branch until a tag ships.
+  AGENT_TAG: feature/azure-devops-adapter
+
+steps:
+  - task: NodeTool@0
+    displayName: 'Use Node.js 22'
+    inputs:
+      versionSpec: '22.x'
+
+  - script: |
+      set -euo pipefail
+
+      curl -fsSL "https://raw.githubusercontent.com/barsurfer/pr-review-agent/$(AGENT_TAG)/dist/pr-review-agent.cjs" -o agent.cjs
+
+      # Split System.CollectionUri into { base URL, org } for the adapter (same as review pipeline).
+      COLL="${SYSTEM_COLLECTIONURI%/}"
+      export AZURE_ORG="${COLL##*/}"
+      export AZURE_BASE_URL="${COLL%/*}"
+
+      # PR_ID/REPO_NAME are step env vars (mapped from the webhook payload) — read as $VAR in
+      # bash, NOT $(VAR) which is Azure's pipeline-variable macro and won't resolve them.
+      echo "reply trigger: PR_ID='$PR_ID' REPO_NAME='$REPO_NAME'"
+
+      node agent.cjs \
+        --vcs azure \
+        --repo-slug "$REPO_NAME" \
+        --pr-id "$PR_ID"
+    displayName: 'PR Review Agent — reply (WIP)'
+    continueOnError: true
+    env:
+      # PR id + repo come from the webhook payload (verified in Phase 0). Compile-time expansion:
+      PR_ID:      ${{ parameters.prComment.resource.pullRequest.pullRequestId }}
+      REPO_NAME:  ${{ parameters.prComment.resource.pullRequest.repository.name }}
+      # Auth — identical to the review pipeline (zero-PAT).
+      AZURE_ACCESS_TOKEN: $(System.AccessToken)
+      AZURE_PROJECT: $(System.TeamProject)
+      ANTHROPIC_API_KEY: $(ANTHROPIC_API_KEY)   # secret pipeline variable — mapped explicitly
+      SKIP_TARGET_BRANCHES: ''                   # default "main,master" would skip PRs into main
+
+  - task: PublishPipelineArtifact@1
+    displayName: 'Archive results.jsonl'
+    condition: always()
+    continueOnError: true
+    inputs:
+      targetPath: results.jsonl
+      artifact: pr-review-reply-results
