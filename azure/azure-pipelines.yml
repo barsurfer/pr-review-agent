@@ -34,7 +34,7 @@ pool:
 variables:
   # Pin to an immutable release tag — raw.githubusercontent serves the committed
   # bundle at any ref, so the tag IS the version selector. Bump to roll forward.
-  AGENT_TAG: v0.0.3
+  AGENT_TAG: v0.0.4
 
 steps:
   - task: NodeTool@0

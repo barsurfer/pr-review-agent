@@ -31,8 +31,8 @@ pool:
   vmImage: ubuntu-latest
 
 variables:
-  # MUST include the Azure adapter. v0.0.3 predates it — use the adapter branch until a tag ships.
-  AGENT_TAG: feature/azure-devops-adapter
+  # Pin to an immutable release tag (the Azure adapter shipped in v0.0.4).
+  AGENT_TAG: v0.0.4
 
 steps:
   - task: NodeTool@0
