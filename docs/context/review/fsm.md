@@ -59,9 +59,9 @@ FETCH_PR_INFO
 | `CHECK_PREVIOUS_REVIEWS` | Parses commit hash from last review footer; triggers delta diff pre-check if different commit |
 | `LOAD_PROMPT` | Fetches `.agent-review-instructions.md` from the target repo (CLI `--prompt` → source commit → target branch; each ref probes root → `docs/` → single-module-dir fallback; defaults last) |
 | `FETCH_CONTEXT` | Fetches full file content for changed files (see [fetching/strategy.md](../fetching/strategy.md)) |
-| `CALL_CLAUDE` | Assembles payload (PR info, prior review, developer discussion, diff, file context); calls reviewer model |
-| `CHECK_NO_CHANGE` | Inspects raw response for the `NO_CHANGE` stop word (exact, or as a standalone line when the model prepends a summary) before any further processing |
-| `JUDGE_REVIEW` | If `JUDGING_MODEL` set: sends diff + review to judge for finding validation; otherwise passthrough |
+| `CALL_CLAUDE` | Assembles payload (PR info, prior review, developer discussion, diff, file context); calls reviewer model. The reviewer returns a typed object (`ctx.reviewObject`); `renderReview` builds `reviewText`. See [llm/structured-output.md](../llm/structured-output.md) |
+| `CHECK_NO_CHANGE` | Inspects `reviewText` for the `NO_CHANGE` sentinel (rendered when the reviewer sets `no_change`) before any further processing |
+| `JUDGE_REVIEW` | If `JUDGING_MODEL` set: sends diff + review to judge for finding validation; stores per-finding scores (`ctx.judgeScores`). Otherwise passthrough |
 | `POST_REVIEW` | Applies safety guards (empty/NO_CHANGE guard, pre-post dedup), then posts comment via VCS API |
 | `RESPOND_TO_REPLIES` | Bundles unanswered developer questions; calls Claude with reply prompt; posts threaded reply |
 
@@ -92,7 +92,9 @@ interface ReviewContext {
   developerReplies: CommentReply[]
   prompt: string
   contextFiles: ContextFile[]
-  reviewText: string       // output from CALL_CLAUDE / JUDGE_REVIEW
+  reviewText: string       // rendered markdown from CALL_CLAUDE / JUDGE_REVIEW
+  reviewObject?: ReviewObject   // reviewer's typed output — source for findings/delta metrics
+  judgeScores?: FindingScore[]  // judge's per-finding 0–10 confidence — logged, never posted
   skipReason?: string
 }
 ```
