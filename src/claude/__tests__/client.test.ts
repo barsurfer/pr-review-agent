@@ -7,7 +7,7 @@ vi.mock('../../llm/provider.js', () => ({
   createProvider: vi.fn(() => ({ complete, completeStructured })),
 }))
 
-import { runReview } from '../client.js'
+import { runReview, runJudge } from '../client.js'
 import type { ReviewObject } from '../../review/formatter.js'
 import type { PRInfo } from '../../vcs/adapter.js'
 import type { LoadedPrompt } from '../../prompt/loader.js'
@@ -52,5 +52,27 @@ describe('runReview (structured output)', () => {
     })
     const res = await runReview('key', 'model', 3, prInfo, 'DIFF', [], prompt, [])
     expect(res.text).toBe('NO_CHANGE')
+  })
+})
+
+describe('runJudge (structured output)', () => {
+  beforeEach(() => { complete.mockReset(); completeStructured.mockReset() })
+
+  it('passes the judged markdown, notes, and per-finding scores through', async () => {
+    completeStructured.mockResolvedValue({
+      object: {
+        review_markdown: '### Summary\nok\n\n### Merge Confidence: 80%',
+        judge_notes: 'dropped a LOW',
+        finding_scores: [{ title: 'X', severity: 'MEDIUM', score: 7 }],
+      },
+      usage,
+    })
+
+    const res = await runJudge('key', 'model', 3, 'DIFF', '### Summary\nreviewer text')
+
+    expect(res.text).toBe('### Summary\nok\n\n### Merge Confidence: 80%')
+    expect(res.notes).toBe('dropped a LOW')
+    expect(res.scores).toEqual([{ title: 'X', severity: 'MEDIUM', score: 7 }])
+    expect(complete).not.toHaveBeenCalled()
   })
 })

@@ -9,6 +9,7 @@ import { fileURLToPath } from 'url'
 import { config } from '../config.js'
 import { parseVerdictScore, parseFindings } from './parsers.js'
 import { countFindings } from './formatter.js'
+import type { FindingScore } from './formatter.js'
 import type { ReviewContext } from './types.js'
 
 export interface UsageRecord {
@@ -44,6 +45,8 @@ export interface UsageRecord {
   computed_score: number | null
   review_findings: { high: number; medium: number; low: number } | null
   findings: { high: number; medium: number; low: number } | null
+  finding_scores: FindingScore[] | null
+  min_finding_score: number | null
   touch_rate: number | null
   delta: { developer_replies: number; resolved: number; still_open: number; new_findings: number } | null
   jenkins: { job: string; build: string; url: string } | null
@@ -142,6 +145,7 @@ export function buildUsageRecord(
   const findings = reviewText ? parseFindings(reviewText) : null
   const reviewFindings = ctx.reviewObject ? countFindings(ctx.reviewObject) : null
   const deltaStats = ctx.reviewObject?.delta_stats ?? null
+  const judgeScores = ctx.judgeScores ?? null
   const judgeModel = config.judge.model || null
   const judgeTokensRaw = ctx.judgeUsage ?? null
   const judgeTokens = judgeTokensRaw ? { input: judgeTokensRaw.input_tokens, output: judgeTokensRaw.output_tokens } : null
@@ -189,6 +193,8 @@ export function buildUsageRecord(
     computed_score: findings ? Math.max(0, 100 - findings.high * 12 - findings.medium * 4) : null,
     review_findings: reviewFindings,
     findings,
+    finding_scores: judgeScores,
+    min_finding_score: judgeScores?.length ? Math.min(...judgeScores.map(s => s.score)) : null,
     touch_rate: ctx.reviewNumber > 1 && deltaStats ? (() => {
       const total = deltaStats.resolved + deltaStats.still_open
       return total > 0 ? Math.round((deltaStats.resolved / total) * 100) : null

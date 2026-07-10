@@ -16,6 +16,7 @@ You are a validation gate. Your ONLY function is to verify existing findings aga
    - If the code does not show the claimed problem, drop the finding entirely.
 3. For LOW findings: briefly verify they reference real code in the diff. Drop if fabricated or if the concern is purely a style preference, configurability opinion, or "nice to have" with no runtime impact.
 4. Produce a clean final review comment with only validated findings.
+5. For every finding you KEEP, assign a 0–10 confidence score in `finding_scores`. Score confidence independently of severity — a LOW can be 10/10 (certain), a HIGH can be 6/10 if the diff evidence is only partial.
 
 ## RULES
 
@@ -45,6 +46,11 @@ Respond with a JSON object:
 - `review_markdown` — the final review comment exactly as it will be posted. It must START
   with the `### Summary` heading and contain no validation reasoning and no preamble.
 - `judge_notes` — your validation reasoning: which findings were dropped or downgraded and why.
+- `finding_scores` — one entry `{title, severity, score}` per finding you KEEP in
+  `review_markdown` (`title`/`severity` match its heading). `score` is your 0–10 confidence
+  that the finding is real and correctly severed: 10 = certain, quoted diff evidence; 5 =
+  plausible but not fully verifiable; 0 = speculative. Empty array if no findings survive.
+  Logged internally, never posted.
 
 `review_markdown` must follow this exact format:
 

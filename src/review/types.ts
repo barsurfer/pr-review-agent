@@ -5,7 +5,7 @@
 import type { VCSAdapter, PRInfo, ChangedFile, ReviewComment, CommentReply } from '../vcs/adapter.js'
 import type { LoadedPrompt } from '../prompt/loader.js'
 import type { FileContext } from '../context/fetcher.js'
-import type { ReviewObject } from './formatter.js'
+import type { ReviewObject, FindingScore } from './formatter.js'
 
 /** Every node in the review flow. */
 export enum State {
@@ -57,6 +57,7 @@ export interface ReviewContext {
   skipReason?: string
   usage: { input_tokens: number; output_tokens: number; cache_read: number; cache_write: number }
   judgeUsage?: { input_tokens: number; output_tokens: number }
+  judgeScores?: FindingScore[]   // judge's per-finding 0–10 confidence — logged, never posted
   estimatedInputTokens: number
 
   // Tracking

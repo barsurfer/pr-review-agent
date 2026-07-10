@@ -2,7 +2,7 @@ import { readFileSync } from 'fs'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { createProvider } from '../llm/provider.js'
-import { renderReview, type ReviewObject } from '../review/formatter.js'
+import { renderReview, type ReviewObject, type FindingScore } from '../review/formatter.js'
 import type { PRInfo, ReviewComment, CommentReply } from '../vcs/adapter.js'
 import type { FileContext } from '../context/fetcher.js'
 import type { LoadedPrompt } from '../prompt/loader.js'
@@ -27,6 +27,8 @@ export interface ClaudeResult {
 export interface JudgeResult extends ClaudeResult {
   /** Validation reasoning — logged, never posted. */
   notes?: string
+  /** Per-finding 0–10 confidence for the kept findings — logged to results.jsonl, never posted. */
+  scores?: FindingScore[]
 }
 
 // Structured output keeps validation reasoning physically separate from the
@@ -42,8 +44,22 @@ const JUDGE_OUTPUT_SCHEMA = {
       type: 'string',
       description: 'Validation reasoning: which findings were dropped or downgraded and why. Internal — never posted.',
     },
+    finding_scores: {
+      type: 'array',
+      description: 'One entry per finding KEPT in review_markdown — the 0–10 confidence that it is real and correctly severed. Empty if no findings survive. Internal — logged, never posted.',
+      items: {
+        type: 'object',
+        properties: {
+          title: { type: 'string', description: "The kept finding's title, matching its heading in review_markdown." },
+          severity: { type: 'string', enum: ['LOW', 'MEDIUM', 'HIGH'], description: 'Final severity after calibration.' },
+          score: { type: 'integer', description: '0–10 confidence: 10 = certain with quoted diff evidence; 5 = plausible but not fully verifiable; 0 = speculative. Independent of severity.' },
+        },
+        required: ['title', 'severity', 'score'],
+        additionalProperties: false,
+      },
+    },
   },
-  required: ['review_markdown', 'judge_notes'],
+  required: ['review_markdown', 'judge_notes', 'finding_scores'],
   additionalProperties: false,
 } as const
 
@@ -191,13 +207,13 @@ export async function runJudge(
   const userMessage = parts.join('\n\n')
 
   console.log(`Sending to judge (${model}, maxRetries: ${maxRetries})...`)
-  const { object: parsed, usage } = await createProvider(apiKey).completeStructured<{ review_markdown: string; judge_notes: string }>(
+  const { object: parsed, usage } = await createProvider(apiKey).completeStructured<{ review_markdown: string; judge_notes: string; finding_scores: FindingScore[] }>(
     getJudgePrompt(), userMessage, JUDGE_OUTPUT_SCHEMA, { model, maxTokens: MAX_TOKENS, maxRetries },
   )
 
   console.log(`Judge received (${usage.input_tokens} in / ${usage.output_tokens} out tokens)`)
 
-  return { text: parsed.review_markdown, usage, notes: parsed.judge_notes }
+  return { text: parsed.review_markdown, usage, notes: parsed.judge_notes, scores: parsed.finding_scores }
 }
 
 function getReplyPrompt(): string {

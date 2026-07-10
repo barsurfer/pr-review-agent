@@ -101,6 +101,13 @@ export interface ReviewObject {
   no_change?: boolean
 }
 
+/** Judge's per-finding validation confidence — logged to results.jsonl, never posted. */
+export interface FindingScore {
+  title: string
+  severity: 'LOW' | 'MEDIUM' | 'HIGH'
+  score: number   // 0–10: judge's confidence the kept finding is real and correctly severed
+}
+
 const bullets = (items: string[]): string => items.map(i => `- ${i}`).join('\n')
 
 /** Render the reviewer's structured output into the posted markdown. The reviewer emits typed

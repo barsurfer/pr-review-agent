@@ -365,6 +365,7 @@ describe('judge preamble leak → stripped before posting', () => {
     mockRunJudge.mockResolvedValue({
       text: '### Summary\nLow-risk change.\n\n### Findings\n\n- **LOW – Fragile helper** (a.ts:1)\n  Desc.\n\n### Merge Confidence: 80%\n\n<!-- JUDGE_NOTES: Dropped MEDIUM — convention claim not verifiable from diff. -->',
       usage: { input_tokens: 800, output_tokens: 300 },
+      scores: [{ title: 'Fragile helper', severity: 'LOW', score: 6 }],
     })
 
     const record = await review(adapter, '100', false)
@@ -374,6 +375,10 @@ describe('judge preamble leak → stripped before posting', () => {
     expect(body).not.toContain('JUDGE_NOTES')
     expect(body).not.toContain('Dropped MEDIUM')
     expect(body).toContain('LOW – Fragile helper')
+    // per-finding scores are logged to results.jsonl, never in the posted body
+    expect(body).not.toContain('6/10')
+    expect(record!.finding_scores).toEqual([{ title: 'Fragile helper', severity: 'LOW', score: 6 }])
+    expect(record!.min_finding_score).toBe(6)
   })
 })
 

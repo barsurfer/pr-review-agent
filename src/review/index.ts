@@ -343,8 +343,12 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       )
 
       ctx.reviewText = result.text
+      ctx.judgeScores = result.scores
       if (result.notes) {
         console.log(`  Judge notes (not posted): ${result.notes}`)
+      }
+      if (result.scores?.length) {
+        console.log(`  Judge finding scores: ${result.scores.map(s => `${s.severity} ${s.score}/10`).join(', ')}`)
       }
       ctx.judgeUsage = { input_tokens: result.usage.input_tokens, output_tokens: result.usage.output_tokens }
       ctx.usage.input_tokens += result.usage.input_tokens
