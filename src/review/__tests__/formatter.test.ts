@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { buildReviewFooter, buildReplyFooter, stripPreviousFooter, stripDeltaStats, stripJudgeNotes, stripJenkinsMeta, stripPreamble, isNoChange, extractCommitHash, hasReviewFooter, hasReplyFooter, renderReview, type ReviewObject } from '../formatter.js'
-import { parseFindings, parseDeltaStats } from '../parsers.js'
+import { buildReviewFooter, buildReplyFooter, stripPreviousFooter, stripDeltaStats, stripJudgeNotes, stripJenkinsMeta, stripPreamble, isNoChange, extractCommitHash, hasReviewFooter, hasReplyFooter, renderReview, countFindings, type ReviewObject } from '../formatter.js'
+import { parseFindings } from '../parsers.js'
 
 // ---------------------------------------------------------------------------
 // buildReviewFooter
@@ -311,15 +311,40 @@ describe('renderReview', () => {
     expect(isNoChange(md)).toBe(true)
   })
 
-  it('appends a DELTA_STATS comment that parseDeltaStats round-trips, then stripDeltaStats removes', () => {
+  it('does not render delta_stats into the markdown — it is object-only metrics metadata', () => {
     const md = renderReview({ ...base, delta_stats: { resolved: 2, still_open: 1, new_findings: 0 } })
-    expect(parseDeltaStats(md)).toEqual({ resolved: 2, still_open: 1, new_findings: 0 })
-    expect(stripDeltaStats(md)).not.toContain('DELTA_STATS')
+    expect(md).not.toContain('DELTA_STATS')
   })
 
   it('adds a Can Be Split section only when populated', () => {
     expect(renderReview(base)).not.toContain('Can Be Split')
     const md = renderReview({ ...base, can_be_split: ['Auth refactor', 'Logging change'] })
     expect(md).toContain('### Can Be Split\n- Auth refactor\n- Logging change')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// countFindings — typed severity tally, the migrated source for review metrics
+// ---------------------------------------------------------------------------
+
+describe('countFindings', () => {
+  const mk = (findings: ReviewObject['findings']): ReviewObject => ({ summary: '', findings, behavioral_diff: [], production_risk: [], unresolved_questions: [] })
+
+  it('tallies findings by severity', () => {
+    expect(countFindings(mk([
+      { severity: 'HIGH', title: 'a', body: 'x' },
+      { severity: 'HIGH', title: 'b', body: 'x' },
+      { severity: 'MEDIUM', title: 'c', body: 'x' },
+      { severity: 'LOW', title: 'd', body: 'x' },
+    ]))).toEqual({ high: 2, medium: 1, low: 1 })
+  })
+
+  it('returns zeros when there are no findings', () => {
+    expect(countFindings(mk([]))).toEqual({ high: 0, medium: 0, low: 0 })
+  })
+
+  it('agrees with parseFindings over the rendered markdown (migration is faithful)', () => {
+    const obj = mk([{ severity: 'HIGH', title: 'a', file: 'x.ts', lines: '1', body: 'x' }, { severity: 'LOW', title: 'b', body: 'y' }])
+    expect(countFindings(obj)).toEqual(parseFindings(renderReview(obj)))
   })
 })

@@ -26,6 +26,7 @@ describe('runReview (structured output)', () => {
       behavioral_diff: ['x'],
       production_risk: ['y'],
       unresolved_questions: [],
+      delta_stats: { resolved: 1, still_open: 2, new_findings: 1 },
     }
     completeStructured.mockResolvedValue({ object, usage })
 
@@ -38,6 +39,8 @@ describe('runReview (structured output)', () => {
     expect(opts).toMatchObject({ model: 'model', maxRetries: 3 })
     expect(res.text).toContain('### Summary\nRisky.')
     expect(res.text).toContain('- **HIGH – boom** (`a.ts:3`)')
+    expect(res.text).not.toContain('DELTA_STATS')   // delta rides the object, not the markdown
+    expect(res.review).toEqual(object)              // object surfaced for metrics
     expect(res.usage).toEqual(usage)
     expect(complete).not.toHaveBeenCalled()
   })

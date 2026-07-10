@@ -6,8 +6,8 @@ import { config } from '../config.js'
 import { loadPrompt } from '../prompt/loader.js'
 import { fetchContext } from '../context/fetcher.js'
 import { runReview, runCommentResponse, runJudge } from '../claude/client.js'
-import { filterDiff, countChangedLines, parseFindings, parseVerdictScore, isPathExcluded, scanTodos } from './parsers.js'
-import { buildReviewFooter, buildReplyFooter, stripPreviousFooter, stripDeltaStats, stripJudgeNotes, stripJenkinsMeta, stripPreamble, isNoChange, extractCommitHash } from './formatter.js'
+import { filterDiff, countChangedLines, parseVerdictScore, isPathExcluded, scanTodos } from './parsers.js'
+import { buildReviewFooter, buildReplyFooter, stripPreviousFooter, stripDeltaStats, stripJudgeNotes, stripJenkinsMeta, stripPreamble, isNoChange, extractCommitHash, countFindings } from './formatter.js'
 import { buildUsageRecord, logUsageRecord, getBuildCommit, getJobUrl } from './usage.js'
 import { State } from './types.js'
 import type { ReviewContext } from './types.js'
@@ -302,6 +302,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         ctx.deltaDiff ?? ''
       )
       ctx.reviewText = result.text
+      ctx.reviewObject = result.review
       ctx.usage.input_tokens += result.usage.input_tokens
       ctx.usage.output_tokens += result.usage.output_tokens
       ctx.usage.cache_read += result.usage.cache_read_input_tokens ?? 0
@@ -320,7 +321,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
     }
 
     case State.JUDGE_REVIEW: {
-      const reviewFindings = parseFindings(ctx.reviewText!)
+      const reviewFindings = ctx.reviewObject ? countFindings(ctx.reviewObject) : { high: 0, medium: 0, low: 0 }
       console.log(`  Reviewer findings: ${reviewFindings.high}H / ${reviewFindings.medium}M / ${reviewFindings.low}L`)
 
       if (!config.judge.model) {

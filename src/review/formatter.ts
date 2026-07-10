@@ -125,10 +125,19 @@ export function renderReview(r: ReviewObject): string {
   ]
   if (r.can_be_split?.length) parts.push(`### Can Be Split\n${bullets(r.can_be_split)}`)
 
-  let body = parts.join('\n\n')
-  if (r.delta_stats) {
-    const d = r.delta_stats
-    body += `\n\n<!-- DELTA_STATS: resolved=${d.resolved} still_open=${d.still_open} new=${d.new_findings} -->`
+  // delta_stats stays on the object as metrics-only metadata — not rendered into the posted
+  // review. (Pre-structured-output it rode along as a stripped-before-posting HTML comment.)
+  return parts.join('\n\n')
+}
+
+/** Tally findings by severity from the reviewer's structured output — the typed source for
+ *  review metrics and the judge-run decision, replacing regex over the rendered markdown. */
+export function countFindings(r: ReviewObject): { high: number; medium: number; low: number } {
+  const tally = { high: 0, medium: 0, low: 0 }
+  for (const f of r.findings) {
+    if (f.severity === 'HIGH') tally.high++
+    else if (f.severity === 'MEDIUM') tally.medium++
+    else tally.low++
   }
-  return body
+  return tally
 }

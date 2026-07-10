@@ -7,7 +7,8 @@ import { execSync, type ExecSyncOptions } from 'child_process'
 import { dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { config } from '../config.js'
-import { parseVerdictScore, parseFindings, parseDeltaStats } from './parsers.js'
+import { parseVerdictScore, parseFindings } from './parsers.js'
+import { countFindings } from './formatter.js'
 import type { ReviewContext } from './types.js'
 
 export interface UsageRecord {
@@ -134,10 +135,13 @@ export function buildUsageRecord(
 ): UsageRecord {
   const commitShort = ctx.prInfo?.sourceCommit?.slice(0, 12) ?? 'unknown'
   const reviewText = ctx.reviewText ?? ''
-  const reviewTextBeforeJudge = ctx.reviewTextBeforeJudge ?? ''
+  // Final findings + verdict come from the posted text: the judge rewrites the reviewer's
+  // markdown (dropping/downgrading findings, adding Merge Confidence), so its output is the
+  // source. Reviewer-side metrics below read the typed object instead of regex.
   const verdictScore = reviewText ? parseVerdictScore(reviewText) : null
   const findings = reviewText ? parseFindings(reviewText) : null
-  const reviewFindings = reviewTextBeforeJudge ? parseFindings(reviewTextBeforeJudge) : null
+  const reviewFindings = ctx.reviewObject ? countFindings(ctx.reviewObject) : null
+  const deltaStats = ctx.reviewObject?.delta_stats ?? null
   const judgeModel = config.judge.model || null
   const judgeTokensRaw = ctx.judgeUsage ?? null
   const judgeTokens = judgeTokensRaw ? { input: judgeTokensRaw.input_tokens, output: judgeTokensRaw.output_tokens } : null
@@ -185,22 +189,16 @@ export function buildUsageRecord(
     computed_score: findings ? Math.max(0, 100 - findings.high * 12 - findings.medium * 4) : null,
     review_findings: reviewFindings,
     findings,
-    touch_rate: ctx.reviewNumber > 1 && reviewText ? (() => {
-      const stats = parseDeltaStats(reviewTextBeforeJudge || reviewText)
-      const resolved = stats?.resolved ?? 0
-      const stillOpen = stats?.still_open ?? 0
-      const total = resolved + stillOpen
-      return total > 0 ? Math.round((resolved / total) * 100) : null
+    touch_rate: ctx.reviewNumber > 1 && deltaStats ? (() => {
+      const total = deltaStats.resolved + deltaStats.still_open
+      return total > 0 ? Math.round((deltaStats.resolved / total) * 100) : null
     })() : null,
-    delta: ctx.reviewNumber > 1 && reviewText ? (() => {
-      const stats = parseDeltaStats(reviewTextBeforeJudge || reviewText)
-      return {
-        developer_replies: ctx.replies?.length ?? 0,
-        resolved: stats?.resolved ?? 0,
-        still_open: stats?.still_open ?? 0,
-        new_findings: stats?.new_findings ?? 0,
-      }
-    })() : null,
+    delta: ctx.reviewNumber > 1 && ctx.reviewObject ? {
+      developer_replies: ctx.replies?.length ?? 0,
+      resolved: deltaStats?.resolved ?? 0,
+      still_open: deltaStats?.still_open ?? 0,
+      new_findings: deltaStats?.new_findings ?? 0,
+    } : null,
     jenkins: getJenkinsMeta(),
     error,
   }

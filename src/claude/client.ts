@@ -20,6 +20,8 @@ export interface ClaudeUsage {
 export interface ClaudeResult {
   text: string
   usage: ClaudeUsage
+  /** Reviewer's structured output — typed source for findings/delta metrics. Review runs only. */
+  review?: ReviewObject
 }
 
 export interface JudgeResult extends ClaudeResult {
@@ -111,7 +113,7 @@ export async function runReview(
 
   console.log(`Review received (${usage.input_tokens} in / ${usage.output_tokens} out tokens, ${object.no_change ? 'NO_CHANGE' : `${object.findings.length} findings`})`)
 
-  return { text, usage }
+  return { text, usage, review: object }
 }
 
 function buildUserMessage(
