@@ -20,15 +20,14 @@ Final system prompt = base-prompt.txt + repo prompt sections
 - MANDATORY RULES — concise bullets, no assumptions, developer trust
 - DETERMINING WHAT TO FLAG — confidence calibration (thorough on bugs/security even with a narrow trigger; certain before flagging low-severity; high-impact + low-confidence reported WITH a caveat, not silently dropped) + the **reviewability finding** (when correctness can't be judged from the diff + changed files as a human reviewer would, raise that as a finding — missing tests / scope too large / undocumented intent / unshown runtime state — instead of speculating or wishing for the whole codebase)
 - FORBIDDEN — hardened rules from production incidents
-- OUTPUT FORMAT — bullets on new lines, markdown structure
 - SCOPE LOCK — prompt injection defense
-- Re-review / delta instructions + NO_CHANGE stop word
+- Re-review / delta instructions + the `no_change` field (set true when a re-review has nothing material)
 - Developer discussion trust rules
-- OUTPUT STRUCTURE — Summary, Findings, Behavioral Diff, Production Risk, Unresolved Questions
+- OUTPUT — the reviewer fills a typed object (`summary`, `findings[]`, `behavioral_diff[]`, `production_risk[]`, `unresolved_questions[]`), not markdown; `renderReview` builds the posted comment (see [llm/structured-output.md](../llm/structured-output.md))
 
 **Runtime add-ons** (appended to the assembled system prompt in `CALL_CLAUDE`, opt-in, never touch the base template):
 - `MAX_FINDINGS` > 0 → a `## FINDINGS LIMIT` instruction capping reported findings
-- `ENABLE_SPLIT_CHECK` → a `## SPLIT CHECK` instruction (adds a "Can Be Split" section for multi-theme PRs)
+- `ENABLE_SPLIT_CHECK` → a `## SPLIT CHECK` instruction directing the reviewer to fill the `can_be_split` field for multi-theme PRs
 
 Separately, a deterministic `TODO`/`FIXME`/`HACK` scan (`scanTodos`, `ENABLE_TODO_SCAN` default on) appends a "TODOs Introduced" section to the posted comment in `POST_REVIEW` — not model-driven, so it can't be missed or hallucinated.
 

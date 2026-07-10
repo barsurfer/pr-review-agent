@@ -47,6 +47,7 @@ import { config } from '../../config.js'
 import { runReview, runCommentResponse, runJudge } from '../../claude/client.js'
 import { loadPrompt } from '../../prompt/loader.js'
 import { fetchContext } from '../../context/fetcher.js'
+import type { ReviewObject } from '../formatter.js'
 
 const mockRunReview = vi.mocked(runReview)
 const mockRunCommentResponse = vi.mocked(runCommentResponse)
@@ -96,10 +97,18 @@ function makeAdapter(overrides: Partial<VCSAdapter> = {}): VCSAdapter {
   }
 }
 
-function setupClaudeMocks(reviewText = '### Summary\nAll good.\n\n### Findings\n\nNo findings.\n\n### Unresolved Questions\nNone.') {
+// The reviewer now returns a structured object; the FSM/metrics read it (not regex over text).
+// Tests that only care about posted text pass the default empty-findings object.
+const reviewWith = (findings: ReviewObject['findings'] = [], extra: Partial<ReviewObject> = {}): ReviewObject =>
+  ({ summary: 'ok', findings, behavioral_diff: [], production_risk: [], unresolved_questions: [], ...extra })
+
+function setupClaudeMocks(
+  reviewText = '### Summary\nAll good.\n\n### Findings\n\nNo findings.\n\n### Unresolved Questions\nNone.',
+  review: ReviewObject = reviewWith(),
+) {
   mockLoadPrompt.mockResolvedValue({ content: 'System prompt here', source: 'repo' })
   mockFetchContext.mockResolvedValue([])
-  mockRunReview.mockResolvedValue({ text: reviewText, usage: { input_tokens: 1000, output_tokens: 200 } })
+  mockRunReview.mockResolvedValue({ text: reviewText, usage: { input_tokens: 1000, output_tokens: 200 }, review })
   mockRunCommentResponse.mockResolvedValue({ text: 'Thanks for clarifying.', usage: { input_tokens: 500, output_tokens: 100 } })
 }
 
@@ -261,13 +270,16 @@ describe('new commit → RE_REVIEW', () => {
       }),
       getCommitDiff: vi.fn().mockResolvedValue(DIFF),
     })
-    setupClaudeMocks()
+    setupClaudeMocks(undefined, reviewWith([], { delta_stats: { resolved: 1, still_open: 0, new_findings: 0 } }))
 
     const record = await review(adapter, '100', true)
 
     expect(record!.action).toBe('RE_REVIEW')
     expect(record!.review_number).toBe(2)
     expect(mockRunReview).toHaveBeenCalledTimes(1)
+    // delta + touch_rate now come from the reviewer object, not a DELTA_STATS markdown comment
+    expect(record!.delta).toMatchObject({ resolved: 1, still_open: 0, new_findings: 0 })
+    expect(record!.touch_rate).toBe(100)
   })
 })
 
@@ -330,7 +342,7 @@ describe('Claude returns NO_CHANGE → skip', () => {
 describe('judge preamble leak → stripped before posting', () => {
   it('posts only from ### Summary onward (PR 45 regression)', async () => {
     const adapter = makeAdapter()
-    setupClaudeMocks('### Summary\nRisky refactor.\n\n### Findings\n\n- **MEDIUM – Substring matching** (a.ts:1)\n  Over-matches rows.')
+    setupClaudeMocks('### Summary\nRisky refactor.\n\n### Findings\n\n- **MEDIUM – Substring matching** (a.ts:1)\n  Over-matches rows.', reviewWith([{ severity: 'MEDIUM', title: 'Substring matching', body: 'Over-matches rows.' }]))
     cfg.judge.model = 'judge-model'
     mockRunJudge.mockResolvedValue({
       text: 'I need to validate each finding against the actual diff. Let me check each one carefully.\n\n**Finding 1: MEDIUM** — visible in the diff, keep.\n\n### Summary\nRisky refactor, validated.\n\n### Findings\n\n- **MEDIUM – Substring matching** (a.ts:1)\n  Over-matches rows.\n\n### Merge Confidence: 78%',
@@ -348,11 +360,12 @@ describe('judge preamble leak → stripped before posting', () => {
 
   it('strips JUDGE_NOTES from the posted comment (PR 8722 regression)', async () => {
     const adapter = makeAdapter()
-    setupClaudeMocks('### Summary\nRisky.\n\n### Findings\n\n- **MEDIUM – Something** (a.ts:1)\n  Desc.')
+    setupClaudeMocks('### Summary\nRisky.\n\n### Findings\n\n- **MEDIUM – Something** (a.ts:1)\n  Desc.', reviewWith([{ severity: 'MEDIUM', title: 'Something', body: 'Desc.' }]))
     cfg.judge.model = 'judge-model'
     mockRunJudge.mockResolvedValue({
       text: '### Summary\nLow-risk change.\n\n### Findings\n\n- **LOW – Fragile helper** (a.ts:1)\n  Desc.\n\n### Merge Confidence: 80%\n\n<!-- JUDGE_NOTES: Dropped MEDIUM — convention claim not verifiable from diff. -->',
       usage: { input_tokens: 800, output_tokens: 300 },
+      scores: [{ title: 'Fragile helper', severity: 'LOW', score: 6 }],
     })
 
     const record = await review(adapter, '100', false)
@@ -362,6 +375,10 @@ describe('judge preamble leak → stripped before posting', () => {
     expect(body).not.toContain('JUDGE_NOTES')
     expect(body).not.toContain('Dropped MEDIUM')
     expect(body).toContain('LOW – Fragile helper')
+    // per-finding scores are logged to results.jsonl, never in the posted body
+    expect(body).not.toContain('6/10')
+    expect(record!.finding_scores).toEqual([{ title: 'Fragile helper', severity: 'LOW', score: 6 }])
+    expect(record!.min_finding_score).toBe(6)
   })
 })
 
@@ -372,7 +389,7 @@ describe('judge preamble leak → stripped before posting', () => {
 describe('cut guard — truncated review not posted', () => {
   it('rejects a judged review missing the Merge Confidence tail', async () => {
     const adapter = makeAdapter()
-    setupClaudeMocks('### Summary\nRisky.\n\n### Findings\n\n- **MEDIUM – X** (a.ts:1)\n  Desc.')
+    setupClaudeMocks('### Summary\nRisky.\n\n### Findings\n\n- **MEDIUM – X** (a.ts:1)\n  Desc.', reviewWith([{ severity: 'MEDIUM', title: 'X', body: 'Desc.' }]))
     cfg.judge.model = 'judge-model'
     // Judge output truncated mid-Behavioral-Diff — no Merge Confidence section
     mockRunJudge.mockResolvedValue({

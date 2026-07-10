@@ -77,3 +77,76 @@ export function hasReviewFooter(body: string): boolean {
 export function hasReplyFooter(body: string): boolean {
   return /^\*(?:Reply by .+ \(.+\)|\[Reply by .+ \(.+\)\]\([^)]+\))\*$/m.test(body)
 }
+
+// ---------------------------------------------------------------------------
+// Structured reviewer output → posted markdown
+// ---------------------------------------------------------------------------
+
+export interface ReviewFinding {
+  severity: 'LOW' | 'MEDIUM' | 'HIGH'
+  title: string
+  file?: string
+  lines?: string
+  body: string
+}
+
+export interface ReviewObject {
+  summary: string
+  findings: ReviewFinding[]
+  behavioral_diff: string[]
+  production_risk: string[]
+  unresolved_questions: string[]
+  can_be_split?: string[]
+  delta_stats?: { resolved: number; still_open: number; new_findings: number }
+  no_change?: boolean
+}
+
+/** Judge's per-finding validation confidence — logged to results.jsonl, never posted. */
+export interface FindingScore {
+  title: string
+  severity: 'LOW' | 'MEDIUM' | 'HIGH'
+  score: number   // 0–10: judge's confidence the kept finding is real and correctly severed
+}
+
+const bullets = (items: string[]): string => items.map(i => `- ${i}`).join('\n')
+// Empty list section → "None." rather than a bare heading (the model may return an empty array).
+const listOrNone = (items: string[]): string => (items.length ? bullets(items) : 'None.')
+
+/** Render the reviewer's structured output into the posted markdown. The reviewer emits typed
+ *  fields, not prose, so preamble/tone/footer can't leak in — this owns the shape the judge,
+ *  dedup, and metrics parse. Merge Confidence is added downstream by the judge, not here. */
+export function renderReview(r: ReviewObject): string {
+  if (r.no_change) return 'NO_CHANGE'
+
+  const findings = r.findings.length
+    ? r.findings.map(f => {
+        const loc = f.file ? ` (\`${f.file}${f.lines ? `:${f.lines}` : ''}\`)` : ''
+        return `- **${f.severity} – ${f.title}**${loc}\n  ${f.body}`
+      }).join('\n\n')
+    : 'No findings.'
+
+  const parts = [
+    `### Summary\n${r.summary}`,
+    `### Findings\n${findings}`,
+    `### Behavioral Diff\n${listOrNone(r.behavioral_diff)}`,
+    `### Production Risk\n${listOrNone(r.production_risk)}`,
+    `### Unresolved Questions\n${listOrNone(r.unresolved_questions)}`,
+  ]
+  if (r.can_be_split?.length) parts.push(`### Can Be Split\n${bullets(r.can_be_split)}`)
+
+  // delta_stats stays on the object as metrics-only metadata — not rendered into the posted
+  // review. (Pre-structured-output it rode along as a stripped-before-posting HTML comment.)
+  return parts.join('\n\n')
+}
+
+/** Tally findings by severity from the reviewer's structured output — the typed source for
+ *  review metrics and the judge-run decision, replacing regex over the rendered markdown. */
+export function countFindings(r: ReviewObject): { high: number; medium: number; low: number } {
+  const tally = { high: 0, medium: 0, low: 0 }
+  for (const f of r.findings) {
+    if (f.severity === 'HIGH') tally.high++
+    else if (f.severity === 'MEDIUM') tally.medium++
+    else tally.low++
+  }
+  return tally
+}

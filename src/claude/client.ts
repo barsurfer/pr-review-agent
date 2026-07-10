@@ -1,7 +1,8 @@
 import { readFileSync } from 'fs'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
-import Anthropic from '@anthropic-ai/sdk'
+import { createProvider } from '../llm/provider.js'
+import { renderReview, type ReviewObject, type FindingScore } from '../review/formatter.js'
 import type { PRInfo, ReviewComment, CommentReply } from '../vcs/adapter.js'
 import type { FileContext } from '../context/fetcher.js'
 import type { LoadedPrompt } from '../prompt/loader.js'
@@ -19,16 +20,20 @@ export interface ClaudeUsage {
 export interface ClaudeResult {
   text: string
   usage: ClaudeUsage
+  /** Reviewer's structured output — typed source for findings/delta metrics. Review runs only. */
+  review?: ReviewObject
 }
 
 export interface JudgeResult extends ClaudeResult {
   /** Validation reasoning — logged, never posted. */
   notes?: string
+  /** Per-finding 0–10 confidence for the kept findings — logged to results.jsonl, never posted. */
+  scores?: FindingScore[]
 }
 
 // Structured output keeps validation reasoning physically separate from the
 // posted review — prompt-only suppression proved leaky (PR 8722)
-const JUDGE_OUTPUT_SCHEMA = {
+export const JUDGE_OUTPUT_SCHEMA = {
   type: 'object',
   properties: {
     review_markdown: {
@@ -39,8 +44,66 @@ const JUDGE_OUTPUT_SCHEMA = {
       type: 'string',
       description: 'Validation reasoning: which findings were dropped or downgraded and why. Internal — never posted.',
     },
+    finding_scores: {
+      type: 'array',
+      description: 'One entry per finding KEPT in review_markdown — the 0–10 confidence that it is real and correctly severed. Empty if no findings survive. Internal — logged, never posted.',
+      items: {
+        type: 'object',
+        properties: {
+          title: { type: 'string', description: "The kept finding's title, matching its heading in review_markdown." },
+          severity: { type: 'string', enum: ['LOW', 'MEDIUM', 'HIGH'], description: 'Final severity after calibration.' },
+          score: { type: 'integer', description: '0–10 confidence: 10 = certain with quoted diff evidence; 5 = plausible but not fully verifiable; 0 = speculative. Independent of severity.' },
+        },
+        required: ['title', 'severity', 'score'],
+        additionalProperties: false,
+      },
+    },
   },
-  required: ['review_markdown', 'judge_notes'],
+  required: ['review_markdown', 'judge_notes', 'finding_scores'],
+  additionalProperties: false,
+} as const
+
+// The reviewer emits typed fields, not prose — the system renders the markdown (renderReview),
+// so preamble, tone, or a footer can't leak into the posted review. Mirrors base-prompt.txt's
+// OUTPUT section; the judge adds Merge Confidence downstream.
+export const REVIEW_OUTPUT_SCHEMA = {
+  type: 'object',
+  properties: {
+    summary: { type: 'string', description: 'One-line production risk assessment. On a re-review, note which previous findings are fixed vs still open.' },
+    findings: {
+      type: 'array',
+      description: 'Issues being flagged, most severe first. New findings only on a re-review — previous findings are already on record.',
+      items: {
+        type: 'object',
+        properties: {
+          severity: { type: 'string', enum: ['LOW', 'MEDIUM', 'HIGH'], description: 'HIGH only for a confirmed, reproducible runtime failure (crash, data loss, security breach, outage).' },
+          title: { type: 'string', description: 'Short label for the issue.' },
+          file: { type: 'string', description: 'File path when the finding is tied to specific code. Omit if not line-specific.' },
+          lines: { type: 'string', description: 'Line or range within the file, e.g. "26-31". Omit if not line-specific.' },
+          body: { type: 'string', description: 'Problem, why it matters, fix. Terse — no essays.' },
+        },
+        required: ['severity', 'title', 'body'],
+        additionalProperties: false,
+      },
+    },
+    behavioral_diff: { type: 'array', items: { type: 'string' }, description: 'What changed vs the target branch and why it matters, as short bullets.' },
+    production_risk: { type: 'array', items: { type: 'string' }, description: 'Concrete failure modes and realistic outage scenarios, as short bullets.' },
+    unresolved_questions: { type: 'array', items: { type: 'string' }, description: 'Anything you cannot verify as safe. Empty only when genuinely nothing is open. New questions only on a re-review.' },
+    can_be_split: { type: 'array', items: { type: 'string' }, description: 'Only when a SPLIT CHECK instruction is present: independent themes this PR could split into. Empty/omitted if cohesive.' },
+    delta_stats: {
+      type: 'object',
+      description: 'Only on a re-review: counts vs the previous review.',
+      properties: {
+        resolved: { type: 'integer', description: 'Previous findings fixed by the new commits.' },
+        still_open: { type: 'integer', description: 'Previous findings still present.' },
+        new_findings: { type: 'integer', description: 'New findings introduced in this re-review.' },
+      },
+      required: ['resolved', 'still_open', 'new_findings'],
+      additionalProperties: false,
+    },
+    no_change: { type: 'boolean', description: 'Set true only on a re-review when nothing material changed (no findings resolved, none new, only cosmetic edits). Leave the other fields empty.' },
+  },
+  required: ['summary', 'findings', 'behavioral_diff', 'production_risk', 'unresolved_questions'],
   additionalProperties: false,
 } as const
 
@@ -56,38 +119,17 @@ export async function runReview(
   developerReplies: CommentReply[] = [],
   changesSinceLastReview = ''
 ): Promise<ClaudeResult> {
-  const client = new Anthropic({ apiKey, maxRetries })
-
   const userMessage = buildUserMessage(prInfo, diff, fileContexts, previousReviews, developerReplies, changesSinceLastReview)
 
   console.log(`Sending request to Claude (${model}, maxRetries: ${maxRetries})...`)
+  const { object, usage } = await createProvider(apiKey).completeStructured<ReviewObject>(
+    prompt.content, userMessage, REVIEW_OUTPUT_SCHEMA, { model, maxTokens: MAX_TOKENS, maxRetries },
+  )
+  const text = renderReview(object)
 
-  const response = await client.messages.create({
-    model,
-    max_tokens: MAX_TOKENS,
-    system: prompt.content,
-    messages: [{ role: 'user', content: userMessage }],
-  })
+  console.log(`Review received (${usage.input_tokens} in / ${usage.output_tokens} out tokens, ${object.no_change ? 'NO_CHANGE' : `${object.findings.length} findings`})`)
 
-  if (response.stop_reason === 'max_tokens') {
-    throw new Error(`Review truncated at ${MAX_TOKENS} output tokens — refusing to post a cut-off review`)
-  }
-
-  // Find the text block rather than assuming it's first — newer models can emit a
-  // thinking (or other) block ahead of the text.
-  const block = response.content.find(b => b.type === 'text')
-  if (!block || block.type !== 'text') throw new Error('Unexpected response type from Claude (no text block)')
-
-  const usage: ClaudeUsage = {
-    input_tokens: response.usage.input_tokens,
-    output_tokens: response.usage.output_tokens,
-    cache_read_input_tokens: response.usage.cache_read_input_tokens ?? 0,
-    cache_creation_input_tokens: response.usage.cache_creation_input_tokens ?? 0,
-  }
-
-  console.log(`Review received (${usage.input_tokens} in / ${usage.output_tokens} out tokens)`)
-
-  return { text: block.text, usage }
+  return { text, usage, review: object }
 }
 
 function buildUserMessage(
@@ -159,49 +201,19 @@ export async function runJudge(
   diff: string,
   reviewText: string,
 ): Promise<JudgeResult> {
-  const client = new Anthropic({ apiKey, maxRetries })
-
   const parts: string[] = []
   parts.push(`## Diff:\n\`\`\`diff\n${diff}\n\`\`\``)
   parts.push(`## Review to Validate:\n${reviewText}`)
   const userMessage = parts.join('\n\n')
 
   console.log(`Sending to judge (${model}, maxRetries: ${maxRetries})...`)
-
-  const response = await client.messages.create({
-    model,
-    max_tokens: MAX_TOKENS,
-    system: getJudgePrompt(),
-    output_config: { format: { type: 'json_schema', schema: JUDGE_OUTPUT_SCHEMA } },
-    messages: [{ role: 'user', content: userMessage }],
-  })
-
-  if (response.stop_reason === 'max_tokens') {
-    throw new Error(`Judge output truncated at ${MAX_TOKENS} output tokens — refusing to post a cut-off review`)
-  }
-
-  // Find the text block rather than assuming it's first — newer models can emit a
-  // thinking (or other) block ahead of the text.
-  const block = response.content.find(b => b.type === 'text')
-  if (!block || block.type !== 'text') throw new Error('Unexpected response type from Claude (no text block)')
-
-  let parsed: { review_markdown: string; judge_notes: string }
-  try {
-    parsed = JSON.parse(block.text)
-  } catch {
-    throw new Error('Judge returned invalid JSON despite structured output — refusing to post')
-  }
-
-  const usage: ClaudeUsage = {
-    input_tokens: response.usage.input_tokens,
-    output_tokens: response.usage.output_tokens,
-    cache_read_input_tokens: response.usage.cache_read_input_tokens ?? 0,
-    cache_creation_input_tokens: response.usage.cache_creation_input_tokens ?? 0,
-  }
+  const { object: parsed, usage } = await createProvider(apiKey).completeStructured<{ review_markdown: string; judge_notes: string; finding_scores: FindingScore[] }>(
+    getJudgePrompt(), userMessage, JUDGE_OUTPUT_SCHEMA, { model, maxTokens: MAX_TOKENS, maxRetries },
+  )
 
   console.log(`Judge received (${usage.input_tokens} in / ${usage.output_tokens} out tokens)`)
 
-  return { text: parsed.review_markdown, usage, notes: parsed.judge_notes }
+  return { text: parsed.review_markdown, usage, notes: parsed.judge_notes, scores: parsed.finding_scores }
 }
 
 function getReplyPrompt(): string {
@@ -223,8 +235,6 @@ export async function runCommentResponse(
   originalReview: string,
   replies: CommentReply[]
 ): Promise<ClaudeResult> {
-  const client = new Anthropic({ apiKey, maxRetries })
-
   const parts: string[] = []
   parts.push(`## Your Original Review:\n${originalReview}`)
   parts.push(`## Diff:\n\`\`\`diff\n${diff}\n\`\`\``)
@@ -235,31 +245,9 @@ export async function runCommentResponse(
   const userMessage = parts.join('\n\n')
 
   console.log(`Sending reply request to Claude (${model}, maxRetries: ${maxRetries})...`)
-
-  const response = await client.messages.create({
-    model,
-    max_tokens: REPLY_MAX_TOKENS,
-    system: getReplyPrompt(),
-    messages: [{ role: 'user', content: userMessage }],
-  })
-
-  if (response.stop_reason === 'max_tokens') {
-    throw new Error(`Reply truncated at ${REPLY_MAX_TOKENS} output tokens — refusing to post a cut-off reply`)
-  }
-
-  // Find the text block rather than assuming it's first — newer models can emit a
-  // thinking (or other) block ahead of the text.
-  const block = response.content.find(b => b.type === 'text')
-  if (!block || block.type !== 'text') throw new Error('Unexpected response type from Claude (no text block)')
-
-  const usage: ClaudeUsage = {
-    input_tokens: response.usage.input_tokens,
-    output_tokens: response.usage.output_tokens,
-    cache_read_input_tokens: response.usage.cache_read_input_tokens ?? 0,
-    cache_creation_input_tokens: response.usage.cache_creation_input_tokens ?? 0,
-  }
+  const { text, usage } = await createProvider(apiKey).complete(getReplyPrompt(), userMessage, { model, maxTokens: REPLY_MAX_TOKENS, maxRetries })
 
   console.log(`Reply received (${usage.input_tokens} in / ${usage.output_tokens} out tokens)`)
 
-  return { text: block.text, usage }
+  return { text, usage }
 }

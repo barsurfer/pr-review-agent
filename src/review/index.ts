@@ -6,8 +6,8 @@ import { config } from '../config.js'
 import { loadPrompt } from '../prompt/loader.js'
 import { fetchContext } from '../context/fetcher.js'
 import { runReview, runCommentResponse, runJudge } from '../claude/client.js'
-import { filterDiff, countChangedLines, parseFindings, parseVerdictScore, isPathExcluded, scanTodos } from './parsers.js'
-import { buildReviewFooter, buildReplyFooter, stripPreviousFooter, stripDeltaStats, stripJudgeNotes, stripJenkinsMeta, stripPreamble, isNoChange, extractCommitHash } from './formatter.js'
+import { filterDiff, countChangedLines, parseVerdictScore, isPathExcluded, scanTodos } from './parsers.js'
+import { buildReviewFooter, buildReplyFooter, stripPreviousFooter, stripDeltaStats, stripJudgeNotes, stripJenkinsMeta, stripPreamble, isNoChange, extractCommitHash, countFindings } from './formatter.js'
 import { buildUsageRecord, logUsageRecord, getBuildCommit, getJobUrl } from './usage.js'
 import { State } from './types.js'
 import type { ReviewContext } from './types.js'
@@ -285,7 +285,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         content += `\n\n## FINDINGS LIMIT\nReport at most ${config.review.maxFindings} findings, prioritized by severity and impact. If more exist, include only the most important and omit the rest.`
       }
       if (config.review.splitCheck) {
-        content += `\n\n## SPLIT CHECK\nIf this PR spans multiple independent themes that could each be a separate, independently-reviewable PR, add a "### Can Be Split" section listing them (one line each). If the PR is cohesive, omit the section entirely.`
+        content += `\n\n## SPLIT CHECK\nIf this PR spans multiple independent themes that could each be a separate, independently-reviewable PR, populate the \`can_be_split\` array — one entry per theme. If the PR is cohesive, leave it empty.`
       }
       const reviewPrompt = { ...ctx.prompt!, content }
 
@@ -302,6 +302,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         ctx.deltaDiff ?? ''
       )
       ctx.reviewText = result.text
+      ctx.reviewObject = result.review
       ctx.usage.input_tokens += result.usage.input_tokens
       ctx.usage.output_tokens += result.usage.output_tokens
       ctx.usage.cache_read += result.usage.cache_read_input_tokens ?? 0
@@ -320,7 +321,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
     }
 
     case State.JUDGE_REVIEW: {
-      const reviewFindings = parseFindings(ctx.reviewText!)
+      const reviewFindings = ctx.reviewObject ? countFindings(ctx.reviewObject) : { high: 0, medium: 0, low: 0 }
       console.log(`  Reviewer findings: ${reviewFindings.high}H / ${reviewFindings.medium}M / ${reviewFindings.low}L`)
 
       if (!config.judge.model) {
@@ -342,8 +343,12 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       )
 
       ctx.reviewText = result.text
+      ctx.judgeScores = result.scores
       if (result.notes) {
         console.log(`  Judge notes (not posted): ${result.notes}`)
+      }
+      if (result.scores?.length) {
+        console.log(`  Judge finding scores: ${result.scores.map(s => `${s.severity} ${s.score}/10`).join(', ')}`)
       }
       ctx.judgeUsage = { input_tokens: result.usage.input_tokens, output_tokens: result.usage.output_tokens }
       ctx.usage.input_tokens += result.usage.input_tokens
