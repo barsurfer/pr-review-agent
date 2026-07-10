@@ -285,7 +285,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         content += `\n\n## FINDINGS LIMIT\nReport at most ${config.review.maxFindings} findings, prioritized by severity and impact. If more exist, include only the most important and omit the rest.`
       }
       if (config.review.splitCheck) {
-        content += `\n\n## SPLIT CHECK\nIf this PR spans multiple independent themes that could each be a separate, independently-reviewable PR, add a "### Can Be Split" section listing them (one line each). If the PR is cohesive, omit the section entirely.`
+        content += `\n\n## SPLIT CHECK\nIf this PR spans multiple independent themes that could each be a separate, independently-reviewable PR, populate the \`can_be_split\` array — one entry per theme. If the PR is cohesive, leave it empty.`
       }
       const reviewPrompt = { ...ctx.prompt!, content }
 

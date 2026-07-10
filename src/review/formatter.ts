@@ -77,3 +77,58 @@ export function hasReviewFooter(body: string): boolean {
 export function hasReplyFooter(body: string): boolean {
   return /^\*(?:Reply by .+ \(.+\)|\[Reply by .+ \(.+\)\]\([^)]+\))\*$/m.test(body)
 }
+
+// ---------------------------------------------------------------------------
+// Structured reviewer output → posted markdown
+// ---------------------------------------------------------------------------
+
+export interface ReviewFinding {
+  severity: 'LOW' | 'MEDIUM' | 'HIGH'
+  title: string
+  file?: string
+  lines?: string
+  body: string
+}
+
+export interface ReviewObject {
+  summary: string
+  findings: ReviewFinding[]
+  behavioral_diff: string[]
+  production_risk: string[]
+  unresolved_questions: string[]
+  can_be_split?: string[]
+  delta_stats?: { resolved: number; still_open: number; new_findings: number }
+  no_change?: boolean
+}
+
+const bullets = (items: string[]): string => items.map(i => `- ${i}`).join('\n')
+
+/** Render the reviewer's structured output into the posted markdown. The reviewer emits typed
+ *  fields, not prose, so preamble/tone/footer can't leak in — this owns the shape the judge,
+ *  dedup, and metrics parse. Merge Confidence is added downstream by the judge, not here. */
+export function renderReview(r: ReviewObject): string {
+  if (r.no_change) return 'NO_CHANGE'
+
+  const findings = r.findings.length
+    ? r.findings.map(f => {
+        const loc = f.file ? ` (\`${f.file}${f.lines ? `:${f.lines}` : ''}\`)` : ''
+        return `- **${f.severity} – ${f.title}**${loc}\n  ${f.body}`
+      }).join('\n\n')
+    : 'No findings.'
+
+  const parts = [
+    `### Summary\n${r.summary}`,
+    `### Findings\n${findings}`,
+    `### Behavioral Diff\n${bullets(r.behavioral_diff)}`,
+    `### Production Risk\n${bullets(r.production_risk)}`,
+    `### Unresolved Questions\n${r.unresolved_questions.length ? bullets(r.unresolved_questions) : 'None.'}`,
+  ]
+  if (r.can_be_split?.length) parts.push(`### Can Be Split\n${bullets(r.can_be_split)}`)
+
+  let body = parts.join('\n\n')
+  if (r.delta_stats) {
+    const d = r.delta_stats
+    body += `\n\n<!-- DELTA_STATS: resolved=${d.resolved} still_open=${d.still_open} new=${d.new_findings} -->`
+  }
+  return body
+}

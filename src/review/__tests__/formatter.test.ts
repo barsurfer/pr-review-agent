@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { buildReviewFooter, buildReplyFooter, stripPreviousFooter, stripDeltaStats, stripJudgeNotes, stripJenkinsMeta, stripPreamble, isNoChange, extractCommitHash, hasReviewFooter, hasReplyFooter } from '../formatter.js'
+import { buildReviewFooter, buildReplyFooter, stripPreviousFooter, stripDeltaStats, stripJudgeNotes, stripJenkinsMeta, stripPreamble, isNoChange, extractCommitHash, hasReviewFooter, hasReplyFooter, renderReview, type ReviewObject } from '../formatter.js'
+import { parseFindings, parseDeltaStats } from '../parsers.js'
 
 // ---------------------------------------------------------------------------
 // buildReviewFooter
@@ -253,5 +254,72 @@ describe('extractCommitHash', () => {
 
   it('returns null when no commit hash', () => {
     expect(extractCommitHash('No footer here')).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// renderReview — the structured reviewer output must render markdown the rest of
+// the pipeline can parse (parseFindings, isNoChange, stripPreamble, cut guard)
+// ---------------------------------------------------------------------------
+
+describe('renderReview', () => {
+  const base: ReviewObject = {
+    summary: 'Low risk.',
+    findings: [],
+    behavioral_diff: ['Adds a retry wrapper.'],
+    production_risk: ['None material.'],
+    unresolved_questions: [],
+  }
+
+  it('starts with ### Summary so stripPreamble keeps the whole review', () => {
+    const md = renderReview(base)
+    expect(md.startsWith('### Summary\n')).toBe(true)
+    expect(stripPreamble(md)).toBe(md)
+  })
+
+  it('always emits the Unresolved Questions section (reviewer-path cut guard)', () => {
+    expect(/^#{1,4}\s*Unresolved Questions\b/im.test(renderReview(base))).toBe(true)
+  })
+
+  it('renders "No findings." when there are none', () => {
+    expect(renderReview(base)).toContain('### Findings\nNo findings.')
+    expect(parseFindings(renderReview(base))).toEqual({ high: 0, medium: 0, low: 0 })
+  })
+
+  it('renders findings with severity and location that parseFindings counts', () => {
+    const md = renderReview({
+      ...base,
+      findings: [
+        { severity: 'HIGH', title: 'N+1 query', file: 'src/user-list.ts', lines: '26-31', body: 'Fires one request per row.' },
+        { severity: 'MEDIUM', title: 'Unhandled reject', body: 'Promise has no catch.' },
+      ],
+    })
+    expect(md).toContain('- **HIGH – N+1 query** (`src/user-list.ts:26-31`)')
+    expect(md).toContain('- **MEDIUM – Unhandled reject**')
+    expect(md).not.toContain('()')   // no empty location parens when file omitted
+    expect(parseFindings(md)).toEqual({ high: 1, medium: 1, low: 0 })
+  })
+
+  it('omits the :lines suffix when only a file is given', () => {
+    const md = renderReview({ ...base, findings: [{ severity: 'LOW', title: 'x', file: 'a.ts', body: 'b' }] })
+    expect(md).toContain('- **LOW – x** (`a.ts`)')
+  })
+
+  it('returns the NO_CHANGE sentinel and nothing else', () => {
+    const md = renderReview({ ...base, no_change: true, summary: 'ignored', findings: [{ severity: 'HIGH', title: 'x', body: 'y' }] })
+    expect(md).toBe('NO_CHANGE')
+    expect(isNoChange(md)).toBe(true)
+  })
+
+  it('appends a DELTA_STATS comment that parseDeltaStats round-trips, then stripDeltaStats removes', () => {
+    const md = renderReview({ ...base, delta_stats: { resolved: 2, still_open: 1, new_findings: 0 } })
+    expect(parseDeltaStats(md)).toEqual({ resolved: 2, still_open: 1, new_findings: 0 })
+    expect(stripDeltaStats(md)).not.toContain('DELTA_STATS')
+  })
+
+  it('adds a Can Be Split section only when populated', () => {
+    expect(renderReview(base)).not.toContain('Can Be Split')
+    const md = renderReview({ ...base, can_be_split: ['Auth refactor', 'Logging change'] })
+    expect(md).toContain('### Can Be Split\n- Auth refactor\n- Logging change')
   })
 })

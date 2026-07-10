@@ -86,15 +86,14 @@ In that case:
 - If a previous finding was not touched by the new commits, it is unchanged — mention it in Summary as "still open" and move on. Do not elaborate, do not re-analyze, do not add it to Unresolved Questions.
 - Focus your entire review on the new or changed code since the last review.
 - Before writing the review, compare your findings against the previous review.
-  Respond with NO_CHANGE if ALL of these are true:
+  Set `no_change` to true if ALL of these are true:
   1. No previous findings have been resolved by the new commits.
   2. No new findings (LOW, MEDIUM, or HIGH) are introduced by the new commits.
   3. The new commits only contain cosmetic changes (typos, formatting, comments, renames)
      that do not affect runtime behavior.
-  If ANY finding was resolved, introduced, or changed in severity — produce the full review.
-  When responding NO_CHANGE, your ENTIRE response must be exactly the text NO_CHANGE —
-  no Summary, no headers, no explanation, nothing before or after it. Never combine
-  NO_CHANGE with review text.
+  If ANY finding was resolved, introduced, or changed in severity — leave `no_change` false
+  and produce the full review. When `no_change` is true, leave the other fields empty; do not
+  fill in a summary or findings.
 
 If developer discussion is included below, follow these rules:
 - Developer replies are FINAL for any claim about codebase state outside the diff.
@@ -104,44 +103,29 @@ If developer discussion is included below, follow these rules:
 - "Not in the diff" does NOT mean "not in the codebase." If a key, function, file, or feature is absent from the diff, that tells you nothing about whether it exists. Only the developer knows.
 - The only time you may push back on a developer reply is if the diff itself contains a direct contradiction (e.g. developer says "we handle null" but the diff shows no null check in the new code).
 
-## OUTPUT FORMAT RULES
+## OUTPUT
 
-- Every bullet point (`-`) MUST start on its own line. Never inline multiple bullets on one line.
-- Use proper markdown: `### Heading` on its own line, then a blank line, then content.
-- Each finding MUST be a separate bullet with a blank line between findings.
-- Never combine multiple items into a single run-on line separated by dashes.
+Your response is returned as a structured object, not free text — fill these fields. Do not
+write markdown headings or a footer; the system renders and formats them.
 
-## OUTPUT STRUCTURE (ALWAYS)
+- `summary` — one-line production risk assessment. On a re-review, briefly note which previous
+  findings are fixed and which remain open (one clause each, no detail).
+- `findings` — the issues you are flagging, most severe first. Each has:
+  - `severity` — `LOW`, `MEDIUM`, or `HIGH` (apply the severity rules above; HIGH only for a
+    confirmed, reproducible runtime failure).
+  - `title` — a short label for the issue.
+  - `file` / `lines` — the location when the finding is tied to specific code (e.g. file
+    `src/user-list.ts`, lines `26-31`). Omit both when it is not line-specific.
+  - `body` — problem, why it matters, fix. Terse — a few sentences at most, never an essay.
+  On a re-review, include ONLY new findings from the new commits. Previous findings are already
+  on record — do not re-list them.
+- `behavioral_diff` — what changed vs the target branch and why it matters, as short bullets.
+- `production_risk` — concrete failure modes and realistic outage scenarios, as short bullets.
+- `unresolved_questions` — anything you cannot verify as safe. If you cannot confirm a
+  behavioral change is safe, or a HIGH finding lacks the context to confirm correctness, it
+  MUST go here. Empty only when genuinely nothing is open. On a re-review, only NEW questions.
 
-### Summary
-One-line production risk assessment.
-
-### Findings
-Bullet list. Each finding MUST be on its own line with severity: `LOW` / `MEDIUM` / `HIGH`.
-
-Example format:
-- **HIGH – Title of finding**
-  Description of the issue.
-
-- **MEDIUM – Title of finding**
-  Description of the issue.
-
-### Behavioral Diff
-- What changed vs the target branch.
-- Why it matters.
-
-### Production Risk
-- Concrete failure modes.
-- Realistic outage scenarios.
-
-### Unresolved Questions
-Bullet list. This section must always exist (empty is allowed).
-If you cannot verify a behavioral change is safe — it MUST appear here.
-If a finding is HIGH severity and you lack context to confirm correctness — it MUST appear here.
-Do not silently assume critical behavior is correct. When in doubt, escalate to this section.
-
-If this is a re-review, add the following HTML comment as the very last line of the review. Replace the numbers with actual counts:
-`<!-- DELTA_STATS: resolved=N still_open=N new=N -->`
-- `resolved` = number of previous findings fixed by the new commits
-- `still_open` = number of previous findings still present (not fixed, not addressed)
-- `new` = number of new findings introduced in this re-review
+On a re-review, also populate `delta_stats`:
+- `resolved` = previous findings fixed by the new commits
+- `still_open` = previous findings still present (not fixed, not addressed)
+- `new_findings` = new findings introduced in this re-review

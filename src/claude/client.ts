@@ -2,6 +2,7 @@ import { readFileSync } from 'fs'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { createProvider } from '../llm/provider.js'
+import { renderReview, type ReviewObject } from '../review/formatter.js'
 import type { PRInfo, ReviewComment, CommentReply } from '../vcs/adapter.js'
 import type { FileContext } from '../context/fetcher.js'
 import type { LoadedPrompt } from '../prompt/loader.js'
@@ -44,6 +45,50 @@ const JUDGE_OUTPUT_SCHEMA = {
   additionalProperties: false,
 } as const
 
+// The reviewer emits typed fields, not prose — the system renders the markdown (renderReview),
+// so preamble, tone, or a footer can't leak into the posted review. Mirrors base-prompt.txt's
+// OUTPUT section; the judge adds Merge Confidence downstream.
+const REVIEW_OUTPUT_SCHEMA = {
+  type: 'object',
+  properties: {
+    summary: { type: 'string', description: 'One-line production risk assessment. On a re-review, note which previous findings are fixed vs still open.' },
+    findings: {
+      type: 'array',
+      description: 'Issues being flagged, most severe first. New findings only on a re-review — previous findings are already on record.',
+      items: {
+        type: 'object',
+        properties: {
+          severity: { type: 'string', enum: ['LOW', 'MEDIUM', 'HIGH'], description: 'HIGH only for a confirmed, reproducible runtime failure (crash, data loss, security breach, outage).' },
+          title: { type: 'string', description: 'Short label for the issue.' },
+          file: { type: 'string', description: 'File path when the finding is tied to specific code. Omit if not line-specific.' },
+          lines: { type: 'string', description: 'Line or range within the file, e.g. "26-31". Omit if not line-specific.' },
+          body: { type: 'string', description: 'Problem, why it matters, fix. Terse — no essays.' },
+        },
+        required: ['severity', 'title', 'body'],
+        additionalProperties: false,
+      },
+    },
+    behavioral_diff: { type: 'array', items: { type: 'string' }, description: 'What changed vs the target branch and why it matters, as short bullets.' },
+    production_risk: { type: 'array', items: { type: 'string' }, description: 'Concrete failure modes and realistic outage scenarios, as short bullets.' },
+    unresolved_questions: { type: 'array', items: { type: 'string' }, description: 'Anything you cannot verify as safe. Empty only when genuinely nothing is open. New questions only on a re-review.' },
+    can_be_split: { type: 'array', items: { type: 'string' }, description: 'Only when a SPLIT CHECK instruction is present: independent themes this PR could split into. Empty/omitted if cohesive.' },
+    delta_stats: {
+      type: 'object',
+      description: 'Only on a re-review: counts vs the previous review.',
+      properties: {
+        resolved: { type: 'integer', description: 'Previous findings fixed by the new commits.' },
+        still_open: { type: 'integer', description: 'Previous findings still present.' },
+        new_findings: { type: 'integer', description: 'New findings introduced in this re-review.' },
+      },
+      required: ['resolved', 'still_open', 'new_findings'],
+      additionalProperties: false,
+    },
+    no_change: { type: 'boolean', description: 'Set true only on a re-review when nothing material changed (no findings resolved, none new, only cosmetic edits). Leave the other fields empty.' },
+  },
+  required: ['summary', 'findings', 'behavioral_diff', 'production_risk', 'unresolved_questions'],
+  additionalProperties: false,
+} as const
+
 export async function runReview(
   apiKey: string,
   model: string,
@@ -59,9 +104,12 @@ export async function runReview(
   const userMessage = buildUserMessage(prInfo, diff, fileContexts, previousReviews, developerReplies, changesSinceLastReview)
 
   console.log(`Sending request to Claude (${model}, maxRetries: ${maxRetries})...`)
-  const { text, usage } = await createProvider(apiKey).complete(prompt.content, userMessage, { model, maxTokens: MAX_TOKENS, maxRetries })
+  const { object, usage } = await createProvider(apiKey).completeStructured<ReviewObject>(
+    prompt.content, userMessage, REVIEW_OUTPUT_SCHEMA, { model, maxTokens: MAX_TOKENS, maxRetries },
+  )
+  const text = renderReview(object)
 
-  console.log(`Review received (${usage.input_tokens} in / ${usage.output_tokens} out tokens)`)
+  console.log(`Review received (${usage.input_tokens} in / ${usage.output_tokens} out tokens, ${object.no_change ? 'NO_CHANGE' : `${object.findings.length} findings`})`)
 
   return { text, usage }
 }
