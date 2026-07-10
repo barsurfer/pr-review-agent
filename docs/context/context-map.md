@@ -22,8 +22,11 @@ Rule: Each entry has a 1-sentence summary: key concepts, keywords, tech; ends wi
   - [review/replies.md](review/replies.md) — Reply detection algorithm, recursive parent tracking, PR 712 stale-reply fix, bundled response, reply footer, reply limit; read when working on comment threading.
 
 - [prompt/](prompt/)
-  - [prompt/composition.md](prompt/composition.md) — Prompt assembly: base template vs repo sections, resolution order incl. monorepo module-dir fallback, FORBIDDEN rules with rationale, delta review rules, developer trust rules, SCOPE LOCK, reply prompt; read when changing prompt logic or adding FORBIDDEN rules.
-  - [prompt/judge.md](prompt/judge.md) — Judge model: when it runs, what it validates, calibration rules, Merge Confidence score vs computed_score, judge prompt; read when configuring or modifying the generator-verifier pass.
+  - [prompt/composition.md](prompt/composition.md) — Prompt assembly: base template vs repo sections, resolution order incl. monorepo module-dir fallback, FORBIDDEN rules with rationale, delta review rules, developer trust rules, SCOPE LOCK, structured reviewer output (fields, not markdown), reply prompt; read when changing prompt logic or adding FORBIDDEN rules.
+  - [prompt/judge.md](prompt/judge.md) — Judge model: when it runs, what it validates, calibration rules, Merge Confidence vs computed_score, per-finding 0–10 scores (finding_scores), judge prompt; read when configuring or modifying the generator-verifier pass.
+
+- [llm/](llm/)
+  - [llm/structured-output.md](llm/structured-output.md) — LLMProvider seam over the SDK (complete/completeStructured, LLM_PROVIDER), structured reviewer output (REVIEW_OUTPUT_SCHEMA → renderReview; no_change/can_be_split/delta_stats fields), structured judge output (finding_scores), and which metrics read the typed object vs regex; read when changing model I/O, output shape, or metrics sourcing.
 
 - [vcs/](vcs/)
   - [vcs/adapter.md](vcs/adapter.md) — VCSAdapter interface, Bitbucket implementation (auth, redirect handling, required scopes), Azure DevOps adapter (WIP but live-validated on cloud — why the diff is reconstructed since there's no unified-diff REST endpoint, thread model, composite IDs, dual auth, ref version-type lookup), provider selection, supporting types, Phase 4 inline comment extension; read when changing VCS behavior or adding a new adapter.

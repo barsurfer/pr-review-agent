@@ -34,9 +34,15 @@ A filtered copy of the diff (lockfiles, generated files stripped) is used for al
 
 ## Generator-Verifier Pattern
 
-When `JUDGING_MODEL` is set, the reviewer generates candidate findings and the judge validates each MEDIUM/HIGH finding against the actual diff. Invalid findings are dropped. Use a cheap model for generation (Haiku), a stronger model for validation (Sonnet). The judge is skipped automatically when the reviewer produces zero findings.
+When `JUDGING_MODEL` is set, the reviewer generates candidate findings and the judge validates each MEDIUM/HIGH finding against the actual diff. Invalid findings are dropped. Use a cheap model for generation (Haiku), a stronger model for validation (Sonnet). The judge is skipped automatically when the reviewer produces zero findings. The judge also emits a per-finding 0–10 confidence (`finding_scores`), logged to `results.jsonl`.
 
 See [prompt/judge.md](prompt/judge.md).
+
+## Structured Output
+
+The reviewer and judge return JSON-schema-constrained objects, not free-form markdown. The reviewer fills typed fields (`REVIEW_OUTPUT_SCHEMA`) and `renderReview()` builds the posted comment, so the model cannot leak preamble, tone, or a footer into the review, and metrics read the object instead of regex-parsing markdown. All model I/O goes through the `LLMProvider` seam (`src/llm/provider.ts`, selected by `LLM_PROVIDER`), keeping the SDK in one file so a second provider is a new impl, not a re-plumb.
+
+See [llm/structured-output.md](llm/structured-output.md).
 
 ## VCS Adapter
 

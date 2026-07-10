@@ -62,6 +62,7 @@ These rules are cherry-picked from the reviewer's FORBIDDEN section to ensure th
 The judge produces a clean final comment with:
 - Only validated findings (LOW/MEDIUM/HIGH after calibration)
 - A **Merge Confidence** score — holistic merge-safety percentage (0–100%)
+- A per-finding **0–10 confidence score** (`finding_scores`) for each kept finding, scored independently of severity — logged, never posted (see below)
 
 The prompt instructs the judge to validate **silently** — the response must start directly
 at `### Summary`. As a code-side guard, `POST_REVIEW` runs `stripPreamble()` to drop any
@@ -69,10 +70,17 @@ leaked validation reasoning before the first `### Summary` heading, so judge del
 never reaches the posted comment.
 
 The posted review must read as if a single reviewer wrote it — dropped findings leave no
-trace in any section. The judge responds via **structured output** (JSON schema with two
-fields): `review_markdown` (the posted comment) and `judge_notes` (drop/downgrade rationale —
-logged to the run output, never posted). This physically separates validation reasoning from
-the comment; `stripPreamble()`/`stripJudgeNotes()` in POST_REVIEW remain as defense-in-depth.
+trace in any section. The judge responds via **structured output** (JSON schema, three
+fields): `review_markdown` (the posted comment), `judge_notes` (drop/downgrade rationale —
+logged, never posted), and `finding_scores` (`[{title, severity, score}]`, one per kept
+finding, `score` 0–10). This physically separates validation reasoning from the comment;
+`stripPreamble()`/`stripJudgeNotes()` in POST_REVIEW remain as defense-in-depth. See
+[llm/structured-output.md](../llm/structured-output.md) for the schema. The judge itself still
+emits `review_markdown` as prose, so final findings/verdict are parsed from it (not yet a
+fully structured judge object).
+
+`finding_scores` is logged to `results.jsonl` as `finding_scores` (the array) and
+`min_finding_score` (the least-confident kept finding) — a calibration signal, never posted.
 
 **Merge Confidence is NOT arithmetic.** The judge considers:
 - Number and severity of findings
