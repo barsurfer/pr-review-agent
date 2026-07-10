@@ -32,7 +32,7 @@ Rule: Each entry has a 1-sentence summary: key concepts, keywords, tech; ends wi
   - [vcs/adapter.md](vcs/adapter.md) — VCSAdapter interface, Bitbucket implementation (auth, redirect handling, required scopes), Azure DevOps adapter (WIP but live-validated on cloud — why the diff is reconstructed since there's no unified-diff REST endpoint, thread model, composite IDs, dual auth, ref version-type lookup), provider selection, supporting types, Phase 4 inline comment extension; read when changing VCS behavior or adding a new adapter.
 
 - [fetching/](fetching/)
-  - [fetching/strategy.md](fetching/strategy.md) — Two-form diff (raw vs filtered), full file context exclusion rules, high-churn priority, MAX_CONTEXT_FILES/MAX_FILE_LINES, full payload format for review and reply; read when changing what context is sent to Claude.
+  - [fetching/strategy.md](fetching/strategy.md) — Two-form diff (raw vs filtered), full file context exclusion rules, high-churn priority, MAX_CONTEXT_FILES/MAX_FILE_LINES, why local testing runs deliberately low limits (drift observation), full payload format for review and reply; read when changing what context is sent to Claude.
 
 
 ## Session greeting (read-proof)

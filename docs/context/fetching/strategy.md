@@ -61,6 +61,13 @@ If the estimated input exceeds `MAX_INPUT_TOKENS` in `ESTIMATE_TOKENS`, the agen
 | `MAX_CONTEXT_FILES` | `20` | Cap on full-file fetches per review |
 | `MAX_FILE_LINES` | `500` | Skip threshold for large files |
 
+### Testing note — deliberately low limits surface drift
+
+Local smoke-testing runs **tight** limits on purpose (e.g. `MAX_FILE_LINES=200` / `MAX_CONTEXT_FILES=5`), well below the defaults. Starving the reviewer of full-file context is *how review drift is observed*: with the supporting files dropped, the model falls back to speculating about framework internals and out-of-diff symbols (e.g. "does `getHotelGroupId()` exist?"), which exposes weak spots the generous defaults would mask. This is intentional, not a misconfiguration — do not "fix" it by raising the values.
+
+For a realistic (Jenkins-parity or fuller) run, override inline rather than editing the defaults:
+`MAX_FILE_LINES=2000 MAX_CONTEXT_FILES=50 node dist/pr-review-agent.cjs …`. The developer-reply flow is the intended backstop for what context can't resolve: an unverifiable finding is raised as a question, the developer answers, and the reply flow acknowledges it and drops the finding. Fetching referenced-but-*unchanged* definitions on demand (symbol fetch) is a deferred enhancement.
+
 ---
 
 ## Payload Sent to Claude (Full Review)
