@@ -38,53 +38,88 @@ grant the **{Project} Build Service ({Org})** identity **Contribute to pull requ
 reviewed repo — the agent auto-loads it (`prompt_source: repo`) and the pipeline stays generic
 across repos.
 
-## Answering comments (reply flow) — validated live (WIP)
+## Reply flow — set up & test (validated live, WIP)
 
-Build validation fires on PR **create/update** but **not on comments**, so the agent's
-reply-to-developer flow needs a second trigger. Validated end-to-end on an Azure DevOps Services
-test org — captured in [azure-reply-flow-runbook.md](azure-reply-flow-runbook.md) and
-[`azure/azure-reply-pipeline.yml`](../../azure/azure-reply-pipeline.yml):
+Build validation fires on PR **create/update** but **not on comments**, so the reply-to-developer
+flow needs a second trigger. Validated end-to-end on a cloud Services test org: a comment fires a
+Service Hook → an Incoming Webhook → a reply pipeline that runs the agent. No agent code change —
+the FSM already decides review-vs-reply and early-exits when there's nothing to answer.
 
-1. a **Service Hook** on `ms.vss-code.git-pullrequest-comment-event` →
-2. an Azure Pipelines **Incoming Webhook** trigger (`resources.webhooks`) →
-3. a reply pipeline that reads the PR id from the webhook payload
-   (`resource.pullRequest.pullRequestId`) — `System.PullRequest.*` is not set on webhook runs.
+```
+PR comment ─▶ Service Hook (ms.vss-code.git-pullrequest-comment-event)
+           ─▶ Incoming Webhook service connection
+           ─▶ reply pipeline ─▶ node agent.cjs --vcs azure --pr-id <id> --repo-slug <name>
+```
 
-The agent's FSM already decides review-vs-reply in one entrypoint, so no agent code change is
-needed — it's purely trigger wiring. Resolved decisions:
+Prereqs: the review pipeline (above) already wired, `ANTHROPIC_API_KEY` secret available, and an
+`AGENT_TAG` whose bundle includes the Azure adapter (a release tag ≥ `v0.0.4`; verify with
+`curl …/<ref>/dist/pr-review-agent.cjs | grep -c AzureDevOpsAdapter` > 0).
 
-- **Hybrid kept** — build-validation for reviews (merge-gating, `System.PullRequest.*`, delta
-  ordering) + webhook for replies. Not unified into one pipeline.
-- Agent-authored comments also fire the event → a cheap no-op run (FSM footer/timestamp dedup
-  means no loop); an optional pipeline-level guard can skip them if the no-op runs become noise.
-- Comment-command triggers (`/azp run`) are **GitHub-only** — not usable for Azure Repos.
+### Setup (one-time)
 
-Confirmed live:
-- **HMAC is a non-issue** — the Incoming Webhook service connection works with a **blank secret**
-  (no authentication); the generic Web Hooks service hook POSTs and the pipeline fires. Fine for
-  a throwaway/test repo; front it with a signing relay for production.
-- Payload paths confirmed against a real comment: `resource.pullRequest.pullRequestId`,
-  `resource.pullRequest.repository.name`, `resource.comment.author.displayName`,
-  `resource.comment.author.id`, `resource.comment.content`.
+1. **Ship the reply pipeline YAML.** Put [`azure/azure-reply-pipeline.yml`](../../azure/azure-reply-pipeline.yml)
+   on the repo's **default branch** — Service Hooks resolve the pipeline's default-branch YAML
+   (unlike build validation, which uses the PR *source* branch).
+2. **Incoming Webhook service connection.** Project Settings → **Service connections → New → Incoming WebHook**.
+   - **Webhook Name** and **Service connection name**: e.g. `pr-comment` (hyphens fine here).
+   - **Secret: leave blank.** Validated — the generic Web Hooks sender can't compute an HMAC, and a
+     blank secret works (the POST fires the pipeline with no signature check). Fine for a test repo;
+     front it with a signing relay before a repo that matters.
+3. **Register the pipeline + secret.** Pipelines → **New pipeline → Azure Repos Git → {repo} →
+   Existing YAML** → `/azure-reply-pipeline.yml` → **Save** (don't run). Then **Edit → Variables →
+   New** → `ANTHROPIC_API_KEY` (mark secret). The Build Service already has "Contribute to pull
+   requests" from the review pipeline, so it can post.
+4. **Comment Service Hook (the trigger).** Project Settings → **Service Hooks → + → Web Hooks** →
+   trigger **Pull request commented on** (`ms.vss-code.git-pullrequest-comment-event`) → filter to
+   the repo → **Action URL**:
+   ```
+   https://dev.azure.com/{ORG}/_apis/public/distributedtask/webhooks/pr-comment?api-version=6.0-preview
+   ```
+   (`pr-comment` = the Webhook Name from step 2.) **Resource details to send: All** → Finish. No
+   HTTP header needed while the secret is blank.
 
-Two pipeline-YAML bugs found and fixed:
-- Webhook payload values arrive as **step env vars** — read them in bash as
-  `$PR_ID`/`$REPO_NAME`, not `$(PR_ID)` (Azure's *pipeline-variable* macro; doesn't resolve step
-  env vars and fails silently — empty string → "--pr-id is required").
-- Set `SKIP_TARGET_BRANCHES: ''` in the reply pipeline's `env:`, or the default `main,master`
-  skips every PR into main.
-- The `webhook:` alias (`prComment`) must be **hyphen-free** — it's used as
-  `${{ parameters.<alias>.* }}` and a hyphen parses as minus in Azure expressions. Hyphens are
-  fine in the `connection:` value and service-connection name.
+### Test
 
-**Review-vs-reply priority:** the review FSM handles new commits before answering comments. If
-the PR has commits newer than the last review, a comment triggers a delta **review** of the new
-code, not a reply. A **reply** posts only when the current commit is already reviewed (no new
-commits) and there's an unanswered human question in a review thread.
+Comment **inside the agent's review thread** (a reply under its review) with a question — e.g.
+*"why is the N+1 a problem here?"* → the reply pipeline fires → the agent posts an answer in that
+thread. A **top-level** comment triggers the run too but no-ops when there's nothing unanswered.
+Check the run log prints `reply trigger: PR_ID='…' REPO_NAME='…'` (populated), and `results.jsonl`
+shows `vcs: azure` with reply-path usage.
 
-**Throttling:** none native — every comment fires one pipeline run. Cheap though: the FSM
-early-exits before any Claude call when there's nothing new, so redundant runs cost CI minutes,
-not tokens. Options if noise matters: skip agent-authored comments via a pipeline `condition` on
-the comment author (kills the main noise — self-reply re-fires); an Environment exclusive lock to
-serialize runs; the free-tier single parallel job naturally queues them; or an external relay
-(Azure Function/Logic App) for real rate-limiting.
+### Gotchas (all found + fixed live)
+
+- **Read payload values as `$VAR`, not `$(VAR)`.** `PR_ID`/`REPO_NAME` arrive as step **env vars**
+  (mapped from the payload via `${{ parameters.prComment.* }}`); in bash that's `$PR_ID` /
+  `$REPO_NAME`. `$(PR_ID)` is Azure's *pipeline-variable* macro — it doesn't resolve step env vars
+  and fails **silently** (empty → "--pr-id is required").
+- **`SKIP_TARGET_BRANCHES: ''`** in the reply pipeline `env:`, or the default `main,master` skips
+  every PR into main.
+- **The `webhook:` alias must be hyphen-free** (`prComment`) — it's used as
+  `${{ parameters.<alias>.* }}` and a hyphen parses as *minus* in Azure expressions. Hyphens are
+  fine in `connection:`, the service-connection name, and the URL.
+- **`System.PullRequest.*` isn't set** on webhook runs — the PR id comes from the payload
+  (`resource.pullRequest.pullRequestId`), which is why the env-var mapping exists.
+
+### Verify the payload (only if a path ever differs)
+
+Point the Service Hook at a request bin (`webhook.site`) or a self-hosted receiver behind
+`cloudflared tunnel --protocol http2 --url http://localhost:<port>` (use **http2** — the default
+QUIC was flaky and its `trycloudflare.com` DNS failed from Azure), post a comment, and read the
+JSON. Confirmed present: `resource.pullRequest.pullRequestId`, `resource.pullRequest.repository.name`,
+`resource.comment.author.displayName`, `resource.comment.author.id`, `resource.comment.content`.
+
+### Behavior & limits
+
+- **Review-vs-reply priority:** the FSM handles new commits before answering comments. If the PR
+  has commits newer than the last review, a comment triggers a delta **review** of the new code,
+  not a reply. A **reply** posts only when the current commit is already reviewed (no new commits)
+  and there's an unanswered human question in a review thread.
+- **Throttling: none native** — every comment fires one pipeline run (no debounce). Cheap, though:
+  the FSM early-exits before any Claude call when there's nothing new, so redundant runs cost CI
+  minutes, not tokens. If noise matters: skip agent-authored comments via a pipeline `condition` on
+  `resource.comment.author.id` (kills the self-reply re-fires — the main source), an Environment
+  exclusive lock to serialize, the free-tier single parallel job (queues naturally), or an external
+  relay (Azure Function/Logic App) for real rate-limiting.
+- **Resolved:** hybrid kept (build-validation for reviews + webhook for replies, not unified);
+  agent-authored comments self-fire a cheap no-op (footer/timestamp dedup → **no loop**);
+  `/azp run` comment-commands are **GitHub-only**, not usable for Azure Repos.

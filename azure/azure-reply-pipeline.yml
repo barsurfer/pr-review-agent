@@ -8,7 +8,7 @@
 # Validated end-to-end on an Azure DevOps Services test org: comment -> Service Hook ->
 # Incoming Webhook -> this pipeline -> agent posts a reply. Payload paths below are confirmed.
 #
-# SETUP: see docs/reference/azure-reply-flow-runbook.md
+# SETUP: see docs/reference/azure-devops.md
 #   1. Incoming Webhook service connection named "pr-comment". Secret can be BLANK for WIP —
 #      the Web Hooks service hook still POSTs and this pipeline fires with no HMAC/signature
 #      check (validated). Front it with a signing relay before pointing at a repo that matters.
