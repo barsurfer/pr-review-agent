@@ -33,7 +33,7 @@ export interface JudgeResult extends ClaudeResult {
 
 // Structured output keeps validation reasoning physically separate from the
 // posted review — prompt-only suppression proved leaky (PR 8722)
-const JUDGE_OUTPUT_SCHEMA = {
+export const JUDGE_OUTPUT_SCHEMA = {
   type: 'object',
   properties: {
     review_markdown: {
@@ -66,7 +66,7 @@ const JUDGE_OUTPUT_SCHEMA = {
 // The reviewer emits typed fields, not prose — the system renders the markdown (renderReview),
 // so preamble, tone, or a footer can't leak into the posted review. Mirrors base-prompt.txt's
 // OUTPUT section; the judge adds Merge Confidence downstream.
-const REVIEW_OUTPUT_SCHEMA = {
+export const REVIEW_OUTPUT_SCHEMA = {
   type: 'object',
   properties: {
     summary: { type: 'string', description: 'One-line production risk assessment. On a re-review, note which previous findings are fixed vs still open.' },

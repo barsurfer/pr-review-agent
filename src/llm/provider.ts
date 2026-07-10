@@ -42,6 +42,10 @@ class AnthropicProvider implements LLMProvider {
     } catch {
       throw new Error('Model returned invalid JSON despite structured output')
     }
+    // Structured output should honor the schema, but a degraded response can be valid JSON yet
+    // miss required keys — fail loudly here instead of crashing later on `.length` of undefined.
+    const missing = missingRequired(object, schema)
+    if (missing.length) throw new Error(`Structured output missing required field(s): ${missing.join(', ')}`)
     return { object, usage: mapUsage(response.usage) }
   }
 }
@@ -64,6 +68,13 @@ function mapUsage(u: Anthropic.Message['usage']): ClaudeUsage {
     cache_read_input_tokens: u.cache_read_input_tokens ?? 0,
     cache_creation_input_tokens: u.cache_creation_input_tokens ?? 0,
   }
+}
+
+/** Top-level required keys the parsed object is missing — a schema-honoring provider returns []. */
+export function missingRequired(object: unknown, schema: Record<string, unknown>): string[] {
+  const required = (schema.required as string[] | undefined) ?? []
+  const obj = (object ?? {}) as Record<string, unknown>
+  return required.filter(k => obj[k] === undefined)
 }
 
 export function createProvider(apiKey: string): LLMProvider {

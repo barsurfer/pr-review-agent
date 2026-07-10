@@ -109,6 +109,8 @@ export interface FindingScore {
 }
 
 const bullets = (items: string[]): string => items.map(i => `- ${i}`).join('\n')
+// Empty list section → "None." rather than a bare heading (the model may return an empty array).
+const listOrNone = (items: string[]): string => (items.length ? bullets(items) : 'None.')
 
 /** Render the reviewer's structured output into the posted markdown. The reviewer emits typed
  *  fields, not prose, so preamble/tone/footer can't leak in — this owns the shape the judge,
@@ -126,9 +128,9 @@ export function renderReview(r: ReviewObject): string {
   const parts = [
     `### Summary\n${r.summary}`,
     `### Findings\n${findings}`,
-    `### Behavioral Diff\n${bullets(r.behavioral_diff)}`,
-    `### Production Risk\n${bullets(r.production_risk)}`,
-    `### Unresolved Questions\n${r.unresolved_questions.length ? bullets(r.unresolved_questions) : 'None.'}`,
+    `### Behavioral Diff\n${listOrNone(r.behavioral_diff)}`,
+    `### Production Risk\n${listOrNone(r.production_risk)}`,
+    `### Unresolved Questions\n${listOrNone(r.unresolved_questions)}`,
   ]
   if (r.can_be_split?.length) parts.push(`### Can Be Split\n${bullets(r.can_be_split)}`)
 

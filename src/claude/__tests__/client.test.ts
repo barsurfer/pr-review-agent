@@ -7,8 +7,8 @@ vi.mock('../../llm/provider.js', () => ({
   createProvider: vi.fn(() => ({ complete, completeStructured })),
 }))
 
-import { runReview, runJudge } from '../client.js'
-import type { ReviewObject } from '../../review/formatter.js'
+import { runReview, runJudge, REVIEW_OUTPUT_SCHEMA, JUDGE_OUTPUT_SCHEMA } from '../client.js'
+import { renderReview, type ReviewObject } from '../../review/formatter.js'
 import type { PRInfo } from '../../vcs/adapter.js'
 import type { LoadedPrompt } from '../../prompt/loader.js'
 
@@ -74,5 +74,26 @@ describe('runJudge (structured output)', () => {
     expect(res.notes).toBe('dropped a LOW')
     expect(res.scores).toEqual([{ title: 'X', severity: 'MEDIUM', score: 7 }])
     expect(complete).not.toHaveBeenCalled()
+  })
+})
+
+// Drift canary: the JSON schemas (client.ts) and the TS types (formatter.ts) are one contract
+// maintained by hand. Change a schema here → update ReviewObject/FindingScore in formatter.ts
+// (and vice versa); these assertions break to force that.
+describe('output schema ↔ type parity (drift canary)', () => {
+  it('REVIEW_OUTPUT_SCHEMA required + property keys match ReviewObject', () => {
+    expect([...REVIEW_OUTPUT_SCHEMA.required].sort()).toEqual(
+      ['behavioral_diff', 'findings', 'production_risk', 'summary', 'unresolved_questions'])
+    expect(Object.keys(REVIEW_OUTPUT_SCHEMA.properties).sort()).toEqual(
+      ['behavioral_diff', 'can_be_split', 'delta_stats', 'findings', 'no_change', 'production_risk', 'summary', 'unresolved_questions'])
+  })
+
+  it('JUDGE_OUTPUT_SCHEMA required keys match JudgeResult usage', () => {
+    expect([...JUDGE_OUTPUT_SCHEMA.required].sort()).toEqual(['finding_scores', 'judge_notes', 'review_markdown'])
+  })
+
+  it('renderReview of a schema-required-only object emits no "undefined" (renderer reads only guaranteed fields)', () => {
+    const md = renderReview({ summary: 's', findings: [], behavioral_diff: [], production_risk: [], unresolved_questions: [] })
+    expect(md).not.toContain('undefined')
   })
 })

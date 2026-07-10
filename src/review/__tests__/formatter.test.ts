@@ -316,6 +316,13 @@ describe('renderReview', () => {
     expect(md).not.toContain('DELTA_STATS')
   })
 
+  it('falls back to "None." for empty behavioral_diff / production_risk / unresolved_questions', () => {
+    const md = renderReview({ summary: 's', findings: [], behavioral_diff: [], production_risk: [], unresolved_questions: [] })
+    expect(md).toContain('### Behavioral Diff\nNone.')
+    expect(md).toContain('### Production Risk\nNone.')
+    expect(md).toContain('### Unresolved Questions\nNone.')
+  })
+
   it('adds a Can Be Split section only when populated', () => {
     expect(renderReview(base)).not.toContain('Can Be Split')
     const md = renderReview({ ...base, can_be_split: ['Auth refactor', 'Logging change'] })
