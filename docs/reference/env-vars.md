@@ -27,6 +27,7 @@ credentials in source code or commit them to version control.**
 | `LLM_PROVIDER` | `anthropic` | Model backend behind the reviewer/judge. Only `anthropic` is implemented; the `LLMProvider` seam (`src/llm/provider.ts`) exists so a second provider is a new impl, not a re-plumb. Default: `anthropic` |
 | `MAX_RETRIES` | `3` | Max retries on 429/5xx errors (SDK built-in exponential backoff). Default: `3` |
 | `MAX_INPUT_TOKENS` | `250000` | If estimated input exceeds this, first drop file contexts and review diff-only; skip only if the diff alone still exceeds it (0 = disabled). `ESTIMATE_TOKENS` logs a per-section breakdown (prompt / diff / delta / file-contexts / prev-reviews / replies) so you can see what drove the size |
+| `MAX_OUTPUT_TOKENS` | `32000` | Output-token cap for reviewer + judge (raised from 16k because the Claude 5 family thinks by default and thinking counts against this). Requests stream, so large caps don't hit the HTTP timeout. **Effort coupling:** thinking counts against this cap, so `REVIEW_EFFORT`/`JUDGE_EFFORT` at `xhigh`/`max` can exceed 32k on a non-trivial PR and truncate the response (the run errors rather than posting a cut-off review) — raise to ~`64000` when using high effort. Default/`high` effort fits 32k. |
 | `MAX_CONTEXT_FILES` | `20` | Max number of files to fetch full content for |
 | `MAX_FILE_LINES` | `500` | Files over this line count get diff-only (no full content) |
 | `MIN_CHANGED_FILES` | `0` | Skip review if PR has fewer reviewable files (0 = disabled) |
@@ -37,6 +38,8 @@ credentials in source code or commit them to version control.**
 | `SKIP_TARGET_BRANCHES` | `main,master` | Comma-separated branch patterns. Skip review if PR target branch matches. Default: `main,master` |
 | `DIFF_EXCLUDE_PATTERNS` | `*.lock,*.json,*.spec.ts` | Comma-separated file patterns to strip from diff before sending to Claude. Default: `*.lock,package-lock.json,yarn.lock,pnpm-lock.yaml,*.json,*.spec.ts` |
 | `JUDGING_MODEL` | `claude-sonnet-5` | Judge model for finding validation — **on by default**. Set empty to disable the judge pass. |
+| `REVIEW_EFFORT` | *(unset)* | Reviewer thinking effort: `low`\|`medium`\|`high`\|`xhigh`\|`max`. Unset = model default (a strong model like Opus 4.8 at its adaptive default needs no effort flag). Only the 5-family / Opus-4.6+ / Sonnet-5 support it; models that don't (e.g. Haiku 4.5) are retried without it. `xhigh`/`max` need a larger `MAX_OUTPUT_TOKENS` (~64k) — thinking counts against the output cap and otherwise truncates the review. |
+| `JUDGE_EFFORT` | *(unset)* | Judge thinking effort — same scale and fallback behavior as `REVIEW_EFFORT`. |
 | `MAX_REPLY_COMMENTS` | `5` | Max agent reply comments per PR (0 = unlimited). Prevents runaway token usage on extended conversations. Default: `5` |
 | `MAX_FINDINGS` | `0` | Cap the number of findings the reviewer reports (0 = unlimited). When set, appends a findings-limit instruction to the reviewer prompt. |
 | `ENABLE_SPLIT_CHECK` | `true` | Reviewer adds a "Can Be Split" section when the PR spans independent themes that could be separate PRs. Set `false` to disable. |
@@ -44,8 +47,10 @@ credentials in source code or commit them to version control.**
 | `AGENT_IDENTITY` | *(BITBUCKET_USERNAME)* | Name shown in review/reply footers. Falls back to `BITBUCKET_USERNAME`, then `'Claude'` |
 
 > Threshold variables can also be set via CLI flags (`--min-changed-files`, etc.)
-> which override the env var values. `CLAUDE_MODEL` and `JUDGING_MODEL` can be
-> overridden with `--model` and `--judge-model` respectively.
+> which override the env var values. Model/token/effort too: `CLAUDE_MODEL`/`JUDGING_MODEL`
+> → `--model`/`--judge-model`; `MAX_INPUT_TOKENS`/`MAX_OUTPUT_TOKENS` →
+> `--max-input-tokens`/`--max-output-tokens`; `REVIEW_EFFORT`/`JUDGE_EFFORT` →
+> `--effort`/`--judge-effort`. CLI always wins over env.
 >
 > Threshold counts are **reviewable** files/lines — computed after `DIFF_EXCLUDE_PATTERNS`
 > filtering, so excluded files never trip the limits. A PR with zero reviewable lines
