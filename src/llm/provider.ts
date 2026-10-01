@@ -22,19 +22,21 @@ class AnthropicProvider implements LLMProvider {
     this.client = new Anthropic({ apiKey })
   }
 
+  // Stream + finalMessage, not create: the SDK rejects a non-streaming request whose max_tokens
+  // could exceed the 10-min timeout — which the Claude 5 family hits since it thinks by default.
   async complete(system: string, user: string, opts: LLMOptions): Promise<{ text: string; usage: ClaudeUsage }> {
-    const response = await this.client.messages.create(
+    const response = await this.client.messages.stream(
       { model: opts.model, max_tokens: opts.maxTokens, system, messages: [{ role: 'user', content: user }] },
       { maxRetries: opts.maxRetries },
-    )
+    ).finalMessage()
     return { text: textOf(response, opts.maxTokens), usage: mapUsage(response.usage) }
   }
 
   async completeStructured<T>(system: string, user: string, schema: Record<string, unknown>, opts: LLMOptions): Promise<{ object: T; usage: ClaudeUsage }> {
-    const response = await this.client.messages.create(
+    const response = await this.client.messages.stream(
       { model: opts.model, max_tokens: opts.maxTokens, system, output_config: { format: { type: 'json_schema', schema } }, messages: [{ role: 'user', content: user }] },
       { maxRetries: opts.maxRetries },
-    )
+    ).finalMessage()
     const text = textOf(response, opts.maxTokens)
     let object: T
     try {
