@@ -35996,7 +35996,9 @@ var config = {
   judge: {
     model: optional("JUDGING_MODEL", "claude-sonnet-5"),
     // on by default; set empty to disable
-    maxRetries: parseInt(optional("MAX_RETRIES", "3"), 10)
+    maxRetries: parseInt(optional("MAX_RETRIES", "3"), 10),
+    effort: optional("JUDGE_EFFORT", "")
+    // output_config.effort; empty = model default (unsent)
   },
   agentIdentity: process.env.AGENT_IDENTITY || process.env.BITBUCKET_USERNAME || "Claude",
   reply: {
@@ -36006,7 +36008,9 @@ var config = {
     maxFindings: parseInt(optional("MAX_FINDINGS", "0"), 10),
     // 0 = unlimited
     splitCheck: optional("ENABLE_SPLIT_CHECK", "true") !== "false",
-    todoScan: optional("ENABLE_TODO_SCAN", "true") !== "false"
+    todoScan: optional("ENABLE_TODO_SCAN", "true") !== "false",
+    effort: optional("REVIEW_EFFORT", "")
+    // output_config.effort; empty = model default (unsent)
   },
   context: {
     maxFiles: parseInt(optional("MAX_CONTEXT_FILES", "20"), 10),
@@ -42975,20 +42979,12 @@ var AnthropicProvider = class {
   constructor(apiKey) {
     this.client = new Anthropic({ apiKey });
   }
-  // Stream + finalMessage, not create: the SDK rejects a non-streaming request whose max_tokens
-  // could exceed the 10-min timeout — which the Claude 5 family hits since it thinks by default.
   async complete(system, user, opts2) {
-    const response = await this.client.messages.stream(
-      { model: opts2.model, max_tokens: opts2.maxTokens, system, messages: [{ role: "user", content: user }] },
-      { maxRetries: opts2.maxRetries }
-    ).finalMessage();
+    const response = await this.streamFinal({ model: opts2.model, max_tokens: opts2.maxTokens, system, messages: [{ role: "user", content: user }] }, opts2);
     return { text: textOf(response, opts2.maxTokens), usage: mapUsage(response.usage) };
   }
   async completeStructured(system, user, schema, opts2) {
-    const response = await this.client.messages.stream(
-      { model: opts2.model, max_tokens: opts2.maxTokens, system, output_config: { format: { type: "json_schema", schema } }, messages: [{ role: "user", content: user }] },
-      { maxRetries: opts2.maxRetries }
-    ).finalMessage();
+    const response = await this.streamFinal({ model: opts2.model, max_tokens: opts2.maxTokens, system, output_config: { format: { type: "json_schema", schema } }, messages: [{ role: "user", content: user }] }, opts2);
     const text = textOf(response, opts2.maxTokens);
     let object;
     try {
@@ -42999,6 +42995,22 @@ var AnthropicProvider = class {
     const missing = missingRequired(object, schema);
     if (missing.length) throw new Error(`Structured output missing required field(s): ${missing.join(", ")}`);
     return { object, usage: mapUsage(response.usage) };
+  }
+  // Stream + finalMessage (not create): the SDK rejects a non-streaming request whose max_tokens
+  // could exceed the 10-min timeout, which the Claude 5 family hits since it thinks by default.
+  // effort (when set) rides output_config; models that don't support it (e.g. Haiku 4.5) 400, so
+  // catch that and retry once without it rather than fail the review.
+  streamFinal(params, opts2) {
+    const run = (p) => this.client.messages.stream(p, { maxRetries: opts2.maxRetries }).finalMessage();
+    if (!opts2.effort) return run(params);
+    const withEffort = { ...params, output_config: { ...params.output_config ?? {}, effort: opts2.effort } };
+    return run(withEffort).catch((err) => {
+      if (err instanceof Anthropic.BadRequestError) {
+        console.warn(`  effort "${opts2.effort}" not accepted by ${opts2.model} \u2014 retrying without it`);
+        return run(params);
+      }
+      throw err;
+    });
   }
 };
 function textOf(response, maxTokens) {
@@ -43103,14 +43115,14 @@ var REVIEW_OUTPUT_SCHEMA = {
   required: ["summary", "findings", "behavioral_diff", "production_risk", "unresolved_questions"],
   additionalProperties: false
 };
-async function runReview(apiKey, model, maxRetries, maxTokens, prInfo, diff, fileContexts, prompt, previousReviews, developerReplies = [], changesSinceLastReview = "") {
+async function runReview(apiKey, model, maxRetries, maxTokens, effort, prInfo, diff, fileContexts, prompt, previousReviews, developerReplies = [], changesSinceLastReview = "") {
   const userMessage = buildUserMessage(prInfo, diff, fileContexts, previousReviews, developerReplies, changesSinceLastReview);
   console.log(`Sending request to Claude (${model}, maxRetries: ${maxRetries})...`);
   const { object, usage } = await createProvider(apiKey).completeStructured(
     prompt.content,
     userMessage,
     REVIEW_OUTPUT_SCHEMA,
-    { model, maxTokens, maxRetries }
+    { model, maxTokens, maxRetries, effort: effort || void 0 }
   );
   const text = renderReview(object);
   console.log(`Review received (${usage.input_tokens} in / ${usage.output_tokens} out tokens, ${object.no_change ? "NO_CHANGE" : `${object.findings.length} findings`})`);
@@ -43170,7 +43182,7 @@ function getJudgePrompt() {
     throw new Error("Cannot load judge prompt: file not found and no embedded copy");
   }
 }
-async function runJudge(apiKey, model, maxRetries, maxTokens, diff, reviewText) {
+async function runJudge(apiKey, model, maxRetries, maxTokens, effort, diff, reviewText) {
   const parts = [];
   parts.push(`## Diff:
 \`\`\`diff
@@ -43184,7 +43196,7 @@ ${reviewText}`);
     getJudgePrompt(),
     userMessage,
     JUDGE_OUTPUT_SCHEMA,
-    { model, maxTokens, maxRetries }
+    { model, maxTokens, maxRetries, effort: effort || void 0 }
   );
   console.log(`Judge received (${usage.input_tokens} in / ${usage.output_tokens} out tokens)`);
   return { text: parsed.review_markdown, usage, notes: parsed.judge_notes, scores: parsed.finding_scores };
@@ -43326,7 +43338,7 @@ function getAgentVersion() {
     const pkg = JSON.parse((0, import_fs3.readFileSync)(pkgPath, "utf-8"));
     return pkg.version;
   } catch {
-    if (true) return "0.0.6";
+    if (true) return "0.0.7";
     return "unknown";
   }
 }
@@ -43338,7 +43350,7 @@ function getBuildCommit() {
     const dirty = (0, import_child_process.execSync)("git status --porcelain", opts2).toString().trim() ? "-dirty" : "";
     return hash + dirty;
   } catch {
-    if (true) return "61a9d97";
+    if (true) return "f33a167";
     return "unknown";
   }
 }
@@ -43680,6 +43692,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
         config.anthropic.model,
         config.anthropic.maxRetries,
         config.anthropic.maxTokens,
+        config.review.effort,
         ctx.prInfo,
         ctx.filteredDiff,
         ctx.fileContexts,
@@ -43724,6 +43737,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
         config.judge.model,
         config.judge.maxRetries,
         config.anthropic.maxTokens,
+        config.judge.effort,
         ctx.filteredDiff,
         ctx.reviewText
       );
@@ -43864,7 +43878,7 @@ if (major < 22) {
   process.exit(1);
 }
 var program2 = new Command();
-program2.name("pr-review-agent").description("Automated PR code review powered by Claude").option("--pr-id <id>", "Pull request ID").option("--workspace <workspace>", "VCS workspace / org (overrides BITBUCKET_WORKSPACE)").option("--repo-slug <slug>", "Repository slug").option("--vcs <provider>", "VCS provider: bitbucket | azure (WIP) | github | gitlab (overrides VCS_PROVIDER)").option("--dry-run", "Print the review to stdout without posting to the PR").option("--force [mode]", 'Force review: "clean" (no prior context) or "re-review" (keep context, bypass dedup)').option("--log-usage [bool]", "Log usage data to results.jsonl (default: true)", (v) => v !== "false", true).option("--prompt <path>", "Path to a local prompt file (overrides repo .agent-review-instructions.md)").option("--validate-prompt", "Validate prompt and exit (local via --prompt, or repo via --pr-id)").option("--model <id>", "Claude model ID (overrides CLAUDE_MODEL)").option("--judge-model <id>", "Judge model ID (overrides JUDGING_MODEL)").option("--min-changed-files <n>", "Skip review if fewer files changed (overrides MIN_CHANGED_FILES)").option("--max-changed-files <n>", "Skip review if more files changed (overrides MAX_CHANGED_FILES)").option("--min-changed-lines <n>", "Skip review if fewer lines changed (overrides MIN_CHANGED_LINES)").option("--max-changed-lines <n>", "Skip review if more lines changed (overrides MAX_CHANGED_LINES)").option("--max-input-tokens <n>", "Max estimated input tokens before degrade/skip (overrides MAX_INPUT_TOKENS)").option("--max-output-tokens <n>", "Max output tokens for reviewer + judge (overrides MAX_OUTPUT_TOKENS)").parse(process.argv);
+program2.name("pr-review-agent").description("Automated PR code review powered by Claude").option("--pr-id <id>", "Pull request ID").option("--workspace <workspace>", "VCS workspace / org (overrides BITBUCKET_WORKSPACE)").option("--repo-slug <slug>", "Repository slug").option("--vcs <provider>", "VCS provider: bitbucket | azure (WIP) | github | gitlab (overrides VCS_PROVIDER)").option("--dry-run", "Print the review to stdout without posting to the PR").option("--force [mode]", 'Force review: "clean" (no prior context) or "re-review" (keep context, bypass dedup)').option("--log-usage [bool]", "Log usage data to results.jsonl (default: true)", (v) => v !== "false", true).option("--prompt <path>", "Path to a local prompt file (overrides repo .agent-review-instructions.md)").option("--validate-prompt", "Validate prompt and exit (local via --prompt, or repo via --pr-id)").option("--model <id>", "Claude model ID (overrides CLAUDE_MODEL)").option("--judge-model <id>", "Judge model ID (overrides JUDGING_MODEL)").option("--min-changed-files <n>", "Skip review if fewer files changed (overrides MIN_CHANGED_FILES)").option("--max-changed-files <n>", "Skip review if more files changed (overrides MAX_CHANGED_FILES)").option("--min-changed-lines <n>", "Skip review if fewer lines changed (overrides MIN_CHANGED_LINES)").option("--max-changed-lines <n>", "Skip review if more lines changed (overrides MAX_CHANGED_LINES)").option("--max-input-tokens <n>", "Max estimated input tokens before degrade/skip (overrides MAX_INPUT_TOKENS)").option("--max-output-tokens <n>", "Max output tokens for reviewer + judge (overrides MAX_OUTPUT_TOKENS)").option("--effort <level>", "Reviewer thinking effort: low|medium|high|xhigh|max (overrides REVIEW_EFFORT; ignored by models without effort)").option("--judge-effort <level>", "Judge thinking effort (overrides JUDGE_EFFORT)").parse(process.argv);
 var opts = program2.opts();
 async function main() {
   if (opts.validatePrompt) {
@@ -43939,6 +43953,8 @@ Filled prompt length: ${result.content.length} chars (~${Math.ceil(result.conten
   if (opts.maxChangedLines) config.thresholds.maxChangedLines = parseInt(opts.maxChangedLines, 10);
   if (opts.maxInputTokens) config.anthropic.maxInputTokens = parseInt(opts.maxInputTokens, 10);
   if (opts.maxOutputTokens) config.anthropic.maxTokens = parseInt(opts.maxOutputTokens, 10);
+  if (opts.effort) config.review.effort = opts.effort;
+  if (opts.judgeEffort) config.judge.effort = opts.judgeEffort;
   const forceMode = opts.force === true ? "re-review" : typeof opts.force === "string" ? opts.force : "off";
   await review(adapter2, opts.prId, opts.dryRun ?? false, opts.prompt, forceMode, opts.logUsage ?? true, opts.repoSlug ?? "");
 }
