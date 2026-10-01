@@ -41743,6 +41743,9 @@ function countFindings(r) {
   }
   return tally;
 }
+function markdownHasFindings(body) {
+  return /^[ \t]*-\s*\*\*(HIGH|MEDIUM|LOW)\b/im.test(body);
+}
 
 // src/vcs/bitbucket.ts
 var REQUEST_TIMEOUT_MS = 3e4;
@@ -43338,7 +43341,7 @@ function getAgentVersion() {
     const pkg = JSON.parse((0, import_fs3.readFileSync)(pkgPath, "utf-8"));
     return pkg.version;
   } catch {
-    if (true) return "0.0.7";
+    if (true) return "0.0.8";
     return "unknown";
   }
 }
@@ -43350,7 +43353,7 @@ function getBuildCommit() {
     const dirty = (0, import_child_process.execSync)("git status --porcelain", opts2).toString().trim() ? "-dirty" : "";
     return hash + dirty;
   } catch {
-    if (true) return "f33a167";
+    if (true) return "ab53994";
     return "unknown";
   }
 }
@@ -43724,10 +43727,21 @@ If this PR spans multiple independent themes that could each be a separate, inde
     case 12 /* JUDGE_REVIEW */: {
       const reviewFindings = ctx.reviewObject ? countFindings(ctx.reviewObject) : { high: 0, medium: 0, low: 0 };
       console.log(`  Reviewer findings: ${reviewFindings.high}H / ${reviewFindings.medium}M / ${reviewFindings.low}L`);
+      const noFindings = reviewFindings.high === 0 && reviewFindings.medium === 0 && reviewFindings.low === 0;
+      if (noFindings && ctx.reviewNumber > 1) {
+        const lastReview = ctx.previousReviews?.[ctx.previousReviews.length - 1];
+        if (!lastReview || !markdownHasFindings(lastReview.body)) {
+          console.log("  Re-review with no findings; prior review already clean \u2014 nothing to post, skipping");
+          ctx.action = "NO_NEW_FINDINGS";
+          ctx.skipReason = "Re-review found no new findings (prior review already clean)";
+          return 14 /* SKIP */;
+        }
+        console.log("  Re-review cleared all findings \u2014 posting one resolution confirmation");
+      }
       if (!config.judge.model) {
         return 13 /* POST_REVIEW */;
       }
-      if (reviewFindings.high === 0 && reviewFindings.medium === 0 && reviewFindings.low === 0) {
+      if (noFindings) {
         console.log("  Skipping judge \u2014 no findings to validate");
         return 13 /* POST_REVIEW */;
       }
