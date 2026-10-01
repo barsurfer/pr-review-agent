@@ -38,7 +38,10 @@ export const config = {
     apiKey: required('ANTHROPIC_API_KEY'),
     model: optional('CLAUDE_MODEL', 'claude-haiku-4-5-20251001'),
     maxRetries: parseInt(optional('MAX_RETRIES', '3'), 10),
-    maxInputTokens: parseInt(optional('MAX_INPUT_TOKENS', '150000'), 10),
+    maxInputTokens: parseInt(optional('MAX_INPUT_TOKENS', '250000'), 10),
+    // Output-token cap for reviewer + judge. The Claude 5 family thinks by default and that
+    // counts against this budget, so too low a cap truncates (16k cut off Sonnet 5 mid-review).
+    maxTokens: parseInt(optional('MAX_OUTPUT_TOKENS', '32000'), 10),
   },
 
   judge: {

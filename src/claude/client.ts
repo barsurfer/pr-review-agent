@@ -7,7 +7,6 @@ import type { PRInfo, ReviewComment, CommentReply } from '../vcs/adapter.js'
 import type { FileContext } from '../context/fetcher.js'
 import type { LoadedPrompt } from '../prompt/loader.js'
 
-const MAX_TOKENS = 16000
 const REPLY_MAX_TOKENS = 4096
 
 export interface ClaudeUsage {
@@ -101,7 +100,7 @@ export const REVIEW_OUTPUT_SCHEMA = {
       required: ['resolved', 'still_open', 'new_findings'],
       additionalProperties: false,
     },
-    no_change: { type: 'boolean', description: 'Set true only on a re-review when nothing material changed (no findings resolved, none new, only cosmetic edits). Leave the other fields empty.' },
+    no_change: { type: 'boolean', description: 'Set true ONLY on a re-review (when a previous review is in context) and nothing material changed — no findings resolved, none new, only cosmetic edits. NEVER set it on a first review. Leave the other fields empty when true.' },
   },
   required: ['summary', 'findings', 'behavioral_diff', 'production_risk', 'unresolved_questions'],
   additionalProperties: false,
@@ -111,6 +110,7 @@ export async function runReview(
   apiKey: string,
   model: string,
   maxRetries: number,
+  maxTokens: number,
   prInfo: PRInfo,
   diff: string,
   fileContexts: FileContext[],
@@ -123,7 +123,7 @@ export async function runReview(
 
   console.log(`Sending request to Claude (${model}, maxRetries: ${maxRetries})...`)
   const { object, usage } = await createProvider(apiKey).completeStructured<ReviewObject>(
-    prompt.content, userMessage, REVIEW_OUTPUT_SCHEMA, { model, maxTokens: MAX_TOKENS, maxRetries },
+    prompt.content, userMessage, REVIEW_OUTPUT_SCHEMA, { model, maxTokens, maxRetries },
   )
   const text = renderReview(object)
 
@@ -198,6 +198,7 @@ export async function runJudge(
   apiKey: string,
   model: string,
   maxRetries: number,
+  maxTokens: number,
   diff: string,
   reviewText: string,
 ): Promise<JudgeResult> {
@@ -208,7 +209,7 @@ export async function runJudge(
 
   console.log(`Sending to judge (${model}, maxRetries: ${maxRetries})...`)
   const { object: parsed, usage } = await createProvider(apiKey).completeStructured<{ review_markdown: string; judge_notes: string; finding_scores: FindingScore[] }>(
-    getJudgePrompt(), userMessage, JUDGE_OUTPUT_SCHEMA, { model, maxTokens: MAX_TOKENS, maxRetries },
+    getJudgePrompt(), userMessage, JUDGE_OUTPUT_SCHEMA, { model, maxTokens, maxRetries },
   )
 
   console.log(`Judge received (${usage.input_tokens} in / ${usage.output_tokens} out tokens)`)

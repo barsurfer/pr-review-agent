@@ -34,6 +34,8 @@ program
   .option('--max-changed-files <n>', 'Skip review if more files changed (overrides MAX_CHANGED_FILES)')
   .option('--min-changed-lines <n>', 'Skip review if fewer lines changed (overrides MIN_CHANGED_LINES)')
   .option('--max-changed-lines <n>', 'Skip review if more lines changed (overrides MAX_CHANGED_LINES)')
+  .option('--max-input-tokens <n>', 'Max estimated input tokens before degrade/skip (overrides MAX_INPUT_TOKENS)')
+  .option('--max-output-tokens <n>', 'Max output tokens for reviewer + judge (overrides MAX_OUTPUT_TOKENS)')
   .parse(process.argv)
 
 const opts = program.opts<{
@@ -52,6 +54,8 @@ const opts = program.opts<{
   maxChangedFiles?: string
   minChangedLines?: string
   maxChangedLines?: string
+  maxInputTokens?: string
+  maxOutputTokens?: string
 }>()
 
 async function main(): Promise<void> {
@@ -145,6 +149,10 @@ async function main(): Promise<void> {
   if (opts.maxChangedFiles) config.thresholds.maxChangedFiles = parseInt(opts.maxChangedFiles, 10)
   if (opts.minChangedLines) config.thresholds.minChangedLines = parseInt(opts.minChangedLines, 10)
   if (opts.maxChangedLines) config.thresholds.maxChangedLines = parseInt(opts.maxChangedLines, 10)
+
+  // CLI flags override env var token limits
+  if (opts.maxInputTokens) config.anthropic.maxInputTokens = parseInt(opts.maxInputTokens, 10)
+  if (opts.maxOutputTokens) config.anthropic.maxTokens = parseInt(opts.maxOutputTokens, 10)
 
   // --force with no value defaults to 're-review'; --force clean or --force re-review explicit
   const forceMode = opts.force === true ? 're-review' : typeof opts.force === 'string' ? opts.force as 'clean' | 're-review' : 'off'

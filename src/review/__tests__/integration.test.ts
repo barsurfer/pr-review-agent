@@ -7,7 +7,7 @@ import type { VCSAdapter, PRInfo, ReviewComment, CommentReply } from '../../vcs/
 
 vi.mock('../../config.js', () => ({
   config: {
-    anthropic: { apiKey: 'test-key', model: 'claude-haiku-4-5-20251001', maxRetries: 1, maxInputTokens: 150000 },
+    anthropic: { apiKey: 'test-key', model: 'claude-haiku-4-5-20251001', maxRetries: 1, maxInputTokens: 150000, maxTokens: 32000 },
     judge: { model: '', maxRetries: 1 },
     agentIdentity: 'test-bot',
     reply: { maxComments: 3 },
@@ -313,9 +313,18 @@ describe('delta only excluded files → dedup skip', () => {
 // Scenario 8: Claude returns NO_CHANGE → skip (never post)
 // ===========================================================================
 
-describe('Claude returns NO_CHANGE → skip', () => {
+describe('Claude returns NO_CHANGE on a re-review → skip', () => {
+  // NO_CHANGE is only valid when a prior review exists — set up a re-review (old-commit footer
+  // + a delta diff) so CALL_CLAUDE is reached with previousReviews populated.
+  const reReviewAdapter = () => makeAdapter({
+    getPreviousReviewComments: vi.fn().mockResolvedValue([
+      { id: '200', body: '### Old' + footer(1, 'aabbcc112233'), createdOn: '2026-03-09T10:00:00Z' },
+    ]),
+    getCommitDiff: vi.fn().mockResolvedValue(DIFF),
+  })
+
   it('does not post NO_CHANGE as a comment', async () => {
-    const adapter = makeAdapter()
+    const adapter = reReviewAdapter()
     setupClaudeMocks('NO_CHANGE')
 
     const record = await review(adapter, '100', true)
@@ -325,12 +334,20 @@ describe('Claude returns NO_CHANGE → skip', () => {
   })
 
   it('does not post summary + standalone NO_CHANGE line (PR 8718 regression)', async () => {
-    const adapter = makeAdapter()
+    const adapter = reReviewAdapter()
     setupClaudeMocks('### Summary\n\nNo new findings. New commits contain only cosmetic changes.\n\nNO_CHANGE')
 
     const record = await review(adapter, '100', true)
 
     expect(record!.action).toBe('NO_CHANGE')
+    expect(adapter.postComment).not.toHaveBeenCalled()
+  })
+
+  it('errors instead of silently skipping when NO_CHANGE fires on a FIRST review (build 10233 bug)', async () => {
+    const adapter = makeAdapter()   // no previous reviews → first review
+    setupClaudeMocks('NO_CHANGE')
+
+    await expect(review(adapter, '100', false)).rejects.toThrow(/NO_CHANGE on a first review/i)
     expect(adapter.postComment).not.toHaveBeenCalled()
   })
 })
@@ -464,7 +481,7 @@ describe('MAX_FINDINGS cap', () => {
 
     await review(adapter, '100', true)
 
-    const promptArg = mockRunReview.mock.calls[0][6] as { content: string }
+    const promptArg = mockRunReview.mock.calls[0][7] as { content: string }
     expect(promptArg.content).toContain('FINDINGS LIMIT')
     expect(promptArg.content).toContain('at most 3')
   })
@@ -475,7 +492,7 @@ describe('MAX_FINDINGS cap', () => {
 
     await review(adapter, '100', true)
 
-    const promptArg = mockRunReview.mock.calls[0][6] as { content: string }
+    const promptArg = mockRunReview.mock.calls[0][7] as { content: string }
     expect(promptArg.content).not.toContain('FINDINGS LIMIT')
   })
 })

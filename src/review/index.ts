@@ -247,32 +247,46 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
     }
 
     case State.ESTIMATE_TOKENS: {
-      const estimate = () => {
-        const contextChars = ctx.fileContexts!.reduce((sum, f) => sum + f.content.length, 0)
-        const reviewChars = (ctx.previousReviews ?? []).reduce((sum, r) => sum + r.body.length, 0)
-        const replyChars = (ctx.replies ?? []).reduce((sum, r) => sum + r.body.length, 0)
-        return Math.ceil((ctx.prompt!.content.length + ctx.filteredDiff!.length + contextChars + reviewChars + replyChars) / 4)
+      const tok = (chars: number) => Math.ceil(chars / 4)
+      // Per-section sizes (~chars/4) so an over-budget run shows WHERE the tokens went —
+      // a huge diff vs many file contexts vs a long review/reply history — not just a total.
+      const sizes = () => {
+        const files = ctx.fileContexts!.reduce((sum, f) => sum + f.content.length, 0)
+        const reviews = (ctx.previousReviews ?? []).reduce((sum, r) => sum + r.body.length, 0)
+        const replies = (ctx.replies ?? []).reduce((sum, r) => sum + r.body.length, 0)
+        const prompt = ctx.prompt!.content.length
+        const diff = ctx.filteredDiff!.length
+        const delta = (ctx.deltaDiff ?? '').length
+        return {
+          total: tok(prompt + diff + delta + files + reviews + replies),
+          prompt: tok(prompt), diff: tok(diff), delta: tok(delta),
+          files: tok(files), filesN: ctx.fileContexts!.length,
+          reviews: tok(reviews), reviewsN: (ctx.previousReviews ?? []).length,
+          replies: tok(replies), repliesN: (ctx.replies ?? []).length,
+        }
       }
+      const fmt = (s: ReturnType<typeof sizes>) =>
+        `prompt ${s.prompt.toLocaleString()} | diff ${s.diff.toLocaleString()} | delta ${s.delta.toLocaleString()} | files ${s.files.toLocaleString()} (${s.filesN}) | prev_reviews ${s.reviews.toLocaleString()} (${s.reviewsN}) | replies ${s.replies.toLocaleString()} (${s.repliesN})`
 
-      let estimatedTokens = estimate()
+      let s = sizes()
       const max = config.anthropic.maxInputTokens
-      console.log(`  Estimated input: ~${estimatedTokens.toLocaleString()} tokens`)
+      console.log(`  Estimated input: ~${s.total.toLocaleString()} tokens  [${fmt(s)}]`)
 
       // Degrade before skipping: file contexts are the largest optional payload —
       // drop them and review diff-only rather than skip a large PR entirely.
-      if (max > 0 && estimatedTokens > max && ctx.fileContexts!.length > 0) {
-        console.warn(`  Over MAX_INPUT_TOKENS (${max.toLocaleString()}) — dropping ${ctx.fileContexts!.length} file context(s), reviewing diff-only`)
+      if (max > 0 && s.total > max && ctx.fileContexts!.length > 0) {
+        console.warn(`  Over MAX_INPUT_TOKENS (${max.toLocaleString()}) — file contexts are ${s.files.toLocaleString()} tokens across ${s.filesN} file(s); dropping them, reviewing diff-only`)
         ctx.fileContexts = []
         ctx.degraded = true
-        estimatedTokens = estimate()
-        console.log(`  Re-estimated input: ~${estimatedTokens.toLocaleString()} tokens (diff-only)`)
+        s = sizes()
+        console.log(`  Re-estimated input: ~${s.total.toLocaleString()} tokens (diff-only)  [${fmt(s)}]`)
       }
 
-      ctx.estimatedInputTokens = estimatedTokens
+      ctx.estimatedInputTokens = s.total
 
-      if (max > 0 && estimatedTokens > max) {
+      if (max > 0 && s.total > max) {
         ctx.action = 'SKIP'
-        ctx.skipReason = `Estimated input ~${estimatedTokens.toLocaleString()} tokens exceeds MAX_INPUT_TOKENS (${max.toLocaleString()}) even without file context`
+        ctx.skipReason = `Estimated input ~${s.total.toLocaleString()} tokens exceeds MAX_INPUT_TOKENS (${max.toLocaleString()}) even without file context — ${fmt(s)}`
         return State.SKIP
       }
       return State.CALL_CLAUDE
@@ -293,6 +307,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         config.anthropic.apiKey,
         config.anthropic.model,
         config.anthropic.maxRetries,
+        config.anthropic.maxTokens,
         ctx.prInfo!,
         ctx.filteredDiff!,
         ctx.fileContexts!,
@@ -312,6 +327,11 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
 
     case State.CHECK_NO_CHANGE: {
       if (isNoChange(ctx.reviewText!)) {
+        // NO_CHANGE is a re-review signal; on a first review it's a reviewer malfunction — error
+        // (CI retries) rather than silently skip a never-reviewed PR as "no changes since last".
+        if ((ctx.previousReviews?.length ?? 0) === 0) {
+          throw new Error('Reviewer returned NO_CHANGE on a first review — refusing to silently skip')
+        }
         console.log('  Reviewer: NO_CHANGE')
         ctx.action = 'NO_CHANGE'
         ctx.skipReason = 'No changes since last review'
@@ -338,6 +358,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         config.anthropic.apiKey,
         config.judge.model,
         config.judge.maxRetries,
+        config.anthropic.maxTokens,
         ctx.filteredDiff!,
         ctx.reviewText!,
       )
