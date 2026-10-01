@@ -7,7 +7,7 @@ import { loadPrompt } from '../prompt/loader.js'
 import { fetchContext } from '../context/fetcher.js'
 import { runReview, runCommentResponse, runJudge } from '../claude/client.js'
 import { filterDiff, countChangedLines, parseVerdictScore, isPathExcluded, scanTodos } from './parsers.js'
-import { buildReviewFooter, buildReplyFooter, stripPreviousFooter, stripDeltaStats, stripJudgeNotes, stripJenkinsMeta, stripPreamble, isNoChange, extractCommitHash, countFindings } from './formatter.js'
+import { buildReviewFooter, buildReplyFooter, stripPreviousFooter, stripDeltaStats, stripJudgeNotes, stripJenkinsMeta, stripPreamble, isNoChange, extractCommitHash, countFindings, markdownHasFindings } from './formatter.js'
 import { buildUsageRecord, logUsageRecord, getBuildCommit, getJobUrl } from './usage.js'
 import { State } from './types.js'
 import type { ReviewContext } from './types.js'
@@ -344,12 +344,28 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
     case State.JUDGE_REVIEW: {
       const reviewFindings = ctx.reviewObject ? countFindings(ctx.reviewObject) : { high: 0, medium: 0, low: 0 }
       console.log(`  Reviewer findings: ${reviewFindings.high}H / ${reviewFindings.medium}M / ${reviewFindings.low}L`)
+      const noFindings = reviewFindings.high === 0 && reviewFindings.medium === 0 && reviewFindings.low === 0
+
+      // Noise gate: a re-review that flags nothing is worth one "your fixes landed"
+      // confirmation — only when the last posted review had findings. If the prior review
+      // was already clean this is a repeat "still clean" comment, so skip. Suppressed
+      // reviews never enter previousReviews, so the chain self-limits to one confirmation.
+      if (noFindings && ctx.reviewNumber > 1) {
+        const lastReview = ctx.previousReviews?.[ctx.previousReviews.length - 1]
+        if (!lastReview || !markdownHasFindings(lastReview.body)) {
+          console.log('  Re-review with no findings; prior review already clean — nothing to post, skipping')
+          ctx.action = 'NO_NEW_FINDINGS'
+          ctx.skipReason = 'Re-review found no new findings (prior review already clean)'
+          return State.SKIP
+        }
+        console.log('  Re-review cleared all findings — posting one resolution confirmation')
+      }
 
       if (!config.judge.model) {
         return State.POST_REVIEW
       }
 
-      if (reviewFindings.high === 0 && reviewFindings.medium === 0 && reviewFindings.low === 0) {
+      if (noFindings) {
         console.log('  Skipping judge — no findings to validate')
         return State.POST_REVIEW
       }

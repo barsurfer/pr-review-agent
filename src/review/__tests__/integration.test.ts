@@ -262,7 +262,7 @@ describe('new commit → RE_REVIEW', () => {
   it('produces delta review with discussion', async () => {
     const adapter = makeAdapter({
       getPreviousReviewComments: vi.fn().mockResolvedValue([
-        { id: '200', body: '### Old' + footer(1, 'aabbcc112233'), createdOn: '2026-03-09T10:00:00Z' },
+        { id: '200', body: '### Summary\nx\n\n### Findings\n- **MEDIUM – Prior issue** (`a.ts:1`)\n  desc' + footer(1, 'aabbcc112233'), createdOn: '2026-03-09T10:00:00Z' },
       ]),
       getRepliesToReviewComments: vi.fn().mockResolvedValue({
         replies: [{ id: '300', parentId: '200', author: 'Vadim', body: 'Fixed', createdOn: '2026-03-09T12:00:00Z' }],
@@ -270,6 +270,7 @@ describe('new commit → RE_REVIEW', () => {
       }),
       getCommitDiff: vi.fn().mockResolvedValue(DIFF),
     })
+    // 0 findings now, but the prior review flagged one → posts a single resolution confirmation
     setupClaudeMocks(undefined, reviewWith([], { delta_stats: { resolved: 1, still_open: 0, new_findings: 0 } }))
 
     const record = await review(adapter, '100', true)
@@ -280,6 +281,30 @@ describe('new commit → RE_REVIEW', () => {
     // delta + touch_rate now come from the reviewer object, not a DELTA_STATS markdown comment
     expect(record!.delta).toMatchObject({ resolved: 1, still_open: 0, new_findings: 0 })
     expect(record!.touch_rate).toBe(100)
+  })
+})
+
+// ===========================================================================
+// Scenario 6b: Re-review clears to 0 findings AND prior review was already clean →
+// suppress the repeat "still clean" comment (PR 133 noise bug)
+// ===========================================================================
+
+describe('re-review, no findings, prior review already clean → NO_NEW_FINDINGS (not posted)', () => {
+  it('does not post a repeat "nothing to report" comment', async () => {
+    const adapter = makeAdapter({
+      getPreviousReviewComments: vi.fn().mockResolvedValue([
+        { id: '200', body: '### Summary\nAll good.\n\n### Findings\nNo findings.' + footer(1, 'aabbcc112233'), createdOn: '2026-03-09T10:00:00Z' },
+      ]),
+      getCommitDiff: vi.fn().mockResolvedValue(DIFF),
+    })
+    setupClaudeMocks(undefined, reviewWith([]))
+
+    const record = await review(adapter, '100', false)
+
+    expect(record!.action).toBe('NO_NEW_FINDINGS')
+    expect(record!.review_number).toBe(2)
+    expect(mockRunReview).toHaveBeenCalledTimes(1)
+    expect(adapter.postComment).not.toHaveBeenCalled()
   })
 })
 
@@ -688,7 +713,7 @@ describe('--force re-review → bypass dedup with context', () => {
   it('re-reviews same commit with discussion', async () => {
     const adapter = makeAdapter({
       getPreviousReviewComments: vi.fn().mockResolvedValue([
-        { id: '200', body: '### Review' + footer(1, COMMIT_A), createdOn: '2026-03-10T10:00:00Z' },
+        { id: '200', body: '### Summary\nx\n\n### Findings\n- **MEDIUM – Prior issue** (`a.ts:1`)\n  desc' + footer(1, COMMIT_A), createdOn: '2026-03-10T10:00:00Z' },
       ]),
       getRepliesToReviewComments: vi.fn().mockResolvedValue({
         replies: [{ id: '300', parentId: '200', author: 'Vadim', body: 'False positive', createdOn: '2026-03-10T12:00:00Z' }],

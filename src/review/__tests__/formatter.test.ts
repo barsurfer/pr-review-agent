@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildReviewFooter, buildReplyFooter, stripPreviousFooter, stripDeltaStats, stripJudgeNotes, stripJenkinsMeta, stripPreamble, isNoChange, extractCommitHash, hasReviewFooter, hasReplyFooter, renderReview, countFindings, type ReviewObject } from '../formatter.js'
+import { buildReviewFooter, buildReplyFooter, stripPreviousFooter, stripDeltaStats, stripJudgeNotes, stripJenkinsMeta, stripPreamble, isNoChange, extractCommitHash, hasReviewFooter, hasReplyFooter, renderReview, countFindings, markdownHasFindings, type ReviewObject } from '../formatter.js'
 import { parseFindings } from '../parsers.js'
 
 // ---------------------------------------------------------------------------
@@ -102,6 +102,26 @@ describe('isNoChange', () => {
 
   it('rejects quoted NO_CHANGE line', () => {
     expect(isNoChange('> NO_CHANGE\nsome reply text')).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// markdownHasFindings — did a prior posted review flag anything?
+// ---------------------------------------------------------------------------
+
+describe('markdownHasFindings', () => {
+  it('detects a finding bullet of any severity', () => {
+    expect(markdownHasFindings('### Findings\n- **HIGH – boom** (`a.ts:3`)\n  crashes')).toBe(true)
+    expect(markdownHasFindings('### Findings\n- **MEDIUM – x**')).toBe(true)
+    expect(markdownHasFindings('### Findings\n- **LOW – y**')).toBe(true)
+  })
+
+  it('returns false for a clean "No findings." review', () => {
+    expect(markdownHasFindings('### Findings\nNo findings.\n\n### Behavioral Diff\n- renamed a tag')).toBe(false)
+  })
+
+  it('does not treat behavioral-diff or TODO bullets as findings', () => {
+    expect(markdownHasFindings('### Behavioral Diff\n- Added retry logic\n\n### TODOs Introduced\n- `a.ts:4` — TODO fix')).toBe(false)
   })
 })
 
