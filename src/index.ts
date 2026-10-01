@@ -36,6 +36,8 @@ program
   .option('--max-changed-lines <n>', 'Skip review if more lines changed (overrides MAX_CHANGED_LINES)')
   .option('--max-input-tokens <n>', 'Max estimated input tokens before degrade/skip (overrides MAX_INPUT_TOKENS)')
   .option('--max-output-tokens <n>', 'Max output tokens for reviewer + judge (overrides MAX_OUTPUT_TOKENS)')
+  .option('--effort <level>', 'Reviewer thinking effort: low|medium|high|xhigh|max (overrides REVIEW_EFFORT; ignored by models without effort)')
+  .option('--judge-effort <level>', 'Judge thinking effort (overrides JUDGE_EFFORT)')
   .parse(process.argv)
 
 const opts = program.opts<{
@@ -56,6 +58,8 @@ const opts = program.opts<{
   maxChangedLines?: string
   maxInputTokens?: string
   maxOutputTokens?: string
+  effort?: string
+  judgeEffort?: string
 }>()
 
 async function main(): Promise<void> {
@@ -153,6 +157,10 @@ async function main(): Promise<void> {
   // CLI flags override env var token limits
   if (opts.maxInputTokens) config.anthropic.maxInputTokens = parseInt(opts.maxInputTokens, 10)
   if (opts.maxOutputTokens) config.anthropic.maxTokens = parseInt(opts.maxOutputTokens, 10)
+
+  // CLI flags override env var effort
+  if (opts.effort) config.review.effort = opts.effort
+  if (opts.judgeEffort) config.judge.effort = opts.judgeEffort
 
   // --force with no value defaults to 're-review'; --force clean or --force re-review explicit
   const forceMode = opts.force === true ? 're-review' : typeof opts.force === 'string' ? opts.force as 'clean' | 're-review' : 'off'

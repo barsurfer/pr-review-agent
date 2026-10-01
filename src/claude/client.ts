@@ -111,6 +111,7 @@ export async function runReview(
   model: string,
   maxRetries: number,
   maxTokens: number,
+  effort: string,
   prInfo: PRInfo,
   diff: string,
   fileContexts: FileContext[],
@@ -123,7 +124,7 @@ export async function runReview(
 
   console.log(`Sending request to Claude (${model}, maxRetries: ${maxRetries})...`)
   const { object, usage } = await createProvider(apiKey).completeStructured<ReviewObject>(
-    prompt.content, userMessage, REVIEW_OUTPUT_SCHEMA, { model, maxTokens, maxRetries },
+    prompt.content, userMessage, REVIEW_OUTPUT_SCHEMA, { model, maxTokens, maxRetries, effort: effort || undefined },
   )
   const text = renderReview(object)
 
@@ -199,6 +200,7 @@ export async function runJudge(
   model: string,
   maxRetries: number,
   maxTokens: number,
+  effort: string,
   diff: string,
   reviewText: string,
 ): Promise<JudgeResult> {
@@ -209,7 +211,7 @@ export async function runJudge(
 
   console.log(`Sending to judge (${model}, maxRetries: ${maxRetries})...`)
   const { object: parsed, usage } = await createProvider(apiKey).completeStructured<{ review_markdown: string; judge_notes: string; finding_scores: FindingScore[] }>(
-    getJudgePrompt(), userMessage, JUDGE_OUTPUT_SCHEMA, { model, maxTokens, maxRetries },
+    getJudgePrompt(), userMessage, JUDGE_OUTPUT_SCHEMA, { model, maxTokens, maxRetries, effort: effort || undefined },
   )
 
   console.log(`Judge received (${usage.input_tokens} in / ${usage.output_tokens} out tokens)`)

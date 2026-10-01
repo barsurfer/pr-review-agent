@@ -8,6 +8,7 @@ export interface LLMOptions {
   model: string
   maxTokens: number
   maxRetries: number
+  effort?: string   // output_config.effort (low|medium|high|xhigh|max); unset = model default
 }
 
 export interface LLMProvider {
@@ -22,21 +23,13 @@ class AnthropicProvider implements LLMProvider {
     this.client = new Anthropic({ apiKey })
   }
 
-  // Stream + finalMessage, not create: the SDK rejects a non-streaming request whose max_tokens
-  // could exceed the 10-min timeout — which the Claude 5 family hits since it thinks by default.
   async complete(system: string, user: string, opts: LLMOptions): Promise<{ text: string; usage: ClaudeUsage }> {
-    const response = await this.client.messages.stream(
-      { model: opts.model, max_tokens: opts.maxTokens, system, messages: [{ role: 'user', content: user }] },
-      { maxRetries: opts.maxRetries },
-    ).finalMessage()
+    const response = await this.streamFinal({ model: opts.model, max_tokens: opts.maxTokens, system, messages: [{ role: 'user', content: user }] }, opts)
     return { text: textOf(response, opts.maxTokens), usage: mapUsage(response.usage) }
   }
 
   async completeStructured<T>(system: string, user: string, schema: Record<string, unknown>, opts: LLMOptions): Promise<{ object: T; usage: ClaudeUsage }> {
-    const response = await this.client.messages.stream(
-      { model: opts.model, max_tokens: opts.maxTokens, system, output_config: { format: { type: 'json_schema', schema } }, messages: [{ role: 'user', content: user }] },
-      { maxRetries: opts.maxRetries },
-    ).finalMessage()
+    const response = await this.streamFinal({ model: opts.model, max_tokens: opts.maxTokens, system, output_config: { format: { type: 'json_schema', schema } }, messages: [{ role: 'user', content: user }] }, opts)
     const text = textOf(response, opts.maxTokens)
     let object: T
     try {
@@ -49,6 +42,24 @@ class AnthropicProvider implements LLMProvider {
     const missing = missingRequired(object, schema)
     if (missing.length) throw new Error(`Structured output missing required field(s): ${missing.join(', ')}`)
     return { object, usage: mapUsage(response.usage) }
+  }
+
+  // Stream + finalMessage (not create): the SDK rejects a non-streaming request whose max_tokens
+  // could exceed the 10-min timeout, which the Claude 5 family hits since it thinks by default.
+  // effort (when set) rides output_config; models that don't support it (e.g. Haiku 4.5) 400, so
+  // catch that and retry once without it rather than fail the review.
+  private streamFinal(params: Record<string, unknown>, opts: LLMOptions): Promise<Anthropic.Message> {
+    const run = (p: Record<string, unknown>): Promise<Anthropic.Message> =>
+      this.client.messages.stream(p as Parameters<typeof this.client.messages.stream>[0], { maxRetries: opts.maxRetries }).finalMessage()
+    if (!opts.effort) return run(params)
+    const withEffort = { ...params, output_config: { ...((params.output_config as Record<string, unknown>) ?? {}), effort: opts.effort } }
+    return run(withEffort).catch((err: unknown) => {
+      if (err instanceof Anthropic.BadRequestError) {
+        console.warn(`  effort "${opts.effort}" not accepted by ${opts.model} — retrying without it`)
+        return run(params)
+      }
+      throw err
+    })
   }
 }
 

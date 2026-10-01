@@ -8,10 +8,10 @@ import type { VCSAdapter, PRInfo, ReviewComment, CommentReply } from '../../vcs/
 vi.mock('../../config.js', () => ({
   config: {
     anthropic: { apiKey: 'test-key', model: 'claude-haiku-4-5-20251001', maxRetries: 1, maxInputTokens: 150000, maxTokens: 32000 },
-    judge: { model: '', maxRetries: 1 },
+    judge: { model: '', maxRetries: 1, effort: '' },
     agentIdentity: 'test-bot',
     reply: { maxComments: 3 },
-    review: { maxFindings: 0, splitCheck: false, todoScan: true },
+    review: { maxFindings: 0, splitCheck: false, todoScan: true, effort: '' },
     context: { maxFiles: 20, maxFileLines: 500 },
     skipSourceBranches: ['main', 'master', 'release/*', 'hotfix/*'],
     skipTargetBranches: ['main', 'master'],
@@ -119,7 +119,7 @@ beforeEach(() => {
   cfg.judge.model = ''
   cfg.reply.maxComments = 3
   cfg.anthropic.maxInputTokens = 150000
-  cfg.review = { maxFindings: 0, splitCheck: false, todoScan: true }
+  cfg.review = { maxFindings: 0, splitCheck: false, todoScan: true, effort: '' }
   cfg.skipSourceBranches = ['main', 'master', 'release/*', 'hotfix/*']
   cfg.skipTargetBranches = ['main', 'master']
   cfg.diffExcludePatterns = ['*.lock', 'package-lock.json', '*.spec.ts']
@@ -481,7 +481,7 @@ describe('MAX_FINDINGS cap', () => {
 
     await review(adapter, '100', true)
 
-    const promptArg = mockRunReview.mock.calls[0][7] as { content: string }
+    const promptArg = mockRunReview.mock.calls[0][8] as { content: string }
     expect(promptArg.content).toContain('FINDINGS LIMIT')
     expect(promptArg.content).toContain('at most 3')
   })
@@ -492,7 +492,7 @@ describe('MAX_FINDINGS cap', () => {
 
     await review(adapter, '100', true)
 
-    const promptArg = mockRunReview.mock.calls[0][7] as { content: string }
+    const promptArg = mockRunReview.mock.calls[0][8] as { content: string }
     expect(promptArg.content).not.toContain('FINDINGS LIMIT')
   })
 })

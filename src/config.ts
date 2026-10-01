@@ -47,6 +47,7 @@ export const config = {
   judge: {
     model: optional('JUDGING_MODEL', 'claude-sonnet-5'),   // on by default; set empty to disable
     maxRetries: parseInt(optional('MAX_RETRIES', '3'), 10),
+    effort: optional('JUDGE_EFFORT', ''),   // output_config.effort; empty = model default (unsent)
   },
 
   agentIdentity: process.env.AGENT_IDENTITY || process.env.BITBUCKET_USERNAME || 'Claude',
@@ -59,6 +60,7 @@ export const config = {
     maxFindings: parseInt(optional('MAX_FINDINGS', '0'), 10),   // 0 = unlimited
     splitCheck: optional('ENABLE_SPLIT_CHECK', 'true') !== 'false',
     todoScan: optional('ENABLE_TODO_SCAN', 'true') !== 'false',
+    effort: optional('REVIEW_EFFORT', ''),   // output_config.effort; empty = model default (unsent)
   },
 
   context: {

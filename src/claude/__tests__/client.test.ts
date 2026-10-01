@@ -30,13 +30,13 @@ describe('runReview (structured output)', () => {
     }
     completeStructured.mockResolvedValue({ object, usage })
 
-    const res = await runReview('key', 'model', 3, 16000, prInfo, 'DIFF', [], prompt, [])
+    const res = await runReview('key', 'model', 3, 16000, 'high', prInfo, 'DIFF', [], prompt, [])
 
     expect(completeStructured).toHaveBeenCalledOnce()
     const [system, , schema, opts] = completeStructured.mock.calls[0]
     expect(system).toBe('SYSTEM')
     expect((schema as { properties: Record<string, unknown> }).properties.findings).toBeDefined()
-    expect(opts).toMatchObject({ model: 'model', maxTokens: 16000, maxRetries: 3 })
+    expect(opts).toMatchObject({ model: 'model', maxTokens: 16000, maxRetries: 3, effort: 'high' })
     expect(res.text).toContain('### Summary\nRisky.')
     expect(res.text).toContain('- **HIGH – boom** (`a.ts:3`)')
     expect(res.text).not.toContain('DELTA_STATS')   // delta rides the object, not the markdown
@@ -50,7 +50,7 @@ describe('runReview (structured output)', () => {
       object: { summary: '', findings: [], behavioral_diff: [], production_risk: [], unresolved_questions: [], no_change: true },
       usage,
     })
-    const res = await runReview('key', 'model', 3, 16000, prInfo, 'DIFF', [], prompt, [])
+    const res = await runReview('key', 'model', 3, 16000, 'high', prInfo, 'DIFF', [], prompt, [])
     expect(res.text).toBe('NO_CHANGE')
   })
 })
@@ -68,7 +68,7 @@ describe('runJudge (structured output)', () => {
       usage,
     })
 
-    const res = await runJudge('key', 'model', 3, 16000, 'DIFF', '### Summary\nreviewer text')
+    const res = await runJudge('key', 'model', 3, 16000, '', 'DIFF', '### Summary\nreviewer text')
 
     expect(res.text).toBe('### Summary\nok\n\n### Merge Confidence: 80%')
     expect(res.notes).toBe('dropped a LOW')

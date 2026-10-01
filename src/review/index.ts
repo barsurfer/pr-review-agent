@@ -308,6 +308,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         config.anthropic.model,
         config.anthropic.maxRetries,
         config.anthropic.maxTokens,
+        config.review.effort,
         ctx.prInfo!,
         ctx.filteredDiff!,
         ctx.fileContexts!,
@@ -359,6 +360,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         config.judge.model,
         config.judge.maxRetries,
         config.anthropic.maxTokens,
+        config.judge.effort,
         ctx.filteredDiff!,
         ctx.reviewText!,
       )
