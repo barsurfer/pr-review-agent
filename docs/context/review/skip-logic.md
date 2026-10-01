@@ -76,7 +76,7 @@ A PR whose diff is 100% excluded files exits earlier, in `FETCH_DIFF`, with
 | `MAX_CHANGED_FILES` | `200` | Skip if PR has more files |
 | `MIN_CHANGED_LINES` | `0` (disabled) | Skip if PR has fewer lines |
 | `MAX_CHANGED_LINES` | `3000` | Skip if PR has more lines |
-| `MAX_INPUT_TOKENS` | `150000` | Skip if estimated input tokens exceed this |
+| `MAX_INPUT_TOKENS` | `250000` | Skip if estimated input tokens exceed this (after dropping file contexts) |
 
 All can be overridden via CLI flags (`--min-changed-files`, etc.). `0` disables the threshold.
 

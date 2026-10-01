@@ -26,7 +26,7 @@ credentials in source code or commit them to version control.**
 | `CLAUDE_MODEL` | `claude-haiku-4-5-20251001` | Claude model ID for reviews (a cheap reviewer paired with a stronger `JUDGING_MODEL` gives the generator-verifier pattern) |
 | `LLM_PROVIDER` | `anthropic` | Model backend behind the reviewer/judge. Only `anthropic` is implemented; the `LLMProvider` seam (`src/llm/provider.ts`) exists so a second provider is a new impl, not a re-plumb. Default: `anthropic` |
 | `MAX_RETRIES` | `3` | Max retries on 429/5xx errors (SDK built-in exponential backoff). Default: `3` |
-| `MAX_INPUT_TOKENS` | `150000` | If estimated input exceeds this, first drop file contexts and review diff-only; skip only if the diff alone still exceeds it (0 = disabled) |
+| `MAX_INPUT_TOKENS` | `250000` | If estimated input exceeds this, first drop file contexts and review diff-only; skip only if the diff alone still exceeds it (0 = disabled). `ESTIMATE_TOKENS` logs a per-section breakdown (prompt / diff / delta / file-contexts / prev-reviews / replies) so you can see what drove the size |
 | `MAX_CONTEXT_FILES` | `20` | Max number of files to fetch full content for |
 | `MAX_FILE_LINES` | `500` | Files over this line count get diff-only (no full content) |
 | `MIN_CHANGED_FILES` | `0` | Skip review if PR has fewer reviewable files (0 = disabled) |
@@ -132,7 +132,7 @@ ANTHROPIC_API_KEY=
 CLAUDE_MODEL=claude-haiku-4-5-20251001
 # LLM_PROVIDER=anthropic   # model backend; only 'anthropic' implemented
 MAX_RETRIES=3
-# MAX_INPUT_TOKENS=150000
+# MAX_INPUT_TOKENS=250000
 
 # Agent identity (defaults to BITBUCKET_USERNAME, then 'Claude')
 # AGENT_IDENTITY=

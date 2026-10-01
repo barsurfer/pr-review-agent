@@ -63,8 +63,9 @@ Complexity: medium-high. Language-specific import parsing required.
 ### ~~Token Estimation Before API Call~~ ✅ Implemented
 
 > **Completed.** After building the payload, the agent estimates input tokens
-> (`total chars / 4`) and logs the estimate. `MAX_INPUT_TOKENS` defaults to
-> `150000` — reviews exceeding the estimate are skipped. Set to `0` to disable.
+> (`total chars / 4`) and logs the estimate with a per-section breakdown.
+> `MAX_INPUT_TOKENS` defaults to `250000` — reviews exceeding the estimate are
+> skipped (after dropping file contexts). Set to `0` to disable.
 > The usage record includes `tokens.estimated_input` alongside actual
 > `tokens.input` for accuracy tracking.
 

@@ -54,6 +54,8 @@ High-churn files are fetched first. Low-churn files fill remaining capacity up t
 
 If the estimated input exceeds `MAX_INPUT_TOKENS` in `ESTIMATE_TOKENS`, the agent **drops the file contexts** (the largest optional payload) and reviews **diff-only** rather than skipping the PR — the usage record's `degraded` flag records this. It only skips outright if the diff alone still exceeds the budget.
 
+`ESTIMATE_TOKENS` always logs a **per-section token breakdown** (`prompt / diff / delta / files ×N / prev_reviews ×N / replies ×N`, ~chars/4) so an over-budget run shows which section drove the size — a large diff vs many file contexts vs a long review/reply history. The breakdown is also included in the skip reason (so `results.jsonl` records the why).
+
 ### Limits
 
 | Env var | Default | Purpose |
