@@ -1137,6 +1137,28 @@ describe('token-budget degradation', () => {
     expect(record!.degraded).toBe(true)              // it tried degrading first
     expect(mockRunReview).not.toHaveBeenCalled()
   })
+
+  it('drops a delta larger than the full PR diff (branch merged its target) and reviews the full diff', async () => {
+    const mergeInflatedDelta = [
+      'diff --git a/src/merged.ts b/src/merged.ts',
+      '--- a/src/merged.ts',
+      '+++ b/src/merged.ts',
+      '@@ -1,1 +1,501 @@',
+      ...Array.from({ length: 500 }, (_, i) => `+merged develop line ${i}`),
+    ].join('\n')
+    const adapter = makeAdapter({
+      getPreviousReviewComments: vi.fn().mockResolvedValue([
+        { id: '200', body: '### Review' + footer(1, 'aabbcc112233'), createdOn: '2026-03-09T10:00:00Z' },
+      ]),
+      getCommitDiff: vi.fn().mockResolvedValue(mergeInflatedDelta),   // delta >> the small full PR diff
+    })
+    setupClaudeMocks(undefined, reviewWith([{ severity: 'LOW', title: 'x', body: 'y' }]))
+
+    const record = await review(adapter, '100', true)
+
+    expect(record!.action).toBe('RE_REVIEW')               // reviewed, not skipped
+    expect(mockRunReview.mock.calls[0].at(-1)).toBe('')    // merge-inflated delta dropped before the model call
+  })
 })
 
 // ===========================================================================

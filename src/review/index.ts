@@ -278,6 +278,14 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       const max = config.anthropic.maxInputTokens
       console.log(`  Estimated input: ~${s.total.toLocaleString()} tokens  [${fmt(s)}]`)
 
+      // A delta larger than the full PR diff means the branch merged its target in (commit-to-commit delta captured the merge) — drop it and review the bounded full diff.
+      if (ctx.deltaDiff && s.delta > s.diff) {
+        console.warn(`  Delta (${s.delta.toLocaleString()} tok) exceeds full PR diff (${s.diff.toLocaleString()} tok) — likely a merged target branch; dropping delta, reviewing full diff`)
+        ctx.deltaDiff = ''
+        s = sizes()
+        console.log(`  Re-estimated input: ~${s.total.toLocaleString()} tokens (full diff, no delta)  [${fmt(s)}]`)
+      }
+
       // Degrade before skipping: file contexts are the largest optional payload —
       // drop them and review diff-only rather than skip a large PR entirely.
       if (max > 0 && s.total > max && ctx.fileContexts!.length > 0) {
