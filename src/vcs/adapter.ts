@@ -17,6 +17,7 @@ export interface ReviewComment {
   id: string
   body: string
   createdOn: string
+  resolved?: boolean
 }
 
 export interface CommentReply {

@@ -146,6 +146,7 @@ export class BitbucketAdapter implements VCSAdapter {
             id: String(c.id),
             body,
             createdOn: c.created_on,
+            resolved: c.resolution != null,   // a human marked this review thread resolved
           })
         }
       }

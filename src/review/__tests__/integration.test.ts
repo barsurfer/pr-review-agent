@@ -299,6 +299,32 @@ describe('stale reply older than latest review → DEDUP_SKIP', () => {
 })
 
 // ===========================================================================
+// Scenario 4b: A human-RESOLVED later review must not supersede an earlier unanswered
+// dev reply — the reply is still answered (PR 579: a resolved re-review buried the reply)
+// ===========================================================================
+
+describe('resolved later review does not supersede an unanswered dev reply', () => {
+  it('answers the dev reply even though a newer review exists, because that review is resolved', async () => {
+    const adapter = makeAdapter({
+      getPreviousReviewComments: vi.fn().mockResolvedValue([
+        { id: '200', body: '### Review' + footer(1, 'aabbcc112233'), createdOn: '2026-03-09T10:00:00Z' },
+        { id: '201', body: '### Delta' + footer(2, COMMIT_A), createdOn: '2026-03-09T14:00:00Z', resolved: true },
+      ]),
+      getRepliesToReviewComments: vi.fn().mockResolvedValue({
+        replies: [{ id: '300', parentId: '200', author: 'Fernando', body: 'Fixed in d4f2b43e.', createdOn: '2026-03-09T12:00:00Z' }],
+        agentReplyCount: 0,
+      }),
+    })
+
+    const record = await review(adapter, '100', false)
+
+    expect(record!.action).toBe('REPLY')
+    expect(adapter.postReply).toHaveBeenCalled()
+    expect(adapter.postComment).not.toHaveBeenCalled()
+  })
+})
+
+// ===========================================================================
 // Scenario 5: Reply limit reached → DEDUP_SKIP
 // ===========================================================================
 
@@ -381,13 +407,10 @@ describe('new commit → RE_REVIEW', () => {
       getPreviousReviewComments: vi.fn().mockResolvedValue([
         { id: '200', body: '### Summary\nx\n\n### Findings\n- **MEDIUM – Prior issue** (`a.ts:1`)\n  desc' + footer(1, 'aabbcc112233'), createdOn: '2026-03-09T10:00:00Z' },
       ]),
-      getRepliesToReviewComments: vi.fn().mockResolvedValue({
-        replies: [{ id: '300', parentId: '200', author: 'Vadim', body: 'Fixed', createdOn: '2026-03-09T12:00:00Z' }],
-        agentReplyCount: 0,
-      }),
+      getRepliesToReviewComments: vi.fn().mockResolvedValue({ replies: [], agentReplyCount: 0 }),
       getCommitDiff: vi.fn().mockResolvedValue(DIFF),
     })
-    // Posts for two independent gate reasons (prior flagged + unanswered dev reply); Scenario 6e isolates each
+    // Prior review flagged a finding, now resolved, no open discussion → one delta confirmation (RE_REVIEW)
     setupClaudeMocks(undefined, reviewWith([], { delta_stats: { resolved: 1, still_open: 0, new_findings: 0 } }))
 
     const record = await review(adapter, '100', true)
@@ -427,11 +450,11 @@ describe('re-review, no findings, prior review already clean → NO_NEW_FINDINGS
 
 // ===========================================================================
 // Scenario 6c: Re-review with 0 findings + prior "No findings" (open finding in prose),
-// but a dev replied after the last review → must post, not suppress (PR 579 regression)
+// but a dev replied after the last review → answer the reply in-thread (PR 579 regression)
 // ===========================================================================
 
-describe('re-review, no findings, prior clean, BUT unanswered dev reply → posts (not swallowed)', () => {
-  it('acknowledges an open developer comment instead of skipping', async () => {
+describe('re-review, no findings, prior clean, BUT unanswered dev reply → answers in-thread (not re-reviewed)', () => {
+  it('answers the developer with a threaded reply instead of posting another review', async () => {
     const adapter = makeAdapter({
       getPreviousReviewComments: vi.fn().mockResolvedValue([
         { id: '200', body: '### Summary\nprior MEDIUM still open (described in prose)\n\n### Findings\nNo findings.' + footer(1, 'aabbcc112233'), createdOn: '2026-03-09T10:00:00Z' },
@@ -446,8 +469,9 @@ describe('re-review, no findings, prior clean, BUT unanswered dev reply → post
 
     const record = await review(adapter, '100', false)
 
-    expect(record!.action).toBe('RE_REVIEW')
-    expect(adapter.postComment).toHaveBeenCalled()
+    expect(record!.action).toBe('REPLY')
+    expect(adapter.postReply).toHaveBeenCalled()
+    expect(adapter.postComment).not.toHaveBeenCalled()
   })
 })
 
@@ -484,12 +508,16 @@ describe('NO_NEW_FINDINGS gate — full truth table', () => {
       [0, 1].flatMap(stillOpen =>
         (['none', 'unanswered'] as const).map(reply => ({
           findings, prior, stillOpen, reply,
-          expected: findings === 0 && prior === 'clean' && stillOpen === 0 && reply === 'none' ? 'suppress' : 'post',
+          expected: findings === 0 && reply === 'unanswered' ? 'reply'
+            : findings === 0 && prior === 'clean' && stillOpen === 0 ? 'suppress'
+            : 'post',
         })))))
 
-  it('covers all 16 combinations, exactly one of which suppresses', () => {
+  it('covers all 16 combinations: 1 suppress, 4 reply, 11 post', () => {
     expect(cases).toHaveLength(16)
     expect(cases.filter(c => c.expected === 'suppress')).toHaveLength(1)
+    expect(cases.filter(c => c.expected === 'reply')).toHaveLength(4)
+    expect(cases.filter(c => c.expected === 'post')).toHaveLength(11)
   })
 
   it.each(cases)('findings=$findings prior=$prior still_open=$stillOpen reply=$reply → $expected', async ({ findings, prior, stillOpen, reply, expected }) => {
@@ -505,6 +533,10 @@ describe('NO_NEW_FINDINGS gate — full truth table', () => {
     expect(mockRunReview).toHaveBeenCalledTimes(1)
     if (expected === 'suppress') {
       expect(record!.action).toBe('NO_NEW_FINDINGS')
+      expect(adapter.postComment).not.toHaveBeenCalled()
+    } else if (expected === 'reply') {
+      expect(record!.action).toBe('REPLY')
+      expect(adapter.postReply).toHaveBeenCalledTimes(1)
       expect(adapter.postComment).not.toHaveBeenCalled()
     } else {
       expect(record!.action).toBe('RE_REVIEW')
@@ -523,7 +555,11 @@ describe('NO_NEW_FINDINGS gate — open-discussion detection', () => {
     const adapter = reReviewAdapter(CLEAN_PRIOR, replies)
     mockReviewer(reviewWith([], { delta_stats: { resolved: 0, still_open: 0, new_findings: 0 } }))
     const record = await review(adapter, '100', false)
-    return { record: record!, posted: vi.mocked(adapter.postComment).mock.calls.length }
+    return {
+      record: record!,
+      posted: vi.mocked(adapter.postComment).mock.calls.length,
+      replied: vi.mocked(adapter.postReply).mock.calls.length,
+    }
   }
 
   it('suppresses when the only dev reply predates the last review (stale thread)', async () => {
@@ -547,12 +583,13 @@ describe('NO_NEW_FINDINGS gate — open-discussion detection', () => {
     expect(posted).toBe(0)
   })
 
-  it('posts when the dev replied again after our last agent reply', async () => {
-    const { record, posted } = await gateWith([
+  it('answers in-thread when the dev replied again after our last agent reply', async () => {
+    const { record, posted, replied } = await gateWith([
       devReply('2026-03-09T11:00:00Z'), agentReply('2026-03-09T11:30:00Z'), devReply('2026-03-09T12:00:00Z'),
     ])
-    expect(record.action).toBe('RE_REVIEW')
-    expect(posted).toBe(1)
+    expect(record.action).toBe('REPLY')
+    expect(replied).toBe(1)
+    expect(posted).toBe(0)
   })
 })
 

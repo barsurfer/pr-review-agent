@@ -171,9 +171,12 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       const reviewIds = ctx.previousReviews!.map(r => r.id)
       const { replies, agentReplyCount } = await ctx.adapter.getRepliesToReviewComments(ctx.prId, reviewIds)
 
-      // Filter out human replies that are older than the latest review —
-      // a new review supersedes the previous conversation thread
-      const latestReviewDate = ctx.previousReviews![ctx.previousReviews!.length - 1].createdOn
+      // Filter out human replies older than the latest review — a new review supersedes the
+      // prior thread. Resolved reviews are human-dismissed, so they don't count as the boundary
+      // (else a resolved re-review would bury a developer's still-open reply).
+      const unresolvedReviews = ctx.previousReviews!.filter(r => !r.resolved)
+      const boundary = unresolvedReviews.length > 0 ? unresolvedReviews : ctx.previousReviews!
+      const latestReviewDate = boundary[boundary.length - 1].createdOn
       ctx.replies = replies.filter(r => r.createdOn > latestReviewDate)
       if (ctx.replies.length < replies.length) {
         console.log(`  Filtered ${replies.length - ctx.replies.length} reply(s) older than latest review (${latestReviewDate})`)
@@ -346,27 +349,38 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       console.log(`  Reviewer findings: ${reviewFindings.high}H / ${reviewFindings.medium}M / ${reviewFindings.low}L`)
       const noFindings = reviewFindings.high === 0 && reviewFindings.medium === 0 && reviewFindings.low === 0
 
-      // Suppress a 0-finding re-review only when nothing to say: no prior findings, none still open, no dev reply since our last review.
-      if (noFindings && ctx.reviewNumber > 1) {
+      // 0-finding re-review: an unanswered dev reply is answered in-thread (reply priority); else suppress noise, or post one confirmation when a finding was resolved or is still open. --force re-review bypasses this and always posts.
+      if (noFindings && ctx.reviewNumber > 1 && ctx.force !== 're-review') {
         const lastReview = ctx.previousReviews?.[ctx.previousReviews.length - 1]
-        const priorHadFindings = !!lastReview && markdownHasFindings(lastReview.body)
-        const stillOpen = (ctx.reviewObject?.delta_stats?.still_open ?? 0) > 0
-
         // Agent replies carry a footer; an unanswered dev reply is one without, newer than our last review and last agent reply.
         const replies = ctx.replies ?? []
         const lastAgentReplyAt = replies.filter(r => hasReplyFooter(r.body))
           .reduce((max, r) => (r.createdOn > max ? r.createdOn : max), '')
-        const openDiscussion = !!lastReview && replies.some(
-          r => !hasReplyFooter(r.body) && r.createdOn > lastReview.createdOn && r.createdOn > lastAgentReplyAt
-        )
+        const unanswered = replies.filter(r =>
+          !hasReplyFooter(r.body) && !!lastReview && r.createdOn > lastReview.createdOn && r.createdOn > lastAgentReplyAt)
 
-        if (!priorHadFindings && !stillOpen && !openDiscussion) {
+        if (unanswered.length > 0) {
+          const agentReplies = replies.filter(r => hasReplyFooter(r.body)).length
+          if (config.reply.maxComments > 0 && agentReplies >= config.reply.maxComments) {
+            console.log(`  Unanswered dev reply, but reply limit reached (${agentReplies}/${config.reply.maxComments}) — skipping`)
+            ctx.action = 'DEDUP_SKIP'
+            ctx.skipReason = `reply limit reached (${agentReplies}/${config.reply.maxComments})`
+            return State.SKIP
+          }
+          ctx.replies = unanswered
+          console.log('  Re-review found nothing new, but a developer reply is unanswered — answering it in-thread')
+          return State.RESPOND_TO_REPLIES
+        }
+
+        const priorHadFindings = !!lastReview && markdownHasFindings(lastReview.body)
+        const stillOpen = (ctx.reviewObject?.delta_stats?.still_open ?? 0) > 0
+        if (!priorHadFindings && !stillOpen) {
           console.log('  Re-review: no findings, prior clean, nothing open, no discussion — nothing to post, skipping')
           ctx.action = 'NO_NEW_FINDINGS'
           ctx.skipReason = 'Re-review found no new findings (prior review already clean)'
           return State.SKIP
         }
-        console.log(`  Re-review with no new findings — posting (${openDiscussion ? 'open developer discussion' : stillOpen ? 'findings still open' : 'prior review had findings'})`)
+        console.log(`  Re-review with no new findings — posting (${stillOpen ? 'findings still open' : 'prior review had findings'})`)
       }
 
       if (!config.judge.model) {
