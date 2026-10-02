@@ -309,6 +309,32 @@ describe('re-review, no findings, prior review already clean → NO_NEW_FINDINGS
 })
 
 // ===========================================================================
+// Scenario 6c: Re-review with 0 findings + prior "No findings" (open finding in prose),
+// but a dev replied after the last review → must post, not suppress (PR 579 regression)
+// ===========================================================================
+
+describe('re-review, no findings, prior clean, BUT unanswered dev reply → posts (not swallowed)', () => {
+  it('acknowledges an open developer comment instead of skipping', async () => {
+    const adapter = makeAdapter({
+      getPreviousReviewComments: vi.fn().mockResolvedValue([
+        { id: '200', body: '### Summary\nprior MEDIUM still open (described in prose)\n\n### Findings\nNo findings.' + footer(1, 'aabbcc112233'), createdOn: '2026-03-09T10:00:00Z' },
+      ]),
+      getCommitDiff: vi.fn().mockResolvedValue(DIFF),
+      getRepliesToReviewComments: vi.fn().mockResolvedValue({
+        replies: [{ id: '300', parentId: '200', author: 'Fernando', body: 'Fixed in d4f2b43e.', createdOn: '2026-03-09T12:00:00Z' }],
+        agentReplyCount: 0,
+      }),
+    })
+    setupClaudeMocks(undefined, reviewWith([]))
+
+    const record = await review(adapter, '100', false)
+
+    expect(record!.action).toBe('RE_REVIEW')
+    expect(adapter.postComment).toHaveBeenCalled()
+  })
+})
+
+// ===========================================================================
 // Scenario 7: New commit but delta only excluded files → reply check → dedup skip
 // ===========================================================================
 

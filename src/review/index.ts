@@ -7,7 +7,7 @@ import { loadPrompt } from '../prompt/loader.js'
 import { fetchContext } from '../context/fetcher.js'
 import { runReview, runCommentResponse, runJudge } from '../claude/client.js'
 import { filterDiff, countChangedLines, parseVerdictScore, isPathExcluded, scanTodos } from './parsers.js'
-import { buildReviewFooter, buildReplyFooter, stripPreviousFooter, stripDeltaStats, stripJudgeNotes, stripJenkinsMeta, stripPreamble, isNoChange, extractCommitHash, countFindings, markdownHasFindings } from './formatter.js'
+import { buildReviewFooter, buildReplyFooter, stripPreviousFooter, stripDeltaStats, stripJudgeNotes, stripJenkinsMeta, stripPreamble, isNoChange, extractCommitHash, countFindings, markdownHasFindings, hasReplyFooter } from './formatter.js'
 import { buildUsageRecord, logUsageRecord, getBuildCommit, getJobUrl } from './usage.js'
 import { State } from './types.js'
 import type { ReviewContext } from './types.js'
@@ -346,19 +346,27 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       console.log(`  Reviewer findings: ${reviewFindings.high}H / ${reviewFindings.medium}M / ${reviewFindings.low}L`)
       const noFindings = reviewFindings.high === 0 && reviewFindings.medium === 0 && reviewFindings.low === 0
 
-      // Noise gate: a re-review that flags nothing is worth one "your fixes landed"
-      // confirmation — only when the last posted review had findings. If the prior review
-      // was already clean this is a repeat "still clean" comment, so skip. Suppressed
-      // reviews never enter previousReviews, so the chain self-limits to one confirmation.
+      // Suppress a 0-finding re-review only when nothing to say: no prior findings, none still open, no dev reply since our last review.
       if (noFindings && ctx.reviewNumber > 1) {
         const lastReview = ctx.previousReviews?.[ctx.previousReviews.length - 1]
-        if (!lastReview || !markdownHasFindings(lastReview.body)) {
-          console.log('  Re-review with no findings; prior review already clean — nothing to post, skipping')
+        const priorHadFindings = !!lastReview && markdownHasFindings(lastReview.body)
+        const stillOpen = (ctx.reviewObject?.delta_stats?.still_open ?? 0) > 0
+
+        // Agent replies carry a footer; an unanswered dev reply is one without, newer than our last review and last agent reply.
+        const replies = ctx.replies ?? []
+        const lastAgentReplyAt = replies.filter(r => hasReplyFooter(r.body))
+          .reduce((max, r) => (r.createdOn > max ? r.createdOn : max), '')
+        const openDiscussion = !!lastReview && replies.some(
+          r => !hasReplyFooter(r.body) && r.createdOn > lastReview.createdOn && r.createdOn > lastAgentReplyAt
+        )
+
+        if (!priorHadFindings && !stillOpen && !openDiscussion) {
+          console.log('  Re-review: no findings, prior clean, nothing open, no discussion — nothing to post, skipping')
           ctx.action = 'NO_NEW_FINDINGS'
           ctx.skipReason = 'Re-review found no new findings (prior review already clean)'
           return State.SKIP
         }
-        console.log('  Re-review cleared all findings — posting one resolution confirmation')
+        console.log(`  Re-review with no new findings — posting (${openDiscussion ? 'open developer discussion' : stillOpen ? 'findings still open' : 'prior review had findings'})`)
       }
 
       if (!config.judge.model) {

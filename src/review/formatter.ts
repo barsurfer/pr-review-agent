@@ -151,9 +151,7 @@ export function countFindings(r: ReviewObject): { high: number; medium: number; 
   return tally
 }
 
-// A posted review renders findings as "- **SEVERITY – title**"; detect whether a prior
-// review (markdown only, no object) actually flagged anything, so a re-review that clears
-// to zero can confirm the fix once rather than repeat "still clean" on every new commit.
+// Did a prior posted review (markdown only, no object) flag anything? Findings render as "- **SEVERITY – title**".
 export function markdownHasFindings(body: string): boolean {
   return /^[ \t]*-\s*\*\*(HIGH|MEDIUM|LOW)\b/im.test(body)
 }
