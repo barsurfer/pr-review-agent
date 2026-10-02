@@ -1,0 +1,7 @@
+# The sync hook must run on Unix/Git-bash — keep LF so the shebang stays valid.
+.githooks/** text eol=lf
+
+# CLAUDE.md is generated from AGENTS.md by the pre-commit hook; keep both LF so the
+# byte-compare in the hook is stable and doesn't rewrite CLAUDE.md on every commit.
+AGENTS.md text eol=lf
+CLAUDE.md text eol=lf

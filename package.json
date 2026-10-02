@@ -7,6 +7,7 @@
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx src/index.ts",
+    "prepare": "git config core.hooksPath .githooks || exit 0",
     "build": "tsc && npm run copy-assets",
     "copy-assets": "node --input-type=module -e \"import{cpSync,mkdirSync}from'node:fs';mkdirSync('dist/prompt',{recursive:true});cpSync('src/prompt/base-prompt.txt','dist/prompt/base-prompt.txt');cpSync('src/prompt/reply-prompt.txt','dist/prompt/reply-prompt.txt');cpSync('src/prompt/judge-prompt.txt','dist/prompt/judge-prompt.txt');\"",
     "bundle": "node scripts/bundle.mjs",

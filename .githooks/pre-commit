@@ -1,0 +1,22 @@
+#!/bin/sh
+# Keep CLAUDE.md in sync with AGENTS.md (the source of truth).
+# The Claude Code harness auto-loads CLAUDE.md, but AGENTS.md is the cross-tool SoT and can't be
+# a symlink here (core.symlinks is false on Windows, and a committed symlink would materialize as
+# a text file). So regenerate CLAUDE.md from AGENTS.md on every commit instead.
+set -e
+root=$(git rev-parse --show-toplevel)
+src="$root/AGENTS.md"
+dst="$root/CLAUDE.md"
+[ -f "$src" ] || exit 0
+
+header='<!-- GENERATED from AGENTS.md — do not edit CLAUDE.md directly; edit AGENTS.md (this hook re-syncs it). -->'
+tmp="$dst.sync.tmp"
+{ printf '%s\n\n' "$header"; cat "$src"; } > "$tmp"
+
+if ! cmp -s "$tmp" "$dst"; then
+  mv "$tmp" "$dst"
+  git add "$dst"
+  echo "pre-commit: synced CLAUDE.md from AGENTS.md"
+else
+  rm -f "$tmp"
+fi
