@@ -64,6 +64,25 @@ describe('getPreviousReviewComments — agent review detection', () => {
   })
 })
 
+describe('getPreviousReviewComments — resolved flag', () => {
+  it('marks a review resolved only when Bitbucket reports a non-null resolution', async () => {
+    clientMock.get.mockResolvedValue({
+      data: {
+        values: [
+          { ...comment(1, REVIEW_BODY, '2026-07-01T10:00:00Z', 'Review Bot'), resolution: { type: 'comment_resolution', user: { display_name: 'Dev One' }, created_on: '2026-07-01T15:00:00Z' } },
+          { ...comment(2, REVIEW_BODY, '2026-07-01T11:00:00Z', 'Review Bot'), resolution: null },
+          // Older payloads omit the field entirely — must read as unresolved, not resolved
+          comment(3, REVIEW_BODY, '2026-07-01T12:00:00Z', 'Review Bot'),
+        ],
+      },
+    })
+
+    const reviews = await makeAdapter().getPreviousReviewComments('100')
+
+    expect(reviews.map(r => [r.id, r.resolved])).toEqual([['1', true], ['2', false], ['3', false]])
+  })
+})
+
 describe('getRepliesToReviewComments — no self-reply loops', () => {
   const thread = [
     comment(1, REVIEW_BODY, '2026-07-01T10:00:00Z', 'Review Bot'),

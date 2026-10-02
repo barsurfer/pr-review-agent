@@ -10,6 +10,13 @@ import { filterDiff, countChangedLines, parseVerdictScore, isPathExcluded, scanT
 import { buildReviewFooter, buildReplyFooter, stripPreviousFooter, stripDeltaStats, stripJudgeNotes, stripJenkinsMeta, stripPreamble, isNoChange, extractCommitHash, countFindings, markdownHasFindings, hasReplyFooter } from './formatter.js'
 import { buildUsageRecord, logUsageRecord, getBuildCommit, getJobUrl } from './usage.js'
 import { State } from './types.js'
+
+// Supersede boundary: the latest review that isn't human-resolved (a resolved review is dismissed, so it must not bury an unanswered reply); falls back to the last review when all are resolved.
+function supersedeBoundary<T extends { resolved?: boolean }>(reviews: T[]): T | undefined {
+  const unresolved = reviews.filter(r => !r.resolved)
+  const pool = unresolved.length > 0 ? unresolved : reviews
+  return pool[pool.length - 1]
+}
 import type { ReviewContext } from './types.js'
 import type { VCSAdapter } from '../vcs/adapter.js'
 
@@ -171,12 +178,8 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       const reviewIds = ctx.previousReviews!.map(r => r.id)
       const { replies, agentReplyCount } = await ctx.adapter.getRepliesToReviewComments(ctx.prId, reviewIds)
 
-      // Filter out human replies older than the latest review — a new review supersedes the
-      // prior thread. Resolved reviews are human-dismissed, so they don't count as the boundary
-      // (else a resolved re-review would bury a developer's still-open reply).
-      const unresolvedReviews = ctx.previousReviews!.filter(r => !r.resolved)
-      const boundary = unresolvedReviews.length > 0 ? unresolvedReviews : ctx.previousReviews!
-      const latestReviewDate = boundary[boundary.length - 1].createdOn
+      // A new review supersedes the prior thread; resolved reviews don't count as the boundary.
+      const latestReviewDate = supersedeBoundary(ctx.previousReviews!)!.createdOn
       ctx.replies = replies.filter(r => r.createdOn > latestReviewDate)
       if (ctx.replies.length < replies.length) {
         console.log(`  Filtered ${replies.length - ctx.replies.length} reply(s) older than latest review (${latestReviewDate})`)
@@ -351,7 +354,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
 
       // 0-finding re-review: an unanswered dev reply is answered in-thread (reply priority); else suppress noise, or post one confirmation when a finding was resolved or is still open. --force re-review bypasses this and always posts.
       if (noFindings && ctx.reviewNumber > 1 && ctx.force !== 're-review') {
-        const lastReview = ctx.previousReviews?.[ctx.previousReviews.length - 1]
+        const lastReview = supersedeBoundary(ctx.previousReviews ?? [])
         // Agent replies carry a footer; an unanswered dev reply is one without, newer than our last review and last agent reply.
         const replies = ctx.replies ?? []
         const lastAgentReplyAt = replies.filter(r => hasReplyFooter(r.body))

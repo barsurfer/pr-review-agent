@@ -325,6 +325,70 @@ describe('resolved later review does not supersede an unanswered dev reply', () 
 })
 
 // ===========================================================================
+// Scenario 4c: EVERY review resolved → no unresolved boundary left, so the supersede
+// boundary falls back to the latest review (not the first, not "no boundary")
+// ===========================================================================
+
+describe('all reviews resolved → supersede boundary falls back to the latest review', () => {
+  const allResolvedAdapter = (reply: CommentReply) => makeAdapter({
+    getPreviousReviewComments: vi.fn().mockResolvedValue([
+      { id: '200', body: '### Review' + footer(1, PRIOR_COMMIT), createdOn: '2026-03-09T10:00:00Z', resolved: true },
+      { id: '201', body: '### Delta' + footer(2, COMMIT_A), createdOn: '2026-03-09T14:00:00Z', resolved: true },
+    ]),
+    getRepliesToReviewComments: vi.fn().mockResolvedValue({ replies: [reply], agentReplyCount: 0 }),
+  })
+
+  it('treats a reply between the two resolved reviews as superseded', async () => {
+    const adapter = allResolvedAdapter(devReply('2026-03-09T12:00:00Z'))
+
+    const record = await review(adapter, '100', false)
+
+    expect(record!.action).toBe('DEDUP_SKIP')
+    expect(record!.skip_reason).toContain('no new commits')
+    expect(mockRunCommentResponse).not.toHaveBeenCalled()
+  })
+
+  it('still answers a reply posted after the latest resolved review', async () => {
+    const fresh = devReply('2026-03-09T15:00:00Z', '201')
+    const adapter = allResolvedAdapter(fresh)
+
+    const record = await review(adapter, '100', false)
+
+    expect(record!.action).toBe('REPLY')
+    expect(mockRunCommentResponse.mock.calls[0][5]).toEqual([fresh])
+    expect(adapter.postReply).toHaveBeenCalledWith('100', '201', expect.any(String))
+  })
+})
+
+// ===========================================================================
+// Scenario 4d: New-commit path — the JUDGE_REVIEW gate uses the same supersede boundary
+// as CHECK_REPLIES, so a resolved later review doesn't bury a dev reply here either
+// ===========================================================================
+
+describe('gate (new-commit path): resolved later review does not bury an unanswered dev reply', () => {
+  it('answers the dev reply instead of suppressing as NO_NEW_FINDINGS', async () => {
+    const adapter = makeAdapter({
+      getPreviousReviewComments: vi.fn().mockResolvedValue([
+        { id: '200', body: '### Review' + footer(1, '111111111111'), createdOn: '2026-03-09T10:00:00Z' },
+        { id: '201', body: '### Delta' + footer(2, '222222222222'), createdOn: '2026-03-09T14:00:00Z', resolved: true },
+      ]),
+      getCommitDiff: vi.fn().mockResolvedValue(DIFF),
+      getRepliesToReviewComments: vi.fn().mockResolvedValue({
+        replies: [{ id: '300', parentId: '200', author: 'Fernando', body: 'Fixed in d4f2b43e.', createdOn: '2026-03-09T12:00:00Z' }],
+        agentReplyCount: 0,
+      }),
+    })
+    setupClaudeMocks(undefined, reviewWith([]))
+
+    const record = await review(adapter, '100', false)
+
+    expect(record!.action).toBe('REPLY')
+    expect(adapter.postReply).toHaveBeenCalled()
+    expect(adapter.postComment).not.toHaveBeenCalled()
+  })
+})
+
+// ===========================================================================
 // Scenario 5: Reply limit reached → DEDUP_SKIP
 // ===========================================================================
 
@@ -559,6 +623,7 @@ describe('NO_NEW_FINDINGS gate — open-discussion detection', () => {
       record: record!,
       posted: vi.mocked(adapter.postComment).mock.calls.length,
       replied: vi.mocked(adapter.postReply).mock.calls.length,
+      replyParent: vi.mocked(adapter.postReply).mock.calls[0]?.[1],
     }
   }
 
@@ -584,12 +649,16 @@ describe('NO_NEW_FINDINGS gate — open-discussion detection', () => {
   })
 
   it('answers in-thread when the dev replied again after our last agent reply', async () => {
-    const { record, posted, replied } = await gateWith([
-      devReply('2026-03-09T11:00:00Z'), agentReply('2026-03-09T11:30:00Z'), devReply('2026-03-09T12:00:00Z'),
+    const followUp = devReply('2026-03-09T12:00:00Z', 'agent-2026-03-09T11:30:00Z')
+    const { record, posted, replied, replyParent } = await gateWith([
+      devReply('2026-03-09T09:00:00Z'), devReply('2026-03-09T11:00:00Z'), agentReply('2026-03-09T11:30:00Z'), followUp,
     ])
     expect(record.action).toBe('REPLY')
     expect(replied).toBe(1)
     expect(posted).toBe(0)
+    // Only the open follow-up goes to the reply model — stale or already-answered replies would be re-answered
+    expect(mockRunCommentResponse.mock.calls[0][5]).toEqual([followUp])
+    expect(replyParent).toBe(followUp.parentId)
   })
 })
 
@@ -704,6 +773,40 @@ describe('delta re-review feeds the reviewer the right inputs', () => {
     expect(record!.action).toBe('RE_REVIEW')
     expect(mockRunReview.mock.calls[0][11]).toBe('')
     expect(adapter.postComment).toHaveBeenCalledTimes(1)
+  })
+})
+
+// ===========================================================================
+// Scenario 6j: Reply-priority gate honors MAX_REPLY_COMMENTS — once the agent's reply
+// budget is spent, an unanswered dev reply on a 0-finding re-review is skipped (0 = unlimited)
+// ===========================================================================
+
+describe('reply-priority gate — reply limit', () => {
+  const agentRepliesThenDev = (n: number) => [
+    ...Array.from({ length: n }, (_, i) => agentReply(`2026-03-09T10:1${i}:00Z`)),
+    devReply('2026-03-09T12:00:00Z'),
+  ]
+
+  it.each([
+    { maxComments: 3, agentReplies: 3, expected: 'DEDUP_SKIP' },
+    { maxComments: 3, agentReplies: 2, expected: 'REPLY' },
+    { maxComments: 0, agentReplies: 5, expected: 'REPLY' },
+  ])('MAX_REPLY_COMMENTS=$maxComments with $agentReplies agent replies → $expected', async ({ maxComments, agentReplies, expected }) => {
+    cfg.reply.maxComments = maxComments
+    const adapter = reReviewAdapter(CLEAN_PRIOR, agentRepliesThenDev(agentReplies))
+    mockReviewer(reviewWith([], { delta_stats: { resolved: 0, still_open: 0, new_findings: 0 } }))
+
+    const record = await review(adapter, '100', false)
+
+    expect(record!.action).toBe(expected)
+    expect(adapter.postComment).not.toHaveBeenCalled()
+    if (expected === 'DEDUP_SKIP') {
+      expect(record!.skip_reason).toBe(`reply limit reached (${agentReplies}/${maxComments})`)
+      expect(mockRunCommentResponse).not.toHaveBeenCalled()
+      expect(adapter.postReply).not.toHaveBeenCalled()
+    } else {
+      expect(adapter.postReply).toHaveBeenCalledTimes(1)
+    }
   })
 })
 
@@ -1037,6 +1140,21 @@ describe('token-budget degradation', () => {
 })
 
 // ===========================================================================
+// Scenario 8h: ENABLE_SPLIT_CHECK toggles the split-theme instruction in the reviewer prompt
+// ===========================================================================
+
+describe('ENABLE_SPLIT_CHECK add-on', () => {
+  it.each([true, false])('splitCheck=%s', async (enabled) => {
+    cfg.review.splitCheck = enabled
+
+    await review(makeAdapter(), '100', true)
+
+    const promptArg = mockRunReview.mock.calls[0][8] as { content: string }
+    expect(promptArg.content.includes('## SPLIT CHECK')).toBe(enabled)
+  })
+})
+
+// ===========================================================================
 // Scenario 9: Claude returns empty → skip (never post)
 // ===========================================================================
 
@@ -1109,6 +1227,35 @@ describe('size thresholds after exclusions', () => {
 })
 
 // ===========================================================================
+// Scenario 9c: Each size bound skips on its own, before review history or the model is touched
+// ===========================================================================
+
+describe('size thresholds — each bound skips', () => {
+  // Fixture size: DIFF has 2 reviewable lines; two reviewable files
+  it.each([
+    [{ minChangedFiles: 3 }, '2 reviewable file(s), minimum is 3'],
+    [{ maxChangedFiles: 1 }, '2 reviewable file(s), maximum is 1'],
+    [{ minChangedLines: 3 }, '2 reviewable line(s), minimum is 3'],
+    [{ maxChangedLines: 1 }, '2 reviewable line(s), maximum is 1'],
+  ])('%o → SKIP', async (bound, reason) => {
+    cfg.thresholds = { ...cfg.thresholds, ...bound }
+    const adapter = makeAdapter({
+      getChangedFiles: vi.fn().mockResolvedValue([
+        { path: 'src/app.ts', status: 'modified' },
+        { path: 'src/foo.ts', status: 'added' },
+      ]),
+    })
+
+    const record = await review(adapter, '100', true)
+
+    expect(record!.action).toBe('SKIP')
+    expect(record!.skip_reason).toBe(`PR has ${reason}`)
+    expect(adapter.getPreviousReviewComments).not.toHaveBeenCalled()
+    expect(mockRunReview).not.toHaveBeenCalled()
+  })
+})
+
+// ===========================================================================
 // Scenario 10: Pre-post dedup — concurrent run already posted
 // ===========================================================================
 
@@ -1173,6 +1320,20 @@ describe('--force clean → fresh review', () => {
     expect(record!.review_number).toBe(1)
     expect(adapter.getRepliesToReviewComments).not.toHaveBeenCalled()
   })
+
+  it('real run posts on an already-reviewed commit — pre-post dedup is skipped too', async () => {
+    const adapter = makeAdapter({
+      getPreviousReviewComments: vi.fn().mockResolvedValue([
+        { id: '200', body: '### Review' + footer(1, COMMIT_A), createdOn: '2026-03-10T10:00:00Z' },
+      ]),
+    })
+
+    const record = await review(adapter, '100', false, undefined, 'clean')
+
+    expect(record!.action).toBe('REVIEW')
+    expect(adapter.postComment).toHaveBeenCalledTimes(1)
+    expect(adapter.getPreviousReviewComments).not.toHaveBeenCalled()
+  })
 })
 
 // ===========================================================================
@@ -1197,6 +1358,29 @@ describe('--force re-review → bypass dedup with context', () => {
     expect(record!.action).toBe('RE_REVIEW')
     expect(record!.review_number).toBe(2)
     expect(adapter.getRepliesToReviewComments).toHaveBeenCalledWith('100', ['200'], true)
+  })
+})
+
+// ===========================================================================
+// Scenario 12b: --force re-review skips the 0-finding gate entirely — it always posts,
+// even where an unforced run would suppress (clean prior) or answer in-thread (open reply)
+// ===========================================================================
+
+describe('--force re-review bypasses the 0-finding gate', () => {
+  it.each([
+    ['clean prior, no discussion (unforced: suppress)', [] as CommentReply[]],
+    ['clean prior, unanswered dev reply (unforced: reply)', [devReply('2026-03-09T12:00:00Z')]],
+  ])('%s → posts RE_REVIEW', async (_label, replies) => {
+    const adapter = reReviewAdapter(CLEAN_PRIOR, replies)
+    mockReviewer(reviewWith([], { delta_stats: { resolved: 0, still_open: 0, new_findings: 0 } }))
+
+    const record = await review(adapter, '100', false, undefined, 're-review')
+
+    expect(record!.action).toBe('RE_REVIEW')
+    expect(record!.review_number).toBe(2)
+    expect(adapter.postComment).toHaveBeenCalledTimes(1)
+    expect(adapter.postReply).not.toHaveBeenCalled()
+    expect(mockRunCommentResponse).not.toHaveBeenCalled()
   })
 })
 
