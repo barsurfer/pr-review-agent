@@ -7,9 +7,9 @@ vi.mock('../../llm/provider.js', () => ({
   createProvider: vi.fn(() => ({ complete, completeStructured })),
 }))
 
-import { runReview, runJudge, REVIEW_OUTPUT_SCHEMA, JUDGE_OUTPUT_SCHEMA } from '../client.js'
+import { runReview, runJudge, runCommentResponse, REVIEW_OUTPUT_SCHEMA, JUDGE_OUTPUT_SCHEMA } from '../client.js'
 import { renderReview, type ReviewObject } from '../../review/formatter.js'
-import type { PRInfo } from '../../vcs/adapter.js'
+import type { PRInfo, ReviewComment, CommentReply } from '../../vcs/adapter.js'
 import type { LoadedPrompt } from '../../prompt/loader.js'
 
 const usage = { input_tokens: 100, output_tokens: 50, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
@@ -52,6 +52,65 @@ describe('runReview (structured output)', () => {
     })
     const res = await runReview('key', 'model', 3, 16000, 'high', prInfo, 'DIFF', [], prompt, [])
     expect(res.text).toBe('NO_CHANGE')
+  })
+})
+
+// The FSM passes discussion + delta in; if they don't reach the model, a dev's "Fixed in <sha>" goes unseen.
+describe('runReview user message (re-review context)', () => {
+  beforeEach(() => { complete.mockReset(); completeStructured.mockReset() })
+
+  const object: ReviewObject = { summary: 's', findings: [], behavioral_diff: [], production_risk: [], unresolved_questions: [] }
+  const prior: ReviewComment[] = [
+    { id: '1', body: 'OLDER REVIEW BODY', createdOn: '2026-03-09T10:00:00Z' },
+    { id: '2', body: 'LATEST REVIEW BODY', createdOn: '2026-03-10T10:00:00Z' },
+  ]
+  const replies: CommentReply[] = [{ id: '3', parentId: '2', author: 'Fernando', body: 'Fixed in d4f2b43e.', createdOn: '2026-03-10T12:00:00Z' }]
+
+  it('includes the latest prior review, the developer discussion, and the changes-since-last-review diff', async () => {
+    completeStructured.mockResolvedValue({ object, usage })
+
+    await runReview('key', 'model', 3, 16000, '', prInfo, 'FULL DIFF', [], prompt, prior, replies, 'DELTA DIFF')
+
+    const userMessage = completeStructured.mock.calls[0][1] as string
+    expect(userMessage).toContain('LATEST REVIEW BODY')
+    expect(userMessage).not.toContain('OLDER REVIEW BODY')
+    expect(userMessage).toContain('Fixed in d4f2b43e.')
+    expect(userMessage).toContain('## Changes Since Your Last Review')
+    expect(userMessage).toContain('DELTA DIFF')
+    expect(userMessage).toContain('FULL DIFF')
+  })
+
+  it('omits the delta section on a first review even if a delta is passed', async () => {
+    completeStructured.mockResolvedValue({ object, usage })
+
+    await runReview('key', 'model', 3, 16000, '', prInfo, 'FULL DIFF', [], prompt, [], [], 'DELTA DIFF')
+
+    const userMessage = completeStructured.mock.calls[0][1] as string
+    expect(userMessage).not.toContain('Changes Since Your Last Review')
+    expect(userMessage).not.toContain('DELTA DIFF')
+    expect(userMessage).not.toContain('Developer Discussion')
+  })
+})
+
+describe('runCommentResponse', () => {
+  beforeEach(() => { complete.mockReset(); completeStructured.mockReset() })
+
+  it('sends the original review and every pending reply in one call', async () => {
+    complete.mockResolvedValue({ text: 'Answer.', usage })
+    const pending: CommentReply[] = [
+      { id: '3', parentId: '2', author: 'Fernando', body: 'Why HIGH?', createdOn: '2026-03-10T12:00:00Z' },
+      { id: '4', parentId: '2', author: 'Vadim', body: 'Also the cache?', createdOn: '2026-03-10T13:00:00Z' },
+    ]
+
+    const res = await runCommentResponse('key', 'model', 3, 'DIFF', 'ORIGINAL REVIEW', pending)
+
+    expect(complete).toHaveBeenCalledOnce()
+    const userMessage = complete.mock.calls[0][1] as string
+    expect(userMessage).toContain('ORIGINAL REVIEW')
+    expect(userMessage).toContain('Why HIGH?')
+    expect(userMessage).toContain('Also the cache?')
+    expect(res.text).toBe('Answer.')
+    expect(completeStructured).not.toHaveBeenCalled()
   })
 })
 
