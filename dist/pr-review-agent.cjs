@@ -43343,7 +43343,7 @@ function getAgentVersion() {
     const pkg = JSON.parse((0, import_fs3.readFileSync)(pkgPath, "utf-8"));
     return pkg.version;
   } catch {
-    if (true) return "0.0.10";
+    if (true) return "0.0.11";
     return "unknown";
   }
 }
@@ -43355,7 +43355,7 @@ function getBuildCommit() {
     const dirty = (0, import_child_process.execSync)("git status --porcelain", opts2).toString().trim() ? "-dirty" : "";
     return hash + dirty;
   } catch {
-    if (true) return "73990e6";
+    if (true) return "53d20b3";
     return "unknown";
   }
 }
@@ -43445,6 +43445,11 @@ function logUsageRecord(record) {
 }
 
 // src/review/index.ts
+function supersedeBoundary(reviews) {
+  const unresolved = reviews.filter((r) => !r.resolved);
+  const pool = unresolved.length > 0 ? unresolved : reviews;
+  return pool[pool.length - 1];
+}
 async function transition(state, ctx) {
   switch (state) {
     case 0 /* FETCH_PR_INFO */: {
@@ -43571,9 +43576,7 @@ async function transition(state, ctx) {
     case 5 /* CHECK_REPLIES */: {
       const reviewIds = ctx.previousReviews.map((r) => r.id);
       const { replies, agentReplyCount } = await ctx.adapter.getRepliesToReviewComments(ctx.prId, reviewIds);
-      const unresolvedReviews = ctx.previousReviews.filter((r) => !r.resolved);
-      const boundary = unresolvedReviews.length > 0 ? unresolvedReviews : ctx.previousReviews;
-      const latestReviewDate = boundary[boundary.length - 1].createdOn;
+      const latestReviewDate = supersedeBoundary(ctx.previousReviews).createdOn;
       ctx.replies = replies.filter((r) => r.createdOn > latestReviewDate);
       if (ctx.replies.length < replies.length) {
         console.log(`  Filtered ${replies.length - ctx.replies.length} reply(s) older than latest review (${latestReviewDate})`);
@@ -43733,7 +43736,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
       console.log(`  Reviewer findings: ${reviewFindings.high}H / ${reviewFindings.medium}M / ${reviewFindings.low}L`);
       const noFindings = reviewFindings.high === 0 && reviewFindings.medium === 0 && reviewFindings.low === 0;
       if (noFindings && ctx.reviewNumber > 1 && ctx.force !== "re-review") {
-        const lastReview = ctx.previousReviews?.[ctx.previousReviews.length - 1];
+        const lastReview = supersedeBoundary(ctx.previousReviews ?? []);
         const replies = ctx.replies ?? [];
         const lastAgentReplyAt = replies.filter((r) => hasReplyFooter(r.body)).reduce((max, r) => r.createdOn > max ? r.createdOn : max, "");
         const unanswered = replies.filter((r) => !hasReplyFooter(r.body) && !!lastReview && r.createdOn > lastReview.createdOn && r.createdOn > lastAgentReplyAt);
