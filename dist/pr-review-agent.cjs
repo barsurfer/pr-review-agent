@@ -43341,7 +43341,7 @@ function getAgentVersion() {
     const pkg = JSON.parse((0, import_fs3.readFileSync)(pkgPath, "utf-8"));
     return pkg.version;
   } catch {
-    if (true) return "0.0.8";
+    if (true) return "0.0.9";
     return "unknown";
   }
 }
@@ -43353,7 +43353,7 @@ function getBuildCommit() {
     const dirty = (0, import_child_process.execSync)("git status --porcelain", opts2).toString().trim() ? "-dirty" : "";
     return hash + dirty;
   } catch {
-    if (true) return "ab53994";
+    if (true) return "9772a0e";
     return "unknown";
   }
 }
@@ -43730,13 +43730,20 @@ If this PR spans multiple independent themes that could each be a separate, inde
       const noFindings = reviewFindings.high === 0 && reviewFindings.medium === 0 && reviewFindings.low === 0;
       if (noFindings && ctx.reviewNumber > 1) {
         const lastReview = ctx.previousReviews?.[ctx.previousReviews.length - 1];
-        if (!lastReview || !markdownHasFindings(lastReview.body)) {
-          console.log("  Re-review with no findings; prior review already clean \u2014 nothing to post, skipping");
+        const priorHadFindings = !!lastReview && markdownHasFindings(lastReview.body);
+        const stillOpen = (ctx.reviewObject?.delta_stats?.still_open ?? 0) > 0;
+        const replies = ctx.replies ?? [];
+        const lastAgentReplyAt = replies.filter((r) => hasReplyFooter(r.body)).reduce((max, r) => r.createdOn > max ? r.createdOn : max, "");
+        const openDiscussion = !!lastReview && replies.some(
+          (r) => !hasReplyFooter(r.body) && r.createdOn > lastReview.createdOn && r.createdOn > lastAgentReplyAt
+        );
+        if (!priorHadFindings && !stillOpen && !openDiscussion) {
+          console.log("  Re-review: no findings, prior clean, nothing open, no discussion \u2014 nothing to post, skipping");
           ctx.action = "NO_NEW_FINDINGS";
           ctx.skipReason = "Re-review found no new findings (prior review already clean)";
           return 14 /* SKIP */;
         }
-        console.log("  Re-review cleared all findings \u2014 posting one resolution confirmation");
+        console.log(`  Re-review with no new findings \u2014 posting (${openDiscussion ? "open developer discussion" : stillOpen ? "findings still open" : "prior review had findings"})`);
       }
       if (!config.judge.model) {
         return 13 /* POST_REVIEW */;
