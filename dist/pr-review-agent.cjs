@@ -41880,7 +41880,9 @@ var BitbucketAdapter = class {
           comments.push({
             id: String(c.id),
             body,
-            createdOn: c.created_on
+            createdOn: c.created_on,
+            resolved: c.resolution != null
+            // a human marked this review thread resolved
           });
         }
       }
@@ -43341,7 +43343,7 @@ function getAgentVersion() {
     const pkg = JSON.parse((0, import_fs3.readFileSync)(pkgPath, "utf-8"));
     return pkg.version;
   } catch {
-    if (true) return "0.0.9";
+    if (true) return "0.0.10";
     return "unknown";
   }
 }
@@ -43353,7 +43355,7 @@ function getBuildCommit() {
     const dirty = (0, import_child_process.execSync)("git status --porcelain", opts2).toString().trim() ? "-dirty" : "";
     return hash + dirty;
   } catch {
-    if (true) return "9772a0e";
+    if (true) return "73990e6";
     return "unknown";
   }
 }
@@ -43569,7 +43571,9 @@ async function transition(state, ctx) {
     case 5 /* CHECK_REPLIES */: {
       const reviewIds = ctx.previousReviews.map((r) => r.id);
       const { replies, agentReplyCount } = await ctx.adapter.getRepliesToReviewComments(ctx.prId, reviewIds);
-      const latestReviewDate = ctx.previousReviews[ctx.previousReviews.length - 1].createdOn;
+      const unresolvedReviews = ctx.previousReviews.filter((r) => !r.resolved);
+      const boundary = unresolvedReviews.length > 0 ? unresolvedReviews : ctx.previousReviews;
+      const latestReviewDate = boundary[boundary.length - 1].createdOn;
       ctx.replies = replies.filter((r) => r.createdOn > latestReviewDate);
       if (ctx.replies.length < replies.length) {
         console.log(`  Filtered ${replies.length - ctx.replies.length} reply(s) older than latest review (${latestReviewDate})`);
@@ -43728,22 +43732,32 @@ If this PR spans multiple independent themes that could each be a separate, inde
       const reviewFindings = ctx.reviewObject ? countFindings(ctx.reviewObject) : { high: 0, medium: 0, low: 0 };
       console.log(`  Reviewer findings: ${reviewFindings.high}H / ${reviewFindings.medium}M / ${reviewFindings.low}L`);
       const noFindings = reviewFindings.high === 0 && reviewFindings.medium === 0 && reviewFindings.low === 0;
-      if (noFindings && ctx.reviewNumber > 1) {
+      if (noFindings && ctx.reviewNumber > 1 && ctx.force !== "re-review") {
         const lastReview = ctx.previousReviews?.[ctx.previousReviews.length - 1];
-        const priorHadFindings = !!lastReview && markdownHasFindings(lastReview.body);
-        const stillOpen = (ctx.reviewObject?.delta_stats?.still_open ?? 0) > 0;
         const replies = ctx.replies ?? [];
         const lastAgentReplyAt = replies.filter((r) => hasReplyFooter(r.body)).reduce((max, r) => r.createdOn > max ? r.createdOn : max, "");
-        const openDiscussion = !!lastReview && replies.some(
-          (r) => !hasReplyFooter(r.body) && r.createdOn > lastReview.createdOn && r.createdOn > lastAgentReplyAt
-        );
-        if (!priorHadFindings && !stillOpen && !openDiscussion) {
+        const unanswered = replies.filter((r) => !hasReplyFooter(r.body) && !!lastReview && r.createdOn > lastReview.createdOn && r.createdOn > lastAgentReplyAt);
+        if (unanswered.length > 0) {
+          const agentReplies = replies.filter((r) => hasReplyFooter(r.body)).length;
+          if (config.reply.maxComments > 0 && agentReplies >= config.reply.maxComments) {
+            console.log(`  Unanswered dev reply, but reply limit reached (${agentReplies}/${config.reply.maxComments}) \u2014 skipping`);
+            ctx.action = "DEDUP_SKIP";
+            ctx.skipReason = `reply limit reached (${agentReplies}/${config.reply.maxComments})`;
+            return 14 /* SKIP */;
+          }
+          ctx.replies = unanswered;
+          console.log("  Re-review found nothing new, but a developer reply is unanswered \u2014 answering it in-thread");
+          return 6 /* RESPOND_TO_REPLIES */;
+        }
+        const priorHadFindings = !!lastReview && markdownHasFindings(lastReview.body);
+        const stillOpen = (ctx.reviewObject?.delta_stats?.still_open ?? 0) > 0;
+        if (!priorHadFindings && !stillOpen) {
           console.log("  Re-review: no findings, prior clean, nothing open, no discussion \u2014 nothing to post, skipping");
           ctx.action = "NO_NEW_FINDINGS";
           ctx.skipReason = "Re-review found no new findings (prior review already clean)";
           return 14 /* SKIP */;
         }
-        console.log(`  Re-review with no new findings \u2014 posting (${openDiscussion ? "open developer discussion" : stillOpen ? "findings still open" : "prior review had findings"})`);
+        console.log(`  Re-review with no new findings \u2014 posting (${stillOpen ? "findings still open" : "prior review had findings"})`);
       }
       if (!config.judge.model) {
         return 13 /* POST_REVIEW */;
