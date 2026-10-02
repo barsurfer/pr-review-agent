@@ -43343,7 +43343,7 @@ function getAgentVersion() {
     const pkg = JSON.parse((0, import_fs3.readFileSync)(pkgPath, "utf-8"));
     return pkg.version;
   } catch {
-    if (true) return "0.0.11";
+    if (true) return "0.0.12";
     return "unknown";
   }
 }
@@ -43355,7 +43355,7 @@ function getBuildCommit() {
     const dirty = (0, import_child_process.execSync)("git status --porcelain", opts2).toString().trim() ? "-dirty" : "";
     return hash + dirty;
   } catch {
-    if (true) return "53d20b3";
+    if (true) return "7f5076a";
     return "unknown";
   }
 }
@@ -43667,6 +43667,12 @@ async function transition(state, ctx) {
       let s = sizes();
       const max = config.anthropic.maxInputTokens;
       console.log(`  Estimated input: ~${s.total.toLocaleString()} tokens  [${fmt(s)}]`);
+      if (ctx.deltaDiff && s.delta > s.diff) {
+        console.warn(`  Delta (${s.delta.toLocaleString()} tok) exceeds full PR diff (${s.diff.toLocaleString()} tok) \u2014 likely a merged target branch; dropping delta, reviewing full diff`);
+        ctx.deltaDiff = "";
+        s = sizes();
+        console.log(`  Re-estimated input: ~${s.total.toLocaleString()} tokens (full diff, no delta)  [${fmt(s)}]`);
+      }
       if (max > 0 && s.total > max && ctx.fileContexts.length > 0) {
         console.warn(`  Over MAX_INPUT_TOKENS (${max.toLocaleString()}) \u2014 file contexts are ${s.files.toLocaleString()} tokens across ${s.filesN} file(s); dropping them, reviewing diff-only`);
         ctx.fileContexts = [];
