@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { filterDiff, countChangedLines, parseVerdictScore, parseFindings, parseDeltaStats, isPathExcluded, scanTodos } from '../parsers.js'
+import { filterDiff, countChangedLines, parseVerdictScore, parseFindings, parseDeltaStats, isPathExcluded, scanTodos, parseChangedFiles } from '../parsers.js'
 
 describe('scanTodos', () => {
   it('finds a TODO in an added line with the correct new-file line number', () => {
@@ -341,5 +341,49 @@ describe('parseDeltaStats', () => {
 
   it('returns null for malformed comment', () => {
     expect(parseDeltaStats('<!-- DELTA_STATS: resolved=abc -->')).toBeNull()
+  })
+})
+
+describe('parseChangedFiles', () => {
+  const diff = [
+    'diff --git a/src/app.ts b/src/app.ts',
+    'index 1111111..2222222 100644',
+    '--- a/src/app.ts',
+    '+++ b/src/app.ts',
+    '@@ -1 +1,2 @@',
+    '++++ b/not-a-header.ts',
+    'diff --git a/src/new.ts b/src/new.ts',
+    'new file mode 100644',
+    '--- /dev/null',
+    '+++ b/src/new.ts',
+    '@@ -0,0 +1 @@',
+    '+x',
+    'diff --git a/src/old.ts b/src/old.ts',
+    'deleted file mode 100644',
+    '--- a/src/old.ts',
+    '+++ /dev/null',
+    '@@ -1 +0,0 @@',
+    '-x',
+    'diff --git a/src/before.ts b/src/after.ts',
+    'similarity index 90%',
+    'rename from src/before.ts',
+    'rename to src/after.ts',
+    'diff --git a/img/logo.png b/img/logo.png',
+    'Binary files a/img/logo.png and b/img/logo.png differ',
+    '',
+  ].join('\n')
+
+  it('lists every file with its status, using the new-side path', () => {
+    expect(parseChangedFiles(diff)).toEqual([
+      { path: 'src/app.ts', status: 'modified' },
+      { path: 'src/new.ts', status: 'added' },
+      { path: 'src/old.ts', status: 'deleted' },
+      { path: 'src/after.ts', status: 'renamed' },
+      { path: 'img/logo.png', status: 'modified' },
+    ])
+  })
+
+  it('returns [] for an empty diff', () => {
+    expect(parseChangedFiles('')).toEqual([])
   })
 })
