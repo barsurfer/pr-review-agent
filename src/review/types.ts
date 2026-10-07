@@ -27,6 +27,16 @@ export enum State {
   DONE,
 }
 
+/** A finished review handed to an outcome sink instead of being posted (benchmark mode). */
+export interface ReviewOutcome {
+  review: ReviewObject
+  reviewText: string
+  judged: boolean
+  judgeScores?: FindingScore[]
+}
+
+export type OutcomeSink = (outcome: ReviewOutcome) => void | Promise<void>
+
 /** Accumulated data shared across states. */
 export interface ReviewContext {
   // Immutable inputs
@@ -37,6 +47,7 @@ export interface ReviewContext {
   readonly force: 'off' | 'clean' | 're-review'
   readonly logUsage: boolean
   readonly repoSlug: string
+  readonly outcomeSink?: OutcomeSink
 
   // Populated progressively
   prInfo?: PRInfo

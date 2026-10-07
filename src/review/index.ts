@@ -17,7 +17,7 @@ function supersedeBoundary<T extends { resolved?: boolean }>(reviews: T[]): T | 
   const pool = unresolved.length > 0 ? unresolved : reviews
   return pool[pool.length - 1]
 }
-import type { ReviewContext } from './types.js'
+import type { ReviewContext, OutcomeSink } from './types.js'
 import type { VCSAdapter } from '../vcs/adapter.js'
 
 import type { UsageRecord } from './usage.js'
@@ -432,6 +432,13 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
     }
 
     case State.POST_REVIEW: {
+      // The sink takes the structured review instead of a posted comment, so cleanup, cut guard and footer don't apply.
+      if (ctx.outcomeSink) {
+        await ctx.outcomeSink({ review: ctx.reviewObject!, reviewText: ctx.reviewText!, judged: ctx.judgeUsage !== undefined, judgeScores: ctx.judgeScores })
+        ctx.action = 'REVIEW'
+        return State.DONE
+      }
+
       const judgeNotes = ctx.reviewText!.match(/<!--\s*JUDGE_NOTES:([\s\S]*?)-->/)
       if (judgeNotes) {
         console.log(`  Judge notes (stripped from comment): ${judgeNotes[1].trim()}`)
@@ -524,12 +531,12 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
 // Public API
 // ---------------------------------------------------------------------------
 
-export async function review(adapter: VCSAdapter, prId: string, dryRun = false, promptPath?: string, force: 'off' | 'clean' | 're-review' = 'off', logUsage = false, repoSlug = ''): Promise<UsageRecord | null> {
+export async function review(adapter: VCSAdapter, prId: string, dryRun = false, promptPath?: string, force: 'off' | 'clean' | 're-review' = 'off', logUsage = false, repoSlug = '', outcomeSink?: OutcomeSink): Promise<UsageRecord | null> {
   console.log(`\nStarting review for PR #${prId}`)
 
   const startTime = Date.now()
   const ctx: ReviewContext = {
-    adapter, prId, dryRun, promptPath, force, logUsage, repoSlug,
+    adapter, prId, dryRun, promptPath, force, logUsage, repoSlug, outcomeSink,
     usage: { input_tokens: 0, output_tokens: 0, cache_read: 0, cache_write: 0 },
     estimatedInputTokens: 0,
     action: 'ERROR',

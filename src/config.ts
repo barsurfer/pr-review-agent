@@ -11,7 +11,7 @@ function optional(name: string, defaultValue: string): string {
 }
 
 export const config = {
-  vcsProvider: optional('VCS_PROVIDER', 'bitbucket') as 'bitbucket' | 'github' | 'gitlab' | 'azure',
+  vcsProvider: optional('VCS_PROVIDER', 'bitbucket') as 'bitbucket' | 'github' | 'gitlab' | 'azure' | 'reviewbench',
 
   // Which LLM backend the reviewer/judge use. Only 'anthropic' is implemented; the seam
   // (src/llm/provider.ts) exists so a second provider is a new impl, not a re-plumb.

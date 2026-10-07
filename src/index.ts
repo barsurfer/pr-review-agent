@@ -12,6 +12,7 @@ import { GitHubAdapter } from './vcs/github.js'
 import { GitLabAdapter } from './vcs/gitlab.js'
 import { review } from './review/index.js'
 import { validateLocalPrompt, loadPrompt } from './prompt/loader.js'
+import { runBenchmark } from './benchmark.js'
 import type { VCSAdapter } from './vcs/adapter.js'
 
 const program = new Command()
@@ -38,6 +39,7 @@ program
   .option('--max-output-tokens <n>', 'Max output tokens for reviewer + judge (overrides MAX_OUTPUT_TOKENS)')
   .option('--effort <level>', 'Reviewer thinking effort: low|medium|high|xhigh|max (overrides REVIEW_EFFORT; ignored by models without effort)')
   .option('--judge-effort <level>', 'Judge thinking effort (overrides JUDGE_EFFORT)')
+  .option('--benchmark', 'ReviewBench mode: read the PR from RB_* env + mounted files, write findings JSON to RB_OUT instead of posting; always exits 0')
   .parse(process.argv)
 
 const opts = program.opts<{
@@ -60,9 +62,15 @@ const opts = program.opts<{
   maxOutputTokens?: string
   effort?: string
   judgeEffort?: string
+  benchmark?: boolean
 }>()
 
 async function main(): Promise<void> {
+  if (opts.benchmark) {
+    await runBenchmark()
+    return
+  }
+
   // --validate-prompt: parse prompt and exit (no review)
   if (opts.validatePrompt) {
     if (opts.prompt) {
