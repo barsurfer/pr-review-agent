@@ -141,4 +141,39 @@ describe('bundled review', () => {
     expect(vi.mocked(a.postComment).mock.calls[0][1]).not.toContain('bundle(s)')
     expect(record!.action).toBe('REVIEW')
   })
+
+  it('a bundle judge failure rethrows in normal mode (CI retries)', async () => {
+    const o = obj('X', 'a/one.ts')
+    mockRunReview.mockResolvedValue({ text: renderReview(o), usage, review: o })
+    mockRunJudge.mockRejectedValue(new Error('judge boom'))
+    await expect(review(adapter(BIG_DIFF, ['a/one.ts', 'a/two.ts', 'b/one.ts', 'b/two.ts']), '1', false))
+      .rejects.toThrow(/judge boom/)
+  })
+
+  it('a bundle judge failure falls back to unjudged findings with an outcome sink', async () => {
+    const o = obj('X', 'a/one.ts')
+    mockRunReview.mockResolvedValue({ text: renderReview(o), usage, review: o })
+    mockRunJudge.mockRejectedValue(new Error('judge boom'))
+    const sink = vi.fn().mockResolvedValue(undefined)
+    await review(adapter(BIG_DIFF, ['a/one.ts', 'a/two.ts', 'b/one.ts', 'b/two.ts']), '1', false, undefined, 'off', false, '', sink)
+    expect(sink).toHaveBeenCalledTimes(1)
+    const arg = sink.mock.calls[0][0] as { judged: boolean; review: ReviewObject }
+    expect(arg.judged).toBe(false)
+    expect(arg.review.findings.length).toBeGreaterThan(0)
+  })
+
+  it('a bundle that overflows the model context is left unreviewed, not failed', async () => {
+    mockRunReview.mockImplementation(async (...args) => {
+      const diff = args[6] as string
+      if (diff.includes('a/two.ts')) { const e = new Error('prompt is too long') as Error & { status: number }; e.status = 400; throw e }
+      const o = obj('Beta problem', 'b/one.ts')
+      return { text: renderReview(o), usage, review: o }
+    })
+    const a = adapter(BIG_DIFF, ['a/one.ts', 'a/two.ts', 'b/one.ts', 'b/two.ts'])
+    const record = await review(a, '1', false)
+    const posted = vi.mocked(a.postComment).mock.calls[0][1] as string
+    expect(posted).toContain('Beta problem')
+    expect(posted).toMatch(/was not reviewed/i)
+    expect(record!.action).toBe('REVIEW')
+  })
 })

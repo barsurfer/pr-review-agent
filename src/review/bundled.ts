@@ -8,6 +8,7 @@ import { runReview, runJudge } from '../claude/client.js'
 import { planBundles, splitDiffByFile, estimateTokens as tok } from './bundler.js'
 import { parseReviewMarkdown, mergeReviews, type BundleReview } from './aggregate.js'
 import { countFindings, isNoChange } from './formatter.js'
+import { isContextLengthError } from './parsers.js'
 import type { ReviewContext } from './types.js'
 
 // The chars/4 estimate under-counts code-heavy diffs; packing to 85% keeps real usage under the cap.
@@ -41,6 +42,7 @@ export async function runBundledReview(ctx: ReviewContext, maxInputTokens: numbe
   console.log(`  Bundled review: ${plan.bundles.length} bundle(s), ${plan.oversized.length} oversized file(s) unreviewed (budget ~${diffBudget.toLocaleString()} tokens of diff each)`)
 
   const reviews: BundleReview[] = []
+  const unreviewed = plan.oversized.map(u => u.path)
   const judgeScores: NonNullable<ReviewContext['judgeScores']> = []
   const judgeUsage = { input_tokens: 0, output_tokens: 0 }
   let judged = false
@@ -71,10 +73,30 @@ export async function runBundledReview(ctx: ReviewContext, maxInputTokens: numbe
     }
     content += `\n\n## BUNDLED REVIEW\nThis PR is too large for one pass. You are reviewing bundle ${i + 1} of ${plan.bundles.length}; the diff contains only: ${bundle.files.slice(0, 40).join(', ')}${bundle.files.length > 40 ? ', ...' : ''}. Review only these files and do not flag code you cannot see. Leave \`can_be_split\` empty.`
 
-    const result = await runReview(
-      config.anthropic.apiKey, config.anthropic.model, config.anthropic.maxRetries, config.anthropic.maxTokens, config.review.effort,
-      prInfo, diff, contexts, { ...ctx.prompt!, content }, ctx.previousReviews ?? [], ctx.replies ?? [], delta,
-    )
+    // Same backstop as CALL_CLAUDE: the chars/4 estimate can under-count, so on a context-length
+    // rejection drop this bundle's file contexts and retry diff-only; if the diff alone won't fit,
+    // leave the bundle unreviewed (surfaced under Unresolved Questions) rather than fail the PR.
+    let bundleContexts = contexts
+    const result = await (async () => {
+      for (;;) {
+        try {
+          return await runReview(
+            config.anthropic.apiKey, config.anthropic.model, config.anthropic.maxRetries, config.anthropic.maxTokens, config.review.effort,
+            prInfo, diff, bundleContexts, { ...ctx.prompt!, content }, ctx.previousReviews ?? [], ctx.replies ?? [], delta,
+          )
+        } catch (err: unknown) {
+          if (!isContextLengthError(err)) throw err
+          if (bundleContexts.length === 0) return null
+          console.warn(`  Bundle ${i + 1} exceeded the model context — dropping file contexts, retrying diff-only`)
+          bundleContexts = []
+        }
+      }
+    })()
+    if (!result) {
+      console.warn(`  Bundle ${i + 1} (${bundle.label}) could not be reviewed within the model context — leaving its files unreviewed`)
+      unreviewed.push(...bundle.files)
+      continue
+    }
     addUsage(ctx, result.usage)
     if (result.review?.no_change || isNoChange(result.text)) {
       console.log('  Reviewer: NO_CHANGE for this bundle')
@@ -91,13 +113,19 @@ export async function runBundledReview(ctx: ReviewContext, maxInputTokens: numbe
     const found = result.review ? countFindings(result.review) : { high: 0, medium: 0, low: 0 }
     console.log(`  Reviewer findings: ${found.high}H / ${found.medium}M / ${found.low}L`)
     if (config.judge.model && found.high + found.medium + found.low > 0) {
-      const verdict = await runJudge(config.anthropic.apiKey, config.judge.model, config.judge.maxRetries, config.anthropic.maxTokens, config.judge.effort, diff, text)
-      addUsage(ctx, verdict.usage)
-      judgeUsage.input_tokens += verdict.usage.input_tokens
-      judgeUsage.output_tokens += verdict.usage.output_tokens
-      judgeScores.push(...(verdict.scores ?? []))
-      text = verdict.text
-      judged = true
+      try {
+        const verdict = await runJudge(config.anthropic.apiKey, config.judge.model, config.judge.maxRetries, config.anthropic.maxTokens, config.judge.effort, diff, text)
+        addUsage(ctx, verdict.usage)
+        judgeUsage.input_tokens += verdict.usage.input_tokens
+        judgeUsage.output_tokens += verdict.usage.output_tokens
+        judgeScores.push(...(verdict.scores ?? []))
+        text = verdict.text
+        judged = true
+      } catch (err: unknown) {
+        // Benchmark: a judge failure falls back to the unjudged bundle findings; normal mode still throws so CI retries.
+        if (!ctx.outcomeSink) throw err
+        console.warn(`  Bundle ${i + 1} judge failed (${(err as Error).message}) — proceeding with unjudged reviewer findings`)
+      }
     }
     reviews.push({ label: bundle.label, parsed: parseReviewMarkdown(text) })
   }
@@ -107,7 +135,7 @@ export async function runBundledReview(ctx: ReviewContext, maxInputTokens: numbe
     return { ok: true }
   }
 
-  const merged = mergeReviews(reviews, plan.oversized.map(u => u.path))
+  const merged = mergeReviews(reviews, unreviewed)
   ctx.reviewText = merged.markdown
   ctx.reviewObject = sawDelta ? { ...merged.object, delta_stats: deltaStats } : merged.object
   ctx.bundleCount = plan.bundles.length

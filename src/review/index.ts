@@ -6,7 +6,7 @@ import { config } from '../config.js'
 import { loadPrompt } from '../prompt/loader.js'
 import { fetchContext } from '../context/fetcher.js'
 import { runReview, runCommentResponse, runJudge } from '../claude/client.js'
-import { filterDiff, countChangedLines, parseVerdictScore, isPathExcluded, scanTodos } from './parsers.js'
+import { filterDiff, countChangedLines, parseVerdictScore, isPathExcluded, scanTodos, isContextLengthError } from './parsers.js'
 import { buildReviewFooter, buildReplyFooter, stripPreviousFooter, stripDeltaStats, stripJudgeNotes, stripJenkinsMeta, stripPreamble, isNoChange, extractCommitHash, countFindings, markdownHasFindings, hasReplyFooter } from './formatter.js'
 import { runBundledReview } from './bundled.js'
 import { buildUsageRecord, logUsageRecord, getBuildCommit, getJobUrl } from './usage.js'
@@ -19,11 +19,6 @@ function supersedeBoundary<T extends { resolved?: boolean }>(reviews: T[]): T | 
   return pool[pool.length - 1]
 }
 
-// The API's context-length rejection — so the caller can degrade (drop file contexts) or skip rather than error.
-function isContextLengthError(err: unknown): boolean {
-  const e = err as { status?: number; message?: string }
-  return e?.status === 400 && /prompt is too long|maximum.*tokens|context (window|length)/i.test(e?.message ?? '')
-}
 import type { ReviewContext, OutcomeSink } from './types.js'
 import type { VCSAdapter } from '../vcs/adapter.js'
 

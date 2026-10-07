@@ -4,6 +4,12 @@
 
 import type { ChangedFile } from '../vcs/adapter.js'
 
+// The API's context-length rejection — so the caller can degrade (drop file contexts) or skip rather than error.
+export function isContextLengthError(err: unknown): boolean {
+  const e = err as { status?: number; message?: string }
+  return e?.status === 400 && /prompt is too long|maximum.*tokens|context (window|length)/i.test(e?.message ?? '')
+}
+
 /** Convert a glob-like pattern (e.g. "*.json", "package-lock.json") to a regex. */
 function patternToRegex(pattern: string): RegExp {
   // Exact filename match
