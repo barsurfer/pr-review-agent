@@ -1106,6 +1106,27 @@ describe('TODO scan', () => {
 })
 
 // ===========================================================================
+// Scenario 8f: Normal mode — a judge failure must still error (benchmark's catch must not leak)
+// ===========================================================================
+
+describe('normal mode: judge failure surfaces as ERROR (not swallowed)', () => {
+  it('rethrows a judge rejection when no outcome sink is set', async () => {
+    cfg.judge.model = 'claude-sonnet-5'
+    const adapter = makeAdapter({
+      getPreviousReviewComments: vi.fn().mockResolvedValue([
+        { id: '200', body: '### Summary\nx\n\n### Findings\n- **MEDIUM – Prior** (`a.ts:1`)\n  d' + footer(1, 'aabbcc112233'), createdOn: '2026-03-09T10:00:00Z' },
+      ]),
+      getCommitDiff: vi.fn().mockResolvedValue(DIFF),
+    })
+    setupClaudeMocks('### Summary\nRisky.\n\n### Findings\n- **MEDIUM – New** (`a.ts:1`)\n  desc', reviewWith([{ severity: 'MEDIUM', title: 'New', file: 'a.ts', lines: '1', body: 'desc' }]))
+    mockRunJudge.mockRejectedValue(new Error('judge boom'))
+
+    await expect(review(adapter, '100', false)).rejects.toThrow(/judge boom/)
+    expect(adapter.postComment).not.toHaveBeenCalled()
+  })
+})
+
+// ===========================================================================
 // Scenario 8g: Token-budget degradation — drop file contexts before skipping
 // ===========================================================================
 

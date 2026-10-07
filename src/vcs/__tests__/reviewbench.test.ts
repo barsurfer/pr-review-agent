@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync } from 'fs'
+import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { ReviewBenchAdapter, readReviewBenchEnv } from '../reviewbench.js'
@@ -89,6 +89,21 @@ describe('ReviewBenchAdapter', () => {
     await expect(adapter.getFileContent('../secret.txt', HEAD)).rejects.toThrow(/outside the repository/)
     await expect(adapter.getFileContent('bin.dat', HEAD)).rejects.toThrow(/binary/)
     expect(await adapter.getRepoFileContent('../secret.txt')).toBeNull()
+  })
+
+  it.skipIf(process.platform === 'win32')('refuses a symlink that points outside the checkout', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'rb-sym-'))
+    const repo = join(dir, 'repo')
+    mkdirSync(join(repo, 'src'), { recursive: true })
+    writeFileSync(join(dir, 'secret.txt'), 'outside')
+    writeFileSync(join(dir, 'diff.patch'), DIFF)
+    writeFileSync(join(dir, 'pr.json'), JSON.stringify({ pr_number: 1938 }))
+    symlinkSync(join(dir, 'secret.txt'), join(repo, 'src', 'leak.ts'))
+    const adapter = new ReviewBenchAdapter(readReviewBenchEnv({
+      RB_DIFF: join(dir, 'diff.patch'), RB_PR_JSON: join(dir, 'pr.json'), RB_REPO: repo, RB_OUT: join(dir, 'out', 'findings.json'),
+      RB_NWO: 'owner/repo', RB_PR_NUMBER: '1938', RB_BASE: BASE, RB_HEAD: HEAD, RB_AGENT: 'my-agent',
+    }))
+    await expect(adapter.getFileContent('src/leak.ts', HEAD)).rejects.toThrow(/outside the repository/)
   })
 
   it('returns null for a missing repo file (prompt loader falls back to defaults)', async () => {

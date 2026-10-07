@@ -64,4 +64,10 @@ describe('reviewbench entrypoint', () => {
     expect(out).toEqual(EMPTY)
     expect(Date.now() - started).toBeLessThan(30_000)
   })
+
+  it('tolerates a malformed BENCHMARK_DEADLINE_SECONDS instead of crashing spawnSync', () => {
+    const { status, out } = runEntrypoint('throw new Error("boom")', { BENCHMARK_DEADLINE_SECONDS: '15m' })
+    expect(status).toBe(0)
+    expect(out).toEqual(EMPTY)
+  })
 })

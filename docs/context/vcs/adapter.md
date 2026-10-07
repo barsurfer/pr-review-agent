@@ -58,7 +58,7 @@ interface VCSAdapter {
 - **Input:** `getDiff` reads `RB_DIFF`. `getChangedFiles` parses it with `parseChangedFiles`. File and repo-prompt reads come from the `RB_REPO` checkout (default `/work/repo`), pinned at `RB_HEAD`, so `ref` is ignored. Reads are refused outside the checkout (`../`, symlinks) and for binary files.
 - **PR info:** comes from `pr.json`; `sourceCommit = RB_HEAD`. Author and branch names don't exist there, so they're placeholders (`unknown`, `head@<sha12>`/`base@<sha12>`). A missing or partial `pr.json` doesn't crash.
 - **Single-shot:** no prior reviews or replies, so every run is a first review. `postComment`/`postReply` are no-ops. `getCommitDiff` throws because there is no delta.
-- **Output:** the FSM hands the structured review to an outcome sink in `POST_REVIEW` (see [review/fsm.md](../review/fsm.md)). The runner keeps the findings the judge kept (matched by title), drops any without a `file` + parseable `lines`, and writes `{pr, agent, findings[]}`. Any error still writes `findings: []` and exits 0.
+- **Output:** the FSM hands the structured review to an outcome sink in `POST_REVIEW` (see [review/fsm.md](../review/fsm.md)). The runner keeps the findings the judge kept — matched by location (path suffix + line-range overlap in the judge's Findings section, since the judge rewrites titles), title as fallback — drops any without a `file` + parseable `lines`, and writes `{pr, agent, findings[]}`. A judge failure falls back to the unjudged reviewer findings; any other error still writes `findings: []` and exits 0.
 
 ---
 

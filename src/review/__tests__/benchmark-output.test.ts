@@ -100,6 +100,18 @@ describe('keptByJudge', () => {
     const kept = keptByJudge(reframed, judged, [{ title: 'Catastrophic-backtracking ReDoS not addressed', severity: 'MEDIUM', score: 8 }])
     expect(kept.map(f => f.title)).toEqual(['ReDoS via backtracking'])
   })
+
+  it('matches a basename-only judge citation and a narrowed range', () => {
+    const reviewer = [finding({ title: 'Unbounded loop', file: 'src/app/core/pool.ts', lines: '40-60' })]
+    const judged = '### Findings\n- **MEDIUM – Loop can run unbounded** (`pool.ts:52`)\n  desc\n\n### Merge Confidence: 70%'
+    expect(keptByJudge(reviewer, judged, []).map(f => f.title)).toEqual(['Unbounded loop'])
+  })
+
+  it('does not match a location that lives in Behavioral Diff rather than Findings', () => {
+    const reviewer = [finding({ title: 'Not actually flagged', file: 'src/pool.ts', lines: '2-3' })]
+    const judged = '### Findings\nNo findings.\n\n### Behavioral Diff\n- pool changed (`src/pool.ts:2-3`)\n\n### Merge Confidence: 90%'
+    expect(keptByJudge(reviewer, judged, [])).toEqual([])
+  })
 })
 
 describe('buildBenchmarkOutput', () => {
