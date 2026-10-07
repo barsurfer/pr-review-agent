@@ -1,0 +1,21 @@
+## REVIEW PRIORITIES
+
+### Angular Specifics
+
+- Signal behavior (signal, computed, effect); signal writes inside effects; signal write loops; effect dependency mistakes
+- Unnecessary signal recomputation; missing signal cleanup
+- RxJS <-> Signal interop changes; missing RxJS teardown (subscriptions, takeUntilDestroyed)
+- Routing behavior changes (guards, resolvers, lazy loading); router edge cases
+- Change detection impact; OnPush assumptions broken; change detection explosions
+- Functions or expensive pipes inside templates; heavy template expressions
+- trackBy missing or incorrect; virtual scroll misuse
+- Async race conditions in observable chains
+- Signal ownership violations; business logic inside components; facade misuse
+- Security: innerHTML usage, DomSanitizer misuse, router URL injection
+
+## EXCEPTIONS
+- Do not claim a subscribe() lacks error handling without tracing the full RxJS pipe chain — catchError inside switchMap/exhaustMap/mergeMap catches errors before they reach subscribe()
+- Do not claim an Angular input() can be null/undefined without checking the input's default value and any Zod/schema defaults on the model
+- Do not claim unbounded Map/cache growth without counting the actual number of possible key permutations from the code. If the key set is finite and small (< 20 combinations), it is not unbounded — do not flag it
+- Do not flag a race condition or concurrent execution if the pipe uses exhaustMap, throttleTime, or debounceTime — these operators exist specifically to prevent it
+- Do not conflate separate Observable chains. Each pipe chain has its own operators and error handling — catchError in stream A does not affect stream B. Trace each chain independently
