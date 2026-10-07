@@ -44,8 +44,7 @@ export function normalizeFindingPath(file: string, changedPaths: readonly string
 
 const normTitle = (title: string): string => title.toLowerCase().replace(/[`*_"']/g, '').replace(/\s+/g, ' ').trim()
 
-// The judge rewrites finding titles but keeps their location, so recover its kept set by location
-// (file:lines in the rendered review) first, and fall back to title for findings without one.
+// The judge rewrites titles but keeps locations — match its kept set by file:lines first, title as fallback.
 export function keptByJudge(findings: ReviewFinding[], judgedText: string, scores: FindingScore[] = []): ReviewFinding[] {
   const locs = new Set([...judgedText.matchAll(/\(`?([^\s():`]+):(\d+(?:-\d+)?)`?\)/g)].map(m => `${m[1]}:${m[2]}`))
   const rendered = [...judgedText.matchAll(/^[ \t]*-\s*\*\*(?:HIGH|MEDIUM|LOW)\s*[–—-]\s*(.+?)\*\*/gim)].map(m => m[1])
