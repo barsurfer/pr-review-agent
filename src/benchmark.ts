@@ -15,7 +15,7 @@ const CONFIG_LABELS: Record<string, (value: string) => void> = {
 
 export function applyConfigLabels(env: NodeJS.ProcessEnv): void {
   for (const [name, value] of Object.entries(env)) {
-    const key = name.match(/^RB_CONFIG_(.+)$/)?.[1]
+    const key = name.match(/^RB_CONFIG_(.+)$/)?.[1]?.toUpperCase()
     if (!key || !value) continue
     const apply = CONFIG_LABELS[key]
     if (apply) apply(value)

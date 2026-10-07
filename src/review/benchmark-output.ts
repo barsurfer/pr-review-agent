@@ -44,12 +44,27 @@ export function normalizeFindingPath(file: string, changedPaths: readonly string
 
 const normTitle = (title: string): string => title.toLowerCase().replace(/[`*_"']/g, '').replace(/\s+/g, ' ').trim()
 
-// The judge rewrites titles but keeps locations — match its kept set by file:lines first, title as fallback.
+const pathsMatch = (a: string, b: string): boolean => a === b || a.endsWith('/' + b) || b.endsWith('/' + a)
+const rangesOverlap = (x: { start: number; end: number }, y: { start: number; end: number }): boolean => x.start <= y.end && y.start <= x.end
+
+// The judge rewrites titles and may narrow a range or cite a basename, so match its kept set by
+// location (path suffix + line-range overlap) within the Findings section, with title as fallback.
 export function keptByJudge(findings: ReviewFinding[], judgedText: string, scores: FindingScore[] = []): ReviewFinding[] {
-  const locs = new Set([...judgedText.matchAll(/\(`?([^\s():`]+):(\d+(?:-\d+)?)`?\)/g)].map(m => `${m[1]}:${m[2]}`))
-  const rendered = [...judgedText.matchAll(/^[ \t]*-\s*\*\*(?:HIGH|MEDIUM|LOW)\s*[–—-]\s*(.+?)\*\*/gim)].map(m => m[1])
-  const titles = new Set([...scores.map(s => s.title), ...rendered].map(normTitle))
-  return findings.filter(f => (!!f.file && !!f.lines && locs.has(`${f.file}:${f.lines}`)) || titles.has(normTitle(f.title)))
+  const section = judgedText.match(/#{1,4}\s*Findings\b([\s\S]*?)(?=\n#{1,4}\s|$)/i)?.[1] ?? judgedText
+  const locs = [...section.matchAll(/\(\s*`?([^`()\n]+?):([0-9][0-9,\s–—L-]*?)`?\s*\)/gi)]
+    .map(m => ({ path: normalizeFindingPath(m[1]), range: parseLineRange(m[2]) }))
+    .filter((l): l is { path: string; range: { start: number; end: number } } => l.range !== null)
+  const titles = new Set([
+    ...scores.map(s => s.title),
+    ...[...section.matchAll(/\*\*(?:HIGH|MEDIUM|LOW)\s*[–—-]\s*(.+?)\*\*/gi)].map(m => m[1]),
+  ].map(normTitle))
+  return findings.filter(f => {
+    if (titles.has(normTitle(f.title))) return true
+    const range = parseLineRange(f.lines)
+    if (!f.file || !range) return false
+    const path = normalizeFindingPath(f.file)
+    return locs.some(l => pathsMatch(path, l.path) && rangesOverlap(range, l.range))
+  })
 }
 
 // The schema requires file + line range, so PR-level findings have no place in it and are dropped.

@@ -45,7 +45,9 @@ export function parseChangedFiles(diff: string): ChangedFile[] {
       : /^deleted file mode /m.test(meta) ? 'deleted'
       : renamedTo ? 'renamed'
       : 'modified'
-    files.push({ path: renamedTo ?? newPath ?? oldPath ?? header[2], status })
+    // git appends a TAB (+ similarity/rename info) when a path contains spaces — drop it.
+    const path = (renamedTo ?? newPath ?? oldPath ?? header[2]).replace(/\t.*$/, '')
+    files.push({ path, status })
   }
   return files
 }

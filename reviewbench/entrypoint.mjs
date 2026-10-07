@@ -7,11 +7,17 @@ const env = process.env
 const out = env.RB_OUT || '/work/out/findings.json'
 const bundle = env.AGENT_BUNDLE || '/app/pr-review-agent.cjs'
 // Default leaves a minute under ReviewBench's 15-minute per-PR limit to write the fallback.
-const deadlineMs = Number(env.BENCHMARK_DEADLINE_SECONDS || 840) * 1000
+// A finite, positive seconds value or 840 — a bad operator-set value must not make spawnSync throw.
+const secs = Number(env.BENCHMARK_DEADLINE_SECONDS)
+const deadlineMs = (Number.isFinite(secs) && secs > 0 ? secs : 840) * 1000
 
-const run = spawnSync(process.execPath, [bundle, '--benchmark'], { stdio: 'inherit', timeout: deadlineMs })
-if (run.error || run.status !== 0) {
-  console.error(`entrypoint: agent ${run.error ? `failed: ${run.error.message}` : `exited with ${run.status ?? run.signal}`}`)
+try {
+  const run = spawnSync(process.execPath, [bundle, '--benchmark'], { stdio: 'inherit', timeout: deadlineMs })
+  if (run.error || run.status !== 0) {
+    console.error(`entrypoint: agent ${run.error ? `failed: ${run.error.message}` : `exited with ${run.status ?? run.signal}`}`)
+  }
+} catch (err) {
+  console.error(`entrypoint: could not run agent: ${err.message}`)
 }
 
 if (!hasValidFindings()) {
