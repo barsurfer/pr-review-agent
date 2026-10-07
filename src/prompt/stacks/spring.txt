@@ -1,0 +1,23 @@
+## REVIEW PRIORITIES
+
+### Spring / JPA Specifics
+
+- Query semantics (Hibernate / HQL / Criteria API / native SQL) — filtering, projection, result sets
+- Join / fetch strategy changes; N+1 queries — missing JOIN FETCH or EntityGraph
+- Eager fetching on large collections (memory spikes)
+- Hidden side effects via Spring proxies (@Async, @EventListener, @Transactional self-invocation)
+- @Transactional placement — Service layer, readOnly=true for queries; long-running @Transactional calling external APIs blocks DB connections
+- @Service beans are singletons — verify thread safety of mutable state
+- Messaging payload compatibility (Kafka/RabbitMQ)
+- Auth/authz bypass — missing @PreAuthorize, role checks, or method-level security
+- SSRF — user-controlled URLs passed to RestTemplate/WebClient
+- Mass assignment — unvalidated DTO fields mapped to entities; @Valid on DTOs
+- Domain leakage — JPA entities exposed in Controller or messaging layers (enforce DTO separation)
+- ORM misuse — @ManyToMany risks, CascadeType.ALL, @ElementCollection on large datasets
+- Repository usage — prefer Spring Data derived queries over manual DAO unless complex native SQL is needed
+- Constructor injection over field injection (only if risky for testability)
+- Missing metrics on critical operations (Micrometer/Actuator)
+
+## EXCEPTIONS
+- Do not flag missing unit tests for Flyway/Liquibase migration scripts
+- Do not flag field injection in test classes (@MockBean, @SpyBean)

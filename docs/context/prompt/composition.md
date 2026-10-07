@@ -47,13 +47,21 @@ Separately, a deterministic `TODO`/`FIXME`/`HACK` scan (`scanTodos`, `ENABLE_TOD
 1. `--prompt <path>` CLI flag (local file)
 2. `.agent-review-instructions.md` from PR's **source commit**: root → `docs/` → module fallback
 3. `.agent-review-instructions.md` from PR's **target branch**: same path list
-4. All four sections default if file not found
+4. No repo prompt and no `--prompt`: composed **tech-stack fallback** (below), if any base is detected
+5. All four sections default if nothing above applies
 
 **Module fallback:** when every changed file in the PR lives under a single top-level
 directory (monorepo module, e.g. `alice-web/`), that directory is treated as an effective
 root and `<dir>/.agent-review-instructions.md` → `<dir>/docs/...` are probed after the
 repo-root paths. Root-level changed files don't disqualify detection; a second top-level
 directory does (no guessing on ambiguous PRs).
+
+**Tech-stack fallback** (`src/prompt/stack.ts`, `src/prompt/stacks/<name>.txt`): the universal fallback for repos with no prompt of ours (ReviewBench, arbitrary repos). Fragments are composable, not one monolith:
+- **Bases** by extension: `java`, `kotlin` (`.kt/.kts`), `python`, `typescript-node` (js/ts), `frontend` (`.tsx/.jsx/.vue/.svelte/.html/.css/.scss`; also plain js/ts when any frontend signal is present). Non-deleted files only; config/docs/assets/extension-less files are ignored; source in other languages counts as "other" against every base.
+- **Floor:** a base is injected when it owns >= 20% (`BASE_FLOOR`) of the classified files, largest first. No base above the floor → generic default prompt.
+- **Overlays** from markers in the diff only (no extra repo reads), each requiring its base above the floor: `spring` (jvm base + `import org.springframework`, an unambiguous Spring annotation, or `application.(properties|yml)`; plain Java never gets it), `angular` (`*.component|directive.*`, `angular.json`, `@angular/` import), `ionic` (`@ionic/`/`@capacitor/` import, `ionic.config.json`, `capacitor.config.*`). `.module/.pipe/.guard` are not Angular markers (NestJS collision).
+- **Compose:** `loadPrompt(..., changedFiles, diff)` merges fragments into the four sections: first ROLE (largest base) wins; priorities/exceptions/mental model concatenate, identical bullet lines de-duplicated. `source` becomes `stack:java+spring` etc. (shown in the review footer).
+- Files are embedded by `scripts/bundle.mjs` as `__STACK_PROMPTS__` (same dual-load as the base template) and copied to `dist/prompt/stacks` by `copy-assets`. They are generic: org-specific exceptions live in `prompts/` / repo files.
 
 YAML frontmatter in the file is stripped before parsing. Only the four `## SECTION` headers are extracted — all other content is ignored.
 
