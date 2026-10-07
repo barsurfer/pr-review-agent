@@ -44,6 +44,9 @@ export const config = {
     // Output-token cap for reviewer + judge. The Claude 5 family thinks by default and that
     // counts against this budget, so too low a cap truncates (16k cut off Sonnet 5 mid-review).
     maxTokens: parseInt(optional('MAX_OUTPUT_TOKENS', '32000'), 10),
+    // Model context window; the input budget is capped at this minus the output reserve so a
+    // large diff degrades/skips before the API rejects it (0 = don't cap on context).
+    modelContextTokens: parseInt(optional('MODEL_CONTEXT_TOKENS', '200000'), 10),
   },
 
   judge: {

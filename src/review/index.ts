@@ -17,6 +17,12 @@ function supersedeBoundary<T extends { resolved?: boolean }>(reviews: T[]): T | 
   const pool = unresolved.length > 0 ? unresolved : reviews
   return pool[pool.length - 1]
 }
+
+// The API's context-length rejection — so the caller can degrade (drop file contexts) or skip rather than error.
+function isContextLengthError(err: unknown): boolean {
+  const e = err as { status?: number; message?: string }
+  return e?.status === 400 && /prompt is too long|maximum.*tokens|context (window|length)/i.test(e?.message ?? '')
+}
 import type { ReviewContext, OutcomeSink } from './types.js'
 import type { VCSAdapter } from '../vcs/adapter.js'
 
@@ -275,7 +281,11 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         `prompt ${s.prompt.toLocaleString()} | diff ${s.diff.toLocaleString()} | delta ${s.delta.toLocaleString()} | files ${s.files.toLocaleString()} (${s.filesN}) | prev_reviews ${s.reviews.toLocaleString()} (${s.reviewsN}) | replies ${s.replies.toLocaleString()} (${s.repliesN})`
 
       let s = sizes()
-      const max = config.anthropic.maxInputTokens
+      // Input budget: the smaller of MAX_INPUT_TOKENS and the model's context minus the output
+      // reserve, so a big diff degrades/skips here instead of hitting a context-length 400.
+      const ctxCap = config.anthropic.modelContextTokens > 0 ? config.anthropic.modelContextTokens - config.anthropic.maxTokens : 0
+      const limits = [config.anthropic.maxInputTokens, ctxCap].filter(n => n > 0)
+      const max = limits.length ? Math.min(...limits) : 0
       console.log(`  Estimated input: ~${s.total.toLocaleString()} tokens  [${fmt(s)}]`)
 
       // A delta larger than the full PR diff means the branch merged its target in (commit-to-commit delta captured the merge) — drop it and review the bounded full diff.
@@ -289,7 +299,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       // Degrade before skipping: file contexts are the largest optional payload —
       // drop them and review diff-only rather than skip a large PR entirely.
       if (max > 0 && s.total > max && ctx.fileContexts!.length > 0) {
-        console.warn(`  Over MAX_INPUT_TOKENS (${max.toLocaleString()}) — file contexts are ${s.files.toLocaleString()} tokens across ${s.filesN} file(s); dropping them, reviewing diff-only`)
+        console.warn(`  Over input budget (${max.toLocaleString()}) — file contexts are ${s.files.toLocaleString()} tokens across ${s.filesN} file(s); dropping them, reviewing diff-only`)
         ctx.fileContexts = []
         ctx.degraded = true
         s = sizes()
@@ -300,7 +310,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
 
       if (max > 0 && s.total > max) {
         ctx.action = 'SKIP'
-        ctx.skipReason = `Estimated input ~${s.total.toLocaleString()} tokens exceeds MAX_INPUT_TOKENS (${max.toLocaleString()}) even without file context — ${fmt(s)}`
+        ctx.skipReason = `Estimated input ~${s.total.toLocaleString()} tokens exceeds the input budget (${max.toLocaleString()}; min of MAX_INPUT_TOKENS and model context) even without file context — ${fmt(s)}`
         return State.SKIP
       }
       return State.CALL_CLAUDE
@@ -317,7 +327,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       }
       const reviewPrompt = { ...ctx.prompt!, content }
 
-      const result = await runReview(
+      const call = () => runReview(
         config.anthropic.apiKey,
         config.anthropic.model,
         config.anthropic.maxRetries,
@@ -331,6 +341,25 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         ctx.replies ?? [],
         ctx.deltaDiff ?? ''
       )
+      // Backstop for an under-counted estimate: on a context-length rejection, drop file contexts
+      // and retry diff-only; if the diff alone won't fit, skip rather than let the API error.
+      const result = await (async () => {
+        for (;;) {
+          try { return await call() }
+          catch (err: unknown) {
+            if (!isContextLengthError(err)) throw err
+            if (ctx.fileContexts!.length === 0) return null
+            console.warn('  Prompt exceeded the model context — dropping file contexts, retrying diff-only')
+            ctx.fileContexts = []
+            ctx.degraded = true
+          }
+        }
+      })()
+      if (!result) {
+        ctx.action = 'SKIP'
+        ctx.skipReason = 'Diff exceeds the model context window'
+        return State.SKIP
+      }
       ctx.reviewText = result.text
       ctx.reviewObject = result.review
       ctx.usage.input_tokens += result.usage.input_tokens

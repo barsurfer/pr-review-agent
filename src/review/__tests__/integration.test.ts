@@ -1183,6 +1183,40 @@ describe('token-budget degradation', () => {
 })
 
 // ===========================================================================
+// Scenario 8g2: Context-length rejection — degrade to diff-only, then skip (estimate under-counts)
+// ===========================================================================
+
+describe('context-length overflow (estimate under-counted)', () => {
+  const tooLong = () => Object.assign(new Error('400 prompt is too long: 300000 tokens > 200000 maximum'), { status: 400 })
+
+  it('drops file contexts and retries diff-only when the model rejects on context length', async () => {
+    const adapter = makeAdapter()
+    mockFetchContext.mockResolvedValue([{ path: 'big.ts', content: 'x'.repeat(8000) }])
+    mockRunReview.mockReset()
+      .mockRejectedValueOnce(tooLong())
+      .mockResolvedValueOnce({ text: '### Summary\nok\n\n### Findings\n\nNo findings.\n\n### Unresolved Questions\nNone.', usage: { input_tokens: 1000, output_tokens: 200 }, review: reviewWith([]) })
+
+    const record = await review(adapter, '100', false)
+
+    expect(mockRunReview).toHaveBeenCalledTimes(2)
+    expect(record!.degraded).toBe(true)
+    expect(mockRunReview.mock.calls[1][7]).toEqual([])   // retry was diff-only
+  })
+
+  it('skips when the diff alone exceeds the context (no file contexts left to drop)', async () => {
+    const adapter = makeAdapter()
+    mockFetchContext.mockResolvedValue([])
+    mockRunReview.mockReset().mockRejectedValue(tooLong())
+
+    const record = await review(adapter, '100', false)
+
+    expect(record!.action).toBe('SKIP')
+    expect(record!.skip_reason).toMatch(/context window/i)
+    expect(mockRunReview).toHaveBeenCalledTimes(1)
+  })
+})
+
+// ===========================================================================
 // Scenario 8h: ENABLE_SPLIT_CHECK toggles the split-theme instruction in the reviewer prompt
 // ===========================================================================
 
