@@ -37,6 +37,8 @@ export const config = {
   anthropic: {
     apiKey: required('ANTHROPIC_API_KEY'),
     model: optional('CLAUDE_MODEL', 'claude-haiku-4-5-20251001'),
+    // ReviewBench passes the registered model endpoint here; empty keeps the SDK default.
+    baseUrl: optional('RB_MODEL_BASE_URL', ''),
     maxRetries: parseInt(optional('MAX_RETRIES', '3'), 10),
     maxInputTokens: parseInt(optional('MAX_INPUT_TOKENS', '250000'), 10),
     // Output-token cap for reviewer + judge. The Claude 5 family thinks by default and that

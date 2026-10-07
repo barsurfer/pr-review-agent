@@ -20,7 +20,8 @@ class AnthropicProvider implements LLMProvider {
   private readonly client: Anthropic
 
   constructor(apiKey: string) {
-    this.client = new Anthropic({ apiKey })
+    const baseURL = anthropicBaseUrl(config.anthropic.baseUrl)
+    this.client = new Anthropic(baseURL ? { apiKey, baseURL } : { apiKey })
   }
 
   async complete(system: string, user: string, opts: LLMOptions): Promise<{ text: string; usage: ClaudeUsage }> {
@@ -81,6 +82,11 @@ function mapUsage(u: Anthropic.Message['usage']): ClaudeUsage {
     cache_read_input_tokens: u.cache_read_input_tokens ?? 0,
     cache_creation_input_tokens: u.cache_creation_input_tokens ?? 0,
   }
+}
+
+// The SDK appends /v1/messages itself, so an endpoint registered as ".../v1" would 404 on /v1/v1.
+export function anthropicBaseUrl(url: string): string | undefined {
+  return url.trim().replace(/\/+$/, '').replace(/\/v1$/, '') || undefined
 }
 
 /** Top-level required keys the parsed object is missing — a schema-honoring provider returns []. */

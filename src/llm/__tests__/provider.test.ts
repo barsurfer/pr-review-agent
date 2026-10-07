@@ -4,7 +4,23 @@ import { describe, it, expect, vi } from 'vitest'
 // pure-helper test doesn't depend on the env (CI has no .env).
 vi.mock('../../config.js', () => ({ config: { llmProvider: 'anthropic' } }))
 
-import { missingRequired } from '../provider.js'
+import { missingRequired, anthropicBaseUrl } from '../provider.js'
+
+describe('anthropicBaseUrl', () => {
+  it('is undefined when unset, keeping the SDK default', () => {
+    expect(anthropicBaseUrl('')).toBeUndefined()
+    expect(anthropicBaseUrl('  ')).toBeUndefined()
+  })
+
+  it.each([
+    ['https://api.anthropic.com', 'https://api.anthropic.com'],
+    ['https://api.anthropic.com/', 'https://api.anthropic.com'],
+    ['https://api.anthropic.com/v1', 'https://api.anthropic.com'],
+    ['https://proxy.example.com/anthropic/v1/', 'https://proxy.example.com/anthropic'],
+  ])('%s → %s (the SDK appends /v1/messages itself)', (input, expected) => {
+    expect(anthropicBaseUrl(input)).toBe(expected)
+  })
+})
 
 describe('missingRequired', () => {
   const schema = { required: ['a', 'b'] } as Record<string, unknown>
