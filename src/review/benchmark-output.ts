@@ -44,11 +44,13 @@ export function normalizeFindingPath(file: string, changedPaths: readonly string
 
 const normTitle = (title: string): string => title.toLowerCase().replace(/[`*_"']/g, '').replace(/\s+/g, ' ').trim()
 
-// The judge returns prose, not structured findings, so its kept set is recovered by title (scores + rendered headings).
+// The judge rewrites finding titles but keeps their location, so recover its kept set by location
+// (file:lines in the rendered review) first, and fall back to title for findings without one.
 export function keptByJudge(findings: ReviewFinding[], judgedText: string, scores: FindingScore[] = []): ReviewFinding[] {
+  const locs = new Set([...judgedText.matchAll(/\(`?([^\s():`]+):(\d+(?:-\d+)?)`?\)/g)].map(m => `${m[1]}:${m[2]}`))
   const rendered = [...judgedText.matchAll(/^[ \t]*-\s*\*\*(?:HIGH|MEDIUM|LOW)\s*[–—-]\s*(.+?)\*\*/gim)].map(m => m[1])
-  const kept = new Set([...scores.map(s => s.title), ...rendered].map(normTitle))
-  return findings.filter(f => kept.has(normTitle(f.title)))
+  const titles = new Set([...scores.map(s => s.title), ...rendered].map(normTitle))
+  return findings.filter(f => (!!f.file && !!f.lines && locs.has(`${f.file}:${f.lines}`)) || titles.has(normTitle(f.title)))
 }
 
 // The schema requires file + line range, so PR-level findings have no place in it and are dropped.

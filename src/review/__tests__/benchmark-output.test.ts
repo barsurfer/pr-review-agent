@@ -93,6 +93,13 @@ describe('keptByJudge', () => {
     const obj: ReviewObject = { summary: 's', findings: reviewer, behavioral_diff: [], production_risk: [], unresolved_questions: [] }
     expect(keptByJudge(reviewer, renderReview(obj))).toEqual(reviewer)
   })
+
+  it('keeps a finding whose title the judge reframed, matched by its preserved location', () => {
+    const reframed = [finding({ title: 'ReDoS via backtracking', file: 'src/engine.ts', lines: '12-20' })]
+    const judged = '### Findings\n- **MEDIUM – Catastrophic-backtracking ReDoS not addressed** (`src/engine.ts:12-20`)\n  still exploitable.\n\n### Merge Confidence: 70%'
+    const kept = keptByJudge(reframed, judged, [{ title: 'Catastrophic-backtracking ReDoS not addressed', severity: 'MEDIUM', score: 8 }])
+    expect(kept.map(f => f.title)).toEqual(['ReDoS via backtracking'])
+  })
 })
 
 describe('buildBenchmarkOutput', () => {
