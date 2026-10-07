@@ -215,7 +215,7 @@ describe('benchmark mode fail-safe', () => {
     expect(process.exitCode ?? 0).toBe(0)
   })
 
-  it('writes findings: [] when the judge fails', async () => {
+  it('falls back to the unjudged reviewer findings when the judge fails (not empty)', async () => {
     completeStructured.mockImplementation(async (_s: string, _u: string, schema: unknown) => {
       if (schema === REVIEW_OUTPUT_SCHEMA) return { object: REVIEW, usage }
       throw new Error('Structured output missing required field(s): finding_scores')
@@ -224,7 +224,10 @@ describe('benchmark mode fail-safe', () => {
 
     await expect(runBenchmark(env)).resolves.toBeUndefined()
 
-    expect(readOut(env).findings).toEqual([])
+    const out = readOut(env)
+    expectAccepted(out)
+    // judge errored → keep the reviewer's line-anchored findings rather than zeroing the PR
+    expect(out.findings.map((f: any) => f.message.split(':')[0])).toEqual(['Race on conns', 'Cited by basename', 'Speculative leak'])
   })
 
   it('writes findings: [] when the diff is missing, without calling the model', async () => {

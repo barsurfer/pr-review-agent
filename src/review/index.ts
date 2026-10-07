@@ -404,29 +404,34 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       }
 
       ctx.reviewTextBeforeJudge = ctx.reviewText
-      const result = await runJudge(
-        config.anthropic.apiKey,
-        config.judge.model,
-        config.judge.maxRetries,
-        config.anthropic.maxTokens,
-        config.judge.effort,
-        ctx.filteredDiff!,
-        ctx.reviewText!,
-      )
-
-      ctx.reviewText = result.text
-      ctx.judgeScores = result.scores
-      if (result.notes) {
-        console.log(`  Judge notes (not posted): ${result.notes}`)
+      try {
+        const result = await runJudge(
+          config.anthropic.apiKey,
+          config.judge.model,
+          config.judge.maxRetries,
+          config.anthropic.maxTokens,
+          config.judge.effort,
+          ctx.filteredDiff!,
+          ctx.reviewText!,
+        )
+        ctx.reviewText = result.text
+        ctx.judgeScores = result.scores
+        if (result.notes) {
+          console.log(`  Judge notes (not posted): ${result.notes}`)
+        }
+        if (result.scores?.length) {
+          console.log(`  Judge finding scores: ${result.scores.map(s => `${s.severity} ${s.score}/10`).join(', ')}`)
+        }
+        ctx.judgeUsage = { input_tokens: result.usage.input_tokens, output_tokens: result.usage.output_tokens }
+        ctx.usage.input_tokens += result.usage.input_tokens
+        ctx.usage.output_tokens += result.usage.output_tokens
+        ctx.usage.cache_read += result.usage.cache_read_input_tokens ?? 0
+        ctx.usage.cache_write += result.usage.cache_creation_input_tokens ?? 0
+      } catch (err: unknown) {
+        // Benchmark: a judge failure falls back to the unjudged reviewer findings (judged stays false) rather than erroring; normal mode still throws so CI retries.
+        if (!ctx.outcomeSink) throw err
+        console.warn(`  Judge failed (${(err as Error).message}) — proceeding with unjudged reviewer findings`)
       }
-      if (result.scores?.length) {
-        console.log(`  Judge finding scores: ${result.scores.map(s => `${s.severity} ${s.score}/10`).join(', ')}`)
-      }
-      ctx.judgeUsage = { input_tokens: result.usage.input_tokens, output_tokens: result.usage.output_tokens }
-      ctx.usage.input_tokens += result.usage.input_tokens
-      ctx.usage.output_tokens += result.usage.output_tokens
-      ctx.usage.cache_read += result.usage.cache_read_input_tokens ?? 0
-      ctx.usage.cache_write += result.usage.cache_creation_input_tokens ?? 0
 
       return State.POST_REVIEW
     }
