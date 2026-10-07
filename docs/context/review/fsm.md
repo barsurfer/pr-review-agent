@@ -36,7 +36,9 @@ FETCH_PR_INFO
                                      └─ [no judge] → POST_REVIEW → DONE
 ```
 
-**15 states. 9 possible outcomes:**
+**Bundled path (`ENABLE_BUNDLED_REVIEW=true`, default off):** after `FETCH_CONTEXT`, `ESTIMATE_TOKENS` drops file contexts if over `MAX_INPUT_TOKENS`; if the diff alone is still over budget it routes to `BUNDLED_REVIEW` instead of SKIP, then `POST_REVIEW`. In-budget PRs never enter it.
+
+**16 states. 9 possible outcomes:**
 1. Skip — branch exclusion
 2. Skip — no reviewable changes after exclusions
 3. Skip — threshold (too few/many reviewable files or lines)
@@ -59,9 +61,11 @@ FETCH_PR_INFO
 | `CHECK_PREVIOUS_REVIEWS` | Parses commit hash from last review footer; triggers delta diff pre-check if different commit |
 | `LOAD_PROMPT` | Fetches `.agent-review-instructions.md` from the target repo (CLI `--prompt` → source commit → target branch; each ref probes root → `docs/` → single-module-dir fallback; defaults last) |
 | `FETCH_CONTEXT` | Fetches full file content for changed files (see [fetching/strategy.md](../fetching/strategy.md)) |
+| `ESTIMATE_TOKENS` | Estimates input (~chars/4); over the input budget (min of `MAX_INPUT_TOKENS` and model context minus output reserve) → drops file contexts (diff-only); still over → `BUNDLED_REVIEW` when enabled, else SKIP |
 | `CALL_CLAUDE` | Assembles payload (PR info, prior review, developer discussion, diff, file context); calls reviewer model. The reviewer returns a typed object (`ctx.reviewObject`); `renderReview` builds `reviewText`. See [llm/structured-output.md](../llm/structured-output.md) |
 | `CHECK_NO_CHANGE` | Inspects `reviewText` for the `NO_CHANGE` sentinel (rendered when the reviewer sets `no_change`) before any further processing |
 | `JUDGE_REVIEW` | If `JUDGING_MODEL` set: sends diff + review to judge for finding validation; stores per-finding scores (`ctx.judgeScores`). Otherwise passthrough |
+| `BUNDLED_REVIEW` | Big-PR map-reduce (`bundled.ts`): `planBundles` groups per-file diffs by directory into bundles of ≤85% of the input budget (min of `MAX_INPUT_TOKENS` and model context) minus fixed overhead (prompt, history); per bundle runs the normal `runReview` + `runJudge` sequentially with that bundle's diff/delta/file contexts; `aggregate.ts` parses each result's markdown, dedupes findings (same file + overlapping lines + similar title), merges sections, Merge Confidence = min across bundles. Files bigger than a whole bundle are listed under Unresolved Questions as unreviewed. Skips if bundles > `MAX_BUNDLES` (default 8) or fixed overhead leaves no room. While enabled, `MAX_CHANGED_FILES/LINES` don't skip. Not handled: unanswered-reply routing on 0-finding re-reviews |
 | `POST_REVIEW` | Applies safety guards (empty/NO_CHANGE guard, pre-post dedup), then posts comment via VCS API. With an outcome sink (`--benchmark`), it passes the structured review + judge result to the sink instead and skips cleanup, guards and posting |
 | `RESPOND_TO_REPLIES` | Bundles unanswered developer questions; calls Claude with reply prompt; posts threaded reply |
 

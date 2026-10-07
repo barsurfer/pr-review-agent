@@ -66,6 +66,9 @@ export const config = {
     splitCheck: optional('ENABLE_SPLIT_CHECK', 'true') !== 'false',
     todoScan: optional('ENABLE_TODO_SCAN', 'true') !== 'false',
     effort: optional('REVIEW_EFFORT', ''),   // output_config.effort; empty = model default (unsent)
+    // Off by default: each bundle costs a reviewer + judge call, so a huge PR is a real spend.
+    bundledReview: optional('ENABLE_BUNDLED_REVIEW', 'false') === 'true',
+    maxBundles: parseInt(optional('MAX_BUNDLES', '8'), 10),   // 0 = unlimited
   },
 
   context: {

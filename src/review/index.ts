@@ -8,6 +8,7 @@ import { fetchContext } from '../context/fetcher.js'
 import { runReview, runCommentResponse, runJudge } from '../claude/client.js'
 import { filterDiff, countChangedLines, parseVerdictScore, isPathExcluded, scanTodos } from './parsers.js'
 import { buildReviewFooter, buildReplyFooter, stripPreviousFooter, stripDeltaStats, stripJudgeNotes, stripJenkinsMeta, stripPreamble, isNoChange, extractCommitHash, countFindings, markdownHasFindings, hasReplyFooter } from './formatter.js'
+import { runBundledReview } from './bundled.js'
 import { buildUsageRecord, logUsageRecord, getBuildCommit, getJobUrl } from './usage.js'
 import { State } from './types.js'
 
@@ -103,7 +104,9 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         ctx.skipReason = `PR has ${fileCount} reviewable file(s), minimum is ${minChangedFiles}`
         return State.SKIP
       }
-      if (maxChangedFiles > 0 && fileCount > maxChangedFiles) {
+      // With bundling on, size is governed by the input budget and MAX_BUNDLES, not these caps.
+      const bundling = config.review.bundledReview
+      if (!bundling && maxChangedFiles > 0 && fileCount > maxChangedFiles) {
         ctx.action = 'SKIP'
         ctx.skipReason = `PR has ${fileCount} reviewable file(s), maximum is ${maxChangedFiles}`
         return State.SKIP
@@ -113,7 +116,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         ctx.skipReason = `PR has ${lineCount} reviewable line(s), minimum is ${minChangedLines}`
         return State.SKIP
       }
-      if (maxChangedLines > 0 && lineCount > maxChangedLines) {
+      if (!bundling && maxChangedLines > 0 && lineCount > maxChangedLines) {
         ctx.action = 'SKIP'
         ctx.skipReason = `PR has ${lineCount} reviewable line(s), maximum is ${maxChangedLines}`
         return State.SKIP
@@ -308,6 +311,12 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
 
       ctx.estimatedInputTokens = s.total
 
+      if (max > 0 && s.total > max && config.review.bundledReview) {
+        console.log('  Still over budget — switching to bundled review')
+        ctx.inputBudget = max
+        return State.BUNDLED_REVIEW
+      }
+
       if (max > 0 && s.total > max) {
         ctx.action = 'SKIP'
         ctx.skipReason = `Estimated input ~${s.total.toLocaleString()} tokens exceeds the input budget (${max.toLocaleString()}; min of MAX_INPUT_TOKENS and model context) even without file context — ${fmt(s)}`
@@ -462,6 +471,29 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         console.warn(`  Judge failed (${(err as Error).message}) — proceeding with unjudged reviewer findings`)
       }
 
+      return State.POST_REVIEW
+    }
+
+    case State.BUNDLED_REVIEW: {
+      const outcome = await runBundledReview(ctx, ctx.inputBudget!)
+      if (!outcome.ok) {
+        ctx.action = 'SKIP'
+        ctx.skipReason = `Bundled review not possible: ${outcome.reason}`
+        return State.SKIP
+      }
+      if (isNoChange(ctx.reviewText!)) return State.CHECK_NO_CHANGE
+
+      // Same quiet-re-review rule as JUDGE_REVIEW: nothing found and prior review was clean means nothing worth posting.
+      const merged = ctx.reviewObject!
+      if (merged.findings.length === 0 && ctx.reviewNumber > 1 && ctx.force !== 're-review') {
+        const lastReview = supersedeBoundary(ctx.previousReviews ?? [])
+        const priorHadFindings = !!lastReview && markdownHasFindings(lastReview.body)
+        if (!priorHadFindings && (merged.delta_stats?.still_open ?? 0) === 0) {
+          ctx.action = 'NO_NEW_FINDINGS'
+          ctx.skipReason = 'Re-review found no new findings (prior review already clean)'
+          return State.SKIP
+        }
+      }
       return State.POST_REVIEW
     }
 

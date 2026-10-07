@@ -22,6 +22,7 @@ export enum State {
   CALL_CLAUDE,
   CHECK_NO_CHANGE,
   JUDGE_REVIEW,
+  BUNDLED_REVIEW,
   POST_REVIEW,
   SKIP,
   DONE,
@@ -74,5 +75,7 @@ export interface ReviewContext {
   // Tracking
   action: string
   reviewNumber: number
-  degraded?: boolean   // file contexts dropped to fit MAX_INPUT_TOKENS (diff-only review)
+  inputBudget?: number
+  bundleCount?: number  // set when the PR was reviewed as bundles instead of one pass
+  degraded?: boolean  // file contexts dropped to fit MAX_INPUT_TOKENS (diff-only review)
 }
