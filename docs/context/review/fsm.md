@@ -62,7 +62,7 @@ FETCH_PR_INFO
 | `CALL_CLAUDE` | Assembles payload (PR info, prior review, developer discussion, diff, file context); calls reviewer model. The reviewer returns a typed object (`ctx.reviewObject`); `renderReview` builds `reviewText`. See [llm/structured-output.md](../llm/structured-output.md) |
 | `CHECK_NO_CHANGE` | Inspects `reviewText` for the `NO_CHANGE` sentinel (rendered when the reviewer sets `no_change`) before any further processing |
 | `JUDGE_REVIEW` | If `JUDGING_MODEL` set: sends diff + review to judge for finding validation; stores per-finding scores (`ctx.judgeScores`). Otherwise passthrough |
-| `POST_REVIEW` | Applies safety guards (empty/NO_CHANGE guard, pre-post dedup), then posts comment via VCS API |
+| `POST_REVIEW` | Applies safety guards (empty/NO_CHANGE guard, pre-post dedup), then posts comment via VCS API. With an outcome sink (`--benchmark`), it passes the structured review + judge result to the sink instead and skips cleanup, guards and posting |
 | `RESPOND_TO_REPLIES` | Bundles unanswered developer questions; calls Claude with reply prompt; posts threaded reply |
 
 ---
@@ -96,6 +96,7 @@ interface ReviewContext {
   reviewObject?: ReviewObject   // reviewer's typed output — source for findings/delta metrics
   judgeScores?: FindingScore[]  // judge's per-finding 0–10 confidence — logged, never posted
   skipReason?: string
+  outcomeSink?: OutcomeSink     // benchmark mode: receives the ReviewOutcome instead of a posted comment
 }
 ```
 
