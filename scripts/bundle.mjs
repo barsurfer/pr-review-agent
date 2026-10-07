@@ -1,10 +1,14 @@
 import { build } from 'esbuild'
-import { readFileSync } from 'fs'
+import { readFileSync, readdirSync } from 'fs'
 import { execSync } from 'child_process'
 
 const basePrompt = readFileSync('src/prompt/base-prompt.txt', 'utf-8')
 const replyPrompt = readFileSync('src/prompt/reply-prompt.txt', 'utf-8')
 const judgePrompt = readFileSync('src/prompt/judge-prompt.txt', 'utf-8')
+const stackPrompts = Object.fromEntries(
+  readdirSync('src/prompt/stacks').filter(f => f.endsWith('.txt'))
+    .map(f => [f.replace(/\.txt$/, ''), readFileSync(`src/prompt/stacks/${f}`, 'utf-8')]),
+)
 const pkg = JSON.parse(readFileSync('package.json', 'utf-8'))
 
 // Fallback only — at runtime the agent prefers `git rev-parse` in its own checkout,
@@ -25,6 +29,7 @@ await build({
     __BASE_PROMPT__: JSON.stringify(basePrompt),
     __REPLY_PROMPT__: JSON.stringify(replyPrompt),
     __JUDGE_PROMPT__: JSON.stringify(judgePrompt),
+    __STACK_PROMPTS__: JSON.stringify(stackPrompts),
     __AGENT_VERSION__: JSON.stringify(pkg.version),
     __BUILD_COMMIT__: JSON.stringify(buildCommit),
   },

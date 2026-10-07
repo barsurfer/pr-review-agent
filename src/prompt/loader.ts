@@ -2,6 +2,7 @@ import { readFileSync } from 'fs'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import type { VCSAdapter, PRInfo, ChangedFile } from '../vcs/adapter.js'
+import { detectStack, type Stack } from './stack.js'
 import { DEFAULT_ROLE, DEFAULT_REVIEW_PRIORITIES, DEFAULT_MENTAL_MODEL, DEFAULT_EXCEPTIONS } from './defaults.js'
 
 const REPO_PROMPT_FILE = '.agent-review-instructions.md'
@@ -17,6 +18,19 @@ function getBaseTemplate(): string {
     // @ts-ignore — injected at bundle time
     if (typeof __BASE_PROMPT__ !== 'undefined') return __BASE_PROMPT__ as string
     throw new Error('Cannot load base prompt: file not found and no embedded copy')
+  }
+}
+
+// esbuild embeds src/prompt/stacks/*.txt as __STACK_PROMPTS__ for the single-file bundle
+function getStackPrompt(stack: Stack): string {
+  try {
+    const __dir = dirname(fileURLToPath(import.meta.url))
+    return readFileSync(join(__dir, 'stacks', `${stack}.txt`), 'utf-8')
+  } catch {
+    // @ts-ignore — injected at bundle time
+    const embedded = typeof __STACK_PROMPTS__ !== 'undefined' ? (__STACK_PROMPTS__ as Record<string, string>)[stack] : undefined
+    if (embedded) return embedded
+    throw new Error(`Cannot load stack prompt '${stack}': file not found and no embedded copy`)
   }
 }
 
@@ -181,7 +195,16 @@ export async function loadPrompt(adapter: VCSAdapter, prInfo: PRInfo, localPromp
     }
   }
 
-  // 3. Fall back to all defaults
+  // 3. No repo prompt: use the rule set of the PR's dominant tech stack, if one clearly wins
+  const stack = changedFiles?.length ? detectStack(changedFiles) : null
+  if (stack) {
+    console.log(`Detected tech stack: ${stack} — using bundled rule set`)
+    const sections = parseRepoPrompt(getStackPrompt(stack))
+    logSections(sections)
+    return { content: fillTemplate(template, sections), source: `stack:${stack}` }
+  }
+
+  // 4. Fall back to all defaults
   console.log(`No ${REPO_PROMPT_FILE} found in source or target branch — using default prompt`)
   const filled = fillTemplate(template, {})
   return { content: filled, source: 'default' }

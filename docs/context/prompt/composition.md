@@ -47,13 +47,16 @@ Separately, a deterministic `TODO`/`FIXME`/`HACK` scan (`scanTodos`, `ENABLE_TOD
 1. `--prompt <path>` CLI flag (local file)
 2. `.agent-review-instructions.md` from PR's **source commit**: root → `docs/` → module fallback
 3. `.agent-review-instructions.md` from PR's **target branch**: same path list
-4. All four sections default if file not found
+4. No repo prompt and no `--prompt`: **tech-stack rule set** (below), if one stack wins
+5. All four sections default if nothing above applies
 
 **Module fallback:** when every changed file in the PR lives under a single top-level
 directory (monorepo module, e.g. `alice-web/`), that directory is treated as an effective
 root and `<dir>/.agent-review-instructions.md` → `<dir>/docs/...` are probed after the
 repo-root paths. Root-level changed files don't disqualify detection; a second top-level
 directory does (no guessing on ambiguous PRs).
+
+**Tech-stack rule sets** (`src/prompt/stack.ts`, `src/prompt/stacks/<stack>.txt`): `detectStack(changedFiles)` classifies non-deleted files by extension into `angular-ionic` / `java-spring` / `typescript-node` / `python`. Config, docs, assets and extension-less files are ignored; source in any other language counts as "other" against every stack. A stack wins only with a strict majority (>50%) of the classified files; tie or no winner → generic default. Plain js/ts is ambiguous, so one Angular marker (`*.component|module|directive|pipe|guard|resolver|interceptor.*`, `angular.json`, `ionic.config.json`, `capacitor.config.*`) in the PR makes all js/ts and html/css files count as Angular. The chosen set fills the same four sections and `source` becomes `stack:<name>` (shown in the review footer). Stack files are embedded in the bundle by `scripts/bundle.mjs` as `__STACK_PROMPTS__` (same dual-load as the base template) and copied to `dist/prompt/stacks` by `copy-assets`. They are generic: org-specific exceptions stay in `prompts/` / repo files.
 
 YAML frontmatter in the file is stripped before parsing. Only the four `## SECTION` headers are extracted — all other content is ignored.
 
