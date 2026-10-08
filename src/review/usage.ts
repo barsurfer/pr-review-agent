@@ -61,18 +61,29 @@ export interface UsageRecord {
 const MODEL_PRICING: Record<string, { input: number; output: number }> = {
   'claude-fable-5-1': { input: 10.0, output: 50.0 },
   'claude-fable-5': { input: 10.0, output: 50.0 },
+  'claude-mythos-5-1': { input: 10.0, output: 50.0 },
+  'claude-opus-5-5': { input: 4.0, output: 20.0 },
   'claude-opus-5': { input: 5.0, output: 25.0 },
   'claude-opus-4-8': { input: 5.0, output: 25.0 },
   'claude-opus-4-7': { input: 5.0, output: 25.0 },
   'claude-opus-4-6': { input: 5.0, output: 25.0 },
+  'claude-opus-4-5': { input: 5.0, output: 25.0 },
+  'claude-sonnet-5-5': { input: 2.0, output: 10.0 },
   'claude-sonnet-5': { input: 2.0, output: 10.0 },
   'claude-sonnet-4-6': { input: 3.0, output: 15.0 },
+  'claude-sonnet-4-5': { input: 3.0, output: 15.0 },
   'claude-haiku-4-5': { input: 1.0, output: 5.0 },
+}
+
+// Haiku 5.5 is the one model priced by prompt length — 5x higher once the input prompt passes 100k tokens.
+function haiku55Pricing(inputTokens: number): { input: number; output: number } {
+  return inputTokens > 100_000 ? { input: 0.5, output: 2.5 } : { input: 0.1, output: 0.5 }
 }
 
 export function estimateCost(tokens: { input: number; output: number }, model: string): number {
   // Dated IDs (claude-haiku-4-5-20251001) price as their alias
-  let p = MODEL_PRICING[model] ?? MODEL_PRICING[model.replace(/-\d{8}$/, '')]
+  const base = model.replace(/-\d{8}$/, '')
+  let p = base === 'claude-haiku-5-5' ? haiku55Pricing(tokens.input) : (MODEL_PRICING[model] ?? MODEL_PRICING[base])
   if (!p) {
     console.warn(`No pricing entry for model "${model}" — estimating with claude-sonnet-4-6 rates`)
     p = MODEL_PRICING['claude-sonnet-4-6']
