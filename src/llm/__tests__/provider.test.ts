@@ -1,10 +1,31 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 
 // provider.ts imports config, which requires ANTHROPIC_API_KEY at load — mock it so this
 // pure-helper test doesn't depend on the env (CI has no .env).
-vi.mock('../../config.js', () => ({ config: { llmProvider: 'anthropic' } }))
+vi.mock('../../config.js', () => ({ config: { llmProvider: 'anthropic', anthropic: { baseUrl: '', workspaceId: '' } } }))
 
-import { missingRequired, anthropicBaseUrl } from '../provider.js'
+import { missingRequired, anthropicBaseUrl, anthropicClientOptions } from '../provider.js'
+import { config } from '../../config.js'
+
+const cfg = config as unknown as { anthropic: { baseUrl: string; workspaceId: string } }
+
+describe('anthropicClientOptions', () => {
+  afterEach(() => { cfg.anthropic.baseUrl = ''; cfg.anthropic.workspaceId = '' })
+
+  it('passes only the apiKey by default', () => {
+    expect(anthropicClientOptions('k')).toEqual({ apiKey: 'k' })
+  })
+
+  it('adds the anthropic-workspace-id header when ANTHROPIC_WORKSPACE_ID is set', () => {
+    cfg.anthropic.workspaceId = 'wrksp_123'
+    expect(anthropicClientOptions('k')).toEqual({ apiKey: 'k', defaultHeaders: { 'anthropic-workspace-id': 'wrksp_123' } })
+  })
+
+  it('adds a normalized baseURL when set', () => {
+    cfg.anthropic.baseUrl = 'https://api.anthropic.com/v1/'
+    expect(anthropicClientOptions('k')).toEqual({ apiKey: 'k', baseURL: 'https://api.anthropic.com' })
+  })
+})
 
 describe('anthropicBaseUrl', () => {
   it('is undefined when unset, keeping the SDK default', () => {

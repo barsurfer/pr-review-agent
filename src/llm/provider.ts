@@ -20,8 +20,7 @@ class AnthropicProvider implements LLMProvider {
   private readonly client: Anthropic
 
   constructor(apiKey: string) {
-    const baseURL = anthropicBaseUrl(config.anthropic.baseUrl)
-    this.client = new Anthropic(baseURL ? { apiKey, baseURL } : { apiKey })
+    this.client = new Anthropic(anthropicClientOptions(apiKey))
   }
 
   async complete(system: string, user: string, opts: LLMOptions): Promise<{ text: string; usage: ClaudeUsage }> {
@@ -87,6 +86,18 @@ function mapUsage(u: Anthropic.Message['usage']): ClaudeUsage {
 // The SDK appends /v1/messages itself, so an endpoint registered as ".../v1" would 404 on /v1/v1.
 export function anthropicBaseUrl(url: string): string | undefined {
   return url.trim().replace(/\/+$/, '').replace(/\/v1$/, '') || undefined
+}
+
+// Client options from config: the key, an optional baseURL, and the anthropic-workspace-id header
+// when ANTHROPIC_WORKSPACE_ID is set (required for user-scoped keys that aren't bound to a workspace).
+export function anthropicClientOptions(apiKey: string): { apiKey: string; baseURL?: string; defaultHeaders?: Record<string, string> } {
+  const baseURL = anthropicBaseUrl(config.anthropic.baseUrl)
+  const workspaceId = config.anthropic.workspaceId.trim()
+  return {
+    apiKey,
+    ...(baseURL ? { baseURL } : {}),
+    ...(workspaceId ? { defaultHeaders: { 'anthropic-workspace-id': workspaceId } } : {}),
+  }
 }
 
 /** Top-level required keys the parsed object is missing — a schema-honoring provider returns []. */

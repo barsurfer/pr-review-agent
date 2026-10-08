@@ -56,6 +56,8 @@ export const config = {
 
   anthropic: {
     apiKey: required('ANTHROPIC_API_KEY'),
+    // Sent as the anthropic-workspace-id header; a user-scoped key (sk-ant-usr-…) 400s without it.
+    workspaceId: optional('ANTHROPIC_WORKSPACE_ID', ''),
     model: optional('CLAUDE_MODEL', 'claude-haiku-4-5-20251001'),
     // ReviewBench passes the registered model endpoint here; empty keeps the SDK default.
     baseUrl: optional('RB_MODEL_BASE_URL', ''),
