@@ -163,6 +163,17 @@ describe('bundled review', () => {
     expect(arg.review.findings.length).toBeGreaterThan(0)
   })
 
+  it('skips (not NO_CHANGE) when every bundle overflows the model context', async () => {
+    mockRunReview.mockImplementation(async () => {
+      const e = new Error('prompt is too long') as Error & { status: number }
+      e.status = 400
+      throw e
+    })
+    const record = await review(adapter(BIG_DIFF, ['a/one.ts', 'a/two.ts', 'b/one.ts', 'b/two.ts']), '1', false)
+    expect(record!.action).toBe('SKIP')
+    expect(record!.skip_reason).toMatch(/left unreviewed/i)
+  })
+
   it('a bundle that overflows the model context is left unreviewed, not failed', async () => {
     mockRunReview.mockImplementation(async (...args) => {
       const diff = args[6] as string

@@ -43,6 +43,7 @@ export async function runBundledReview(ctx: ReviewContext, maxInputTokens: numbe
 
   const reviews: BundleReview[] = []
   const unreviewed = plan.oversized.map(u => u.path)
+  let anyOverflow = false
   const judgeScores: NonNullable<ReviewContext['judgeScores']> = []
   const judgeUsage = { input_tokens: 0, output_tokens: 0 }
   let judged = false
@@ -95,6 +96,7 @@ export async function runBundledReview(ctx: ReviewContext, maxInputTokens: numbe
     if (!result) {
       console.warn(`  Bundle ${i + 1} (${bundle.label}) could not be reviewed within the model context — leaving its files unreviewed`)
       unreviewed.push(...bundle.files)
+      anyOverflow = true
       continue
     }
     addUsage(ctx, result.usage)
@@ -131,6 +133,9 @@ export async function runBundledReview(ctx: ReviewContext, maxInputTokens: numbe
   }
 
   if (!reviews.length) {
+    // A bundle that overflowed the context was never reviewed — that is not NO_CHANGE. Skip
+    // honestly rather than let a first review throw on a false NO_CHANGE sentinel.
+    if (anyOverflow) return { ok: false, reason: `No bundle fit the model context — ${unreviewed.length} file(s) left unreviewed` }
     ctx.reviewText = 'NO_CHANGE'
     return { ok: true }
   }

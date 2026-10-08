@@ -147,7 +147,8 @@ async function main(): Promise<void> {
   if (opts.validatePrompt) {
     const prInfo = await adapter.getPullRequestInfo(opts.prId!)
     const changedFiles = await adapter.getChangedFiles(opts.prId!)
-    const result = await loadPrompt(adapter, prInfo, undefined, changedFiles)
+    const diff = await adapter.getDiff(opts.prId!)   // import-based stack overlays need the diff, as in a real run
+    const result = await loadPrompt(adapter, prInfo, undefined, changedFiles, diff)
     console.log(`\nFilled prompt length: ${result.content.length} chars (~${Math.ceil(result.content.length / 4).toLocaleString()} tokens)`)
     return
   }

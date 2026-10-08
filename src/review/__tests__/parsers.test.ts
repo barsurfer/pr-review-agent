@@ -1,5 +1,21 @@
 import { describe, it, expect } from 'vitest'
-import { filterDiff, countChangedLines, parseVerdictScore, parseFindings, parseDeltaStats, isPathExcluded, scanTodos, parseChangedFiles } from '../parsers.js'
+import { filterDiff, countChangedLines, parseVerdictScore, parseFindings, parseDeltaStats, isPathExcluded, scanTodos, parseChangedFiles, isContextLengthError } from '../parsers.js'
+
+describe('isContextLengthError', () => {
+  const err = (status: number, message: string) => ({ status, message })
+
+  it('matches input/context overflow 400s', () => {
+    expect(isContextLengthError(err(400, 'prompt is too long: 300000 tokens > 200000 maximum'))).toBe(true)
+    expect(isContextLengthError(err(400, 'input length and max_tokens exceed context limit: 250000 + 64000 > 200000'))).toBe(true)
+    expect(isContextLengthError(err(400, 'context window exceeded'))).toBe(true)
+  })
+
+  it('does not match an output-cap 400 or non-400 errors', () => {
+    expect(isContextLengthError(err(400, 'max_tokens: 300000 > 200000, the maximum allowed number of output tokens'))).toBe(false)
+    expect(isContextLengthError(err(429, 'rate limit'))).toBe(false)
+    expect(isContextLengthError(err(400, 'invalid request'))).toBe(false)
+  })
+})
 
 describe('scanTodos', () => {
   it('finds a TODO in an added line with the correct new-file line number', () => {
