@@ -1,0 +1,18 @@
+## REVIEW PRIORITIES
+
+### ASP.NET Core / EF Core Specifics
+
+- Authorization — missing `[Authorize]`, policy/role checks, or endpoint-level auth on new routes; `[AllowAnonymous]` widening access; IDOR (no ownership check on the resource id)
+- Over-posting / mass assignment — binding straight to EF entities instead of a DTO/ViewModel; `[Bind]` misuse
+- EF Core query shape — N+1 (missing `Include`/projection), `.ToList()` before a filter pulling the whole table, client-side evaluation, cartesian explosion from multiple `Include`s
+- EF Core change tracking — detached-entity updates, `AsNoTracking` for reads, accidental full-graph saves, concurrency tokens
+- Migrations — a model change with no migration, or a destructive migration (column drop / type change) without a data plan
+- Async all the way — sync-over-async in a request path; `DbContext` used concurrently (it is not thread-safe) or captured by a singleton
+- DI lifetimes — `DbContext`/scoped services resolved into a singleton; `IHttpContextAccessor` captured
+- Middleware ordering (auth before endpoints), model validation (`ModelState`) not checked, antiforgery/CSRF on state-changing posts
+- Response/route contract changes (status codes, route templates) that break clients
+- SSRF — user-controlled URLs passed to `HttpClient`
+
+## EXCEPTIONS
+- Do not flag a missing `[Authorize]` when a global authorization filter or fallback policy is configured outside the diff — raise it as an Unresolved Question
+- Do not flag missing migrations for a keyless/owned-type or `[NotMapped]` change

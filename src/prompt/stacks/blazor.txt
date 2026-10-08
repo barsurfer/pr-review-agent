@@ -1,0 +1,16 @@
+## REVIEW PRIORITIES
+
+### Blazor Specifics
+
+- Component lifecycle — work in `OnInitializedAsync`/`OnParametersSetAsync` that re-runs unexpectedly; blocking or long sync work on the render path
+- `StateHasChanged` — missing after an async update (stale UI) or called in a loop (render storm); updates off the renderer's `SynchronizationContext` without `InvokeAsync`
+- Disposal — components holding event subscriptions, timers, `IDisposable`/`IAsyncDisposable`, or `DotNetObjectReference` that are never released → leaks over a long-lived circuit
+- Prerendering double-run — `OnInitializedAsync` executing twice (server prerender + client) causing duplicate side effects
+- Parameter discipline — mutating `[Parameter]` values, non-primitive parameters triggering needless re-renders, missing `[EditorRequired]`
+- JS interop — unawaited `InvokeVoidAsync`, interop during prerender when no JS runtime exists, undisposed JS object references
+- Auth — `[Authorize]` / `AuthorizeView` on protected components; never trust client-side-only checks (Blazor Server runs on the server, WASM is fully client-trust)
+- Server circuit state — large per-circuit state; unbounded growth across reconnects
+
+## EXCEPTIONS
+- Do not flag a missing `StateHasChanged` after an `await` inside an event handler — the framework re-renders automatically there
+- Do not flag `[Parameter]` on components that are genuinely immutable inputs

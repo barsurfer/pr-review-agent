@@ -1,0 +1,16 @@
+## REVIEW PRIORITIES
+
+### .NET MAUI Specifics
+
+- UI-thread marshaling — touching UI from a background thread without `MainThread.BeginInvokeOnMainThread`; blocking the UI thread with sync I/O or `.Result`
+- Event / messaging leaks — handlers, `MessagingCenter`/`WeakReferenceMessenger` subscriptions, and timers not removed on page/viewmodel teardown (`OnDisappearing`/`Dispose`) → retained pages
+- BindingContext leaks — long-lived viewmodels holding page references; bindings not cleared
+- Page lifecycle — heavy work in `OnAppearing` re-running on every navigation; navigation stack growth
+- `async void` handlers swallowing exceptions (crash the app); unobserved task exceptions
+- Image/resource memory — large images not downsampled; handler/renderer resources not released
+- Platform differences — platform-specific handlers/permissions; behavior divergence across iOS/Android/Windows
+- Data binding correctness — `INotifyPropertyChanged` not raised, binding to fields instead of properties
+
+## EXCEPTIONS
+- Do not flag `async void` on handlers wired to XAML events — that is the expected shape; flag only the missing try/catch inside them
+- Do not claim a UI-thread violation without confirming the call originates off the main thread

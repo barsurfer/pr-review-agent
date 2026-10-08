@@ -42,8 +42,22 @@ describe('detectStacks bases', () => {
   })
 
   it('drops bases below the floor and counts unsupported languages against them', () => {
-    const files = changed('A.java', 'a.go', 'b.go', 'c.go', 'd.go', 'e.go')
+    const files = changed('A.java', 'a.scala', 'b.scala', 'c.scala', 'd.scala', 'e.scala')
     expect(detectStacks(files).bases).toEqual([])
+  })
+
+  it('classifies C#, Go, and Rust', () => {
+    expect(detectStacks(changed('src/A.cs', 'src/B.cs')).bases).toEqual(['csharp'])
+    expect(detectStacks(changed('cmd/main.go', 'util.go')).bases).toEqual(['go'])
+    expect(detectStacks(changed('src/lib.rs')).bases).toEqual(['rust'])
+  })
+
+  it('counts .razor/.cshtml/.xaml toward the csharp base', () => {
+    expect(detectStacks(changed('Pages/Index.razor', 'App.xaml', 'Program.cs')).bases).toEqual(['csharp'])
+  })
+
+  it('a Go-dominant PR with a stray web file stays go, not frontend (mis-vote fix)', () => {
+    expect(detectStacks(changed('main.go', 'a.go', 'b.go', 'c.go', 'd.go', 'ui/App.tsx')).bases).toEqual(['go'])
   })
 })
 
@@ -88,6 +102,29 @@ describe('detectStacks overlays', () => {
   it('does not add an overlay whose base is below the floor', () => {
     const files = changed('x.component.ts', 'a.py', 'b.py', 'c.py', 'd.py', 'e.py', 'f.py', 'g.py')
     expect(detectStacks(files).overlays).toEqual([])
+  })
+})
+
+describe('detectStacks .NET overlays', () => {
+  it('adds aspnet from an AspNetCore/EF import or a .cshtml path', () => {
+    expect(detectStacks(changed('Api.cs'), addLines('using Microsoft.AspNetCore.Mvc;')).overlays).toEqual(['aspnet'])
+    expect(detectStacks(changed('Views/Home.cshtml', 'HomeController.cs')).overlays).toContain('aspnet')
+  })
+
+  it('adds blazor from a .razor file', () => {
+    expect(detectStacks(changed('Pages/Counter.razor', 'App.cs')).overlays).toContain('blazor')
+  })
+
+  it('adds maui from a Microsoft.Maui import', () => {
+    expect(detectStacks(changed('MainPage.xaml.cs'), addLines('using Microsoft.Maui.Controls;')).overlays).toContain('maui')
+  })
+
+  it('adds winforms from System.Windows.Forms', () => {
+    expect(detectStacks(changed('Form1.cs'), addLines('using System.Windows.Forms;')).overlays).toContain('winforms')
+  })
+
+  it('does not add a .NET overlay without a csharp base', () => {
+    expect(detectStacks(changed('a.py'), addLines('using Microsoft.AspNetCore.Mvc;')).overlays).toEqual([])
   })
 })
 
@@ -144,9 +181,18 @@ describe('loadPrompt stack composition', () => {
   })
 
   it('falls back to the default prompt when nothing is detected', async () => {
-    const result = await loadPrompt(adapterWith({}), PR, undefined, changed('README.md', 'a.go'))
+    const result = await loadPrompt(adapterWith({}), PR, undefined, changed('README.md', 'a.scala'))
 
     expect(result.source).toBe('default')
+  })
+
+  it('layers the aspnet overlay on the csharp base', async () => {
+    const result = await loadPrompt(adapterWith({}), PR, undefined, changed('HomeController.cs'), addLines('using Microsoft.AspNetCore.Mvc;'))
+
+    expect(result.source).toBe('stack:csharp+aspnet')
+    expect(result.content).toContain('Senior .NET Engineer')
+    expect(result.content).toContain('ASP.NET Core / EF Core Specifics')
+    expect(result.content).not.toContain('{{')
   })
 
   it('repo prompt wins over the stacks', async () => {
@@ -172,6 +218,7 @@ describe('loadPrompt stack composition', () => {
     const cases: [string[], string][] = [
       [['A.java'], 'java'], [['A.kt'], 'kotlin'], [['a.py'], 'python'],
       [['a.ts'], 'typescript-node'], [['App.tsx'], 'frontend'],
+      [['A.cs'], 'csharp'], [['main.go'], 'go'], [['lib.rs'], 'rust'],
     ]
     for (const [paths, source] of cases) {
       const result = await loadPrompt(adapterWith({}), PR, undefined, changed(...paths))

@@ -1,7 +1,7 @@
 import type { ChangedFile } from '../vcs/adapter.js'
 
-export const BASE_STACKS = ['java', 'kotlin', 'python', 'typescript-node', 'frontend'] as const
-export const OVERLAY_STACKS = ['spring', 'angular', 'ionic'] as const
+export const BASE_STACKS = ['java', 'kotlin', 'python', 'typescript-node', 'frontend', 'csharp', 'go', 'rust'] as const
+export const OVERLAY_STACKS = ['spring', 'angular', 'ionic', 'aspnet', 'blazor', 'maui', 'winforms'] as const
 export type BaseStack = (typeof BASE_STACKS)[number]
 export type OverlayStack = (typeof OVERLAY_STACKS)[number]
 
@@ -32,6 +32,17 @@ const ANGULAR_DIFF = /^[+ ]\s*import\b.*['"]@angular\//m
 const IONIC_DIFF = /^[+ ]\s*import\b.*['"]@(ionic|capacitor)\//m
 const FRONTEND_DIFF = /^[+ ]\s*import\b.*['"](react|react-dom|vue|svelte|@angular\/[^'"]*|@ionic\/[^'"]*)['"]/m
 
+// .NET flavor — detect web / Blazor / MAUI / desktop-forms from imports, attributes, and XAML roots
+// so a C# PR gets the right framework rules, not just generic .NET.
+const ASPNET_PATH = /\.cshtml$/
+const ASPNET_DIFF = /^[+ ]\s*using\s+Microsoft\.(AspNetCore|EntityFrameworkCore)\b|^[+ ]\s*\[(ApiController|Route|Http(Get|Post|Put|Patch|Delete))\b|^[+ ]\s*(WebApplication|WebApplicationBuilder)\b|^[+ ]\s*app\.Map(Get|Post|Put|Delete|Controllers)\b|:\s*Controller(Base)?\b/m
+const BLAZOR_PATH = /\.razor$/
+const BLAZOR_DIFF = /^[+ ]\s*using\s+Microsoft\.AspNetCore\.Components\b|^[+ ]\s*@(page|rendermode)\b/m
+const MAUI_PATH = /(^|\/)MauiProgram\.cs$/
+const MAUI_DIFF = /^[+ ]\s*using\s+Microsoft\.Maui\b|<(ContentPage|FlyoutPage|Shell)\b/m
+const WINFORMS_PATH = /\.Designer\.cs$/
+const WINFORMS_DIFF = /^[+ ]\s*using\s+System\.Windows\.Forms\b|^[+ ]\s*using\s+System\.Windows(\.(Controls|Media|Data|Shapes|Input))?\s*;|<(Window|UserControl)\b|:\s*Form\b/m
+
 function extensionOf(path: string): string {
   const base = path.slice(path.lastIndexOf('/') + 1)
   const dot = base.lastIndexOf('.')
@@ -48,6 +59,10 @@ function classifyFile(path: string, frontendSignal: boolean): BaseStack | 'other
   if (ext === 'java') return 'java'
   if (ext === 'kt' || ext === 'kts') return 'kotlin'
   if (ext === 'py') return 'python'
+  // .NET: .razor/.cshtml/.xaml are .NET UI markup, not generic web — count them for the csharp base.
+  if (ext === 'cs' || ext === 'csx' || ext === 'razor' || ext === 'cshtml' || ext === 'xaml') return 'csharp'
+  if (ext === 'go') return 'go'
+  if (ext === 'rs') return 'rust'
   return 'other'
 }
 
@@ -77,10 +92,15 @@ export function detectStacks(changedFiles: ChangedFile[], diff = ''): StackSelec
 
   const hasJvm = bases.includes('java') || bases.includes('kotlin')
   const hasFrontend = bases.includes('frontend')
+  const hasCsharp = bases.includes('csharp')
   const overlays: OverlayStack[] = []
   if (hasJvm && (anyPath(SPRING_PATH) || SPRING_DIFF.test(diff))) overlays.push('spring')
   if (hasFrontend && angular) overlays.push('angular')
   if (hasFrontend && ionic) overlays.push('ionic')
+  if (hasCsharp && (anyPath(ASPNET_PATH) || ASPNET_DIFF.test(diff))) overlays.push('aspnet')
+  if (hasCsharp && (anyPath(BLAZOR_PATH) || BLAZOR_DIFF.test(diff))) overlays.push('blazor')
+  if (hasCsharp && (anyPath(MAUI_PATH) || MAUI_DIFF.test(diff))) overlays.push('maui')
+  if (hasCsharp && (anyPath(WINFORMS_PATH) || WINFORMS_DIFF.test(diff))) overlays.push('winforms')
 
   return { bases, overlays }
 }
