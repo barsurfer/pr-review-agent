@@ -43488,13 +43488,14 @@ function highChurnInDiff(filePath, diff) {
   const fileSection = extractFileDiff(filePath, diff);
   if (!fileSection) return false;
   const lines = fileSection.split("\n");
-  const changed = lines.filter((l) => l.startsWith("+") || l.startsWith("-")).length;
-  const total = lines.filter((l) => !l.startsWith("@@") && !l.startsWith("---") && !l.startsWith("+++")).length;
+  const isHeader = (l) => l.startsWith("@@") || l.startsWith("---") || l.startsWith("+++");
+  const changed = lines.filter((l) => !isHeader(l) && (l.startsWith("+") || l.startsWith("-"))).length;
+  const total = lines.filter((l) => !isHeader(l)).length;
   return total > 0 && changed / total > 0.3;
 }
 function extractFileDiff(filePath, diff) {
   const escaped = filePath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const match = diff.match(new RegExp(`--- a/${escaped}[\\s\\S]*?(?=^--- a/|$)`, "m"));
+  const match = diff.match(new RegExp(`--- a/${escaped}\\n[\\s\\S]*?(?=\\ndiff --git |$)`));
   return match ? match[0] : null;
 }
 async function fetchContext(adapter2, changedFiles, sourceCommit, diff, maxFiles, maxFileLines) {
@@ -44279,7 +44280,7 @@ function getAgentVersion() {
     const pkg = JSON.parse((0, import_fs3.readFileSync)(pkgPath, "utf-8"));
     return pkg.version;
   } catch {
-    if (true) return "0.0.14";
+    if (true) return "0.0.15";
     return "unknown";
   }
 }
@@ -44291,7 +44292,7 @@ function getBuildCommit() {
     const dirty = (0, import_child_process.execSync)("git status --porcelain", opts2).toString().trim() ? "-dirty" : "";
     return hash + dirty;
   } catch {
-    if (true) return "3e71ced";
+    if (true) return "2475ce9";
     return "unknown";
   }
 }
