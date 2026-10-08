@@ -22,6 +22,7 @@ vi.mock('../config.js', () => ({
     bitbucket: { workspace: '', baseUrl: '', username: '', token: '' },
     azure: { org: '' },
   },
+  modelContextWindow: () => 200_000,
 }))
 
 const completeStructured = vi.fn()

@@ -2,7 +2,7 @@
 // Review orchestration — state machine only
 // ---------------------------------------------------------------------------
 
-import { config } from '../config.js'
+import { config, modelContextWindow } from '../config.js'
 import { loadPrompt } from '../prompt/loader.js'
 import { fetchContext } from '../context/fetcher.js'
 import { runReview, runCommentResponse, runJudge } from '../claude/client.js'
@@ -280,8 +280,10 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
 
       let s = sizes()
       // Input budget: the smaller of MAX_INPUT_TOKENS and the model's context minus the output
-      // reserve, so a big diff degrades/skips here instead of hitting a context-length 400.
-      const ctxCap = config.anthropic.modelContextTokens > 0 ? config.anthropic.modelContextTokens - config.anthropic.maxTokens : 0
+      // reserve, so a big diff degrades/skips here instead of hitting a context-length 400. The
+      // window is the model's own (derived from its id) unless MODEL_CONTEXT_TOKENS overrides it.
+      const ctxWindow = config.anthropic.modelContextTokens > 0 ? config.anthropic.modelContextTokens : modelContextWindow(config.anthropic.model)
+      const ctxCap = ctxWindow > 0 ? ctxWindow - config.anthropic.maxTokens : 0
       const limits = [config.anthropic.maxInputTokens, ctxCap].filter(n => n > 0)
       const max = limits.length ? Math.min(...limits) : 0
       console.log(`  Estimated input: ~${s.total.toLocaleString()} tokens  [${fmt(s)}]`)

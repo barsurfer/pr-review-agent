@@ -10,6 +10,28 @@ function optional(name: string, defaultValue: string): string {
   return process.env[name] ?? defaultValue
 }
 
+// Context windows (max_input_tokens) from the Models API: 4.5-generation models are 200K,
+// 4.6+/5.x are 1M. Matched by id prefix so date-suffixed ids (claude-haiku-4-5-20251001)
+// resolve too. Unknown models fall back to 200K so a new model never over-fills the prompt
+// before it is mapped; MODEL_CONTEXT_TOKENS overrides this per deployment.
+const MODEL_CONTEXT_WINDOWS: readonly [string, number][] = [
+  ['claude-haiku-4-5', 200_000],
+  ['claude-sonnet-4-5', 200_000],
+  ['claude-opus-4-5', 200_000],
+  ['claude-haiku-5', 1_000_000],
+  ['claude-sonnet-4-6', 1_000_000],
+  ['claude-sonnet-5', 1_000_000],
+  ['claude-opus-4-6', 1_000_000],
+  ['claude-opus-4-7', 1_000_000],
+  ['claude-opus-4-8', 1_000_000],
+  ['claude-opus-5', 1_000_000],
+  ['claude-fable-5', 1_000_000],
+]
+
+export function modelContextWindow(model: string): number {
+  return MODEL_CONTEXT_WINDOWS.find(([prefix]) => model.startsWith(prefix))?.[1] ?? 200_000
+}
+
 export const config = {
   vcsProvider: optional('VCS_PROVIDER', 'bitbucket') as 'bitbucket' | 'github' | 'gitlab' | 'azure' | 'reviewbench',
 
@@ -44,9 +66,10 @@ export const config = {
     // Output-token cap for reviewer + judge. The Claude 5 family thinks by default and that
     // counts against this budget, so too low a cap truncates (16k cut off Sonnet 5 mid-review).
     maxTokens: parseInt(optional('MAX_OUTPUT_TOKENS', '32000'), 10),
-    // Model context window; the input budget is capped at this minus the output reserve so a
-    // large diff degrades/skips before the API rejects it (0 = don't cap on context).
-    modelContextTokens: parseInt(optional('MODEL_CONTEXT_TOKENS', '200000'), 10),
+    // Override for the model's context window; the input budget is capped at this minus the
+    // output reserve so a large diff degrades/skips before the API rejects it. 0 = derive from
+    // the model id (modelContextWindow), so a 1M reviewer isn't throttled to a 200K default.
+    modelContextTokens: parseInt(optional('MODEL_CONTEXT_TOKENS', '0'), 10),
   },
 
   judge: {

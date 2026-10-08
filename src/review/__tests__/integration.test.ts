@@ -20,6 +20,7 @@ vi.mock('../../config.js', () => ({
     vcsProvider: 'bitbucket',
     bitbucket: { workspace: 'test', baseUrl: '', username: 'bot', token: 'x' },
   },
+  modelContextWindow: () => 200_000,
 }))
 
 vi.mock('../../claude/client.js', () => ({
