@@ -36270,6 +36270,8 @@ var config = {
   },
   anthropic: {
     apiKey: required("ANTHROPIC_API_KEY"),
+    // Sent as the anthropic-workspace-id header; a user-scoped key (sk-ant-usr-…) 400s without it.
+    workspaceId: optional("ANTHROPIC_WORKSPACE_ID", ""),
     model: optional("CLAUDE_MODEL", "claude-haiku-4-5-20251001"),
     // ReviewBench passes the registered model endpoint here; empty keeps the SDK default.
     baseUrl: optional("RB_MODEL_BASE_URL", ""),
@@ -43545,8 +43547,7 @@ init_sdk();
 var AnthropicProvider = class {
   client;
   constructor(apiKey) {
-    const baseURL = anthropicBaseUrl(config.anthropic.baseUrl);
-    this.client = new Anthropic(baseURL ? { apiKey, baseURL } : { apiKey });
+    this.client = new Anthropic(anthropicClientOptions(apiKey));
   }
   async complete(system, user, opts2) {
     const response = await this.streamFinal({ model: opts2.model, max_tokens: opts2.maxTokens, system, messages: [{ role: "user", content: user }] }, opts2);
@@ -43600,6 +43601,15 @@ function mapUsage(u) {
 }
 function anthropicBaseUrl(url2) {
   return url2.trim().replace(/\/+$/, "").replace(/\/v1$/, "") || void 0;
+}
+function anthropicClientOptions(apiKey) {
+  const baseURL = anthropicBaseUrl(config.anthropic.baseUrl);
+  const workspaceId = config.anthropic.workspaceId.trim();
+  return {
+    apiKey,
+    ...baseURL ? { baseURL } : {},
+    ...workspaceId ? { defaultHeaders: { "anthropic-workspace-id": workspaceId } } : {}
+  };
 }
 function missingRequired(object, schema) {
   const required2 = schema.required ?? [];
@@ -44289,7 +44299,7 @@ function getAgentVersion() {
     const pkg = JSON.parse((0, import_fs3.readFileSync)(pkgPath, "utf-8"));
     return pkg.version;
   } catch {
-    if (true) return "0.0.16";
+    if (true) return "0.0.17";
     return "unknown";
   }
 }
@@ -44301,7 +44311,7 @@ function getBuildCommit() {
     const dirty = (0, import_child_process.execSync)("git status --porcelain", opts2).toString().trim() ? "-dirty" : "";
     return hash + dirty;
   } catch {
-    if (true) return "6b93a14";
+    if (true) return "51aa3d0";
     return "unknown";
   }
 }
