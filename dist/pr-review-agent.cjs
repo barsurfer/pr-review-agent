@@ -43981,6 +43981,88 @@ function planBundles(units, budget) {
 
 // src/review/aggregate.ts
 init_define_STACK_PROMPTS();
+
+// src/review/findings-output.ts
+init_define_STACK_PROMPTS();
+var import_fs3 = require("fs");
+var import_path71 = require("path");
+function parseLineRange(lines) {
+  const nums = (lines ?? "").match(/\d+/g)?.map(Number).filter((n) => n > 0) ?? [];
+  if (nums.length === 0) return null;
+  return { start: Math.min(...nums), end: Math.max(...nums) };
+}
+function normalizeFindingPath(file, changedPaths = []) {
+  const path4 = file.trim().replace(/^`+|`+$/g, "").replace(/\\/g, "/").replace(/^(\.\/|\/)+/, "");
+  if (changedPaths.length === 0 || changedPaths.includes(path4)) return path4;
+  const unprefixed = path4.replace(/^[ab]\//, "");
+  if (changedPaths.includes(unprefixed)) return unprefixed;
+  const bySuffix = changedPaths.filter((p) => p.endsWith("/" + path4));
+  return bySuffix.length === 1 ? bySuffix[0] : path4;
+}
+function findingsSection(judgedText) {
+  return judgedText.match(/(?:^|\n)#{1,4}\s*Findings\b([\s\S]*?)(?=\n#{1,4}\s|$)/i)?.[1] ?? "";
+}
+function countFindingBullets(judgedText) {
+  return [...findingsSection(judgedText).matchAll(/^[ \t]*[-*]\s*\*\*(?:HIGH|MEDIUM|LOW)\b/gim)].length;
+}
+function citations(parens) {
+  const backticked = [...parens.matchAll(/`([^`]+)`/g)].map((m) => m[1]);
+  const items = backticked.length ? backticked : parens.replace(/^[(]|[)]$/g, "").split(",");
+  const out = [];
+  for (const raw of items) {
+    const s = raw.trim();
+    const at = s.lastIndexOf(":");
+    if (at > 0 && /\d/.test(s.slice(at + 1))) out.push({ path: s.slice(0, at), lines: s.slice(at + 1) });
+  }
+  return out;
+}
+function findingsFromJudgedMarkdown(judgedText, producer, changedPaths = []) {
+  const section = findingsSection(judgedText);
+  const out = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const block of section.split(/\n(?=[ \t]*[-*]\s*\*\*(?:HIGH|MEDIUM|LOW)\b)/i)) {
+    const head = block.match(/^[ \t]*[-*]\s*\*\*(?:HIGH|MEDIUM|LOW)\s*[–—-]\s*([\s\S]+?)\*\*[ \t]*(\([^\n]*\))?/i);
+    if (!head) continue;
+    const title = head[1].replace(/\s+/g, " ").trim();
+    const body = block.slice(head[0].length).replace(/\s+/g, " ").trim();
+    const message = body ? `${title}: ${body}` : title;
+    for (const c of citations(head[2] ?? "")) {
+      const file = normalizeFindingPath(c.path, changedPaths);
+      const range = parseLineRange(c.lines);
+      if (!file || !range) continue;
+      const key = `${file}:${range.start}-${range.end}:${title}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ file, start_line: range.start, end_line: range.end, message, producer });
+    }
+  }
+  return out;
+}
+function mapFindings(findings, producer, changedPaths = []) {
+  const out = [];
+  for (const f of findings) {
+    const file = f.file ? normalizeFindingPath(f.file, changedPaths) : "";
+    const range = parseLineRange(f.lines);
+    if (!file || !range) continue;
+    out.push({ file, start_line: range.start, end_line: range.end, message: `${f.title.trim()}: ${f.body.trim()}`, producer });
+  }
+  return out;
+}
+function buildFindingsReport(pr, agent, findings) {
+  return {
+    pr: { repo: pr.repo, pr_number: Number(pr.prNumber), base: pr.base, head: pr.head },
+    agent,
+    findings
+  };
+}
+function writeFindingsReport(path4, report) {
+  (0, import_fs3.mkdirSync)((0, import_path71.dirname)(path4), { recursive: true });
+  const tmp = `${path4}.tmp`;
+  (0, import_fs3.writeFileSync)(tmp, JSON.stringify(report, null, 2) + "\n");
+  (0, import_fs3.renameSync)(tmp, path4);
+}
+
+// src/review/aggregate.ts
 var SEVERITY_RANK = { HIGH: 0, MEDIUM: 1, LOW: 2 };
 var EMPTY_ITEM = /^(none|no\b[^\n]*)\.?$/i;
 var FINDING_START = /^[ \t]*[-*]\s*\*\*(HIGH|MEDIUM|LOW)\s*[–—-]\s*(.+?)\*\*[ \t]*(?:\(([^)\n]*)\))?[ \t]*/;
@@ -44006,22 +44088,18 @@ function bulletItems(body) {
 }
 function parseFindings2(body) {
   const findings = [];
-  let cur = null;
+  let cur = [];
   for (const line of body.split("\n")) {
     const m = line.match(FINDING_START);
     if (m) {
-      const loc = (m[3] ?? "").replace(/`/g, "").trim();
-      const at = loc.lastIndexOf(":");
-      cur = {
-        severity: m[1],
-        title: m[2].trim(),
-        file: loc ? (at > 0 ? loc.slice(0, at) : loc).trim() : void 0,
-        lines: at > 0 ? loc.slice(at + 1).trim() || void 0 : void 0,
-        body: line.slice(m[0].length).trim()
-      };
-      findings.push(cur);
-    } else if (cur && line.trim()) {
-      cur.body = (cur.body ? cur.body + " " : "") + line.trim();
+      const severity = m[1];
+      const title = m[2].trim();
+      const text = line.slice(m[0].length).trim();
+      const locs = citations(m[3] ?? "");
+      cur = locs.length ? locs.map((c) => ({ severity, title, file: c.path, lines: c.lines, body: text })) : [{ severity, title, file: void 0, lines: void 0, body: text }];
+      findings.push(...cur);
+    } else if (cur.length && line.trim()) {
+      for (const f of cur) f.body = (f.body ? f.body + " " : "") + line.trim();
     }
   }
   return findings;
@@ -44259,15 +44337,16 @@ function addUsage(ctx, u) {
 
 // src/review/usage.ts
 init_define_STACK_PROMPTS();
-var import_fs3 = require("fs");
+var import_fs4 = require("fs");
 var import_child_process = require("child_process");
-var import_path71 = require("path");
+var import_path72 = require("path");
 var import_url4 = require("url");
 var import_meta3 = {};
 var MODEL_PRICING = {
   "claude-fable-5-1": { input: 10, output: 50 },
   "claude-fable-5": { input: 10, output: 50 },
   "claude-mythos-5-1": { input: 10, output: 50 },
+  "claude-mythos-5": { input: 10, output: 50 },
   "claude-opus-5-5": { input: 4, output: 20 },
   "claude-opus-5": { input: 5, output: 25 },
   "claude-opus-4-8": { input: 5, output: 25 },
@@ -44296,22 +44375,22 @@ function estimateCost(tokens2, model) {
 function getAgentVersion() {
   try {
     const pkgPath = (0, import_url4.fileURLToPath)(new URL("../../package.json", import_meta3.url));
-    const pkg = JSON.parse((0, import_fs3.readFileSync)(pkgPath, "utf-8"));
+    const pkg = JSON.parse((0, import_fs4.readFileSync)(pkgPath, "utf-8"));
     return pkg.version;
   } catch {
-    if (true) return "0.0.17";
+    if (true) return "0.0.18";
     return "unknown";
   }
 }
 function getBuildCommit() {
   try {
-    const cwd = (0, import_path71.dirname)(process.argv[1] ?? ".");
+    const cwd = (0, import_path72.dirname)(process.argv[1] ?? ".");
     const opts2 = { cwd, stdio: ["ignore", "pipe", "ignore"] };
     const hash = (0, import_child_process.execSync)("git rev-parse --short HEAD", opts2).toString().trim();
     const dirty = (0, import_child_process.execSync)("git status --porcelain", opts2).toString().trim() ? "-dirty" : "";
     return hash + dirty;
   } catch {
-    if (true) return "51aa3d0";
+    if (true) return "c40ec54";
     return "unknown";
   }
 }
@@ -44396,7 +44475,7 @@ function buildUsageRecord(ctx, durationMs, error) {
   };
 }
 function logUsageRecord(record) {
-  (0, import_fs3.appendFileSync)("results.jsonl", JSON.stringify(record) + "\n");
+  (0, import_fs4.appendFileSync)("results.jsonl", JSON.stringify(record) + "\n");
   console.log("Usage appended to results.jsonl");
 }
 
@@ -44938,8 +45017,8 @@ init_define_STACK_PROMPTS();
 
 // src/vcs/reviewbench.ts
 init_define_STACK_PROMPTS();
-var import_fs4 = require("fs");
-var import_path72 = require("path");
+var import_fs5 = require("fs");
+var import_path73 = require("path");
 function readReviewBenchEnv(env = process.env) {
   return {
     diffPath: env.RB_DIFF || "/work/pr/diff.patch",
@@ -44955,7 +45034,7 @@ function readReviewBenchEnv(env = process.env) {
 }
 function readPrJson(path4) {
   try {
-    const parsed = JSON.parse((0, import_fs4.readFileSync)(path4, "utf-8"));
+    const parsed = JSON.parse((0, import_fs5.readFileSync)(path4, "utf-8"));
     return parsed && typeof parsed === "object" ? parsed : {};
   } catch (err) {
     console.warn(`  Could not read ${path4} (${err.message}) \u2014 continuing without PR metadata`);
@@ -44983,7 +45062,7 @@ var ReviewBenchAdapter = class {
     };
   }
   async getDiff(_prId) {
-    return (0, import_fs4.readFileSync)(this.env.diffPath, "utf-8");
+    return (0, import_fs5.readFileSync)(this.env.diffPath, "utf-8");
   }
   async getChangedFiles(prId) {
     return parseChangedFiles(await this.getDiff(prId));
@@ -45013,91 +45092,17 @@ var ReviewBenchAdapter = class {
     throw new Error("ReviewBench runs are single-shot \u2014 there is no prior review commit to diff from");
   }
   readRepoFile(filePath) {
-    const root = (0, import_fs4.realpathSync)(this.env.repoDir);
-    const full = (0, import_fs4.realpathSync)((0, import_path72.resolve)(root, filePath));
-    const rel = (0, import_path72.relative)(root, full);
-    if (rel === ".." || rel.startsWith(".." + import_path72.sep) || (0, import_path72.isAbsolute)(rel)) {
+    const root = (0, import_fs5.realpathSync)(this.env.repoDir);
+    const full = (0, import_fs5.realpathSync)((0, import_path73.resolve)(root, filePath));
+    const rel = (0, import_path73.relative)(root, full);
+    if (rel === ".." || rel.startsWith(".." + import_path73.sep) || (0, import_path73.isAbsolute)(rel)) {
       throw new Error(`${filePath} resolves outside the repository checkout`);
     }
-    const content = (0, import_fs4.readFileSync)(full, "utf-8");
+    const content = (0, import_fs5.readFileSync)(full, "utf-8");
     if (content.includes("\0")) throw new Error(`${filePath} is a binary file`);
     return content;
   }
 };
-
-// src/review/findings-output.ts
-init_define_STACK_PROMPTS();
-var import_fs5 = require("fs");
-var import_path73 = require("path");
-function parseLineRange(lines) {
-  const nums = (lines ?? "").match(/\d+/g)?.map(Number).filter((n) => n > 0) ?? [];
-  if (nums.length === 0) return null;
-  return { start: Math.min(...nums), end: Math.max(...nums) };
-}
-function normalizeFindingPath(file, changedPaths = []) {
-  const path4 = file.trim().replace(/^`+|`+$/g, "").replace(/\\/g, "/").replace(/^(\.\/|\/)+/, "");
-  if (changedPaths.length === 0 || changedPaths.includes(path4)) return path4;
-  const unprefixed = path4.replace(/^[ab]\//, "");
-  if (changedPaths.includes(unprefixed)) return unprefixed;
-  const bySuffix = changedPaths.filter((p) => p.endsWith("/" + path4));
-  return bySuffix.length === 1 ? bySuffix[0] : path4;
-}
-function citations(parens) {
-  const backticked = [...parens.matchAll(/`([^`]+)`/g)].map((m) => m[1]);
-  const items = backticked.length ? backticked : parens.replace(/^[(]|[)]$/g, "").split(",");
-  const out = [];
-  for (const raw of items) {
-    const s = raw.trim();
-    const at = s.lastIndexOf(":");
-    if (at > 0 && /\d/.test(s.slice(at + 1))) out.push({ path: s.slice(0, at), lines: s.slice(at + 1) });
-  }
-  return out;
-}
-function findingsFromJudgedMarkdown(judgedText, producer, changedPaths = []) {
-  const section = judgedText.match(/#{1,4}\s*Findings\b([\s\S]*?)(?=\n#{1,4}\s|$)/i)?.[1] ?? "";
-  const out = [];
-  const seen = /* @__PURE__ */ new Set();
-  for (const block of section.split(/\n(?=[ \t]*[-*]\s*\*\*(?:HIGH|MEDIUM|LOW)\b)/i)) {
-    const head = block.match(/^[ \t]*[-*]\s*\*\*(?:HIGH|MEDIUM|LOW)\s*[–—-]\s*([\s\S]+?)\*\*[ \t]*(\([^\n]*\))?/i);
-    if (!head) continue;
-    const title = head[1].replace(/\s+/g, " ").trim();
-    const body = block.slice(head[0].length).replace(/\s+/g, " ").trim();
-    const message = body ? `${title}: ${body}` : title;
-    for (const c of citations(head[2] ?? "")) {
-      const file = normalizeFindingPath(c.path, changedPaths);
-      const range = parseLineRange(c.lines);
-      if (!file || !range) continue;
-      const key = `${file}:${range.start}-${range.end}:${title}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push({ file, start_line: range.start, end_line: range.end, message, producer });
-    }
-  }
-  return out;
-}
-function mapFindings(findings, producer, changedPaths = []) {
-  const out = [];
-  for (const f of findings) {
-    const file = f.file ? normalizeFindingPath(f.file, changedPaths) : "";
-    const range = parseLineRange(f.lines);
-    if (!file || !range) continue;
-    out.push({ file, start_line: range.start, end_line: range.end, message: `${f.title.trim()}: ${f.body.trim()}`, producer });
-  }
-  return out;
-}
-function buildFindingsReport(pr, agent, findings) {
-  return {
-    pr: { repo: pr.repo, pr_number: Number(pr.prNumber), base: pr.base, head: pr.head },
-    agent,
-    findings
-  };
-}
-function writeFindingsReport(path4, report) {
-  (0, import_fs5.mkdirSync)((0, import_path73.dirname)(path4), { recursive: true });
-  const tmp = `${path4}.tmp`;
-  (0, import_fs5.writeFileSync)(tmp, JSON.stringify(report, null, 2) + "\n");
-  (0, import_fs5.renameSync)(tmp, path4);
-}
 
 // src/benchmark.ts
 var CONFIG_LABELS = {
@@ -45150,6 +45155,10 @@ async function runBenchmark(env = process.env) {
       const changedPaths = (await adapter2.getChangedFiles(prNumber)).map((f) => f.path);
       findings = outcome.judged ? findingsFromJudgedMarkdown(outcome.reviewText, rb.agent, changedPaths) : mapFindings(outcome.review.findings, rb.agent, changedPaths);
       console.log(`Benchmark findings: reviewer ${outcome.review.findings.length}, ${outcome.judged ? "from judge markdown" : "judge skipped"}, line-anchored ${findings.length}`);
+      if (outcome.judged) {
+        const bullets3 = countFindingBullets(outcome.reviewText);
+        if (bullets3 > findings.length) console.warn(`  Parse check: ${bullets3} finding bullet(s) in the judge output, ${findings.length} line-anchored \u2014 unlocated findings or a format drift`);
+      }
     } else {
       console.log("Benchmark: review skipped \u2014 writing empty findings");
     }
