@@ -42,8 +42,22 @@ describe('detectStacks bases', () => {
   })
 
   it('drops bases below the floor and counts unsupported languages against them', () => {
-    const files = changed('A.java', 'a.go', 'b.go', 'c.go', 'd.go', 'e.go')
+    const files = changed('A.java', 'a.scala', 'b.scala', 'c.scala', 'd.scala', 'e.scala')
     expect(detectStacks(files).bases).toEqual([])
+  })
+
+  it('classifies C#, Go, and Rust', () => {
+    expect(detectStacks(changed('src/A.cs', 'src/B.cs')).bases).toEqual(['csharp'])
+    expect(detectStacks(changed('cmd/main.go', 'util.go')).bases).toEqual(['go'])
+    expect(detectStacks(changed('src/lib.rs')).bases).toEqual(['rust'])
+  })
+
+  it('counts .razor/.cshtml/.xaml toward the csharp base', () => {
+    expect(detectStacks(changed('Pages/Index.razor', 'App.xaml', 'Program.cs')).bases).toEqual(['csharp'])
+  })
+
+  it('a Go-dominant PR with a stray web file stays go, not frontend (mis-vote fix)', () => {
+    expect(detectStacks(changed('main.go', 'a.go', 'b.go', 'c.go', 'd.go', 'ui/App.tsx')).bases).toEqual(['go'])
   })
 })
 
@@ -88,6 +102,104 @@ describe('detectStacks overlays', () => {
   it('does not add an overlay whose base is below the floor', () => {
     const files = changed('x.component.ts', 'a.py', 'b.py', 'c.py', 'd.py', 'e.py', 'f.py', 'g.py')
     expect(detectStacks(files).overlays).toEqual([])
+  })
+})
+
+describe('detectStacks .NET overlays', () => {
+  it('adds aspnet from an AspNetCore/EF import or a .cshtml path', () => {
+    expect(detectStacks(changed('Api.cs'), addLines('using Microsoft.AspNetCore.Mvc;')).overlays).toEqual(['aspnet'])
+    expect(detectStacks(changed('Views/Home.cshtml', 'HomeController.cs')).overlays).toContain('aspnet')
+  })
+
+  it('adds blazor from a .razor file', () => {
+    expect(detectStacks(changed('Pages/Counter.razor', 'App.cs')).overlays).toContain('blazor')
+  })
+
+  it('adds maui from a Microsoft.Maui import', () => {
+    expect(detectStacks(changed('MainPage.xaml.cs'), addLines('using Microsoft.Maui.Controls;')).overlays).toContain('maui')
+  })
+
+  it('adds winforms from System.Windows.Forms', () => {
+    expect(detectStacks(changed('Form1.cs'), addLines('using System.Windows.Forms;')).overlays).toContain('winforms')
+  })
+
+  it('does not add a .NET overlay without a csharp base', () => {
+    expect(detectStacks(changed('a.py'), addLines('using Microsoft.AspNetCore.Mvc;')).overlays).toEqual([])
+  })
+})
+
+describe('detectStacks round-2 bases', () => {
+  it('classifies each new language by extension', () => {
+    expect(detectStacks(changed('run.sh', 'lib.bash', 't.bats')).bases).toEqual(['shell'])
+    expect(detectStacks(changed('a.php', 'b.phpt')).bases).toEqual(['php'])
+    expect(detectStacks(changed('a.c', 'b.cc', 'c.cpp', 'd.cxx', 'e.h', 'f.hpp', 'g.hh')).bases).toEqual(['cpp'])
+    expect(detectStacks(changed('A.swift')).bases).toEqual(['swift'])
+    expect(detectStacks(changed('main.tf', 'prod.tfvars')).bases).toEqual(['terraform'])
+    expect(detectStacks(changed('a.rb')).bases).toEqual(['ruby'])
+    expect(detectStacks(changed('lib/main.dart')).bases).toEqual(['dart'])
+    expect(detectStacks(changed('x.ps1', 'M.psm1')).bases).toEqual(['powershell'])
+  })
+
+  it('counts Jupyter notebooks as python', () => {
+    expect(detectStacks(changed('analysis.ipynb')).bases).toEqual(['python'])
+  })
+
+  it('classifies an extensionless script as shell from its shebang', () => {
+    const diff = ['diff --git a/bin/deploy b/bin/deploy', '--- a/bin/deploy', '+++ b/bin/deploy', '@@ -1 +1,2 @@', '+#!/usr/bin/env bash', '+echo hi'].join('\n')
+    expect(detectStacks(changed('bin/deploy'), diff).bases).toEqual(['shell'])
+    expect(detectStacks(changed('bin/deploy'), diff.replace('env bash', 'bin/sh')).bases).toEqual(['shell'])
+  })
+
+  it('ignores extensionless files without a shell shebang', () => {
+    const diff = ['diff --git a/Makefile b/Makefile', '+all:', '+\techo hi'].join('\n')
+    expect(detectStacks(changed('Makefile'), diff).bases).toEqual([])
+  })
+
+  it('does not attribute a shebang from one file to another', () => {
+    const diff = ['diff --git a/run b/run', '+#!/bin/bash', 'diff --git a/LICENSE b/LICENSE', '+text'].join('\n')
+    expect(detectStacks(changed('run', 'LICENSE', 'a.py', 'b.py', 'c.py'), diff).bases).toEqual(['python', 'shell'])
+  })
+})
+
+describe('detectStacks round-2 overlays', () => {
+  it('adds laravel from Illuminate import, Model subclass, composer.json or artisan', () => {
+    expect(detectStacks(changed('A.php'), addLines('use Illuminate\\Http\\Request;')).overlays).toEqual(['laravel'])
+    expect(detectStacks(changed('User.php'), addLines('class User extends Model')).overlays).toEqual(['laravel'])
+    expect(detectStacks(changed('a.php', 'composer.json'), addLines('"laravel/framework": "^11.0"')).overlays).toEqual(['laravel'])
+    expect(detectStacks(changed('a.php', 'artisan')).overlays).toEqual(['laravel'])
+  })
+
+  it('plain php stays generic and laravel needs a php base', () => {
+    expect(detectStacks(changed('a.php'), addLines('echo 1;')).overlays).toEqual([])
+    expect(detectStacks(changed('a.py'), addLines('use Illuminate\\Http\\Request;')).overlays).toEqual([])
+  })
+
+  it('adds rails from controller/record superclass, Rails., routes.rb or Gemfile', () => {
+    expect(detectStacks(changed('a.rb'), addLines('class A < ApplicationController')).overlays).toEqual(['rails'])
+    expect(detectStacks(changed('a.rb'), addLines('class A < ApplicationRecord')).overlays).toEqual(['rails'])
+    expect(detectStacks(changed('a.rb'), addLines('Rails.logger.info(1)')).overlays).toEqual(['rails'])
+    expect(detectStacks(changed('a.rb', 'config/routes.rb')).overlays).toEqual(['rails'])
+    expect(detectStacks(changed('a.rb', 'Gemfile'), addLines("gem 'rails', '~> 7.1'")).overlays).toEqual(['rails'])
+  })
+
+  it('plain ruby stays generic', () => {
+    expect(detectStacks(changed('a.rb'), addLines('puts 1')).overlays).toEqual([])
+  })
+
+  it('adds android on kotlin or java from manifest, android imports, or gradle plugin', () => {
+    expect(detectStacks(changed('A.kt'), addLines('import androidx.fragment.app.Fragment')).overlays).toEqual(['android'])
+    expect(detectStacks(changed('A.java'), addLines('import android.os.Bundle;')).overlays).toEqual(['android'])
+    expect(detectStacks(changed('A.kt', 'app/src/main/AndroidManifest.xml')).overlays).toEqual(['android'])
+    expect(detectStacks(changed('A.kt', 'build.gradle.kts'), addLines('id("com.android.application")')).overlays).toEqual(['android'])
+  })
+
+  it('does not treat a bare applicationId as android (too generic — backend code uses that name)', () => {
+    expect(detectStacks(changed('Service.java'), addLines('String applicationId = userId;')).overlays).toEqual([])
+  })
+
+  it('does not add android without a jvm base', () => {
+    expect(detectStacks(changed('a.py', 'AndroidManifest.xml')).overlays).toEqual([])
+    expect(detectStacks(changed('A.java'), addLines('import java.util.List;')).overlays).toEqual([])
   })
 })
 
@@ -144,9 +256,31 @@ describe('loadPrompt stack composition', () => {
   })
 
   it('falls back to the default prompt when nothing is detected', async () => {
-    const result = await loadPrompt(adapterWith({}), PR, undefined, changed('README.md', 'a.go'))
+    const result = await loadPrompt(adapterWith({}), PR, undefined, changed('README.md', 'a.scala'))
 
     expect(result.source).toBe('default')
+  })
+
+  it('layers the aspnet overlay on the csharp base', async () => {
+    const result = await loadPrompt(adapterWith({}), PR, undefined, changed('HomeController.cs'), addLines('using Microsoft.AspNetCore.Mvc;'))
+
+    expect(result.source).toBe('stack:csharp+aspnet')
+    expect(result.content).toContain('Senior .NET Engineer')
+    expect(result.content).toContain('ASP.NET Core / EF Core Specifics')
+    expect(result.content).not.toContain('{{')
+  })
+
+  it('loads every bundled overlay fragment', async () => {
+    const cases: [string, string, string][] = [
+      ['A.php', 'use Illuminate\\Http\\Request;', 'php+laravel'],
+      ['a.rb', 'class A < ApplicationRecord', 'ruby+rails'],
+      ['A.kt', 'import androidx.fragment.app.Fragment', 'kotlin+android'],
+    ]
+    for (const [path, line, source] of cases) {
+      const result = await loadPrompt(adapterWith({}), PR, undefined, changed(path), addLines(line))
+      expect(result.source).toBe(`stack:${source}`)
+      expect(result.content).not.toContain('{{')
+    }
   })
 
   it('repo prompt wins over the stacks', async () => {
@@ -172,6 +306,9 @@ describe('loadPrompt stack composition', () => {
     const cases: [string[], string][] = [
       [['A.java'], 'java'], [['A.kt'], 'kotlin'], [['a.py'], 'python'],
       [['a.ts'], 'typescript-node'], [['App.tsx'], 'frontend'],
+      [['A.cs'], 'csharp'], [['main.go'], 'go'], [['lib.rs'], 'rust'],
+      [['a.sh'], 'shell'], [['a.php'], 'php'], [['a.c'], 'cpp'], [['A.swift'], 'swift'],
+      [['main.tf'], 'terraform'], [['a.rb'], 'ruby'], [['a.dart'], 'dart'], [['a.ps1'], 'powershell'],
     ]
     for (const [paths, source] of cases) {
       const result = await loadPrompt(adapterWith({}), PR, undefined, changed(...paths))

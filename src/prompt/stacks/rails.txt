@@ -1,0 +1,21 @@
+## REVIEW PRIORITIES
+
+### Rails / ActiveRecord Specifics
+
+- Strong parameters / mass assignment — `params.permit!`, `params[:x]` passed straight to `create`/`update`/`assign_attributes`, permitting privileged attributes (`admin`, `role`, `*_id` of other tenants), nested attributes without a limit
+- N+1 — associations used in loops or views without `includes`/`preload`/`eager_load`; `.map(&:assoc)` over a relation; `count` in loops instead of counter caches; `Model.all` / `.each` over large tables instead of `find_each`
+- SQLi via string interpolation — `where("name = '#{x}'")`, `order(params[:sort])`, `pluck`/`select`/`group`/`joins`/`find_by_sql` with interpolated input; use bind params or `sanitize_sql`
+- Callbacks — side effects (emails, API calls, jobs) in `after_save`/`before_save` that run in unrelated contexts or inside a transaction; `after_commit` vs `after_save`; callbacks that halt silently or hide ordering dependencies
+- Authorization — missing `before_action` authentication / authorization (Pundit, CanCan) on new actions; `find(params[:id])` without scoping to the current user (IDOR); `skip_before_action` widening access
+- Transactions and concurrency — multi-write flows outside `transaction`; read-modify-write without `lock!` / optimistic locking; `find_or_create_by` races without a unique index
+- Migrations — non-reversible `change`, `remove_column` without `ignored_columns` first, adding indexes without `algorithm: :concurrently` on large tables, missing `null: false`/defaults/foreign keys, model changes without a migration or `schema.rb` update
+- Validations vs constraints — model validations with no matching DB unique index/constraint; `update_column`/`update_all`/`save(validate: false)` bypassing validations and callbacks
+- Background jobs — non-idempotent jobs with retries; passing whole records instead of ids; enqueueing before the transaction commits
+- Views and output — `html_safe` / `raw` on user data; `redirect_to params[:url]` (open redirect); `send_file`/`render file:` with user paths; `CSRF` protection skipped (`skip_forgery_protection`) on session-authenticated routes
+- Routing — `match`/wildcard routes or `resources` exposing unintended actions; changed route contract breaking clients
+
+## EXCEPTIONS
+- Do not flag `params.permit!` or `update_all` in admin-only rake tasks, seeds, or console scripts
+- Do not flag `html_safe` on fixed literal strings or output already sanitized in the same method
+- Do not flag a missing `includes` where the association is loaded once (not in a loop) or the collection is bounded and tiny
+- Do not flag a missing authorization check when it is enforced by a parent controller `before_action` outside the diff — raise it as an Unresolved Question

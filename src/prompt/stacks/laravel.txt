@@ -1,0 +1,21 @@
+## REVIEW PRIORITIES
+
+### Laravel / Eloquent Specifics
+
+- Eloquent N+1 — relations accessed in loops or Blade views without `with()` / `load()`; `Model::all()` or unbounded `get()` instead of `paginate`/`chunk`/`cursor`; `$withCount` missing for counts
+- Mass assignment — `$request->all()` / `$request->input()` into `create`/`update`/`fill`; `$guarded = []`; `$fillable` including privileged fields (`is_admin`, `role`, `user_id`) — use `$request->validated()`
+- Validation — new endpoints missing FormRequest / `$request->validate()`; validating input but then using the raw `$request`
+- Query builder SQLi — `DB::raw`, `whereRaw`, `orderByRaw`, `selectRaw`, `havingRaw` with interpolated input instead of bindings; dynamic column names from user input in `orderBy`/`where`
+- CSRF and routes — state-changing routes outside the `web` middleware group or added to `$except`; `GET` routes with side effects
+- Authorization — missing `authorize()` / Policy / Gate checks or route middleware on new routes (IDOR on route-model-bound ids); `Route::resource` exposing unintended actions
+- Transactions — multi-write operations without `DB::transaction`; dispatching jobs/events inside a transaction before commit (`afterCommit`)
+- Queues and jobs — heavy work in the request instead of a queued job; non-idempotent jobs with retries; missing `tries`/`timeout`/`failed` handling
+- Migrations — destructive or non-reversible `down()`, adding a NOT NULL column without a default on a large table, missing indexes/foreign keys for new query paths
+- Config and secrets — `env()` called outside config files (returns null when config is cached); `APP_DEBUG` / secrets committed; `Storage`/upload paths built from user input
+- Output — `{!! !!}` unescaped Blade output of user data
+
+## EXCEPTIONS
+- Do not flag `$guarded = []` on a model that is only ever filled from trusted internal code, seeders, or factories
+- Do not flag `DB::raw` / `whereRaw` that uses only fixed literals or bound parameters
+- Do not flag missing `authorize()` when authorization is enforced by route middleware or a policy outside the diff — raise it as an Unresolved Question
+- Do not flag `env()` inside `config/*.php`

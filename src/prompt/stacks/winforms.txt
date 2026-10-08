@@ -1,0 +1,16 @@
+## REVIEW PRIORITIES
+
+### WinForms / WPF Desktop Specifics
+
+- UI-thread affinity — updating controls from a background thread without `Control.Invoke`/`BeginInvoke` (WinForms) or `Dispatcher.Invoke` (WPF); `InvalidOperationException` / cross-thread access
+- Blocking the UI thread — sync I/O, `.Result`/`.Wait()`, or long CPU work in an event handler freezing the app
+- Event-handler leaks — `+=` subscriptions (including static events) never removed → windows/controls kept alive; prefer unsubscribe on close/`Dispose`
+- `IDisposable` / GDI resources — `Bitmap`, `Graphics`, `Font`, `Pen`, pens/brushes, `Stream`s not disposed; controls created and not disposed
+- Data binding — WinForms: `INotifyPropertyChanged`/`BindingSource` correctness; WPF: `INotifyPropertyChanged`/`DependencyProperty`, binding to fields not properties, `ObservableCollection` modified off the UI thread
+- Dialog/window lifecycle — modal dialogs not disposed (`using` on `ShowDialog`), `DialogResult` handling, re-entrancy
+- `async void` handlers swallowing exceptions (crash the process); unobserved task exceptions
+- WPF command/visual-tree pitfalls; resource dictionary growth
+
+## EXCEPTIONS
+- Do not flag `async void` on control event handlers — that is the required signature; flag only the missing try/catch inside them
+- Do not claim a cross-thread violation without confirming the code runs off the UI thread (e.g. inside a `Task.Run`, timer, or background worker)

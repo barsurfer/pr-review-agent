@@ -1,7 +1,9 @@
 import type { ChangedFile } from '../vcs/adapter.js'
 
-export const BASE_STACKS = ['java', 'kotlin', 'python', 'typescript-node', 'frontend'] as const
-export const OVERLAY_STACKS = ['spring', 'angular', 'ionic'] as const
+export const BASE_STACKS = ['java', 'kotlin', 'python', 'typescript-node', 'frontend', 'csharp', 'go', 'rust',
+  'shell', 'php', 'cpp', 'swift', 'terraform', 'ruby', 'dart', 'powershell'] as const
+export const OVERLAY_STACKS = ['spring', 'angular', 'ionic', 'aspnet', 'blazor', 'maui', 'winforms',
+  'laravel', 'rails', 'android'] as const
 export type BaseStack = (typeof BASE_STACKS)[number]
 export type OverlayStack = (typeof OVERLAY_STACKS)[number]
 
@@ -32,6 +34,39 @@ const ANGULAR_DIFF = /^[+ ]\s*import\b.*['"]@angular\//m
 const IONIC_DIFF = /^[+ ]\s*import\b.*['"]@(ionic|capacitor)\//m
 const FRONTEND_DIFF = /^[+ ]\s*import\b.*['"](react|react-dom|vue|svelte|@angular\/[^'"]*|@ionic\/[^'"]*)['"]/m
 
+// .NET flavor — detect web / Blazor / MAUI / desktop-forms from imports, attributes, and XAML roots
+// so a C# PR gets the right framework rules, not just generic .NET.
+const ASPNET_PATH = /\.cshtml$/
+const ASPNET_DIFF = /^[+ ]\s*using\s+Microsoft\.(AspNetCore|EntityFrameworkCore)\b|^[+ ]\s*\[(ApiController|Route|Http(Get|Post|Put|Patch|Delete))\b|^[+ ]\s*(WebApplication|WebApplicationBuilder)\b|^[+ ]\s*app\.Map(Get|Post|Put|Delete|Controllers)\b|:\s*Controller(Base)?\b/m
+const BLAZOR_PATH = /\.razor$/
+const BLAZOR_DIFF = /^[+ ]\s*using\s+Microsoft\.AspNetCore\.Components\b|^[+ ]\s*@rendermode\b/m
+const MAUI_PATH = /(^|\/)MauiProgram\.cs$/
+const MAUI_DIFF = /^[+ ]\s*using\s+Microsoft\.Maui\b|<(ContentPage|FlyoutPage|Shell)\b/m
+const WINFORMS_PATH = /\.Designer\.cs$/
+const WINFORMS_DIFF = /^[+ ]\s*using\s+System\.Windows\.Forms\b|^[+ ]\s*using\s+System\.Windows(\.(Controls|Media|Data|Shapes|Input))?\s*;|<(Window|UserControl)\b|:\s*Form\b/m
+
+// Framework entrypoints often appear only as paths or manifest lines, so both path and diff markers count
+const LARAVEL_PATH = /(^|\/)artisan$/
+const LARAVEL_DIFF = /^[+ ]\s*use\s+Illuminate\\|^[+ ]\s*(final\s+|abstract\s+)?class\s+\w+\s+extends\s+Model\b|^[+ ].*laravel\/framework/m
+const RAILS_PATH = /(^|\/)config\/routes\.rb$/
+const RAILS_DIFF = /<\s*(ApplicationController|ApplicationRecord)\b|^[+ ].*\bRails\.|^[+ ]\s*gem\s+['"]rails['"]/m
+const ANDROID_PATH = /(^|\/)AndroidManifest\.xml$/
+const ANDROID_DIFF = /^[+ ]\s*import\s+androidx?\.|^[+ ].*com\.android\.(application|library)\b/m
+
+// Extensionless scripts (bin/deploy) can't be classified by name, so the shebang in their diff section decides
+const SHEBANG = /^[+ ]#!\s*\/\S*?(\/env\s+)?(ba|z|da|k)?sh\b/m
+const DIFF_FILE_HEADER = /^diff --git a\/(.+?) b\/(.+)$/gm
+
+function shellShebangPaths(diff: string): Set<string> {
+  const out = new Set<string>()
+  const headers = [...diff.matchAll(DIFF_FILE_HEADER)]
+  headers.forEach((h, i) => {
+    const section = diff.slice(h.index, headers[i + 1]?.index ?? diff.length)
+    if (SHEBANG.test(section)) out.add(h[2])
+  })
+  return out
+}
+
 function extensionOf(path: string): string {
   const base = path.slice(path.lastIndexOf('/') + 1)
   const dot = base.lastIndexOf('.')
@@ -39,15 +74,29 @@ function extensionOf(path: string): string {
 }
 
 // 'other' = real source in an unsupported language; it counts against every base
-function classifyFile(path: string, frontendSignal: boolean): BaseStack | 'other' | null {
+function classifyFile(path: string, frontendSignal: boolean, shellScripts: Set<string>): BaseStack | 'other' | null {
   const ext = extensionOf(path)
+  if (!ext && shellScripts.has(path)) return 'shell'
   if (!ext || NEUTRAL_EXTENSIONS.has(ext)) return null
   if (FRONTEND_EXTENSIONS.has(ext)) return 'frontend'
   // Plain js/ts is ambiguous, so any frontend signal in the PR claims it for the frontend base
   if (JS_TS_EXTENSIONS.has(ext)) return frontendSignal ? 'frontend' : 'typescript-node'
   if (ext === 'java') return 'java'
   if (ext === 'kt' || ext === 'kts') return 'kotlin'
-  if (ext === 'py') return 'python'
+  // Jupyter cells are Python
+  if (ext === 'py' || ext === 'ipynb') return 'python'
+  // .NET: .razor/.cshtml/.xaml are .NET UI markup, not generic web — count them for the csharp base.
+  if (ext === 'cs' || ext === 'csx' || ext === 'razor' || ext === 'cshtml' || ext === 'xaml') return 'csharp'
+  if (ext === 'go') return 'go'
+  if (ext === 'rs') return 'rust'
+  if (ext === 'sh' || ext === 'bash' || ext === 'bats') return 'shell'
+  if (ext === 'php' || ext === 'phpt') return 'php'
+  if (['c', 'cc', 'cpp', 'cxx', 'h', 'hpp', 'hh'].includes(ext)) return 'cpp'
+  if (ext === 'swift') return 'swift'
+  if (ext === 'tf' || ext === 'tfvars') return 'terraform'
+  if (ext === 'rb') return 'ruby'
+  if (ext === 'dart') return 'dart'
+  if (ext === 'ps1' || ext === 'psm1') return 'powershell'
   return 'other'
 }
 
@@ -61,10 +110,12 @@ export function detectStacks(changedFiles: ChangedFile[], diff = ''): StackSelec
   const frontendSignal = angular || ionic || FRONTEND_DIFF.test(diff)
     || paths.some(p => ['tsx', 'jsx', 'vue', 'svelte'].includes(extensionOf(p)))
 
+  const shellScripts = shellShebangPaths(diff)
+
   const counts = new Map<BaseStack | 'other', number>()
   let total = 0
   for (const p of paths) {
-    const kind = classifyFile(p, frontendSignal)
+    const kind = classifyFile(p, frontendSignal, shellScripts)
     if (!kind) continue
     counts.set(kind, (counts.get(kind) ?? 0) + 1)
     total++
@@ -77,10 +128,18 @@ export function detectStacks(changedFiles: ChangedFile[], diff = ''): StackSelec
 
   const hasJvm = bases.includes('java') || bases.includes('kotlin')
   const hasFrontend = bases.includes('frontend')
+  const hasCsharp = bases.includes('csharp')
   const overlays: OverlayStack[] = []
   if (hasJvm && (anyPath(SPRING_PATH) || SPRING_DIFF.test(diff))) overlays.push('spring')
   if (hasFrontend && angular) overlays.push('angular')
   if (hasFrontend && ionic) overlays.push('ionic')
+  if (hasCsharp && (anyPath(ASPNET_PATH) || ASPNET_DIFF.test(diff))) overlays.push('aspnet')
+  if (hasCsharp && (anyPath(BLAZOR_PATH) || BLAZOR_DIFF.test(diff))) overlays.push('blazor')
+  if (hasCsharp && (anyPath(MAUI_PATH) || MAUI_DIFF.test(diff))) overlays.push('maui')
+  if (hasCsharp && (anyPath(WINFORMS_PATH) || WINFORMS_DIFF.test(diff))) overlays.push('winforms')
+  if (bases.includes('php') && (anyPath(LARAVEL_PATH) || LARAVEL_DIFF.test(diff))) overlays.push('laravel')
+  if (bases.includes('ruby') && (anyPath(RAILS_PATH) || RAILS_DIFF.test(diff))) overlays.push('rails')
+  if (hasJvm && (anyPath(ANDROID_PATH) || ANDROID_DIFF.test(diff))) overlays.push('android')
 
   return { bases, overlays }
 }
