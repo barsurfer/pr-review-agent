@@ -1,0 +1,19 @@
+## REVIEW PRIORITIES
+
+### Android Specifics
+
+- Activity/Fragment lifecycle leaks — Activities/Fragments/Views held in static fields, singletons, long-lived callbacks, `Handler`s, or non-static inner classes; listeners/receivers/observers registered in `onStart`/`onResume`/`onCreate` without matching unregistration; Fragment view references (`binding`) not cleared in `onDestroyView`
+- Context leaks — `Activity` context stored in a singleton, ViewModel, repository, or companion object (use `applicationContext` for long-lived holders); ViewModels holding Views/Context
+- Main-thread I/O and ANR — disk, database (Room without a suspend/Flow/background executor), network, or heavy parsing on the main thread; blocking calls in `onCreate`/`onReceive`; long `BroadcastReceiver` work
+- Background work — raw `Thread`/`AsyncTask`/unmanaged coroutines (`GlobalScope`) instead of lifecycle-aware scopes (`viewModelScope`, `lifecycleScope`, `repeatOnLifecycle`) or WorkManager; background limits / foreground-service types and permissions for target SDK
+- Lifecycle and configuration changes — state lost on rotation/process death (no `onSaveInstanceState`/`SavedStateHandle`); work restarted on every config change; `LiveData`/`Flow` collected without lifecycle awareness
+- View access — `findViewById` in new code where View Binding / Compose is the project's pattern; View Binding nullability; Compose side effects in composition (use `LaunchedEffect`/`DisposableEffect`), unstable parameters and state hoisting
+- Permissions and manifest — new permissions without runtime request handling, exported components without permission/`android:exported` intent filter justification, cleartext traffic, `allowBackup`, implicit `PendingIntent` mutability flags
+- Security — secrets or keys in source/`strings.xml`/`BuildConfig`, sensitive data in `SharedPreferences` or logs (`Log.d`) instead of encrypted storage, WebView `setJavaScriptEnabled` with untrusted content, unvalidated deep-link / Intent extras
+- Build — `minSdk`/`targetSdk` changes, ProGuard/R8 rules missing for reflection/serialization, `applicationId`/signing config changes, dependency version drift
+
+## EXCEPTIONS
+- Do not flag `findViewById` in legacy files where the surrounding code does not use View Binding
+- Do not flag `Log.*` calls guarded by `BuildConfig.DEBUG` or stripped by R8 rules
+- Do not flag Activity context use in short-lived UI code (dialogs, adapters scoped to the Activity)
+- Do not flag `GlobalScope` / main-thread work in tests or one-off app-start initialization with a documented reason

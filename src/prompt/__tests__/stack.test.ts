@@ -128,6 +128,78 @@ describe('detectStacks .NET overlays', () => {
   })
 })
 
+describe('detectStacks round-2 bases', () => {
+  it('classifies each new language by extension', () => {
+    expect(detectStacks(changed('run.sh', 'lib.bash', 't.bats')).bases).toEqual(['shell'])
+    expect(detectStacks(changed('a.php', 'b.phpt')).bases).toEqual(['php'])
+    expect(detectStacks(changed('a.c', 'b.cc', 'c.cpp', 'd.cxx', 'e.h', 'f.hpp', 'g.hh')).bases).toEqual(['cpp'])
+    expect(detectStacks(changed('A.swift')).bases).toEqual(['swift'])
+    expect(detectStacks(changed('main.tf', 'prod.tfvars')).bases).toEqual(['terraform'])
+    expect(detectStacks(changed('a.rb')).bases).toEqual(['ruby'])
+    expect(detectStacks(changed('lib/main.dart')).bases).toEqual(['dart'])
+    expect(detectStacks(changed('x.ps1', 'M.psm1')).bases).toEqual(['powershell'])
+  })
+
+  it('counts Jupyter notebooks as python', () => {
+    expect(detectStacks(changed('analysis.ipynb')).bases).toEqual(['python'])
+  })
+
+  it('classifies an extensionless script as shell from its shebang', () => {
+    const diff = ['diff --git a/bin/deploy b/bin/deploy', '--- a/bin/deploy', '+++ b/bin/deploy', '@@ -1 +1,2 @@', '+#!/usr/bin/env bash', '+echo hi'].join('\n')
+    expect(detectStacks(changed('bin/deploy'), diff).bases).toEqual(['shell'])
+    expect(detectStacks(changed('bin/deploy'), diff.replace('env bash', 'bin/sh')).bases).toEqual(['shell'])
+  })
+
+  it('ignores extensionless files without a shell shebang', () => {
+    const diff = ['diff --git a/Makefile b/Makefile', '+all:', '+\techo hi'].join('\n')
+    expect(detectStacks(changed('Makefile'), diff).bases).toEqual([])
+  })
+
+  it('does not attribute a shebang from one file to another', () => {
+    const diff = ['diff --git a/run b/run', '+#!/bin/bash', 'diff --git a/LICENSE b/LICENSE', '+text'].join('\n')
+    expect(detectStacks(changed('run', 'LICENSE', 'a.py', 'b.py', 'c.py'), diff).bases).toEqual(['python', 'shell'])
+  })
+})
+
+describe('detectStacks round-2 overlays', () => {
+  it('adds laravel from Illuminate import, Model subclass, composer.json or artisan', () => {
+    expect(detectStacks(changed('A.php'), addLines('use Illuminate\\Http\\Request;')).overlays).toEqual(['laravel'])
+    expect(detectStacks(changed('User.php'), addLines('class User extends Model')).overlays).toEqual(['laravel'])
+    expect(detectStacks(changed('a.php', 'composer.json'), addLines('"laravel/framework": "^11.0"')).overlays).toEqual(['laravel'])
+    expect(detectStacks(changed('a.php', 'artisan')).overlays).toEqual(['laravel'])
+  })
+
+  it('plain php stays generic and laravel needs a php base', () => {
+    expect(detectStacks(changed('a.php'), addLines('echo 1;')).overlays).toEqual([])
+    expect(detectStacks(changed('a.py'), addLines('use Illuminate\\Http\\Request;')).overlays).toEqual([])
+  })
+
+  it('adds rails from controller/record superclass, Rails., routes.rb or Gemfile', () => {
+    expect(detectStacks(changed('a.rb'), addLines('class A < ApplicationController')).overlays).toEqual(['rails'])
+    expect(detectStacks(changed('a.rb'), addLines('class A < ApplicationRecord')).overlays).toEqual(['rails'])
+    expect(detectStacks(changed('a.rb'), addLines('Rails.logger.info(1)')).overlays).toEqual(['rails'])
+    expect(detectStacks(changed('a.rb', 'config/routes.rb')).overlays).toEqual(['rails'])
+    expect(detectStacks(changed('a.rb', 'Gemfile'), addLines("gem 'rails', '~> 7.1'")).overlays).toEqual(['rails'])
+  })
+
+  it('plain ruby stays generic', () => {
+    expect(detectStacks(changed('a.rb'), addLines('puts 1')).overlays).toEqual([])
+  })
+
+  it('adds android on kotlin or java from manifest, android imports, or gradle plugin', () => {
+    expect(detectStacks(changed('A.kt'), addLines('import androidx.fragment.app.Fragment')).overlays).toEqual(['android'])
+    expect(detectStacks(changed('A.java'), addLines('import android.os.Bundle;')).overlays).toEqual(['android'])
+    expect(detectStacks(changed('A.kt', 'app/src/main/AndroidManifest.xml')).overlays).toEqual(['android'])
+    expect(detectStacks(changed('A.java', 'app/build.gradle'), addLines('applicationId "com.x.y"')).overlays).toEqual(['android'])
+    expect(detectStacks(changed('A.kt', 'build.gradle.kts'), addLines('id("com.android.application")')).overlays).toEqual(['android'])
+  })
+
+  it('does not add android without a jvm base', () => {
+    expect(detectStacks(changed('a.py', 'AndroidManifest.xml')).overlays).toEqual([])
+    expect(detectStacks(changed('A.java'), addLines('import java.util.List;')).overlays).toEqual([])
+  })
+})
+
 const PR: PRInfo = {
   id: '1', title: 'Test', description: '', author: 'dev',
   sourceBranch: 'feature/x', targetBranch: 'develop', sourceCommit: 'abc123def456',
@@ -195,6 +267,19 @@ describe('loadPrompt stack composition', () => {
     expect(result.content).not.toContain('{{')
   })
 
+  it('loads every bundled overlay fragment', async () => {
+    const cases: [string, string, string][] = [
+      ['A.php', 'use Illuminate\\Http\\Request;', 'php+laravel'],
+      ['a.rb', 'class A < ApplicationRecord', 'ruby+rails'],
+      ['A.kt', 'import androidx.fragment.app.Fragment', 'kotlin+android'],
+    ]
+    for (const [path, line, source] of cases) {
+      const result = await loadPrompt(adapterWith({}), PR, undefined, changed(path), addLines(line))
+      expect(result.source).toBe(`stack:${source}`)
+      expect(result.content).not.toContain('{{')
+    }
+  })
+
   it('repo prompt wins over the stacks', async () => {
     const adapter = adapterWith({ '.agent-review-instructions.md': '## ROLE\nRepo reviewer.' })
 
@@ -219,6 +304,8 @@ describe('loadPrompt stack composition', () => {
       [['A.java'], 'java'], [['A.kt'], 'kotlin'], [['a.py'], 'python'],
       [['a.ts'], 'typescript-node'], [['App.tsx'], 'frontend'],
       [['A.cs'], 'csharp'], [['main.go'], 'go'], [['lib.rs'], 'rust'],
+      [['a.sh'], 'shell'], [['a.php'], 'php'], [['a.c'], 'cpp'], [['A.swift'], 'swift'],
+      [['main.tf'], 'terraform'], [['a.rb'], 'ruby'], [['a.dart'], 'dart'], [['a.ps1'], 'powershell'],
     ]
     for (const [paths, source] of cases) {
       const result = await loadPrompt(adapterWith({}), PR, undefined, changed(...paths))
