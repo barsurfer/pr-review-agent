@@ -44,9 +44,20 @@ export function normalizeFindingPath(file: string, changedPaths: readonly string
   return bySuffix.length === 1 ? bySuffix[0] : path
 }
 
+// The `### Findings` section body, line-anchored so a mid-line "C# findings" in the Summary can't match.
+function findingsSection(judgedText: string): string {
+  return judgedText.match(/(?:^|\n)#{1,4}\s*Findings\b([\s\S]*?)(?=\n#{1,4}\s|$)/i)?.[1] ?? ''
+}
+
+// Count of finding bullets in the Findings section — compared against emitted findings to flag a
+// format drift that would otherwise score zero silently.
+export function countFindingBullets(judgedText: string): number {
+  return [...findingsSection(judgedText).matchAll(/^[ \t]*[-*]\s*\*\*(?:HIGH|MEDIUM|LOW)\b/gim)].length
+}
+
 // Pull `path:lines` citations from a finding's location paren — backtick-quoted items first (so a
 // multi-file finding keeps every file), else comma-split.
-function citations(parens: string): { path: string; lines: string }[] {
+export function citations(parens: string): { path: string; lines: string }[] {
   const backticked = [...parens.matchAll(/`([^`]+)`/g)].map(m => m[1])
   const items = backticked.length ? backticked : parens.replace(/^[(]|[)]$/g, '').split(',')
   const out: { path: string; lines: string }[] = []
@@ -62,7 +73,7 @@ function citations(parens: string): { path: string; lines: string }[] {
 // and location citations — instead of re-matching them onto the reviewer's findings, which silently
 // drops a finding whenever the judge reframes its title and re-cites its lines.
 export function findingsFromJudgedMarkdown(judgedText: string, producer: string, changedPaths: readonly string[] = []): ReportFinding[] {
-  const section = judgedText.match(/#{1,4}\s*Findings\b([\s\S]*?)(?=\n#{1,4}\s|$)/i)?.[1] ?? ''
+  const section = findingsSection(judgedText)
   const out: ReportFinding[] = []
   const seen = new Set<string>()
   for (const block of section.split(/\n(?=[ \t]*[-*]\s*\*\*(?:HIGH|MEDIUM|LOW)\b)/i)) {

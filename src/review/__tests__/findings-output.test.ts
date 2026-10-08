@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { mkdtempSync, readFileSync, existsSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { parseLineRange, normalizeFindingPath, findingsFromJudgedMarkdown, mapFindings, buildFindingsReport, writeFindingsReport } from '../findings-output.js'
+import { parseLineRange, normalizeFindingPath, findingsFromJudgedMarkdown, mapFindings, buildFindingsReport, writeFindingsReport, countFindingBullets } from '../findings-output.js'
 import { renderReview, type ReviewFinding, type ReviewObject } from '../formatter.js'
 
 const finding = (over: Partial<ReviewFinding> = {}): ReviewFinding =>
@@ -116,6 +116,22 @@ describe('findingsFromJudgedMarkdown', () => {
     const out = findingsFromJudgedMarkdown(renderReview(obj), 'rb')
     expect(out).toHaveLength(1)
     expect(out[0]).toMatchObject({ file: 'src/pool.ts', start_line: 42, end_line: 45, message: 'Race on conns: conns is read without the mutex.' })
+  })
+
+  it('is not fooled by "C# findings" in the Summary (section is line-anchored)', () => {
+    const md = '### Summary\nUses C# findings naming\n\n### Findings\n- **HIGH – Real** (`src/a.ts:1-2`)\n  body.'
+    expect(findingsFromJudgedMarkdown(md, 'rb').map(f => f.file)).toEqual(['src/a.ts'])
+  })
+})
+
+describe('countFindingBullets', () => {
+  it('counts severity bullets in the Findings section only', () => {
+    const md = '### Summary\nC# findings here\n\n### Findings\n- **HIGH – A** (`a.ts:1`)\n  x\n- **LOW – B** (`b.ts:2`)\n  y\n\n### Behavioral Diff\n- **HIGH – not a finding**'
+    expect(countFindingBullets(md)).toBe(2)
+  })
+
+  it('is zero when the judge kept nothing', () => {
+    expect(countFindingBullets('### Findings\nNo findings.\n\n### Merge Confidence: 95%')).toBe(0)
   })
 })
 

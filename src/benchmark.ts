@@ -3,7 +3,7 @@
 import { config } from './config.js'
 import { review } from './review/index.js'
 import { ReviewBenchAdapter, readReviewBenchEnv, readPrJson } from './vcs/reviewbench.js'
-import { findingsFromJudgedMarkdown, mapFindings, buildFindingsReport, writeFindingsReport, type ReportFinding } from './review/findings-output.js'
+import { findingsFromJudgedMarkdown, mapFindings, buildFindingsReport, writeFindingsReport, countFindingBullets, type ReportFinding } from './review/findings-output.js'
 import type { ReviewOutcome } from './review/types.js'
 
 const CONFIG_LABELS: Record<string, (value: string) => void> = {
@@ -56,6 +56,11 @@ export async function runBenchmark(env: NodeJS.ProcessEnv = process.env): Promis
         ? findingsFromJudgedMarkdown(outcome.reviewText, rb.agent, changedPaths)
         : mapFindings(outcome.review.findings, rb.agent, changedPaths)
       console.log(`Benchmark findings: reviewer ${outcome.review.findings.length}, ${outcome.judged ? 'from judge markdown' : 'judge skipped'}, line-anchored ${findings.length}`)
+      if (outcome.judged) {
+        // Flag a parse shortfall — unlocated findings or a judge-format drift that would otherwise score zero silently.
+        const bullets = countFindingBullets(outcome.reviewText)
+        if (bullets > findings.length) console.warn(`  Parse check: ${bullets} finding bullet(s) in the judge output, ${findings.length} line-anchored — unlocated findings or a format drift`)
+      }
     } else {
       console.log('Benchmark: review skipped — writing empty findings')
     }

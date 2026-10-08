@@ -27,7 +27,7 @@ function countLines(content: string): number {
 }
 
 function highChurnInDiff(filePath: string, diff: string): boolean {
-  // Extract this file's hunk from the unified diff and check if >30% of lines changed
+  // >30% of the diffed lines changed (changed vs changed+context within this file's hunks — not of the whole file)
   const fileSection = extractFileDiff(filePath, diff)
   if (!fileSection) return false
 

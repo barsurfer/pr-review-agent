@@ -4,6 +4,7 @@
 
 import type { ReviewFinding, ReviewObject } from './formatter.js'
 import { parseVerdictScore } from './parsers.js'
+import { citations } from './findings-output.js'
 
 export interface ParsedReview {
   summary: string
@@ -42,22 +43,22 @@ function bulletItems(body: string): string[] {
 
 function parseFindings(body: string): ReviewFinding[] {
   const findings: ReviewFinding[] = []
-  let cur: ReviewFinding | null = null
+  let cur: ReviewFinding[] = []   // the current finding + its multi-location siblings, for body continuation
   for (const line of body.split('\n')) {
     const m = line.match(FINDING_START)
     if (m) {
-      const loc = (m[3] ?? '').replace(/`/g, '').trim()
-      const at = loc.lastIndexOf(':')
-      cur = {
-        severity: m[1] as ReviewFinding['severity'],
-        title: m[2].trim(),
-        file: loc ? (at > 0 ? loc.slice(0, at) : loc).trim() : undefined,
-        lines: at > 0 ? loc.slice(at + 1).trim() || undefined : undefined,
-        body: line.slice(m[0].length).trim(),
-      }
-      findings.push(cur)
-    } else if (cur && line.trim()) {
-      cur.body = (cur.body ? cur.body + ' ' : '') + line.trim()
+      const severity = m[1] as ReviewFinding['severity']
+      const title = m[2].trim()
+      const text = line.slice(m[0].length).trim()
+      // A finding may cite several files; emit one per location so multi-file citations aren't
+      // flattened into one bogus `a.ts:1-2, b.ts` path. No location → one locationless finding.
+      const locs = citations(m[3] ?? '')
+      cur = locs.length
+        ? locs.map(c => ({ severity, title, file: c.path, lines: c.lines, body: text }))
+        : [{ severity, title, file: undefined, lines: undefined, body: text }]
+      findings.push(...cur)
+    } else if (cur.length && line.trim()) {
+      for (const f of cur) f.body = (f.body ? f.body + ' ' : '') + line.trim()
     }
   }
   return findings
