@@ -37,8 +37,11 @@ Separately, a deterministic `TODO`/`FIXME`/`HACK` scan (`scanTodos`, `ENABLE_TOD
 |---------------|------------|-------------------|
 | `## ROLE` | `{{ROLE}}` | "Senior Architect and Production Gatekeeper" |
 | `## REVIEW PRIORITIES` | `{{REVIEW_PRIORITIES}}` | Generic (logic, safety, correctness) |
+| `## SECURITY` | `{{SECURITY}}` | Generic OWASP-informed baseline — access control, injection, SSRF, secrets, crypto, auth/sessions, deserialization, output encoding, misconfig |
 | `## MENTAL MODEL` | `{{MENTAL_MODEL}}` | Production load, real users, large dataset, 3am |
 | `## EXCEPTIONS` | `{{EXCEPTIONS}}` | "No exceptions" |
+
+`## SECURITY` is stack-independent: the `DEFAULT_SECURITY` baseline (`src/prompt/defaults.ts`) is injected into **every** review — default, stack fallback, or a repo prompt that omits the section — so security coverage never depends on which stack wins. A repo or stack `## SECURITY` section fully replaces it.
 
 ---
 
@@ -48,7 +51,7 @@ Separately, a deterministic `TODO`/`FIXME`/`HACK` scan (`scanTodos`, `ENABLE_TOD
 2. `.agent-review-instructions.md` from PR's **source commit**: root → `docs/` → module fallback
 3. `.agent-review-instructions.md` from PR's **target branch**: same path list
 4. No repo prompt and no `--prompt`: composed **tech-stack fallback** (below), if any base is detected
-5. All four sections default if nothing above applies
+5. All five sections default if nothing above applies
 
 **Module fallback:** when every changed file in the PR lives under a single top-level
 directory (monorepo module, e.g. `alice-web/`), that directory is treated as an effective
@@ -60,7 +63,7 @@ directory does (no guessing on ambiguous PRs).
 - **Bases** by extension: `java`, `kotlin` (`.kt/.kts`), `python`, `typescript-node` (js/ts), `frontend` (`.tsx/.jsx/.vue/.svelte/.html/.css/.scss`; also plain js/ts when any frontend signal is present). Non-deleted files only; config/docs/assets/extension-less files are ignored; source in other languages counts as "other" against every base.
 - **Floor:** a base is injected when it owns >= 20% (`BASE_FLOOR`) of the classified files, largest first. No base above the floor → generic default prompt.
 - **Overlays** from markers in the diff only (no extra repo reads), each requiring its base above the floor: `spring` (jvm base + `import org.springframework`, an unambiguous Spring annotation, or `application.(properties|yml)`; plain Java never gets it), `angular` (`*.component|directive.*`, `angular.json`, `@angular/` import), `ionic` (`@ionic/`/`@capacitor/` import, `ionic.config.json`, `capacitor.config.*`). `.module/.pipe/.guard` are not Angular markers (NestJS collision).
-- **Compose:** `loadPrompt(..., changedFiles, diff)` merges fragments into the four sections: first ROLE (largest base) wins; priorities/exceptions/mental model concatenate, identical bullet lines de-duplicated. `source` becomes `stack:java+spring` etc. (shown in the review footer).
+- **Compose:** `loadPrompt(..., changedFiles, diff)` merges fragments into the prompt sections: first ROLE (largest base) wins; priorities/exceptions/mental model concatenate, identical bullet lines de-duplicated; stacks carry no `## SECURITY`, so the OWASP baseline applies. `source` becomes `stack:java+spring` etc. (shown in the review footer).
 - Files are embedded by `scripts/bundle.mjs` as `__STACK_PROMPTS__` (same dual-load as the base template) and copied to `dist/prompt/stacks` by `copy-assets`. They are generic: org-specific exceptions live in `prompts/` / repo files.
 
 YAML frontmatter in the file is stripped before parsing. Only the four `## SECTION` headers are extracted — all other content is ignored.
