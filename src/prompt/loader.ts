@@ -3,7 +3,7 @@ import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import type { VCSAdapter, PRInfo, ChangedFile } from '../vcs/adapter.js'
 import { detectStacks } from './stack.js'
-import { DEFAULT_ROLE, DEFAULT_REVIEW_PRIORITIES, DEFAULT_MENTAL_MODEL, DEFAULT_EXCEPTIONS } from './defaults.js'
+import { DEFAULT_ROLE, DEFAULT_REVIEW_PRIORITIES, DEFAULT_SECURITY, DEFAULT_MENTAL_MODEL, DEFAULT_EXCEPTIONS } from './defaults.js'
 
 const REPO_PROMPT_FILE = '.agent-review-instructions.md'
 
@@ -37,6 +37,7 @@ function getStackPrompt(stack: string): string {
 interface RepoPromptSections {
   role?: string
   reviewPriorities?: string
+  security?: string
   mentalModel?: string
   exceptions?: string
 }
@@ -73,6 +74,8 @@ function parseRepoPrompt(raw: string): RepoPromptSections {
       sections.role = body
     } else if (name.startsWith('REVIEW PRIORITIES')) {
       sections.reviewPriorities = body
+    } else if (name.startsWith('SECURITY')) {
+      sections.security = body
     } else if (name.startsWith('MENTAL MODEL')) {
       sections.mentalModel = body
     } else if (name.startsWith('EXCEPTION')) {
@@ -83,10 +86,11 @@ function parseRepoPrompt(raw: string): RepoPromptSections {
   return sections
 }
 
-const SECTION_NAMES: (keyof RepoPromptSections)[] = ['role', 'reviewPriorities', 'mentalModel', 'exceptions']
+const SECTION_NAMES: (keyof RepoPromptSections)[] = ['role', 'reviewPriorities', 'security', 'mentalModel', 'exceptions']
 const SECTION_LABELS: Record<keyof RepoPromptSections, string> = {
   role: 'ROLE',
   reviewPriorities: 'REVIEW PRIORITIES',
+  security: 'SECURITY',
   mentalModel: 'MENTAL MODEL',
   exceptions: 'EXCEPTIONS',
 }
@@ -112,6 +116,7 @@ function composeSections(fragments: RepoPromptSections[]): RepoPromptSections {
   return {
     role: fragments.find(f => f.role)?.role,
     reviewPriorities: merge('reviewPriorities'),
+    security: merge('security'),
     mentalModel: merge('mentalModel'),
     exceptions: merge('exceptions'),
   }
@@ -128,6 +133,7 @@ function fillTemplate(template: string, sections: RepoPromptSections): string {
   return template
     .replace('{{ROLE}}', sections.role ?? DEFAULT_ROLE)
     .replace('{{REVIEW_PRIORITIES}}', sections.reviewPriorities ?? DEFAULT_REVIEW_PRIORITIES)
+    .replace('{{SECURITY}}', sections.security ?? DEFAULT_SECURITY)
     .replace('{{MENTAL_MODEL}}', sections.mentalModel ?? DEFAULT_MENTAL_MODEL)
     .replace('{{EXCEPTIONS}}', sections.exceptions ?? DEFAULT_EXCEPTIONS)
 }
