@@ -2,12 +2,13 @@
 // Review orchestration — state machine only
 // ---------------------------------------------------------------------------
 
-import { config } from '../config.js'
+import { config, modelContextWindow } from '../config.js'
 import { loadPrompt } from '../prompt/loader.js'
 import { fetchContext } from '../context/fetcher.js'
 import { runReview, runCommentResponse, runJudge } from '../claude/client.js'
-import { filterDiff, countChangedLines, parseVerdictScore, isPathExcluded, scanTodos } from './parsers.js'
+import { filterDiff, countChangedLines, parseVerdictScore, isPathExcluded, scanTodos, isContextLengthError } from './parsers.js'
 import { buildReviewFooter, buildReplyFooter, stripPreviousFooter, stripDeltaStats, stripJudgeNotes, stripJenkinsMeta, stripPreamble, isNoChange, extractCommitHash, countFindings, markdownHasFindings, hasReplyFooter } from './formatter.js'
+import { runBundledReview } from './bundled.js'
 import { buildUsageRecord, logUsageRecord, getBuildCommit, getJobUrl } from './usage.js'
 import { State } from './types.js'
 
@@ -17,7 +18,8 @@ function supersedeBoundary<T extends { resolved?: boolean }>(reviews: T[]): T | 
   const pool = unresolved.length > 0 ? unresolved : reviews
   return pool[pool.length - 1]
 }
-import type { ReviewContext } from './types.js'
+
+import type { ReviewContext, OutcomeSink } from './types.js'
 import type { VCSAdapter } from '../vcs/adapter.js'
 
 import type { UsageRecord } from './usage.js'
@@ -97,7 +99,9 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         ctx.skipReason = `PR has ${fileCount} reviewable file(s), minimum is ${minChangedFiles}`
         return State.SKIP
       }
-      if (maxChangedFiles > 0 && fileCount > maxChangedFiles) {
+      // With bundling on, size is governed by the input budget and MAX_BUNDLES, not these caps.
+      const bundling = config.review.bundledReview
+      if (!bundling && maxChangedFiles > 0 && fileCount > maxChangedFiles) {
         ctx.action = 'SKIP'
         ctx.skipReason = `PR has ${fileCount} reviewable file(s), maximum is ${maxChangedFiles}`
         return State.SKIP
@@ -107,7 +111,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         ctx.skipReason = `PR has ${lineCount} reviewable line(s), minimum is ${minChangedLines}`
         return State.SKIP
       }
-      if (maxChangedLines > 0 && lineCount > maxChangedLines) {
+      if (!bundling && maxChangedLines > 0 && lineCount > maxChangedLines) {
         ctx.action = 'SKIP'
         ctx.skipReason = `PR has ${lineCount} reviewable line(s), maximum is ${maxChangedLines}`
         return State.SKIP
@@ -233,7 +237,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
 
     case State.LOAD_PROMPT: {
       console.log('Loading prompt...')
-      ctx.prompt = await loadPrompt(ctx.adapter, ctx.prInfo!, ctx.promptPath, ctx.changedFiles)
+      ctx.prompt = await loadPrompt(ctx.adapter, ctx.prInfo!, ctx.promptPath, ctx.changedFiles, ctx.diff)
       console.log(`  Prompt source: ${ctx.prompt.source}`)
       return State.FETCH_CONTEXT
     }
@@ -275,7 +279,13 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         `prompt ${s.prompt.toLocaleString()} | diff ${s.diff.toLocaleString()} | delta ${s.delta.toLocaleString()} | files ${s.files.toLocaleString()} (${s.filesN}) | prev_reviews ${s.reviews.toLocaleString()} (${s.reviewsN}) | replies ${s.replies.toLocaleString()} (${s.repliesN})`
 
       let s = sizes()
-      const max = config.anthropic.maxInputTokens
+      // Input budget: MAX_INPUT_TOKENS and the context window (minus output reserve), whichever is smaller, so a big diff degrades/skips instead of hitting a 400.
+      // The diff goes to both reviewer and judge, so cap by the smaller window; MODEL_CONTEXT_TOKENS overrides the reviewer's derived window.
+      const reviewerWindow = config.anthropic.modelContextTokens > 0 ? config.anthropic.modelContextTokens : modelContextWindow(config.anthropic.model)
+      const ctxWindow = config.judge.model ? Math.min(reviewerWindow, modelContextWindow(config.judge.model)) : reviewerWindow
+      const ctxCap = ctxWindow > 0 ? ctxWindow - config.anthropic.maxTokens : 0
+      const limits = [config.anthropic.maxInputTokens, ctxCap].filter(n => n > 0)
+      const max = limits.length ? Math.min(...limits) : 0
       console.log(`  Estimated input: ~${s.total.toLocaleString()} tokens  [${fmt(s)}]`)
 
       // A delta larger than the full PR diff means the branch merged its target in (commit-to-commit delta captured the merge) — drop it and review the bounded full diff.
@@ -289,7 +299,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       // Degrade before skipping: file contexts are the largest optional payload —
       // drop them and review diff-only rather than skip a large PR entirely.
       if (max > 0 && s.total > max && ctx.fileContexts!.length > 0) {
-        console.warn(`  Over MAX_INPUT_TOKENS (${max.toLocaleString()}) — file contexts are ${s.files.toLocaleString()} tokens across ${s.filesN} file(s); dropping them, reviewing diff-only`)
+        console.warn(`  Over input budget (${max.toLocaleString()}) — file contexts are ${s.files.toLocaleString()} tokens across ${s.filesN} file(s); dropping them, reviewing diff-only`)
         ctx.fileContexts = []
         ctx.degraded = true
         s = sizes()
@@ -298,9 +308,15 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
 
       ctx.estimatedInputTokens = s.total
 
+      if (max > 0 && s.total > max && config.review.bundledReview) {
+        console.log('  Still over budget — switching to bundled review')
+        ctx.inputBudget = max
+        return State.BUNDLED_REVIEW
+      }
+
       if (max > 0 && s.total > max) {
         ctx.action = 'SKIP'
-        ctx.skipReason = `Estimated input ~${s.total.toLocaleString()} tokens exceeds MAX_INPUT_TOKENS (${max.toLocaleString()}) even without file context — ${fmt(s)}`
+        ctx.skipReason = `Estimated input ~${s.total.toLocaleString()} tokens exceeds the input budget (${max.toLocaleString()}; min of MAX_INPUT_TOKENS and model context) even without file context — ${fmt(s)}`
         return State.SKIP
       }
       return State.CALL_CLAUDE
@@ -317,7 +333,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       }
       const reviewPrompt = { ...ctx.prompt!, content }
 
-      const result = await runReview(
+      const call = () => runReview(
         config.anthropic.apiKey,
         config.anthropic.model,
         config.anthropic.maxRetries,
@@ -331,6 +347,25 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         ctx.replies ?? [],
         ctx.deltaDiff ?? ''
       )
+      // Backstop for an under-counted estimate: on a context-length rejection, drop file contexts
+      // and retry diff-only; if the diff alone won't fit, skip rather than let the API error.
+      const result = await (async () => {
+        for (;;) {
+          try { return await call() }
+          catch (err: unknown) {
+            if (!isContextLengthError(err)) throw err
+            if (ctx.fileContexts!.length === 0) return null
+            console.warn('  Prompt exceeded the model context — dropping file contexts, retrying diff-only')
+            ctx.fileContexts = []
+            ctx.degraded = true
+          }
+        }
+      })()
+      if (!result) {
+        ctx.action = 'SKIP'
+        ctx.skipReason = 'Diff exceeds the model context window'
+        return State.SKIP
+      }
       ctx.reviewText = result.text
       ctx.reviewObject = result.review
       ctx.usage.input_tokens += result.usage.input_tokens
@@ -404,34 +439,69 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       }
 
       ctx.reviewTextBeforeJudge = ctx.reviewText
-      const result = await runJudge(
-        config.anthropic.apiKey,
-        config.judge.model,
-        config.judge.maxRetries,
-        config.anthropic.maxTokens,
-        config.judge.effort,
-        ctx.filteredDiff!,
-        ctx.reviewText!,
-      )
-
-      ctx.reviewText = result.text
-      ctx.judgeScores = result.scores
-      if (result.notes) {
-        console.log(`  Judge notes (not posted): ${result.notes}`)
+      try {
+        const result = await runJudge(
+          config.anthropic.apiKey,
+          config.judge.model,
+          config.judge.maxRetries,
+          config.anthropic.maxTokens,
+          config.judge.effort,
+          ctx.filteredDiff!,
+          ctx.reviewText!,
+        )
+        ctx.reviewText = result.text
+        ctx.judgeScores = result.scores
+        if (result.notes) {
+          console.log(`  Judge notes (not posted): ${result.notes}`)
+        }
+        if (result.scores?.length) {
+          console.log(`  Judge finding scores: ${result.scores.map(s => `${s.severity} ${s.score}/10`).join(', ')}`)
+        }
+        ctx.judgeUsage = { input_tokens: result.usage.input_tokens, output_tokens: result.usage.output_tokens }
+        ctx.usage.input_tokens += result.usage.input_tokens
+        ctx.usage.output_tokens += result.usage.output_tokens
+        ctx.usage.cache_read += result.usage.cache_read_input_tokens ?? 0
+        ctx.usage.cache_write += result.usage.cache_creation_input_tokens ?? 0
+      } catch (err: unknown) {
+        // Benchmark: a judge failure falls back to the unjudged reviewer findings (judged stays false) rather than erroring; normal mode still throws so CI retries.
+        if (!ctx.outcomeSink) throw err
+        console.warn(`  Judge failed (${(err as Error).message}) — proceeding with unjudged reviewer findings`)
       }
-      if (result.scores?.length) {
-        console.log(`  Judge finding scores: ${result.scores.map(s => `${s.severity} ${s.score}/10`).join(', ')}`)
-      }
-      ctx.judgeUsage = { input_tokens: result.usage.input_tokens, output_tokens: result.usage.output_tokens }
-      ctx.usage.input_tokens += result.usage.input_tokens
-      ctx.usage.output_tokens += result.usage.output_tokens
-      ctx.usage.cache_read += result.usage.cache_read_input_tokens ?? 0
-      ctx.usage.cache_write += result.usage.cache_creation_input_tokens ?? 0
 
       return State.POST_REVIEW
     }
 
+    case State.BUNDLED_REVIEW: {
+      const outcome = await runBundledReview(ctx, ctx.inputBudget!)
+      if (!outcome.ok) {
+        ctx.action = 'SKIP'
+        ctx.skipReason = `Bundled review not possible: ${outcome.reason}`
+        return State.SKIP
+      }
+      if (isNoChange(ctx.reviewText!)) return State.CHECK_NO_CHANGE
+
+      // Same quiet-re-review rule as JUDGE_REVIEW: nothing found and prior review was clean means nothing worth posting.
+      const merged = ctx.reviewObject!
+      if (merged.findings.length === 0 && ctx.reviewNumber > 1 && ctx.force !== 're-review') {
+        const lastReview = supersedeBoundary(ctx.previousReviews ?? [])
+        const priorHadFindings = !!lastReview && markdownHasFindings(lastReview.body)
+        if (!priorHadFindings && (merged.delta_stats?.still_open ?? 0) === 0) {
+          ctx.action = 'NO_NEW_FINDINGS'
+          ctx.skipReason = 'Re-review found no new findings (prior review already clean)'
+          return State.SKIP
+        }
+      }
+      return State.POST_REVIEW
+    }
+
     case State.POST_REVIEW: {
+      // The sink takes the structured review instead of a posted comment, so cleanup, cut guard and footer don't apply.
+      if (ctx.outcomeSink) {
+        await ctx.outcomeSink({ review: ctx.reviewObject!, reviewText: ctx.reviewText!, judged: ctx.judgeUsage !== undefined, judgeScores: ctx.judgeScores })
+        ctx.action = 'REVIEW'
+        return State.DONE
+      }
+
       const judgeNotes = ctx.reviewText!.match(/<!--\s*JUDGE_NOTES:([\s\S]*?)-->/)
       if (judgeNotes) {
         console.log(`  Judge notes (stripped from comment): ${judgeNotes[1].trim()}`)
@@ -524,12 +594,12 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
 // Public API
 // ---------------------------------------------------------------------------
 
-export async function review(adapter: VCSAdapter, prId: string, dryRun = false, promptPath?: string, force: 'off' | 'clean' | 're-review' = 'off', logUsage = false, repoSlug = ''): Promise<UsageRecord | null> {
+export async function review(adapter: VCSAdapter, prId: string, dryRun = false, promptPath?: string, force: 'off' | 'clean' | 're-review' = 'off', logUsage = false, repoSlug = '', outcomeSink?: OutcomeSink): Promise<UsageRecord | null> {
   console.log(`\nStarting review for PR #${prId}`)
 
   const startTime = Date.now()
   const ctx: ReviewContext = {
-    adapter, prId, dryRun, promptPath, force, logUsage, repoSlug,
+    adapter, prId, dryRun, promptPath, force, logUsage, repoSlug, outcomeSink,
     usage: { input_tokens: 0, output_tokens: 0, cache_read: 0, cache_write: 0 },
     estimatedInputTokens: 0,
     action: 'ERROR',

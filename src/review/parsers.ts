@@ -2,6 +2,15 @@
 // Pure parsing & diff helpers — no side effects, no I/O
 // ---------------------------------------------------------------------------
 
+import type { ChangedFile } from '../vcs/adapter.js'
+
+// The API's context-length rejection — so the caller can degrade (drop file contexts) or skip rather than error.
+export function isContextLengthError(err: unknown): boolean {
+  const e = err as { status?: number; message?: string }
+  // Match genuine input/context overflow only — not a max_tokens-above-output-limit 400 (a config bug to surface, not degrade past).
+  return e?.status === 400 && /prompt is too long|exceed context limit|context (window|length)/i.test(e?.message ?? '')
+}
+
 /** Convert a glob-like pattern (e.g. "*.json", "package-lock.json") to a regex. */
 function patternToRegex(pattern: string): RegExp {
   // Exact filename match
@@ -26,6 +35,28 @@ export function filterDiff(diff: string, excludePatterns: string[]): { filtered:
     return !regexes.some(r => r.test(match[1]))
   })
   return { filtered: kept.join(''), removedCount: sections.length - kept.length }
+}
+
+/** Changed files of a git unified diff, keyed by the new-side path (old side for deletions). */
+export function parseChangedFiles(diff: string): ChangedFile[] {
+  const files: ChangedFile[] = []
+  for (const section of diff.split(/(?=^diff --git )/m)) {
+    const header = section.match(/^diff --git a\/(.+?) b\/(.+)$/m)
+    if (!header) continue
+    // Only the extended header — a hunk line can itself start with "+++ b/".
+    const meta = section.split(/^@@/m)[0]
+    const renamedTo = meta.match(/^rename to (.+)$/m)?.[1]
+    const newPath = meta.match(/^\+\+\+ b\/(.+)$/m)?.[1]
+    const oldPath = meta.match(/^--- a\/(.+)$/m)?.[1]
+    const status: ChangedFile['status'] = /^new file mode /m.test(meta) ? 'added'
+      : /^deleted file mode /m.test(meta) ? 'deleted'
+      : renamedTo ? 'renamed'
+      : 'modified'
+    // git appends a TAB (+ similarity/rename info) when a path contains spaces — drop it.
+    const path = (renamedTo ?? newPath ?? oldPath ?? header[2]).replace(/\t.*$/, '')
+    files.push({ path, status })
+  }
+  return files
 }
 
 /** Count added/removed lines in a unified diff (excludes --- and +++ headers). */

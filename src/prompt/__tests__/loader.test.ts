@@ -68,3 +68,32 @@ describe('loadPrompt module-dir fallback', () => {
     expect(result.source).toBe('default')
   })
 })
+
+describe('security baseline', () => {
+  it('injects the generic OWASP baseline when no SECURITY section is provided', async () => {
+    const result = await loadPrompt(adapterWith({}), PR)
+
+    expect(result.content).toContain('## SECURITY')
+    expect(result.content).toContain('SSRF')
+  })
+
+  it('still injects the baseline when a repo prompt omits SECURITY', async () => {
+    const adapter = adapterWith({ '.agent-review-instructions.md': MODULE_PROMPT })
+
+    const result = await loadPrompt(adapter, PR, undefined, changed('src/a.ts'))
+
+    expect(result.source).toBe('repo')
+    expect(result.content).toContain('SSRF')
+  })
+
+  it('a repo SECURITY section overrides the baseline', async () => {
+    const adapter = adapterWith({
+      '.agent-review-instructions.md': '## ROLE\nX\n\n## SECURITY\n- Only check our custom auth flow.',
+    })
+
+    const result = await loadPrompt(adapter, PR, undefined, changed('src/a.ts'))
+
+    expect(result.content).toContain('Only check our custom auth flow.')
+    expect(result.content).not.toContain('SSRF')
+  })
+})

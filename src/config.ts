@@ -10,8 +10,28 @@ function optional(name: string, defaultValue: string): string {
   return process.env[name] ?? defaultValue
 }
 
+// Context windows (max_input_tokens, from the Models API): 4.5-gen = 200K, 4.6+/5.x = 1M; matched by id prefix, unknown models fall back to 200K.
+const MODEL_CONTEXT_WINDOWS: readonly [string, number][] = [
+  ['claude-haiku-4-5', 200_000],
+  ['claude-sonnet-4-5', 200_000],
+  ['claude-opus-4-5', 200_000],
+  ['claude-haiku-5', 1_000_000],
+  ['claude-sonnet-4-6', 1_000_000],
+  ['claude-sonnet-5', 1_000_000],
+  ['claude-opus-4-6', 1_000_000],
+  ['claude-opus-4-7', 1_000_000],
+  ['claude-opus-4-8', 1_000_000],
+  ['claude-opus-5', 1_000_000],
+  ['claude-fable-5', 1_000_000],
+  ['claude-mythos-5', 1_000_000],
+]
+
+export function modelContextWindow(model: string): number {
+  return MODEL_CONTEXT_WINDOWS.find(([prefix]) => model.startsWith(prefix))?.[1] ?? 200_000
+}
+
 export const config = {
-  vcsProvider: optional('VCS_PROVIDER', 'bitbucket') as 'bitbucket' | 'github' | 'gitlab' | 'azure',
+  vcsProvider: optional('VCS_PROVIDER', 'bitbucket') as 'bitbucket' | 'github' | 'gitlab' | 'azure' | 'reviewbench',
 
   // Which LLM backend the reviewer/judge use. Only 'anthropic' is implemented; the seam
   // (src/llm/provider.ts) exists so a second provider is a new impl, not a re-plumb.
@@ -37,11 +57,15 @@ export const config = {
   anthropic: {
     apiKey: required('ANTHROPIC_API_KEY'),
     model: optional('CLAUDE_MODEL', 'claude-haiku-4-5-20251001'),
+    // ReviewBench passes the registered model endpoint here; empty keeps the SDK default.
+    baseUrl: optional('RB_MODEL_BASE_URL', ''),
     maxRetries: parseInt(optional('MAX_RETRIES', '3'), 10),
     maxInputTokens: parseInt(optional('MAX_INPUT_TOKENS', '250000'), 10),
     // Output-token cap for reviewer + judge. The Claude 5 family thinks by default and that
     // counts against this budget, so too low a cap truncates (16k cut off Sonnet 5 mid-review).
     maxTokens: parseInt(optional('MAX_OUTPUT_TOKENS', '32000'), 10),
+    // Override for the model's context window; 0 = derive from the model id (modelContextWindow).
+    modelContextTokens: parseInt(optional('MODEL_CONTEXT_TOKENS', '0'), 10),
   },
 
   judge: {
@@ -61,6 +85,9 @@ export const config = {
     splitCheck: optional('ENABLE_SPLIT_CHECK', 'true') !== 'false',
     todoScan: optional('ENABLE_TODO_SCAN', 'true') !== 'false',
     effort: optional('REVIEW_EFFORT', ''),   // output_config.effort; empty = model default (unsent)
+    // Off by default: each bundle costs a reviewer + judge call, so a huge PR is a real spend.
+    bundledReview: optional('ENABLE_BUNDLED_REVIEW', 'false') === 'true',
+    maxBundles: parseInt(optional('MAX_BUNDLES', '8'), 10),   // 0 = unlimited
   },
 
   context: {

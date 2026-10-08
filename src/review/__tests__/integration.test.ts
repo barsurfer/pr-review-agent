@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { VCSAdapter, PRInfo, ReviewComment, CommentReply } from '../../vcs/adapter.js'
 
 // ---------------------------------------------------------------------------
@@ -20,6 +20,7 @@ vi.mock('../../config.js', () => ({
     vcsProvider: 'bitbucket',
     bitbucket: { workspace: 'test', baseUrl: '', username: 'bot', token: 'x' },
   },
+  modelContextWindow: vi.fn(() => 200_000),
 }))
 
 vi.mock('../../claude/client.js', () => ({
@@ -43,7 +44,7 @@ vi.mock('../usage.js', async (importOriginal) => {
 
 // Import after mocks
 import { review } from '../index.js'
-import { config } from '../../config.js'
+import { config, modelContextWindow } from '../../config.js'
 import { runReview, runCommentResponse, runJudge } from '../../claude/client.js'
 import { loadPrompt } from '../../prompt/loader.js'
 import { fetchContext } from '../../context/fetcher.js'
@@ -1106,6 +1107,27 @@ describe('TODO scan', () => {
 })
 
 // ===========================================================================
+// Scenario 8f: Normal mode — a judge failure must still error (benchmark's catch must not leak)
+// ===========================================================================
+
+describe('normal mode: judge failure surfaces as ERROR (not swallowed)', () => {
+  it('rethrows a judge rejection when no outcome sink is set', async () => {
+    cfg.judge.model = 'claude-sonnet-5'
+    const adapter = makeAdapter({
+      getPreviousReviewComments: vi.fn().mockResolvedValue([
+        { id: '200', body: '### Summary\nx\n\n### Findings\n- **MEDIUM – Prior** (`a.ts:1`)\n  d' + footer(1, 'aabbcc112233'), createdOn: '2026-03-09T10:00:00Z' },
+      ]),
+      getCommitDiff: vi.fn().mockResolvedValue(DIFF),
+    })
+    setupClaudeMocks('### Summary\nRisky.\n\n### Findings\n- **MEDIUM – New** (`a.ts:1`)\n  desc', reviewWith([{ severity: 'MEDIUM', title: 'New', file: 'a.ts', lines: '1', body: 'desc' }]))
+    mockRunJudge.mockRejectedValue(new Error('judge boom'))
+
+    await expect(review(adapter, '100', false)).rejects.toThrow(/judge boom/)
+    expect(adapter.postComment).not.toHaveBeenCalled()
+  })
+})
+
+// ===========================================================================
 // Scenario 8g: Token-budget degradation — drop file contexts before skipping
 // ===========================================================================
 
@@ -1158,6 +1180,80 @@ describe('token-budget degradation', () => {
 
     expect(record!.action).toBe('RE_REVIEW')               // reviewed, not skipped
     expect(mockRunReview.mock.calls[0].at(-1)).toBe('')    // merge-inflated delta dropped before the model call
+  })
+})
+
+// ===========================================================================
+// Scenario 8g2: Context-length rejection — degrade to diff-only, then skip (estimate under-counts)
+// ===========================================================================
+
+describe('input budget from context window', () => {
+  const overBudget = 'diff --git a/x.ts b/x.ts\n--- a/x.ts\n+++ b/x.ts\n@@ -1 +1,6 @@\n' + Array(6).fill('+' + 'a'.repeat(80)).join('\n') + '\n'
+
+  afterEach(() => {
+    cfg.anthropic.maxTokens = 32000
+    cfg.anthropic.maxInputTokens = 150000
+    cfg.anthropic.modelContextTokens = 0
+    vi.mocked(modelContextWindow).mockReturnValue(200_000)
+  })
+
+  it('derives the reviewer window and skips a diff that exceeds it', async () => {
+    const adapter = makeAdapter({ getDiff: vi.fn().mockResolvedValue(overBudget) })
+    setupClaudeMocks()
+    cfg.anthropic.maxInputTokens = 1_000_000   // not the binding limit
+    cfg.anthropic.maxTokens = 10
+    cfg.anthropic.modelContextTokens = 0        // derive from the model
+    vi.mocked(modelContextWindow).mockReturnValue(100)   // window 100 → cap 90
+
+    const record = await review(adapter, '100', false)
+
+    expect(record!.action).toBe('SKIP')
+    expect(record!.skip_reason).toMatch(/input budget/i)
+    expect(mockRunReview).not.toHaveBeenCalled()
+  })
+
+  it('lets MODEL_CONTEXT_TOKENS override the derived cap', async () => {
+    const adapter = makeAdapter({ getDiff: vi.fn().mockResolvedValue(overBudget) })
+    setupClaudeMocks()
+    cfg.anthropic.maxInputTokens = 1_000_000
+    cfg.anthropic.maxTokens = 10
+    cfg.anthropic.modelContextTokens = 100_000   // override wins over the tiny derived window below
+    vi.mocked(modelContextWindow).mockReturnValue(100)
+
+    const record = await review(adapter, '100', false)
+
+    expect(record!.action).toBe('REVIEW')
+    expect(mockRunReview).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('context-length overflow (estimate under-counted)', () => {
+  const tooLong = () => Object.assign(new Error('400 prompt is too long: 300000 tokens > 200000 maximum'), { status: 400 })
+
+  it('drops file contexts and retries diff-only when the model rejects on context length', async () => {
+    const adapter = makeAdapter()
+    mockFetchContext.mockResolvedValue([{ path: 'big.ts', content: 'x'.repeat(8000) }])
+    mockRunReview.mockReset()
+      .mockRejectedValueOnce(tooLong())
+      .mockResolvedValueOnce({ text: '### Summary\nok\n\n### Findings\n\nNo findings.\n\n### Unresolved Questions\nNone.', usage: { input_tokens: 1000, output_tokens: 200 }, review: reviewWith([]) })
+
+    const record = await review(adapter, '100', false)
+
+    expect(mockRunReview).toHaveBeenCalledTimes(2)
+    expect(record!.degraded).toBe(true)
+    expect(mockRunReview.mock.calls[1][7]).toEqual([])   // retry was diff-only
+  })
+
+  it('skips when the diff alone exceeds the context (no file contexts left to drop)', async () => {
+    const adapter = makeAdapter()
+    mockFetchContext.mockResolvedValue([])
+    mockRunReview.mockReset().mockRejectedValue(tooLong())
+
+    const record = await review(adapter, '100', false)
+
+    expect(record!.action).toBe('SKIP')
+    expect(record!.skip_reason).toMatch(/context window/i)
+    expect(mockRunReview).toHaveBeenCalledTimes(1)
   })
 })
 

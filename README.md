@@ -344,6 +344,8 @@ All credentials and settings are provided via environment variables.
 | `CLAUDE_MODEL` | `claude-sonnet-4-6` | Claude model ID to use for reviews |
 | `MAX_RETRIES` | `3` | Max retries on 429/5xx errors (exponential backoff) |
 | `MAX_INPUT_TOKENS` | `150000` | Over budget → drop file contexts and review diff-only; skip only if the diff alone still exceeds it (0 = disabled) |
+| `ENABLE_BUNDLED_REVIEW` | `false` | Over-budget PR is split into directory bundles, each reviewed + judged, then merged/deduped, instead of skipped (2 calls per bundle) |
+| `MAX_BUNDLES` | `8` | Skip if a bundled review would need more bundles (0 = unlimited) |
 | `MAX_CONTEXT_FILES` | `20` | Max files to fetch full content for |
 | `MAX_FILE_LINES` | `500` | Files over this line count get diff-only context |
 | `MIN_CHANGED_FILES` | `0` (disabled) | Skip review if PR has fewer changed files |

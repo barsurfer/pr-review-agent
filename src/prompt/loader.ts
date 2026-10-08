@@ -2,7 +2,8 @@ import { readFileSync } from 'fs'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import type { VCSAdapter, PRInfo, ChangedFile } from '../vcs/adapter.js'
-import { DEFAULT_ROLE, DEFAULT_REVIEW_PRIORITIES, DEFAULT_MENTAL_MODEL, DEFAULT_EXCEPTIONS } from './defaults.js'
+import { detectStacks } from './stack.js'
+import { DEFAULT_ROLE, DEFAULT_REVIEW_PRIORITIES, DEFAULT_SECURITY, DEFAULT_MENTAL_MODEL, DEFAULT_EXCEPTIONS } from './defaults.js'
 
 const REPO_PROMPT_FILE = '.agent-review-instructions.md'
 
@@ -20,9 +21,23 @@ function getBaseTemplate(): string {
   }
 }
 
+// esbuild embeds src/prompt/stacks/*.txt as __STACK_PROMPTS__ for the single-file bundle
+function getStackPrompt(stack: string): string {
+  try {
+    const __dir = dirname(fileURLToPath(import.meta.url))
+    return readFileSync(join(__dir, 'stacks', `${stack}.txt`), 'utf-8')
+  } catch {
+    // @ts-ignore — injected at bundle time
+    const embedded = typeof __STACK_PROMPTS__ !== 'undefined' ? (__STACK_PROMPTS__ as Record<string, string>)[stack] : undefined
+    if (embedded) return embedded
+    throw new Error(`Cannot load stack prompt '${stack}': file not found and no embedded copy`)
+  }
+}
+
 interface RepoPromptSections {
   role?: string
   reviewPriorities?: string
+  security?: string
   mentalModel?: string
   exceptions?: string
 }
@@ -59,6 +74,8 @@ function parseRepoPrompt(raw: string): RepoPromptSections {
       sections.role = body
     } else if (name.startsWith('REVIEW PRIORITIES')) {
       sections.reviewPriorities = body
+    } else if (name.startsWith('SECURITY')) {
+      sections.security = body
     } else if (name.startsWith('MENTAL MODEL')) {
       sections.mentalModel = body
     } else if (name.startsWith('EXCEPTION')) {
@@ -69,12 +86,40 @@ function parseRepoPrompt(raw: string): RepoPromptSections {
   return sections
 }
 
-const SECTION_NAMES: (keyof RepoPromptSections)[] = ['role', 'reviewPriorities', 'mentalModel', 'exceptions']
+const SECTION_NAMES: (keyof RepoPromptSections)[] = ['role', 'reviewPriorities', 'security', 'mentalModel', 'exceptions']
 const SECTION_LABELS: Record<keyof RepoPromptSections, string> = {
   role: 'ROLE',
   reviewPriorities: 'REVIEW PRIORITIES',
+  security: 'SECURITY',
   mentalModel: 'MENTAL MODEL',
   exceptions: 'EXCEPTIONS',
+}
+
+// Fragments are ordered base-first; the first ROLE wins, other sections concatenate with identical lines de-duplicated
+function composeSections(fragments: RepoPromptSections[]): RepoPromptSections {
+  const merge = (key: keyof RepoPromptSections): string | undefined => {
+    const seen = new Set<string>()
+    const lines: string[] = []
+    for (const body of fragments.map(f => f[key]).filter((b): b is string => !!b)) {
+      for (const line of body.split('\n')) {
+        const t = line.trim()
+        if (t.startsWith('- ')) {
+          if (seen.has(t)) continue
+          seen.add(t)
+        }
+        lines.push(line)
+      }
+      lines.push('')
+    }
+    return lines.length ? lines.join('\n').trim() : undefined
+  }
+  return {
+    role: fragments.find(f => f.role)?.role,
+    reviewPriorities: merge('reviewPriorities'),
+    security: merge('security'),
+    mentalModel: merge('mentalModel'),
+    exceptions: merge('exceptions'),
+  }
 }
 
 function logSections(sections: RepoPromptSections): void {
@@ -88,6 +133,7 @@ function fillTemplate(template: string, sections: RepoPromptSections): string {
   return template
     .replace('{{ROLE}}', sections.role ?? DEFAULT_ROLE)
     .replace('{{REVIEW_PRIORITIES}}', sections.reviewPriorities ?? DEFAULT_REVIEW_PRIORITIES)
+    .replace('{{SECURITY}}', sections.security ?? DEFAULT_SECURITY)
     .replace('{{MENTAL_MODEL}}', sections.mentalModel ?? DEFAULT_MENTAL_MODEL)
     .replace('{{EXCEPTIONS}}', sections.exceptions ?? DEFAULT_EXCEPTIONS)
 }
@@ -136,7 +182,7 @@ export interface LoadedPrompt {
   source: PromptSource
 }
 
-export async function loadPrompt(adapter: VCSAdapter, prInfo: PRInfo, localPromptPath?: string, changedFiles?: ChangedFile[]): Promise<LoadedPrompt> {
+export async function loadPrompt(adapter: VCSAdapter, prInfo: PRInfo, localPromptPath?: string, changedFiles?: ChangedFile[], diff?: string): Promise<LoadedPrompt> {
   const template = getBaseTemplate()
 
   // 1. If a local prompt file was provided via --prompt, use it
@@ -181,7 +227,17 @@ export async function loadPrompt(adapter: VCSAdapter, prInfo: PRInfo, localPromp
     }
   }
 
-  // 3. Fall back to all defaults
+  // 3. No repo prompt: compose the bundled base + overlay rule sets detected from the PR
+  const { bases, overlays } = changedFiles?.length ? detectStacks(changedFiles, diff) : { bases: [], overlays: [] }
+  if (bases.length) {
+    const names = [...bases, ...overlays]
+    console.log(`Detected tech stack: ${names.join(' + ')} — using bundled rule sets`)
+    const sections = composeSections(names.map(n => parseRepoPrompt(getStackPrompt(n))))
+    logSections(sections)
+    return { content: fillTemplate(template, sections), source: `stack:${names.join('+')}` }
+  }
+
+  // 4. Fall back to all defaults
   console.log(`No ${REPO_PROMPT_FILE} found in source or target branch — using default prompt`)
   const filled = fillTemplate(template, {})
   return { content: filled, source: 'default' }

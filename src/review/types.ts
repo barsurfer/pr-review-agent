@@ -22,10 +22,21 @@ export enum State {
   CALL_CLAUDE,
   CHECK_NO_CHANGE,
   JUDGE_REVIEW,
+  BUNDLED_REVIEW,
   POST_REVIEW,
   SKIP,
   DONE,
 }
+
+/** A finished review handed to an outcome sink instead of being posted (benchmark mode). */
+export interface ReviewOutcome {
+  review: ReviewObject
+  reviewText: string
+  judged: boolean
+  judgeScores?: FindingScore[]
+}
+
+export type OutcomeSink = (outcome: ReviewOutcome) => void | Promise<void>
 
 /** Accumulated data shared across states. */
 export interface ReviewContext {
@@ -37,6 +48,7 @@ export interface ReviewContext {
   readonly force: 'off' | 'clean' | 're-review'
   readonly logUsage: boolean
   readonly repoSlug: string
+  readonly outcomeSink?: OutcomeSink
 
   // Populated progressively
   prInfo?: PRInfo
@@ -63,5 +75,7 @@ export interface ReviewContext {
   // Tracking
   action: string
   reviewNumber: number
-  degraded?: boolean   // file contexts dropped to fit MAX_INPUT_TOKENS (diff-only review)
+  inputBudget?: number
+  bundleCount?: number  // set when the PR was reviewed as bundles instead of one pass
+  degraded?: boolean  // file contexts dropped to fit MAX_INPUT_TOKENS (diff-only review)
 }

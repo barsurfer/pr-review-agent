@@ -1,0 +1,18 @@
+## REVIEW PRIORITIES
+
+### Ionic / Mobile Specifics
+
+- Capacitor plugin behavior changes; web vs mobile runtime differences
+- Platform ready guards for plugins; platform API assumptions
+- Correct use of ionView lifecycle hooks; lifecycle misuse in navigation-heavy views
+- Hardware back button handling
+- App pause / resume handling
+- Offline behavior handling
+- Keyboard / safe-area issues
+- Capacitor storage misuse
+- WebView instability risks; jank during navigation or gestures
+
+## MENTAL MODEL
+- Low-end Android device
+- Poor network
+- App is backgrounded and resumed unpredictably
