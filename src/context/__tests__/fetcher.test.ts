@@ -27,6 +27,13 @@ describe('fetchContext (concurrency-bounded)', () => {
     expect(res.length).toBe(0)
   })
 
+  it('keeps a large HIGH-churn file — the main change is not dropped', async () => {
+    const diff = '--- a/big.ts\n+++ b/big.ts\n@@ -1,4 +1,2 @@\n keep\n-rm1\n-rm2\n-rm3\n+new\n'
+    const adapter = makeAdapter({ 'big.ts': Array(600).fill('line').join('\n') })
+    const res = await fetchContext(adapter, changed('big.ts'), 'sha', diff, 20, 500)
+    expect(res.map(r => r.path)).toEqual(['big.ts'])
+  })
+
   it('never fetches deleted or excluded files', async () => {
     const adapter = makeAdapter({})
     const files: ChangedFile[] = [{ path: 'gone.ts', status: 'deleted' }, { path: 'pkg.lock', status: 'modified' }]

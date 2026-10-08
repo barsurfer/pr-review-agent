@@ -32,15 +32,19 @@ function highChurnInDiff(filePath: string, diff: string): boolean {
   if (!fileSection) return false
 
   const lines = fileSection.split('\n')
-  const changed = lines.filter((l) => l.startsWith('+') || l.startsWith('-')).length
-  const total = lines.filter((l) => !l.startsWith('@@') && !l.startsWith('---') && !l.startsWith('+++')).length
+  const isHeader = (l: string) => l.startsWith('@@') || l.startsWith('---') || l.startsWith('+++')
+  const changed = lines.filter((l) => !isHeader(l) && (l.startsWith('+') || l.startsWith('-'))).length
+  const total = lines.filter((l) => !isHeader(l)).length
 
   return total > 0 && changed / total > 0.3
 }
 
 function extractFileDiff(filePath: string, diff: string): string | null {
   const escaped = filePath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const match = diff.match(new RegExp(`--- a/${escaped}[\\s\\S]*?(?=^--- a/|$)`, 'm'))
+  // From this file's `--- a/<path>` header to the next file section or end of string. No `m` flag:
+  // `$` must mean end-of-string, not end-of-line — the old `|$` under `m` stopped the match at the
+  // header line, so every file measured 0% churn and large changed files were wrongly skipped.
+  const match = diff.match(new RegExp(`--- a/${escaped}\\n[\\s\\S]*?(?=\\ndiff --git |$)`))
   return match ? match[0] : null
 }
 
