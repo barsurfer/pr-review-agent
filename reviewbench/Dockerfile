@@ -17,9 +17,12 @@ COPY reviewbench/entrypoint.mjs ./entrypoint.mjs
 
 # Defaults only: the RB_CONFIG_MODEL / RB_CONFIG_EFFORT labels override per run. 64k output covers xhigh/max effort thinking.
 # haiku-5-5 reviewer (1M context → big PRs review in one pass) with a stronger sonnet-5 judge.
+# Bundling salvages PRs still over budget, capped at 3 bundles so one giant PR can't run away on cost.
 ENV CLAUDE_MODEL=claude-haiku-5-5 \
     JUDGING_MODEL=claude-sonnet-5 \
-    MAX_OUTPUT_TOKENS=64000
+    MAX_OUTPUT_TOKENS=64000 \
+    ENABLE_BUNDLED_REVIEW=true \
+    MAX_BUNDLES=3
 
 # Runs as root like the reference agents: /work/out is a host mount whose owner we don't control.
 ENTRYPOINT ["node", "/app/entrypoint.mjs"]
