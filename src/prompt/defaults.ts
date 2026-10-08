@@ -37,17 +37,18 @@ export const DEFAULT_REVIEW_PRIORITIES = `### 1. Behavioral Differences (Highest
 - Missing tests for behavior change
 - Future regression hazards`
 
-// Generic OWASP Top 10 baseline — stack-independent, so a Node, Java, or Python review all get
-// it. A repo or stack `## SECURITY` section overrides it. Kept terse on purpose.
-export const DEFAULT_SECURITY = `Stack-independent baseline. Flag only what the diff introduces or exposes.
+// Generic, stack-independent security baseline (OWASP-informed) — a Node, Java, or Python review
+// all get it. A repo or stack `## SECURITY` section overrides it. Kept terse on purpose.
+export const DEFAULT_SECURITY = `Stack-independent baseline. Flag only what the diff introduces or exposes; when a control would live outside the diff (global middleware, a security filter, the auth server), raise an Unresolved Question instead of a finding.
 
-- Access control: new or changed endpoints, routes, handlers, or queries must enforce authentication and authorization; verify resource-ownership checks (IDOR); never trust client-side-only checks.
-- Injection: untrusted input reaching SQL/NoSQL, shell, path, template, or LDAP APIs must be parameterized or escaped — never built by string concatenation.
-- SSRF: outbound requests built from user-controlled URLs, hosts, or identifiers must be validated against an allowlist; a redirect target or DNS result is still attacker-controlled.
-- Secrets & sensitive data: no credentials, tokens, keys, or PII committed in code, written to logs, placed in URLs, or exposed to the client bundle/storage.
-- Authentication & sessions: OAuth/OIDC must validate \`state\` (CSRF), use PKCE, and allowlist \`redirect_uri\`; verify token signatures and expiry; guard session fixation and check-then-act races on privilege or first-user grants.
-- Integrity & deserialization: no unsafe deserialization or dynamic execution (eval/exec/pickle); guard prototype pollution; verify data crossing a trust boundary.
-- Output & headers: encode untrusted data at the sink to prevent XSS, open redirects, and header/log injection.
+- Access control: new or changed endpoints, routes, or data access should enforce authentication, authorization, and resource-ownership checks (IDOR). If the enforcement is not visible in the diff, ask — do not assume it is missing.
+- Injection: untrusted input reaching SQL/NoSQL, shell, path, template, or LDAP APIs needs the right control — parameterized queries for SQL values, an allowlist for SQL identifiers, an argument array (no shell) for commands, canonicalize-then-check-base-dir for paths — never string concatenation, interpolation, or format strings.
+- SSRF: outbound requests built from user-controlled URLs or hosts must be validated against an allowlist; a redirect target or DNS result is still attacker-controlled.
+- Secrets: server-side secrets, keys, and credentials must never ship to the client, get logged, or sit in URLs. Client-held tokens belong in secure storage (Keychain/Keystore, httpOnly cookie), not localStorage. Public config keys (Firebase, Maps, Stripe \`pk_\`) are not secrets.
+- Cryptography: vetted password hashing (bcrypt/argon2/scrypt), a CSPRNG for tokens and IDs, no hardcoded keys/IVs, and never disable TLS/certificate verification.
+- Authentication & sessions: when the code issues or verifies tokens or sessions, check signature, expiry, issuer, audience, and a pinned algorithm; validate the OIDC \`nonce\`; use PKCE; guard session fixation and check-then-act races on privilege or first-user grants.
+- Integrity & deserialization: no unsafe deserialization or dynamic execution (eval/exec/pickle); guard prototype pollution; verify data that crosses a trust boundary.
+- Output & headers: encode untrusted data at the sink to stop XSS; stop open redirects by allowlisting the target or restricting to relative paths (encoding alone does not); reject CR/LF in header and log values.
 - Misconfiguration: no verbose errors leaking internals, overly permissive CORS, or security controls weakened by the change.`
 
 export const DEFAULT_MENTAL_MODEL = `- Production load
