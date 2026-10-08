@@ -1,10 +1,12 @@
-// ReviewBench findings file: structured review findings → { pr, agent, findings[] } at RB_OUT.
+// Machine-readable findings report: review outcome → { pr, agent, findings[] } of file+line findings.
+// Written to RB_OUT for the ReviewBench harness today; the same shape suits any other consumer
+// (e.g. an HTTP endpoint returning findings for another agent).
 
 import { mkdirSync, renameSync, writeFileSync } from 'fs'
 import { dirname } from 'path'
 import type { ReviewFinding } from './formatter.js'
 
-export interface BenchmarkFinding {
+export interface ReportFinding {
   file: string
   start_line: number
   end_line: number
@@ -12,13 +14,13 @@ export interface BenchmarkFinding {
   producer: string
 }
 
-export interface BenchmarkOutput {
+export interface FindingsReport {
   pr: { repo: string; pr_number: number; base: string; head: string }
   agent: string
-  findings: BenchmarkFinding[]
+  findings: ReportFinding[]
 }
 
-export interface BenchmarkPR {
+export interface ReportPR {
   repo: string
   prNumber: string
   base: string
@@ -59,9 +61,9 @@ function citations(parens: string): { path: string; lines: string }[] {
 // Read the kept findings straight from the judge's final review_markdown — its own titles, bodies
 // and location citations — instead of re-matching them onto the reviewer's findings, which silently
 // drops a finding whenever the judge reframes its title and re-cites its lines.
-export function findingsFromJudgedMarkdown(judgedText: string, producer: string, changedPaths: readonly string[] = []): BenchmarkFinding[] {
+export function findingsFromJudgedMarkdown(judgedText: string, producer: string, changedPaths: readonly string[] = []): ReportFinding[] {
   const section = judgedText.match(/#{1,4}\s*Findings\b([\s\S]*?)(?=\n#{1,4}\s|$)/i)?.[1] ?? ''
-  const out: BenchmarkFinding[] = []
+  const out: ReportFinding[] = []
   const seen = new Set<string>()
   for (const block of section.split(/\n(?=[ \t]*[-*]\s*\*\*(?:HIGH|MEDIUM|LOW)\b)/i)) {
     const head = block.match(/^[ \t]*[-*]\s*\*\*(?:HIGH|MEDIUM|LOW)\s*[–—-]\s*([\s\S]+?)\*\*[ \t]*(\([^\n]*\))?/i)
@@ -83,8 +85,8 @@ export function findingsFromJudgedMarkdown(judgedText: string, producer: string,
 }
 
 // The schema requires file + line range, so PR-level findings have no place in it and are dropped.
-export function mapFindings(findings: ReviewFinding[], producer: string, changedPaths: readonly string[] = []): BenchmarkFinding[] {
-  const out: BenchmarkFinding[] = []
+export function mapFindings(findings: ReviewFinding[], producer: string, changedPaths: readonly string[] = []): ReportFinding[] {
+  const out: ReportFinding[] = []
   for (const f of findings) {
     const file = f.file ? normalizeFindingPath(f.file, changedPaths) : ''
     const range = parseLineRange(f.lines)
@@ -94,7 +96,7 @@ export function mapFindings(findings: ReviewFinding[], producer: string, changed
   return out
 }
 
-export function buildBenchmarkOutput(pr: BenchmarkPR, agent: string, findings: BenchmarkFinding[]): BenchmarkOutput {
+export function buildFindingsReport(pr: ReportPR, agent: string, findings: ReportFinding[]): FindingsReport {
   return {
     pr: { repo: pr.repo, pr_number: Number(pr.prNumber), base: pr.base, head: pr.head },
     agent,
@@ -103,9 +105,9 @@ export function buildBenchmarkOutput(pr: BenchmarkPR, agent: string, findings: B
 }
 
 // Write-then-rename so a run killed mid-write never leaves a truncated findings file behind.
-export function writeBenchmarkOutput(path: string, output: BenchmarkOutput): void {
+export function writeFindingsReport(path: string, report: FindingsReport): void {
   mkdirSync(dirname(path), { recursive: true })
   const tmp = `${path}.tmp`
-  writeFileSync(tmp, JSON.stringify(output, null, 2) + '\n')
+  writeFileSync(tmp, JSON.stringify(report, null, 2) + '\n')
   renameSync(tmp, path)
 }

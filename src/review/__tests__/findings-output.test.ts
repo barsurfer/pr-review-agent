@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { mkdtempSync, readFileSync, existsSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { parseLineRange, normalizeFindingPath, findingsFromJudgedMarkdown, mapFindings, buildBenchmarkOutput, writeBenchmarkOutput } from '../benchmark-output.js'
+import { parseLineRange, normalizeFindingPath, findingsFromJudgedMarkdown, mapFindings, buildFindingsReport, writeFindingsReport } from '../findings-output.js'
 import { renderReview, type ReviewFinding, type ReviewObject } from '../formatter.js'
 
 const finding = (over: Partial<ReviewFinding> = {}): ReviewFinding =>
@@ -119,18 +119,18 @@ describe('findingsFromJudgedMarkdown', () => {
   })
 })
 
-describe('buildBenchmarkOutput', () => {
+describe('buildFindingsReport', () => {
   it('echoes head and repo as given and pr_number as a JSON number, with no review prose fields', () => {
-    const out = buildBenchmarkOutput(PR, 'my-agent', [])
+    const out = buildFindingsReport(PR, 'my-agent', [])
     expect(out).toEqual({ pr: { repo: PR.repo, pr_number: 1938, base: PR.base, head: PR.head }, agent: 'my-agent', findings: [] })
     expect(Object.keys(out).sort()).toEqual(['agent', 'findings', 'pr'])
   })
 })
 
-describe('writeBenchmarkOutput', () => {
+describe('writeFindingsReport', () => {
   it('writes parseable JSON, creating the directory, and leaves no temp file', () => {
     const path = join(mkdtempSync(join(tmpdir(), 'rb-out-')), 'nested', 'findings.json')
-    writeBenchmarkOutput(path, buildBenchmarkOutput(PR, 'a', mapFindings([finding()], 'a')))
+    writeFindingsReport(path, buildFindingsReport(PR, 'a', mapFindings([finding()], 'a')))
     const written = JSON.parse(readFileSync(path, 'utf-8'))
     expect(written.pr.head).toBe(PR.head)
     expect(written.findings).toHaveLength(1)
@@ -139,7 +139,7 @@ describe('writeBenchmarkOutput', () => {
 
   it('writes an empty findings list as a valid file', () => {
     const path = join(mkdtempSync(join(tmpdir(), 'rb-out-')), 'findings.json')
-    writeBenchmarkOutput(path, buildBenchmarkOutput(PR, 'a', []))
+    writeFindingsReport(path, buildFindingsReport(PR, 'a', []))
     expect(JSON.parse(readFileSync(path, 'utf-8'))).toMatchObject({ pr: { pr_number: 1938, head: PR.head }, findings: [] })
   })
 })

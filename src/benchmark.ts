@@ -3,7 +3,7 @@
 import { config } from './config.js'
 import { review } from './review/index.js'
 import { ReviewBenchAdapter, readReviewBenchEnv, readPrJson } from './vcs/reviewbench.js'
-import { findingsFromJudgedMarkdown, mapFindings, buildBenchmarkOutput, writeBenchmarkOutput, type BenchmarkFinding } from './review/benchmark-output.js'
+import { findingsFromJudgedMarkdown, mapFindings, buildFindingsReport, writeFindingsReport, type ReportFinding } from './review/findings-output.js'
 import type { ReviewOutcome } from './review/types.js'
 
 const CONFIG_LABELS: Record<string, (value: string) => void> = {
@@ -40,7 +40,7 @@ export async function runBenchmark(env: NodeJS.ProcessEnv = process.env): Promis
   const rb = readReviewBenchEnv(env)
   const pr = readPrJson(rb.prJsonPath)
   const prNumber = rb.prNumber || String(pr.pr_number ?? '')
-  let findings: BenchmarkFinding[] = []
+  let findings: ReportFinding[] = []
 
   try {
     applyBenchmarkConfig(env)
@@ -65,13 +65,13 @@ export async function runBenchmark(env: NodeJS.ProcessEnv = process.env): Promis
   }
 
   try {
-    const output = buildBenchmarkOutput({
+    const report = buildFindingsReport({
       repo: pr.repo || `https://github.com/${rb.nwo}`,
       prNumber,
       base: rb.base || (pr.base ?? ''),
       head: rb.head || (pr.head ?? ''),
     }, rb.agent, findings)
-    writeBenchmarkOutput(rb.outPath, output)
+    writeFindingsReport(rb.outPath, report)
     console.log(`Wrote ${findings.length} finding(s) to ${rb.outPath}`)
   } catch (err: unknown) {
     console.error(`Could not write findings to ${rb.outPath}: ${(err as Error).message}`)
