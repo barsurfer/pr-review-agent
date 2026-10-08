@@ -44257,16 +44257,25 @@ var import_meta3 = {};
 var MODEL_PRICING = {
   "claude-fable-5-1": { input: 10, output: 50 },
   "claude-fable-5": { input: 10, output: 50 },
+  "claude-mythos-5-1": { input: 10, output: 50 },
+  "claude-opus-5-5": { input: 4, output: 20 },
   "claude-opus-5": { input: 5, output: 25 },
   "claude-opus-4-8": { input: 5, output: 25 },
   "claude-opus-4-7": { input: 5, output: 25 },
   "claude-opus-4-6": { input: 5, output: 25 },
+  "claude-opus-4-5": { input: 5, output: 25 },
+  "claude-sonnet-5-5": { input: 2, output: 10 },
   "claude-sonnet-5": { input: 2, output: 10 },
   "claude-sonnet-4-6": { input: 3, output: 15 },
+  "claude-sonnet-4-5": { input: 3, output: 15 },
   "claude-haiku-4-5": { input: 1, output: 5 }
 };
+function haiku55Pricing(inputTokens) {
+  return inputTokens > 1e5 ? { input: 0.5, output: 2.5 } : { input: 0.1, output: 0.5 };
+}
 function estimateCost(tokens2, model) {
-  let p = MODEL_PRICING[model] ?? MODEL_PRICING[model.replace(/-\d{8}$/, "")];
+  const base = model.replace(/-\d{8}$/, "");
+  let p = base === "claude-haiku-5-5" ? haiku55Pricing(tokens2.input) : MODEL_PRICING[model] ?? MODEL_PRICING[base];
   if (!p) {
     console.warn(`No pricing entry for model "${model}" \u2014 estimating with claude-sonnet-4-6 rates`);
     p = MODEL_PRICING["claude-sonnet-4-6"];
@@ -44280,7 +44289,7 @@ function getAgentVersion() {
     const pkg = JSON.parse((0, import_fs3.readFileSync)(pkgPath, "utf-8"));
     return pkg.version;
   } catch {
-    if (true) return "0.0.15";
+    if (true) return "0.0.16";
     return "unknown";
   }
 }
@@ -44292,7 +44301,7 @@ function getBuildCommit() {
     const dirty = (0, import_child_process.execSync)("git status --porcelain", opts2).toString().trim() ? "-dirty" : "";
     return hash + dirty;
   } catch {
-    if (true) return "2475ce9";
+    if (true) return "6b93a14";
     return "unknown";
   }
 }
