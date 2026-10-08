@@ -3,7 +3,7 @@
 import { config } from './config.js'
 import { review } from './review/index.js'
 import { ReviewBenchAdapter, readReviewBenchEnv, readPrJson } from './vcs/reviewbench.js'
-import { keptByJudge, mapFindings, buildBenchmarkOutput, writeBenchmarkOutput, type BenchmarkFinding } from './review/benchmark-output.js'
+import { findingsFromJudgedMarkdown, mapFindings, buildBenchmarkOutput, writeBenchmarkOutput, type BenchmarkFinding } from './review/benchmark-output.js'
 import type { ReviewOutcome } from './review/types.js'
 
 const CONFIG_LABELS: Record<string, (value: string) => void> = {
@@ -50,10 +50,12 @@ export async function runBenchmark(env: NodeJS.ProcessEnv = process.env): Promis
 
     const outcome = outcomes[0]
     if (outcome) {
-      const kept = outcome.judged ? keptByJudge(outcome.review.findings, outcome.reviewText, outcome.judgeScores) : outcome.review.findings
       const changedPaths = (await adapter.getChangedFiles(prNumber)).map(f => f.path)
-      findings = mapFindings(kept, rb.agent, changedPaths)
-      console.log(`Benchmark findings: reviewer ${outcome.review.findings.length}, ${outcome.judged ? `judge kept ${kept.length}` : 'judge skipped'}, line-anchored ${findings.length}`)
+      // Judged: read the kept set from the judge's own markdown; unjudged: map the reviewer's findings.
+      findings = outcome.judged
+        ? findingsFromJudgedMarkdown(outcome.reviewText, rb.agent, changedPaths)
+        : mapFindings(outcome.review.findings, rb.agent, changedPaths)
+      console.log(`Benchmark findings: reviewer ${outcome.review.findings.length}, ${outcome.judged ? 'from judge markdown' : 'judge skipped'}, line-anchored ${findings.length}`)
     } else {
       console.log('Benchmark: review skipped — writing empty findings')
     }

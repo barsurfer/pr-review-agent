@@ -2,7 +2,7 @@
 
 import { mkdirSync, renameSync, writeFileSync } from 'fs'
 import { dirname } from 'path'
-import type { ReviewFinding, FindingScore } from './formatter.js'
+import type { ReviewFinding } from './formatter.js'
 
 export interface BenchmarkFinding {
   file: string
@@ -42,29 +42,44 @@ export function normalizeFindingPath(file: string, changedPaths: readonly string
   return bySuffix.length === 1 ? bySuffix[0] : path
 }
 
-const normTitle = (title: string): string => title.toLowerCase().replace(/[`*_"']/g, '').replace(/\s+/g, ' ').trim()
+// Pull `path:lines` citations from a finding's location paren — backtick-quoted items first (so a
+// multi-file finding keeps every file), else comma-split.
+function citations(parens: string): { path: string; lines: string }[] {
+  const backticked = [...parens.matchAll(/`([^`]+)`/g)].map(m => m[1])
+  const items = backticked.length ? backticked : parens.replace(/^[(]|[)]$/g, '').split(',')
+  const out: { path: string; lines: string }[] = []
+  for (const raw of items) {
+    const s = raw.trim()
+    const at = s.lastIndexOf(':')
+    if (at > 0 && /\d/.test(s.slice(at + 1))) out.push({ path: s.slice(0, at), lines: s.slice(at + 1) })
+  }
+  return out
+}
 
-const pathsMatch = (a: string, b: string): boolean => a === b || a.endsWith('/' + b) || b.endsWith('/' + a)
-const rangesOverlap = (x: { start: number; end: number }, y: { start: number; end: number }): boolean => x.start <= y.end && y.start <= x.end
-
-// The judge rewrites titles and may narrow a range or cite a basename, so match its kept set by
-// location (path suffix + line-range overlap) within the Findings section, with title as fallback.
-export function keptByJudge(findings: ReviewFinding[], judgedText: string, scores: FindingScore[] = []): ReviewFinding[] {
-  const section = judgedText.match(/#{1,4}\s*Findings\b([\s\S]*?)(?=\n#{1,4}\s|$)/i)?.[1] ?? judgedText
-  const locs = [...section.matchAll(/\(\s*`?([^`()\n]+?):([0-9][0-9,\s–—L-]*?)`?\s*\)/gi)]
-    .map(m => ({ path: normalizeFindingPath(m[1]), range: parseLineRange(m[2]) }))
-    .filter((l): l is { path: string; range: { start: number; end: number } } => l.range !== null)
-  const titles = new Set([
-    ...scores.map(s => s.title),
-    ...[...section.matchAll(/\*\*(?:HIGH|MEDIUM|LOW)\s*[–—-]\s*(.+?)\*\*/gi)].map(m => m[1]),
-  ].map(normTitle))
-  return findings.filter(f => {
-    if (titles.has(normTitle(f.title))) return true
-    const range = parseLineRange(f.lines)
-    if (!f.file || !range) return false
-    const path = normalizeFindingPath(f.file)
-    return locs.some(l => pathsMatch(path, l.path) && rangesOverlap(range, l.range))
-  })
+// Read the kept findings straight from the judge's final review_markdown — its own titles, bodies
+// and location citations — instead of re-matching them onto the reviewer's findings, which silently
+// drops a finding whenever the judge reframes its title and re-cites its lines.
+export function findingsFromJudgedMarkdown(judgedText: string, producer: string, changedPaths: readonly string[] = []): BenchmarkFinding[] {
+  const section = judgedText.match(/#{1,4}\s*Findings\b([\s\S]*?)(?=\n#{1,4}\s|$)/i)?.[1] ?? ''
+  const out: BenchmarkFinding[] = []
+  const seen = new Set<string>()
+  for (const block of section.split(/\n(?=[ \t]*[-*]\s*\*\*(?:HIGH|MEDIUM|LOW)\b)/i)) {
+    const head = block.match(/^[ \t]*[-*]\s*\*\*(?:HIGH|MEDIUM|LOW)\s*[–—-]\s*([\s\S]+?)\*\*[ \t]*(\([^\n]*\))?/i)
+    if (!head) continue
+    const title = head[1].replace(/\s+/g, ' ').trim()
+    const body = block.slice(head[0].length).replace(/\s+/g, ' ').trim()
+    const message = body ? `${title}: ${body}` : title
+    for (const c of citations(head[2] ?? '')) {
+      const file = normalizeFindingPath(c.path, changedPaths)
+      const range = parseLineRange(c.lines)
+      if (!file || !range) continue
+      const key = `${file}:${range.start}-${range.end}:${title}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      out.push({ file, start_line: range.start, end_line: range.end, message, producer })
+    }
+  }
+  return out
 }
 
 // The schema requires file + line range, so PR-level findings have no place in it and are dropped.

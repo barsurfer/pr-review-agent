@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { mkdtempSync, readFileSync, existsSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { parseLineRange, normalizeFindingPath, keptByJudge, mapFindings, buildBenchmarkOutput, writeBenchmarkOutput } from '../benchmark-output.js'
+import { parseLineRange, normalizeFindingPath, findingsFromJudgedMarkdown, mapFindings, buildBenchmarkOutput, writeBenchmarkOutput } from '../benchmark-output.js'
 import { renderReview, type ReviewFinding, type ReviewObject } from '../formatter.js'
 
 const finding = (over: Partial<ReviewFinding> = {}): ReviewFinding =>
@@ -76,41 +76,46 @@ describe('mapFindings', () => {
   })
 })
 
-describe('keptByJudge', () => {
-  const reviewer = [finding({ title: 'Race on conns' }), finding({ title: 'Leaked handle' }), finding({ title: 'Dropped one' })]
-
-  it('keeps only findings the judge scored or rendered', () => {
-    const judged = '### Findings\n- **LOW – Leaked handle** (`src/pool.ts:9`)\n  desc\n\n### Merge Confidence: 80%'
-    const kept = keptByJudge(reviewer, judged, [{ title: 'race on  CONNS', severity: 'MEDIUM', score: 8 }])
-    expect(kept.map(f => f.title)).toEqual(['Race on conns', 'Leaked handle'])
+describe('findingsFromJudgedMarkdown', () => {
+  it('reads each kept finding from the judge Findings section as "<title>: <body>" at its cited location', () => {
+    const judged = '### Summary\ns\n\n### Findings\n- **HIGH – Auth gate removed** (`src/api/search.ts:23-30`)\n  requirePerm was deleted.\n\n- **MEDIUM – LIKE escape wrong** (`src/db/options.ts:126-152`)\n  backslash mismatches Postgres.\n\n### Merge Confidence: 40%'
+    expect(findingsFromJudgedMarkdown(judged, 'rb')).toEqual([
+      { file: 'src/api/search.ts', start_line: 23, end_line: 30, message: 'Auth gate removed: requirePerm was deleted.', producer: 'rb' },
+      { file: 'src/db/options.ts', start_line: 126, end_line: 152, message: 'LIKE escape wrong: backslash mismatches Postgres.', producer: 'rb' },
+    ])
   })
 
-  it('keeps nothing when the judge kept nothing', () => {
-    expect(keptByJudge(reviewer, '### Findings\nNo actionable findings.', [])).toEqual([])
+  it('emits one entry per file for a multi-location finding', () => {
+    const judged = '### Findings\n- **HIGH – Public search** (`src/api/search.ts:23-30`, `src/api/suggest.ts:22-28`)\n  both lost the perm check.\n\n### Merge Confidence: 50%'
+    const out = findingsFromJudgedMarkdown(judged, 'rb')
+    expect(out.map(f => f.file)).toEqual(['src/api/search.ts', 'src/api/suggest.ts'])
+    expect(out.every(f => f.message.startsWith('Public search:'))).toBe(true)
   })
 
-  it('round-trips the reviewer rendering (judge returned findings unchanged)', () => {
-    const obj: ReviewObject = { summary: 's', findings: reviewer, behavioral_diff: [], production_risk: [], unresolved_questions: [] }
-    expect(keptByJudge(reviewer, renderReview(obj))).toEqual(reviewer)
+  it('keeps the judge-reframed title verbatim — no reviewer join to lose it', () => {
+    const judged = '### Findings\n- **MEDIUM – Catastrophic-backtracking ReDoS** (`src/engine.ts:12-20`)\n  still exploitable.'
+    expect(findingsFromJudgedMarkdown(judged, 'rb')[0].message).toBe('Catastrophic-backtracking ReDoS: still exploitable.')
   })
 
-  it('keeps a finding whose title the judge reframed, matched by its preserved location', () => {
-    const reframed = [finding({ title: 'ReDoS via backtracking', file: 'src/engine.ts', lines: '12-20' })]
-    const judged = '### Findings\n- **MEDIUM – Catastrophic-backtracking ReDoS not addressed** (`src/engine.ts:12-20`)\n  still exploitable.\n\n### Merge Confidence: 70%'
-    const kept = keptByJudge(reframed, judged, [{ title: 'Catastrophic-backtracking ReDoS not addressed', severity: 'MEDIUM', score: 8 }])
-    expect(kept.map(f => f.title)).toEqual(['ReDoS via backtracking'])
+  it('snaps a basename or diff-prefixed citation to the exact changed path', () => {
+    const judged = '### Findings\n- **MEDIUM – Loop** (`pool.ts:52`)\n  unbounded.'
+    expect(findingsFromJudgedMarkdown(judged, 'rb', ['src/app/core/pool.ts'])[0].file).toBe('src/app/core/pool.ts')
   })
 
-  it('matches a basename-only judge citation and a narrowed range', () => {
-    const reviewer = [finding({ title: 'Unbounded loop', file: 'src/app/core/pool.ts', lines: '40-60' })]
-    const judged = '### Findings\n- **MEDIUM – Loop can run unbounded** (`pool.ts:52`)\n  desc\n\n### Merge Confidence: 70%'
-    expect(keptByJudge(reviewer, judged, []).map(f => f.title)).toEqual(['Unbounded loop'])
+  it('drops a finding with no parseable location and ignores other sections', () => {
+    const judged = '### Findings\n- **LOW – PR-level concern**\n  no single location.\n\n### Behavioral Diff\n- changed (`src/pool.ts:2-3`)\n\n### Merge Confidence: 90%'
+    expect(findingsFromJudgedMarkdown(judged, 'rb')).toEqual([])
   })
 
-  it('does not match a location that lives in Behavioral Diff rather than Findings', () => {
-    const reviewer = [finding({ title: 'Not actually flagged', file: 'src/pool.ts', lines: '2-3' })]
-    const judged = '### Findings\nNo findings.\n\n### Behavioral Diff\n- pool changed (`src/pool.ts:2-3`)\n\n### Merge Confidence: 90%'
-    expect(keptByJudge(reviewer, judged, [])).toEqual([])
+  it('emits nothing when the judge kept nothing', () => {
+    expect(findingsFromJudgedMarkdown('### Findings\nNo findings.\n\n### Merge Confidence: 95%', 'rb')).toEqual([])
+  })
+
+  it('parses the reviewer rendering too (judge returned findings unchanged)', () => {
+    const obj: ReviewObject = { summary: 's', findings: [finding({ title: 'Race on conns' })], behavioral_diff: [], production_risk: [], unresolved_questions: [] }
+    const out = findingsFromJudgedMarkdown(renderReview(obj), 'rb')
+    expect(out).toHaveLength(1)
+    expect(out[0]).toMatchObject({ file: 'src/pool.ts', start_line: 42, end_line: 45, message: 'Race on conns: conns is read without the mutex.' })
   })
 })
 
