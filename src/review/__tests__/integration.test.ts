@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { VCSAdapter, PRInfo, ReviewComment, CommentReply } from '../../vcs/adapter.js'
 
 // ---------------------------------------------------------------------------
@@ -20,7 +20,7 @@ vi.mock('../../config.js', () => ({
     vcsProvider: 'bitbucket',
     bitbucket: { workspace: 'test', baseUrl: '', username: 'bot', token: 'x' },
   },
-  modelContextWindow: () => 200_000,
+  modelContextWindow: vi.fn(() => 200_000),
 }))
 
 vi.mock('../../claude/client.js', () => ({
@@ -44,7 +44,7 @@ vi.mock('../usage.js', async (importOriginal) => {
 
 // Import after mocks
 import { review } from '../index.js'
-import { config } from '../../config.js'
+import { config, modelContextWindow } from '../../config.js'
 import { runReview, runCommentResponse, runJudge } from '../../claude/client.js'
 import { loadPrompt } from '../../prompt/loader.js'
 import { fetchContext } from '../../context/fetcher.js'
@@ -1186,6 +1186,46 @@ describe('token-budget degradation', () => {
 // ===========================================================================
 // Scenario 8g2: Context-length rejection — degrade to diff-only, then skip (estimate under-counts)
 // ===========================================================================
+
+describe('input budget from context window', () => {
+  const overBudget = 'diff --git a/x.ts b/x.ts\n--- a/x.ts\n+++ b/x.ts\n@@ -1 +1,6 @@\n' + Array(6).fill('+' + 'a'.repeat(80)).join('\n') + '\n'
+
+  afterEach(() => {
+    cfg.anthropic.maxTokens = 32000
+    cfg.anthropic.maxInputTokens = 150000
+    cfg.anthropic.modelContextTokens = 0
+    vi.mocked(modelContextWindow).mockReturnValue(200_000)
+  })
+
+  it('derives the reviewer window and skips a diff that exceeds it', async () => {
+    const adapter = makeAdapter({ getDiff: vi.fn().mockResolvedValue(overBudget) })
+    setupClaudeMocks()
+    cfg.anthropic.maxInputTokens = 1_000_000   // not the binding limit
+    cfg.anthropic.maxTokens = 10
+    cfg.anthropic.modelContextTokens = 0        // derive from the model
+    vi.mocked(modelContextWindow).mockReturnValue(100)   // window 100 → cap 90
+
+    const record = await review(adapter, '100', false)
+
+    expect(record!.action).toBe('SKIP')
+    expect(record!.skip_reason).toMatch(/input budget/i)
+    expect(mockRunReview).not.toHaveBeenCalled()
+  })
+
+  it('lets MODEL_CONTEXT_TOKENS override the derived cap', async () => {
+    const adapter = makeAdapter({ getDiff: vi.fn().mockResolvedValue(overBudget) })
+    setupClaudeMocks()
+    cfg.anthropic.maxInputTokens = 1_000_000
+    cfg.anthropic.maxTokens = 10
+    cfg.anthropic.modelContextTokens = 100_000   // override wins over the tiny derived window below
+    vi.mocked(modelContextWindow).mockReturnValue(100)
+
+    const record = await review(adapter, '100', false)
+
+    expect(record!.action).toBe('REVIEW')
+    expect(mockRunReview).toHaveBeenCalledTimes(1)
+  })
+})
 
 describe('context-length overflow (estimate under-counted)', () => {
   const tooLong = () => Object.assign(new Error('400 prompt is too long: 300000 tokens > 200000 maximum'), { status: 400 })

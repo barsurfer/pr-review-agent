@@ -279,10 +279,10 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         `prompt ${s.prompt.toLocaleString()} | diff ${s.diff.toLocaleString()} | delta ${s.delta.toLocaleString()} | files ${s.files.toLocaleString()} (${s.filesN}) | prev_reviews ${s.reviews.toLocaleString()} (${s.reviewsN}) | replies ${s.replies.toLocaleString()} (${s.repliesN})`
 
       let s = sizes()
-      // Input budget: the smaller of MAX_INPUT_TOKENS and the model's context minus the output
-      // reserve, so a big diff degrades/skips here instead of hitting a context-length 400. The
-      // window is the model's own (derived from its id) unless MODEL_CONTEXT_TOKENS overrides it.
-      const ctxWindow = config.anthropic.modelContextTokens > 0 ? config.anthropic.modelContextTokens : modelContextWindow(config.anthropic.model)
+      // Input budget: MAX_INPUT_TOKENS and the context window (minus output reserve), whichever is smaller, so a big diff degrades/skips instead of hitting a 400.
+      // The diff goes to both reviewer and judge, so cap by the smaller window; MODEL_CONTEXT_TOKENS overrides the reviewer's derived window.
+      const reviewerWindow = config.anthropic.modelContextTokens > 0 ? config.anthropic.modelContextTokens : modelContextWindow(config.anthropic.model)
+      const ctxWindow = config.judge.model ? Math.min(reviewerWindow, modelContextWindow(config.judge.model)) : reviewerWindow
       const ctxCap = ctxWindow > 0 ? ctxWindow - config.anthropic.maxTokens : 0
       const limits = [config.anthropic.maxInputTokens, ctxCap].filter(n => n > 0)
       const max = limits.length ? Math.min(...limits) : 0

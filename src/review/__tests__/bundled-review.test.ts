@@ -163,6 +163,17 @@ describe('bundled review', () => {
     expect(arg.review.findings.length).toBeGreaterThan(0)
   })
 
+  it('all bundles NO_CHANGE is treated as NO_CHANGE, not an overflow skip', async () => {
+    mockRunReview.mockResolvedValue({
+      text: 'NO_CHANGE', usage,
+      review: { summary: '', findings: [], behavioral_diff: [], production_risk: [], unresolved_questions: [], no_change: true },
+    })
+    // First review + NO_CHANGE hits the shared CHECK_NO_CHANGE guard (throws), which proves it took
+    // the NO_CHANGE path — not the all-overflow skip (which would SKIP with "left unreviewed").
+    await expect(review(adapter(BIG_DIFF, ['a/one.ts', 'a/two.ts', 'b/one.ts', 'b/two.ts']), '1', false))
+      .rejects.toThrow(/NO_CHANGE on a first review/)
+  })
+
   it('skips (not NO_CHANGE) when every bundle overflows the model context', async () => {
     mockRunReview.mockImplementation(async () => {
       const e = new Error('prompt is too long') as Error & { status: number }

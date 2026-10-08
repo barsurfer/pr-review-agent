@@ -133,9 +133,8 @@ export async function runBundledReview(ctx: ReviewContext, maxInputTokens: numbe
   }
 
   if (!reviews.length) {
-    // A bundle that overflowed the context was never reviewed — that is not NO_CHANGE. Skip
-    // honestly rather than let a first review throw on a false NO_CHANGE sentinel.
-    if (anyOverflow) return { ok: false, reason: `No bundle fit the model context — ${unreviewed.length} file(s) left unreviewed` }
+    // An overflowed bundle was never reviewed — that is not NO_CHANGE; skip honestly rather than emit a false sentinel a first review would throw on.
+    if (anyOverflow) return { ok: false, reason: `A bundle exceeded the model context — ${unreviewed.length} file(s) left unreviewed` }
     ctx.reviewText = 'NO_CHANGE'
     return { ok: true }
   }
