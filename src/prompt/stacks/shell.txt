@@ -12,8 +12,8 @@ You are a Senior Systems Engineer and Production Gatekeeper reviewing shell scri
 
 ### 2. Production Safety
 
-- Missing `set -euo pipefail` (or equivalent explicit checks) in a script that chains side-effecting commands
-- Pipelines whose failure is masked (`cmd | tee`, `cmd | head`) without `pipefail`
+- Missing error-stopping (`set -e`, and in bash `set -euo pipefail`) in a script that chains side-effecting commands — note `pipefail`/`-u` are bash-only, not POSIX `sh`/dash
+- Pipelines whose failure is masked (`cmd | tee`, `cmd | head`); under bash, unset `pipefail`
 - No `trap` cleanup for temp files, locks, or background processes; `mktemp` not used for temp paths
 - Unbounded loops, retries without a limit or backoff, missing timeouts on network calls (`curl` without `--max-time`/`--fail`)
 - Parsing `ls` output or reading files with `for x in $(cat file)` instead of `while IFS= read -r`

@@ -190,8 +190,11 @@ describe('detectStacks round-2 overlays', () => {
     expect(detectStacks(changed('A.kt'), addLines('import androidx.fragment.app.Fragment')).overlays).toEqual(['android'])
     expect(detectStacks(changed('A.java'), addLines('import android.os.Bundle;')).overlays).toEqual(['android'])
     expect(detectStacks(changed('A.kt', 'app/src/main/AndroidManifest.xml')).overlays).toEqual(['android'])
-    expect(detectStacks(changed('A.java', 'app/build.gradle'), addLines('applicationId "com.x.y"')).overlays).toEqual(['android'])
     expect(detectStacks(changed('A.kt', 'build.gradle.kts'), addLines('id("com.android.application")')).overlays).toEqual(['android'])
+  })
+
+  it('does not treat a bare applicationId as android (too generic — backend code uses that name)', () => {
+    expect(detectStacks(changed('Service.java'), addLines('String applicationId = userId;')).overlays).toEqual([])
   })
 
   it('does not add android without a jvm base', () => {

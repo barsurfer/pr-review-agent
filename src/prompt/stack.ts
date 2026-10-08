@@ -39,7 +39,7 @@ const FRONTEND_DIFF = /^[+ ]\s*import\b.*['"](react|react-dom|vue|svelte|@angula
 const ASPNET_PATH = /\.cshtml$/
 const ASPNET_DIFF = /^[+ ]\s*using\s+Microsoft\.(AspNetCore|EntityFrameworkCore)\b|^[+ ]\s*\[(ApiController|Route|Http(Get|Post|Put|Patch|Delete))\b|^[+ ]\s*(WebApplication|WebApplicationBuilder)\b|^[+ ]\s*app\.Map(Get|Post|Put|Delete|Controllers)\b|:\s*Controller(Base)?\b/m
 const BLAZOR_PATH = /\.razor$/
-const BLAZOR_DIFF = /^[+ ]\s*using\s+Microsoft\.AspNetCore\.Components\b|^[+ ]\s*@(page|rendermode)\b/m
+const BLAZOR_DIFF = /^[+ ]\s*using\s+Microsoft\.AspNetCore\.Components\b|^[+ ]\s*@rendermode\b/m
 const MAUI_PATH = /(^|\/)MauiProgram\.cs$/
 const MAUI_DIFF = /^[+ ]\s*using\s+Microsoft\.Maui\b|<(ContentPage|FlyoutPage|Shell)\b/m
 const WINFORMS_PATH = /\.Designer\.cs$/
@@ -51,7 +51,7 @@ const LARAVEL_DIFF = /^[+ ]\s*use\s+Illuminate\\|^[+ ]\s*(final\s+|abstract\s+)?
 const RAILS_PATH = /(^|\/)config\/routes\.rb$/
 const RAILS_DIFF = /<\s*(ApplicationController|ApplicationRecord)\b|^[+ ].*\bRails\.|^[+ ]\s*gem\s+['"]rails['"]/m
 const ANDROID_PATH = /(^|\/)AndroidManifest\.xml$/
-const ANDROID_DIFF = /^[+ ]\s*import\s+androidx?\.|^[+ ].*(com\.android\.(application|library)|\bapplicationId\b)/m
+const ANDROID_DIFF = /^[+ ]\s*import\s+androidx?\.|^[+ ].*com\.android\.(application|library)\b/m
 
 // Extensionless scripts (bin/deploy) can't be classified by name, so the shebang in their diff section decides
 const SHEBANG = /^[+ ]#!\s*\/\S*?(\/env\s+)?(ba|z|da|k)?sh\b/m

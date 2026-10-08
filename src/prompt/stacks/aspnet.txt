@@ -15,4 +15,4 @@
 
 ## EXCEPTIONS
 - Do not flag a missing `[Authorize]` when a global authorization filter or fallback policy is configured outside the diff — raise it as an Unresolved Question
-- Do not flag missing migrations for a keyless/owned-type or `[NotMapped]` change
+- Do not flag missing migrations for a keyless-entity or `[NotMapped]` change (owned types ARE mapped as columns and do need a migration)
