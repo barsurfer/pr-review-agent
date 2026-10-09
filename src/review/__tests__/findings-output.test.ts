@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { mkdtempSync, readFileSync, existsSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { parseLineRange, normalizeFindingPath, findingsFromJudgedMarkdown, mapFindings, resolveKeptFindings, keptToReportFindings, mergeJudgedFindings, buildFindingsReport, writeFindingsReport, countFindingBullets } from '../findings-output.js'
+import { parseLineRange, normalizeFindingPath, findingsFromJudgedMarkdown, mapFindings, resolveKeptFindings, keptToReportFindings, mergeJudgedFindings, mergeJudgedFindingsWithStats, buildFindingsReport, writeFindingsReport, countFindingBullets } from '../findings-output.js'
 import { renderReview, type ReviewFinding, type ReviewObject, type FindingScore } from '../formatter.js'
 
 const finding = (over: Partial<ReviewFinding> = {}): ReviewFinding =>
@@ -395,6 +395,62 @@ describe('mergeJudgedFindings', () => {
   it('returns the located markdown rows when judgeScores is undefined, not just empty', () => {
     const md = judged('- **MEDIUM – A** (`a.ts:1`)\n  x')
     expect(mergeJudgedFindings(md, [finding()], undefined, 'rb')).toHaveLength(1)
+  })
+
+  it('a recovered row with no reviewer match borrows the judge bullet text instead of a bare title (R2 Case B)', () => {
+    const md = judged('- **MEDIUM – Unbounded session map**\n  SaveSession has no cap; a flood of /authorize grows the map until OOM.')
+    const revs = [finding({ title: 'Totally unrelated thing', file: 'x.ts', lines: '1', body: 'other' })]
+    const out = mergeJudgedFindings(md, revs, [score({ title: 'Unbounded session map', file: 'auth/session.go', lines: '60' })], 'rb')
+    expect(out).toHaveLength(1)
+    expect(out[0].message).toBe('Unbounded session map: SaveSession has no cap; a flood of /authorize grows the map until OOM.')
+  })
+
+  it('a recovered row with a reviewer match keeps the reviewer body (Case A not shipped)', () => {
+    const md = judged('- **MEDIUM – Race on conns**\n  judge terse text.')
+    const revs = [finding({ title: 'Race on conns', file: 'a.ts', lines: '3', body: 'reviewer body.' })]
+    expect(mergeJudgedFindings(md, revs, [score({ title: 'Race on conns' })], 'rb')[0].message).toBe('Race on conns: reviewer body.')
+  })
+})
+
+describe('mergeJudgedFindingsWithStats', () => {
+  const judged = (findings: string) => `### Summary\ns\n\n### Findings\n${findings}\n\n### Merge Confidence: 70%`
+
+  it('mergeJudgedFindings returns the same findings as the stats variant', () => {
+    const md = judged('- **MEDIUM – A** (`a.ts:1`)\n  x')
+    const revs = [finding({ title: 'A', file: 'a.ts', lines: '1', body: 'b' })]
+    expect(mergeJudgedFindings(md, revs, [score({ title: 'A' })], 'rb'))
+      .toEqual(mergeJudgedFindingsWithStats(md, revs, [score({ title: 'A' })], 'rb').findings)
+  })
+
+  it('flags a certain silent drop the old row-count check masked', () => {
+    // located single + located two-file (inflates rows) + a prose bullet nothing can anchor.
+    const md = judged('- **MEDIUM – A** (`a.ts:1`)\n  x\n- **HIGH – B** (`b.ts:2`, `c.ts:3`)\n  y\n- **MEDIUM – C**\n  z')
+    const { findings, stats } = mergeJudgedFindingsWithStats(md, [], [score({ title: 'A' }), score({ title: 'B' }), score({ title: 'C' })], 'rb')
+    expect(stats.unanchoredPaired).toBe(1)             // C: kept prose bullet, no anchor
+    expect(findings.length).toBeGreaterThanOrEqual(stats.scores)   // rows (3) ≥ scores (3): old `kept > rows` stays silent
+  })
+
+  it('counts unscored prose bullets when the judge returns empty finding_scores', () => {
+    const md = judged('- **MEDIUM – A**\n  x\n- **MEDIUM – B**\n  y')
+    expect(mergeJudgedFindingsWithStats(md, [], [], 'rb').stats.unscoredProse).toBe(2)
+  })
+
+  it('counts an unpaired anchored score (the reframe double-count signal)', () => {
+    const md = judged('- **MEDIUM – Throttling (429) misread** (`h.go:88`)\n  x')
+    const revs = [finding({ title: 'Throttling misread as invalid token', file: 'h.go', lines: '88', body: 'b' })]
+    expect(mergeJudgedFindingsWithStats(md, revs, [score({ title: 'Throttling misread as invalid token' })], 'rb').stats.recoveredUnpaired).toBe(1)
+  })
+
+  it('zeroes the drop counters when every bullet is located', () => {
+    const md = judged('- **MEDIUM – A** (`a.ts:1`)\n  x')
+    const s = mergeJudgedFindingsWithStats(md, [finding({ title: 'A', file: 'a.ts', lines: '1' })], [score({ title: 'A' })], 'rb').stats
+    expect([s.unanchoredPaired, s.unanchoredUnpaired, s.unscoredProse]).toEqual([0, 0, 0])
+  })
+
+  it('detects parser drift — a severity bullet the head regex cannot read', () => {
+    const md = judged('- **MEDIUM Something** (`a.ts:1`)\n  x')   // no dash after MEDIUM
+    expect(mergeJudgedFindingsWithStats(md, [], [], 'rb').stats.bullets).toBe(0)
+    expect(countFindingBullets(md)).toBe(1)
   })
 })
 
