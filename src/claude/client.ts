@@ -52,6 +52,8 @@ export const JUDGE_OUTPUT_SCHEMA = {
           title: { type: 'string', description: "The kept finding's title, matching its heading in review_markdown." },
           severity: { type: 'string', enum: ['LOW', 'MEDIUM', 'HIGH'], description: 'Final severity after calibration.' },
           score: { type: 'integer', description: '0–10 confidence: 10 = certain with quoted diff evidence; 5 = plausible but not fully verifiable; 0 = speculative. Independent of severity.' },
+          file: { type: 'string', description: "The kept finding's file path, copied from its (file:line) reference in review_markdown. Omit only if the finding is not line-specific." },
+          lines: { type: 'string', description: 'Line or range within that file, e.g. "26-31". Omit only if the finding is not line-specific.' },
         },
         required: ['title', 'severity', 'score'],
         additionalProperties: false,

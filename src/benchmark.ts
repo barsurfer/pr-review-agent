@@ -3,7 +3,7 @@
 import { config } from './config.js'
 import { review } from './review/index.js'
 import { ReviewBenchAdapter, readReviewBenchEnv, readPrJson } from './vcs/reviewbench.js'
-import { findingsFromJudgedMarkdown, mapFindings, buildFindingsReport, writeFindingsReport, countFindingBullets, type ReportFinding } from './review/findings-output.js'
+import { mergeJudgedFindings, mapFindings, buildFindingsReport, writeFindingsReport, countFindingBullets, type ReportFinding } from './review/findings-output.js'
 import type { ReviewOutcome } from './review/types.js'
 
 const CONFIG_LABELS: Record<string, (value: string) => void> = {
@@ -51,15 +51,16 @@ export async function runBenchmark(env: NodeJS.ProcessEnv = process.env): Promis
     const outcome = outcomes[0]
     if (outcome) {
       const changedPaths = (await adapter.getChangedFiles(prNumber)).map(f => f.path)
-      // Judged: read the kept set from the judge's own markdown; unjudged: map the reviewer's findings.
+      // Judged: the judge's own cited anchors plus structured recoveries for the ones it located as
+      // prose (which the markdown alone drops silently). Unjudged: map the reviewer's findings.
       findings = outcome.judged
-        ? findingsFromJudgedMarkdown(outcome.reviewText, rb.agent, changedPaths)
+        ? mergeJudgedFindings(outcome.reviewText, outcome.review.findings, outcome.judgeScores, rb.agent, changedPaths)
         : mapFindings(outcome.review.findings, rb.agent, changedPaths)
-      console.log(`Benchmark findings: reviewer ${outcome.review.findings.length}, ${outcome.judged ? 'from judge markdown' : 'judge skipped'}, line-anchored ${findings.length}`)
+      console.log(`Benchmark findings: reviewer ${outcome.review.findings.length}, judge kept ${outcome.judgeScores?.length ?? '—'}, line-anchored ${findings.length}`)
       if (outcome.judged) {
-        // Flag a parse shortfall — unlocated findings or a judge-format drift that would otherwise score zero silently.
-        const bullets = countFindingBullets(outcome.reviewText)
-        if (bullets > findings.length) console.warn(`  Parse check: ${bullets} finding bullet(s) in the judge output, ${findings.length} line-anchored — unlocated findings or a format drift`)
+        // Shortfall vs both signals of intent (scored + bulleted) — findings with no usable file:line.
+        const kept = Math.max(outcome.judgeScores?.length ?? 0, countFindingBullets(outcome.reviewText))
+        if (kept > findings.length) console.warn(`  Parse check: judge kept ~${kept}, only ${findings.length} anchored — ${kept - findings.length} finding(s) without a usable file:line`)
       }
     } else {
       console.log('Benchmark: review skipped — writing empty findings')

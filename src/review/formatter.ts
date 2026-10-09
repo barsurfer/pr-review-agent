@@ -106,6 +106,9 @@ export interface FindingScore {
   title: string
   severity: 'LOW' | 'MEDIUM' | 'HIGH'
   score: number   // 0–10: judge's confidence the kept finding is real and correctly severed
+  // Anchor transcribed from the finding's (file:line), so a consumer can locate it without re-parsing prose.
+  file?: string
+  lines?: string
 }
 
 const bullets = (items: string[]): string => items.map(i => `- ${i}`).join('\n')

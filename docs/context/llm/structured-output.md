@@ -37,7 +37,7 @@ The reviewer returns a typed object (`REVIEW_OUTPUT_SCHEMA` in `src/claude/clien
 The judge (`JUDGE_OUTPUT_SCHEMA`) returns three fields:
 - `review_markdown` — the posted comment; the judge still writes this as prose, including `### Merge Confidence: X%`
 - `judge_notes` — drop/downgrade rationale; logged, never posted
-- `finding_scores[{title, severity, score}]` — per-finding 0–10 confidence, scored independently of severity; logged to `results.jsonl` as `finding_scores` + `min_finding_score`, never posted
+- `finding_scores[{title, severity, score, file?, lines?}]` — per-finding 0–10 confidence, scored independently of severity, with an optional transcribed anchor (benchmark uses it to re-locate a prose-only finding); logged to `results.jsonl` as `finding_scores` + `min_finding_score`, never posted
 
 The judge is **not** yet fully structured (it emits `review_markdown` prose), so the final `findings` counts and `verdict_score` are still parsed from that markdown. Making the judge emit structured findings — and rendering the scores in the review — is a deferred step (the "visible / structured-judge" path).
 

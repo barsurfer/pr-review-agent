@@ -201,6 +201,37 @@ describe('benchmark mode end-to-end (model + judge mocked)', () => {
     expect(completeStructured).toHaveBeenCalled()
     expect(readOut(env).findings.length).toBeGreaterThan(0)
   })
+
+  it('recovers kept findings when the judge wrote locations as prose, not (file:line)', async () => {
+    // The real regression: judge keeps findings and scores them, but omits the (file:line) paren.
+    mockModel(REVIEW, {
+      review_markdown: '### Summary\ns\n\n### Findings\n- **MEDIUM – Race on conns**\n  conns mutated without a lock.\n- **MEDIUM – Cited by basename**\n  put accepts null.\n\n### Merge Confidence: 70%',
+      judge_notes: '',
+      finding_scores: [{ title: 'Race on conns', severity: 'MEDIUM', score: 9 }, { title: 'Cited by basename', severity: 'MEDIUM', score: 7 }],
+    })
+    const env = fixture()
+
+    await runBenchmark(env)
+
+    // Anchors recovered from the reviewer's structured findings despite the prose-only judge markdown.
+    expect(readOut(env).findings).toEqual([
+      { file: 'src/pool.ts', start_line: 2, end_line: 3, message: 'Race on conns: get/put mutate conns without a lock.', producer: 'my-agent' },
+      { file: 'src/pool.ts', start_line: 4, end_line: 4, message: 'Cited by basename: put accepts null.', producer: 'my-agent' },
+    ])
+  })
+
+  it('still emits located markdown findings when the judge returns an empty finding_scores', async () => {
+    mockModel(REVIEW, {
+      review_markdown: '### Summary\ns\n\n### Findings\n- **MEDIUM – Race on conns** (`src/pool.ts:2-3`)\n  body.\n- **HIGH – Cited by basename** (`src/pool.ts:4`)\n  body.\n\n### Merge Confidence: 60%',
+      judge_notes: '',
+      finding_scores: [],
+    })
+    const env = fixture()
+
+    await runBenchmark(env)
+
+    expect(readOut(env).findings.map((f: any) => `${f.file}:${f.start_line}`)).toEqual(['src/pool.ts:2', 'src/pool.ts:4'])
+  })
 })
 
 describe('benchmark mode fail-safe', () => {
