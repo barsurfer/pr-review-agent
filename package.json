@@ -1,6 +1,6 @@
 {
   "name": "pr-review-agent",
-  "version": "0.0.21",
+  "version": "0.0.22",
   "description": "Automated PR code review agent powered by Claude",
   "license": "MIT",
   "type": "module",
