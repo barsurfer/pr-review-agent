@@ -44090,16 +44090,18 @@ function parseJudgedBullets(judgedText, changedPaths) {
     const title = head[1].replace(/\s+/g, " ").trim();
     const body = block.slice(head[0].length).replace(/\s+/g, " ").trim();
     const rows = [];
+    let anchored = false;
     for (const c of citations(head[2] ?? "")) {
       const file = normalizeFindingPath(c.path, changedPaths);
       const range = parseLineRange(c.lines);
       if (!file || !range) continue;
+      anchored = true;
       const key = `${file}:${range.start}-${range.end}:${title}`;
       if (seen.has(key)) continue;
       seen.add(key);
       rows.push({ file, start_line: range.start, end_line: range.end });
     }
-    out.push({ title, message: body ? `${title}: ${body}` : title, located: rows.length > 0, rows });
+    out.push({ title, message: body ? `${title}: ${body}` : title, located: anchored, rows });
   }
   return out;
 }
@@ -44229,8 +44231,11 @@ function mergeJudgedFindings(judgedText, reviewerFindings, judgeScores, producer
   const usedBullet = /* @__PURE__ */ new Set();
   const recovered = resolveKeptFindings(reviewerFindings, judgeScores).filter((k) => {
     const kt = normTitle(k.title);
-    const bi = kt ? bullets3.findIndex((b, i) => !usedBullet.has(i) && normTitle(b.title) === kt) : -1;
-    if (bi < 0) return true;
+    if (!kt) return true;
+    const cands = bullets3.map((_, i) => i).filter((i) => !usedBullet.has(i) && normTitle(bullets3[i].title) === kt);
+    if (!cands.length) return true;
+    const kf = k.file ? normalizeFindingPath(k.file, changedPaths) : "";
+    const bi = cands.find((i) => bullets3[i].located && kf && bullets3[i].rows.some((r) => r.file === kf)) ?? cands.find((i) => !bullets3[i].located) ?? cands[0];
     usedBullet.add(bi);
     return !bullets3[bi].located;
   });
@@ -44566,7 +44571,7 @@ function getAgentVersion() {
     const pkg = JSON.parse((0, import_fs4.readFileSync)(pkgPath, "utf-8"));
     return pkg.version;
   } catch {
-    if (true) return "0.0.20";
+    if (true) return "0.0.21";
     return "unknown";
   }
 }
@@ -44578,7 +44583,7 @@ function getBuildCommit() {
     const dirty = (0, import_child_process.execSync)("git status --porcelain", opts2).toString().trim() ? "-dirty" : "";
     return hash + dirty;
   } catch {
-    if (true) return "cd1cecf";
+    if (true) return "856537e";
     return "unknown";
   }
 }
