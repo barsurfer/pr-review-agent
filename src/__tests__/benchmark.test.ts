@@ -232,6 +232,19 @@ describe('benchmark mode end-to-end (model + judge mocked)', () => {
 
     expect(readOut(env).findings.map((f: any) => `${f.file}:${f.start_line}`)).toEqual(['src/pool.ts:2', 'src/pool.ts:4'])
   })
+
+  it('warns when a kept finding reaches no row (certain silent drop)', async () => {
+    // "Orphan prose finding" is kept and scored but located only in prose, with no reviewer finding to anchor it.
+    mockModel(REVIEW, {
+      review_markdown: '### Summary\ns\n\n### Findings\n- **MEDIUM – Race on conns** (`src/pool.ts:2-3`)\n  x\n- **MEDIUM – Orphan prose finding**\n  described in prose only.\n\n### Merge Confidence: 60%',
+      judge_notes: '',
+      finding_scores: [{ title: 'Race on conns', severity: 'MEDIUM', score: 9 }, { title: 'Orphan prose finding', severity: 'MEDIUM', score: 7 }],
+    })
+    const warnSpy = vi.spyOn(console, 'warn')
+    await runBenchmark(fixture())
+    expect(warnSpy.mock.calls.map(c => c.join(' ')).join('\n')).toContain('Parse check:')
+    warnSpy.mockRestore()
+  })
 })
 
 describe('benchmark mode fail-safe', () => {

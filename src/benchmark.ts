@@ -3,7 +3,7 @@
 import { config } from './config.js'
 import { review } from './review/index.js'
 import { ReviewBenchAdapter, readReviewBenchEnv, readPrJson } from './vcs/reviewbench.js'
-import { mergeJudgedFindings, mapFindings, buildFindingsReport, writeFindingsReport, countFindingBullets, type ReportFinding } from './review/findings-output.js'
+import { mergeJudgedFindingsWithStats, mapFindings, buildFindingsReport, writeFindingsReport, countFindingBullets, type ReportFinding } from './review/findings-output.js'
 import type { ReviewOutcome } from './review/types.js'
 
 const CONFIG_LABELS: Record<string, (value: string) => void> = {
@@ -51,16 +51,22 @@ export async function runBenchmark(env: NodeJS.ProcessEnv = process.env): Promis
     const outcome = outcomes[0]
     if (outcome) {
       const changedPaths = (await adapter.getChangedFiles(prNumber)).map(f => f.path)
-      // Judged: the judge's own cited anchors plus structured recoveries for the ones it located as
-      // prose (which the markdown alone drops silently). Unjudged: map the reviewer's findings.
-      findings = outcome.judged
-        ? mergeJudgedFindings(outcome.reviewText, outcome.review.findings, outcome.judgeScores, rb.agent, changedPaths)
-        : mapFindings(outcome.review.findings, rb.agent, changedPaths)
-      console.log(`Benchmark findings: reviewer ${outcome.review.findings.length}, judge kept ${outcome.judgeScores?.length ?? '—'}, line-anchored ${findings.length}`)
       if (outcome.judged) {
-        // Shortfall vs both signals of intent (scored + bulleted) — findings with no usable file:line.
-        const kept = Math.max(outcome.judgeScores?.length ?? 0, countFindingBullets(outcome.reviewText))
-        if (kept > findings.length) console.warn(`  Parse check: judge kept ~${kept}, only ${findings.length} anchored — ${kept - findings.length} finding(s) without a usable file:line`)
+        // Judged: the judge's own cited anchors plus structured recoveries for the ones it located as prose.
+        const { findings: judged, stats: s } = mergeJudgedFindingsWithStats(outcome.reviewText, outcome.review.findings, outcome.judgeScores, rb.agent, changedPaths)
+        findings = judged
+        console.log(`Merge: bullets ${s.bullets} (located ${s.located}, prose ${s.prose}) | scores ${s.scores} | rows ${findings.length} = markdown ${s.rowsMarkdown} + recovered ${s.rowsRecovered} | paired-located ${s.dupOfLocated} | borrowed-text ${s.borrowed} | unpaired-scores ${s.unpairedScoreTitles.length}`)
+        // A kept finding that reached no row is a silent drop — warn when it's certain, note when it's possible.
+        const certain = s.unanchoredPaired + s.unscoredProse
+        if (certain > 0) console.warn(`  Parse check: ${certain} kept finding(s) with no usable file:line (unanchored prose ${s.unanchoredPaired}, unscored prose ${s.unscoredProse})`)
+        if (s.unanchoredUnpaired > 0) console.log(`  Note: ${s.unanchoredUnpaired} kept score(s) with no bullet and no anchor`)
+        // The eye-check for the reframe double-count: an unpaired score next to an unconsumed prose bullet.
+        if (s.unpairedScoreTitles.length) console.log(`  Unpaired scores: ${s.unpairedScoreTitles.join(' | ')}`)
+        if (s.unconsumedBullets.length) console.log(`  Unconsumed bullets: ${s.unconsumedBullets.join(' | ')}`)
+        if (countFindingBullets(outcome.reviewText) > s.bullets) console.warn(`  Parse check: judge bullets unreadable by the parser (format drift)`)
+      } else {
+        findings = mapFindings(outcome.review.findings, rb.agent, changedPaths)
+        console.log(`Benchmark findings: reviewer ${outcome.review.findings.length}, judge skipped, line-anchored ${findings.length}`)
       }
     } else {
       console.log('Benchmark: review skipped — writing empty findings')

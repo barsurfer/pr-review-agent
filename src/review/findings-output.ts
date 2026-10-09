@@ -83,7 +83,7 @@ export function citations(parens: string): { path: string; lines: string }[] {
   return out
 }
 
-interface JudgedBullet { title: string; message: string; located: boolean; rows: { file: string; start_line: number; end_line: number }[] }
+interface JudgedBullet { title: string; body: string; message: string; located: boolean; rows: { file: string; start_line: number; end_line: number }[] }
 
 // Every finding bullet in the judge's `### Findings` section with its citations (one row per cited
 // file). `located` is false for a prose-only bullet; the merge pairs each kept score to its bullet by
@@ -108,7 +108,7 @@ function parseJudgedBullets(judgedText: string, changedPaths: readonly string[])
       seen.add(key)
       rows.push({ file, start_line: range.start, end_line: range.end })
     }
-    out.push({ title, message: body ? `${title}: ${body}` : title, located: anchored, rows })
+    out.push({ title, body, message: body ? `${title}: ${body}` : title, located: anchored, rows })
   }
   return out
 }
@@ -240,19 +240,56 @@ export function keptToReportFindings(kept: readonly KeptFinding[], producer: str
   return out
 }
 
+// Per-PR merge tally — exposed so the benchmark can warn on a certain silent drop (a finding the
+// judge kept but nothing could anchor) instead of the old row-count check, which multi-citation and
+// recovered rows mask. Counts are per score and mutually exclusive.
+export interface MergeStats {
+  bullets: number
+  located: number
+  prose: number
+  scores: number
+  rowsMarkdown: number
+  rowsRecovered: number
+  dupOfLocated: number      // recovery dropped because its bullet was already located (the happy path)
+  recoveredPaired: number   // recovery kept + anchored, paired to a prose bullet
+  recoveredUnpaired: number // recovery kept + anchored, no bullet matched (reframe/drift)
+  unanchoredPaired: number  // prose bullet kept but neither side anchored it → CERTAIN drop
+  unanchoredUnpaired: number// kept score, no bullet and no anchor → possible drop
+  unscoredProse: number     // prose bullet no score claimed (e.g. empty finding_scores) → CERTAIN drop
+  borrowed: number          // recovered rows that took the judge bullet's text (R2 Case B frequency)
+  unpairedScoreTitles: string[]  // kept scores that matched no bullet — reframe/drift, printed for the eye
+  unconsumedBullets: string[]    // bullets no score claimed, "title (located|prose)"
+}
+
 // Markdown-located findings pass through untouched; each kept score is paired to its bullet by exact
 // title and recovered only if that bullet was prose-only — recovering a finding the judge located as
 // prose without double-counting one it already anchored, even amid distinct findings on the same lines.
-export function mergeJudgedFindings(judgedText: string, reviewerFindings: readonly ReviewFinding[], judgeScores: readonly FindingScore[] | undefined, producer: string, changedPaths: readonly string[] = []): ReportFinding[] {
+// A recovered row whose reviewer body is empty borrows the judge's bullet text so it carries a real claim.
+export function mergeJudgedFindingsWithStats(judgedText: string, reviewerFindings: readonly ReviewFinding[], judgeScores: readonly FindingScore[] | undefined, producer: string, changedPaths: readonly string[] = []): { findings: ReportFinding[]; stats: MergeStats } {
   const bullets = parseJudgedBullets(judgedText, changedPaths)
   const primary = bullets.flatMap(b => b.rows.map(r => ({ file: r.file, start_line: r.start_line, end_line: r.end_line, message: b.message, producer })))
-  if (!judgeScores?.length) return primary
+  const located = bullets.filter(b => b.located).length
+  const stats: MergeStats = {
+    bullets: bullets.length, located, prose: bullets.length - located, scores: judgeScores?.length ?? 0,
+    rowsMarkdown: primary.length, rowsRecovered: 0, dupOfLocated: 0,
+    recoveredPaired: 0, recoveredUnpaired: 0, unanchoredPaired: 0, unanchoredUnpaired: 0, unscoredProse: 0,
+    borrowed: 0, unpairedScoreTitles: [], unconsumedBullets: [],
+  }
+  if (!judgeScores?.length) {
+    stats.unscoredProse = bullets.length - located
+    stats.unconsumedBullets = bullets.filter(b => !b.located).map(b => `${b.title} (prose)`)
+    return { findings: primary, stats }
+  }
   const usedBullet = new Set<number>()
-  const recovered = resolveKeptFindings(reviewerFindings, judgeScores).filter(k => {
+  const recovered = resolveKeptFindings(reviewerFindings, judgeScores).flatMap(k => {
+    const anchored = k.anchorSource !== 'none' && !!k.file
     const kt = normTitle(k.title)
-    if (!kt) return true
-    const cands = bullets.map((_, i) => i).filter(i => !usedBullet.has(i) && normTitle(bullets[i].title) === kt)
-    if (!cands.length) return true   // no matching bullet → keep the recovery
+    const cands = kt ? bullets.map((_, i) => i).filter(i => !usedBullet.has(i) && normTitle(bullets[i].title) === kt) : []
+    if (!cands.length) {
+      if (anchored) stats.recoveredUnpaired++; else stats.unanchoredUnpaired++
+      stats.unpairedScoreTitles.push(k.title)
+      return [k]   // no matching bullet → keep the recovery (reframe/drift)
+    }
     // Among same-title bullets, pair by identity not array order: a located bullet already anchoring
     // this recovery's file (the same finding, so drop it), else a prose bullet (the one we recover),
     // else any located bullet.
@@ -261,9 +298,26 @@ export function mergeJudgedFindings(judgedText: string, reviewerFindings: readon
       ?? cands.find(i => !bullets[i].located)
       ?? cands[0]
     usedBullet.add(bi)
-    return !bullets[bi].located   // prose bullet → recover; located → drop as a duplicate
+    if (bullets[bi].located) { stats.dupOfLocated++; return [] }   // duplicate of a located row → drop
+    if (anchored) stats.recoveredPaired++; else stats.unanchoredPaired++
+    // Prose bullet → recover; borrow the judge's validated bullet text only when the reviewer gave none
+    // (R2 Case B). A matched reviewer finding keeps its own title and body unchanged.
+    if (k.body) return [k]
+    stats.borrowed++
+    return [{ ...k, title: bullets[bi].title, body: bullets[bi].body }]
   })
-  return [...primary, ...keptToReportFindings(recovered, producer, changedPaths)]
+  // A reframed score emits a recovered row but leaves its prose bullet unconsumed; don't also count
+  // that bullet as a certain drop (it was recovered under the score's own title).
+  const unconsumedProse = bullets.filter((b, i) => !b.located && !usedBullet.has(i)).length
+  stats.unscoredProse = Math.max(0, unconsumedProse - stats.recoveredUnpaired)
+  stats.unconsumedBullets = bullets.filter((b, i) => !usedBullet.has(i) && !b.located).map(b => `${b.title} (prose)`)
+  const recoveredRows = keptToReportFindings(recovered, producer, changedPaths)
+  stats.rowsRecovered = recoveredRows.length
+  return { findings: [...primary, ...recoveredRows], stats }
+}
+
+export function mergeJudgedFindings(judgedText: string, reviewerFindings: readonly ReviewFinding[], judgeScores: readonly FindingScore[] | undefined, producer: string, changedPaths: readonly string[] = []): ReportFinding[] {
+  return mergeJudgedFindingsWithStats(judgedText, reviewerFindings, judgeScores, producer, changedPaths).findings
 }
 
 export function buildFindingsReport(pr: ReportPR, agent: string, findings: ReportFinding[]): FindingsReport {
