@@ -120,7 +120,8 @@ write markdown headings or a footer; the system renders and formats them.
     confirmed, reproducible runtime failure).
   - `title` — a short label for the issue.
   - `file` / `lines` — the location when the finding is tied to specific code (e.g. file
-    `src/user-list.ts`, lines `26-31`). Omit both when it is not line-specific.
+    `src/user-list.ts`, lines `26-31`). `lines` is digits only — a line number or range from the
+    diff, never a function/symbol name or quoted code. Omit both only when it is not line-specific.
   - `body` — problem, why it matters, fix. Terse — a few sentences at most, never an essay.
   On a re-review, include ONLY new findings from the new commits. Previous findings are already
   on record — do not re-list them.

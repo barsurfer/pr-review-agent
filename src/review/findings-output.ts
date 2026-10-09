@@ -250,12 +250,15 @@ export interface MergeStats {
   scores: number
   rowsMarkdown: number
   rowsRecovered: number
-  dupOfLocated: number      // recovery dropped because its bullet was already located
+  dupOfLocated: number      // recovery dropped because its bullet was already located (the happy path)
   recoveredPaired: number   // recovery kept + anchored, paired to a prose bullet
   recoveredUnpaired: number // recovery kept + anchored, no bullet matched (reframe/drift)
   unanchoredPaired: number  // prose bullet kept but neither side anchored it → CERTAIN drop
   unanchoredUnpaired: number// kept score, no bullet and no anchor → possible drop
   unscoredProse: number     // prose bullet no score claimed (e.g. empty finding_scores) → CERTAIN drop
+  borrowed: number          // recovered rows that took the judge bullet's text (R2 Case B frequency)
+  unpairedScoreTitles: string[]  // kept scores that matched no bullet — reframe/drift, printed for the eye
+  unconsumedBullets: string[]    // bullets no score claimed, "title (located|prose)"
 }
 
 // Markdown-located findings pass through untouched; each kept score is paired to its bullet by exact
@@ -270,9 +273,11 @@ export function mergeJudgedFindingsWithStats(judgedText: string, reviewerFinding
     bullets: bullets.length, located, prose: bullets.length - located, scores: judgeScores?.length ?? 0,
     rowsMarkdown: primary.length, rowsRecovered: 0, dupOfLocated: 0,
     recoveredPaired: 0, recoveredUnpaired: 0, unanchoredPaired: 0, unanchoredUnpaired: 0, unscoredProse: 0,
+    borrowed: 0, unpairedScoreTitles: [], unconsumedBullets: [],
   }
   if (!judgeScores?.length) {
     stats.unscoredProse = bullets.length - located
+    stats.unconsumedBullets = bullets.filter(b => !b.located).map(b => `${b.title} (prose)`)
     return { findings: primary, stats }
   }
   const usedBullet = new Set<number>()
@@ -282,6 +287,7 @@ export function mergeJudgedFindingsWithStats(judgedText: string, reviewerFinding
     const cands = kt ? bullets.map((_, i) => i).filter(i => !usedBullet.has(i) && normTitle(bullets[i].title) === kt) : []
     if (!cands.length) {
       if (anchored) stats.recoveredUnpaired++; else stats.unanchoredUnpaired++
+      stats.unpairedScoreTitles.push(k.title)
       return [k]   // no matching bullet → keep the recovery (reframe/drift)
     }
     // Among same-title bullets, pair by identity not array order: a located bullet already anchoring
@@ -294,10 +300,17 @@ export function mergeJudgedFindingsWithStats(judgedText: string, reviewerFinding
     usedBullet.add(bi)
     if (bullets[bi].located) { stats.dupOfLocated++; return [] }   // duplicate of a located row → drop
     if (anchored) stats.recoveredPaired++; else stats.unanchoredPaired++
-    // Prose bullet → recover; borrow the judge's validated bullet text when the reviewer gave none.
-    return [{ ...k, title: bullets[bi].title, body: k.body || bullets[bi].body }]
+    // Prose bullet → recover; borrow the judge's validated bullet text only when the reviewer gave none
+    // (R2 Case B). A matched reviewer finding keeps its own title and body unchanged.
+    if (k.body) return [k]
+    stats.borrowed++
+    return [{ ...k, title: bullets[bi].title, body: bullets[bi].body }]
   })
-  stats.unscoredProse = bullets.filter((b, i) => !b.located && !usedBullet.has(i)).length
+  // A reframed score emits a recovered row but leaves its prose bullet unconsumed; don't also count
+  // that bullet as a certain drop (it was recovered under the score's own title).
+  const unconsumedProse = bullets.filter((b, i) => !b.located && !usedBullet.has(i)).length
+  stats.unscoredProse = Math.max(0, unconsumedProse - stats.recoveredUnpaired)
+  stats.unconsumedBullets = bullets.filter((b, i) => !usedBullet.has(i) && !b.located).map(b => `${b.title} (prose)`)
   const recoveredRows = keptToReportFindings(recovered, producer, changedPaths)
   stats.rowsRecovered = recoveredRows.length
   return { findings: [...primary, ...recoveredRows], stats }

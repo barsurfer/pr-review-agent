@@ -452,6 +452,37 @@ describe('mergeJudgedFindingsWithStats', () => {
     expect(mergeJudgedFindingsWithStats(md, [], [], 'rb').stats.bullets).toBe(0)
     expect(countFindingBullets(md)).toBe(1)
   })
+
+  it('does not raise a false certain drop when a prose bullet is recovered under a reframed score title (F1)', () => {
+    const md = judged('- **MEDIUM – Unbounded session map**\n  prose only.')
+    const revs = [finding({ title: 'Unbounded session map growth', file: 'auth/session.go', lines: '60', body: 'b' })]
+    const { findings, stats } = mergeJudgedFindingsWithStats(md, revs, [score({ title: 'Unbounded session map growth' })], 'rb')
+    expect(findings).toHaveLength(1)        // the finding was recovered
+    expect(stats.recoveredUnpaired).toBe(1)
+    expect(stats.unscoredProse).toBe(0)     // NOT counted as a certain drop
+  })
+
+  it('keeps the score title on a Case A recovery, not the bullet heading spelling (F2)', () => {
+    const md = judged('- **MEDIUM – `parseConfig` leaks the handle**\n  prose only.')
+    const revs = [finding({ title: 'parseConfig leaks the handle', file: 'a.ts', lines: '5', body: 'reviewer body' })]
+    const out = mergeJudgedFindings(md, revs, [score({ title: 'parseConfig leaks the handle' })], 'rb')
+    expect(out[0].message).toBe('parseConfig leaks the handle: reviewer body')   // not the backticked heading
+  })
+
+  it('counts a borrowed-text recovery (R2 Case B frequency)', () => {
+    const md = judged('- **MEDIUM – Unbounded session map**\n  judge prose text.')
+    const revs = [finding({ title: 'Unrelated', file: 'x.ts', lines: '1', body: 'o' })]
+    const s = mergeJudgedFindingsWithStats(md, revs, [score({ title: 'Unbounded session map', file: 'a.ts', lines: '2' })], 'rb').stats
+    expect(s.borrowed).toBe(1)
+  })
+
+  it('counts dupOfLocated and rowsRecovered on a mixed PR', () => {
+    const md = judged('- **MEDIUM – A** (`a.ts:1`)\n  x\n- **MEDIUM – B**\n  prose.')
+    const revs = [finding({ title: 'A', file: 'a.ts', lines: '1', body: 'p' }), finding({ title: 'B', file: 'b.ts', lines: '2', body: 'q' })]
+    const s = mergeJudgedFindingsWithStats(md, revs, [score({ title: 'A' }), score({ title: 'B' })], 'rb').stats
+    expect(s.dupOfLocated).toBe(1)    // A was located → its recovery dropped
+    expect(s.rowsRecovered).toBe(1)   // B recovered
+  })
 })
 
 describe('buildFindingsReport', () => {

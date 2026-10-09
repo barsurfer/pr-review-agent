@@ -55,11 +55,14 @@ export async function runBenchmark(env: NodeJS.ProcessEnv = process.env): Promis
         // Judged: the judge's own cited anchors plus structured recoveries for the ones it located as prose.
         const { findings: judged, stats: s } = mergeJudgedFindingsWithStats(outcome.reviewText, outcome.review.findings, outcome.judgeScores, rb.agent, changedPaths)
         findings = judged
-        console.log(`Merge: bullets ${s.bullets} (located ${s.located}, prose ${s.prose}) | scores ${s.scores} | rows ${findings.length} = markdown ${s.rowsMarkdown} + recovered ${s.rowsRecovered} | dup-of-located ${s.dupOfLocated} | unpaired-scores ${s.recoveredUnpaired + s.unanchoredUnpaired}`)
+        console.log(`Merge: bullets ${s.bullets} (located ${s.located}, prose ${s.prose}) | scores ${s.scores} | rows ${findings.length} = markdown ${s.rowsMarkdown} + recovered ${s.rowsRecovered} | paired-located ${s.dupOfLocated} | borrowed-text ${s.borrowed} | unpaired-scores ${s.unpairedScoreTitles.length}`)
         // A kept finding that reached no row is a silent drop — warn when it's certain, note when it's possible.
         const certain = s.unanchoredPaired + s.unscoredProse
         if (certain > 0) console.warn(`  Parse check: ${certain} kept finding(s) with no usable file:line (unanchored prose ${s.unanchoredPaired}, unscored prose ${s.unscoredProse})`)
         if (s.unanchoredUnpaired > 0) console.log(`  Note: ${s.unanchoredUnpaired} kept score(s) with no bullet and no anchor`)
+        // The eye-check for the reframe double-count: an unpaired score next to an unconsumed prose bullet.
+        if (s.unpairedScoreTitles.length) console.log(`  Unpaired scores: ${s.unpairedScoreTitles.join(' | ')}`)
+        if (s.unconsumedBullets.length) console.log(`  Unconsumed bullets: ${s.unconsumedBullets.join(' | ')}`)
         if (countFindingBullets(outcome.reviewText) > s.bullets) console.warn(`  Parse check: judge bullets unreadable by the parser (format drift)`)
       } else {
         findings = mapFindings(outcome.review.findings, rb.agent, changedPaths)
