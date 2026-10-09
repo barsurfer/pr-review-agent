@@ -97,16 +97,18 @@ function parseJudgedBullets(judgedText: string, changedPaths: readonly string[])
     const title = head[1].replace(/\s+/g, ' ').trim()
     const body = block.slice(head[0].length).replace(/\s+/g, ' ').trim()
     const rows: JudgedBullet['rows'] = []
+    let anchored = false   // the bullet carried a valid citation — true even if its row dedups away against an earlier bullet
     for (const c of citations(head[2] ?? '')) {
       const file = normalizeFindingPath(c.path, changedPaths)
       const range = parseLineRange(c.lines)
       if (!file || !range) continue
+      anchored = true
       const key = `${file}:${range.start}-${range.end}:${title}`
       if (seen.has(key)) continue
       seen.add(key)
       rows.push({ file, start_line: range.start, end_line: range.end })
     }
-    out.push({ title, message: body ? `${title}: ${body}` : title, located: rows.length > 0, rows })
+    out.push({ title, message: body ? `${title}: ${body}` : title, located: anchored, rows })
   }
   return out
 }
@@ -248,10 +250,18 @@ export function mergeJudgedFindings(judgedText: string, reviewerFindings: readon
   const usedBullet = new Set<number>()
   const recovered = resolveKeptFindings(reviewerFindings, judgeScores).filter(k => {
     const kt = normTitle(k.title)
-    const bi = kt ? bullets.findIndex((b, i) => !usedBullet.has(i) && normTitle(b.title) === kt) : -1
-    if (bi < 0) return true   // no matching bullet → keep the recovery
+    if (!kt) return true
+    const cands = bullets.map((_, i) => i).filter(i => !usedBullet.has(i) && normTitle(bullets[i].title) === kt)
+    if (!cands.length) return true   // no matching bullet → keep the recovery
+    // Among same-title bullets, pair by identity not array order: a located bullet already anchoring
+    // this recovery's file (the same finding, so drop it), else a prose bullet (the one we recover),
+    // else any located bullet.
+    const kf = k.file ? normalizeFindingPath(k.file, changedPaths) : ''
+    const bi = cands.find(i => bullets[i].located && kf && bullets[i].rows.some(r => r.file === kf))
+      ?? cands.find(i => !bullets[i].located)
+      ?? cands[0]
     usedBullet.add(bi)
-    return !bullets[bi].located   // its bullet was prose-only → recover; already located → drop as a duplicate
+    return !bullets[bi].located   // prose bullet → recover; located → drop as a duplicate
   })
   return [...primary, ...keptToReportFindings(recovered, producer, changedPaths)]
 }

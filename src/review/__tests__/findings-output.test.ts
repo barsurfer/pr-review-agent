@@ -346,6 +346,26 @@ describe('mergeJudgedFindings', () => {
     expect(mergeJudgedFindings(md, revs, [score({ title: 'Throttling misread as invalid token' })], 'rb')).toHaveLength(2)
   })
 
+  it('pairs duplicate-title bullets by file identity, not array order (located first, scores reversed)', () => {
+    const md = judged('- **MEDIUM – Missing null check** (`a.ts:10`)\n  x\n- **MEDIUM – Missing null check**\n  y')
+    const revs = [finding({ title: 'Missing null check', file: 'a.ts', lines: '10', body: 'p' }), finding({ title: 'Missing null check', file: 'b.ts', lines: '20', body: 'q' })]
+    const scores = [score({ title: 'Missing null check', file: 'b.ts' }), score({ title: 'Missing null check', file: 'a.ts' })]
+    expect(mergeJudgedFindings(md, revs, scores, 'rb').map(f => `${f.file}:${f.start_line}`).sort()).toEqual(['a.ts:10', 'b.ts:20'])
+  })
+
+  it('pairs duplicate-title bullets by identity regardless of bullet order (prose first)', () => {
+    const md = judged('- **MEDIUM – Missing null check**\n  y\n- **MEDIUM – Missing null check** (`b.ts:20`)\n  x')
+    const revs = [finding({ title: 'Missing null check', file: 'a.ts', lines: '10', body: 'p' }), finding({ title: 'Missing null check', file: 'b.ts', lines: '20', body: 'q' })]
+    const scores = [score({ title: 'Missing null check', file: 'a.ts' }), score({ title: 'Missing null check', file: 'b.ts' })]
+    expect(mergeJudgedFindings(md, revs, scores, 'rb').map(f => `${f.file}:${f.start_line}`).sort()).toEqual(['a.ts:10', 'b.ts:20'])
+  })
+
+  it('pairs a score to its bullet across case and punctuation (normalized title), no double-count', () => {
+    const md = judged('- **MEDIUM – PKCE Bypass!** (`a.ts:5`)\n  x')
+    const revs = [finding({ title: 'pkce bypass', file: 'a.ts', lines: '5', body: 'b' })]
+    expect(mergeJudgedFindings(md, revs, [score({ title: 'pkce bypass' })], 'rb')).toHaveLength(1)
+  })
+
   it('keeps a distinct prose-located finding that only shares words with a located one (same file, far apart)', () => {
     const md = judged('- **MEDIUM – Missing validation of redirect URI** (`auth.ts:10`)\n  x')
     const revs = [finding({ title: 'Missing validation of state parameter', file: 'auth.ts', lines: '77', body: 'b' })]
