@@ -32,9 +32,11 @@ export interface UsageRecord {
   action: string
   skip_reason: string | null
   model: string
+  effort: string | null
   tokens: { input: number; output: number; cache_read: number; cache_write: number; estimated_input: number }
   cost_usd: number
   judge_model: string | null
+  judge_effort: string | null
   judge_tokens: { input: number; output: number } | null
   judge_cost_usd: number | null
   duration_ms: number
@@ -187,6 +189,7 @@ export function buildUsageRecord(
     action: ctx.action,
     skip_reason: ctx.skipReason ?? null,
     model: config.anthropic.model,
+    effort: config.review.effort || null,
     tokens: {
       input: ctx.usage.input_tokens,
       output: ctx.usage.output_tokens,
@@ -199,6 +202,7 @@ export function buildUsageRecord(
       output: ctx.usage.output_tokens - (judgeTokens?.output ?? 0),
     }, config.anthropic.model) + (judgeCost ?? 0),
     judge_model: judgeModel,
+    judge_effort: config.judge.effort || null,
     judge_tokens: judgeTokens,
     judge_cost_usd: judgeCost,
     duration_ms: durationMs,

@@ -63,11 +63,20 @@ class AnthropicProvider implements LLMProvider {
   }
 }
 
+// Carries the usage of a truncated response so the caller can still record real token counts
+// (and the stop reason) instead of logging a zeroed, near-empty error record.
+export class TruncatedResponseError extends Error {
+  constructor(message: string, readonly usage: ClaudeUsage) {
+    super(message)
+    this.name = 'TruncatedResponseError'
+  }
+}
+
 // A max_tokens stop is a cut-off response — refuse rather than post a partial. Newer models
 // can emit a thinking block ahead of the text, so find the text block, don't assume it's first.
 function textOf(response: Anthropic.Message, maxTokens: number): string {
   if (response.stop_reason === 'max_tokens') {
-    throw new Error(`Model response truncated at ${maxTokens} output tokens — refusing to post a cut-off response`)
+    throw new TruncatedResponseError(`Model response truncated at ${maxTokens} output tokens — refusing to post a cut-off response`, mapUsage(response.usage))
   }
   const block = response.content.find(b => b.type === 'text')
   if (!block || block.type !== 'text') throw new Error('Unexpected response type from Claude (no text block)')

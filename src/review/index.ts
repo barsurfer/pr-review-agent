@@ -615,7 +615,15 @@ export async function review(adapter: VCSAdapter, prId: string, dryRun = false, 
     }
   } catch (err: unknown) {
     ctx.action = 'ERROR'
-    const e = err as Error & { status?: number }
+    const e = err as Error & { status?: number; usage?: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } }
+    // A truncated response carries its usage — fold it in so the record shows the real token spend
+    // (often large: that is why it truncated) instead of zeros.
+    if (e.usage) {
+      ctx.usage.input_tokens += e.usage.input_tokens
+      ctx.usage.output_tokens += e.usage.output_tokens
+      ctx.usage.cache_read += e.usage.cache_read_input_tokens ?? 0
+      ctx.usage.cache_write += e.usage.cache_creation_input_tokens ?? 0
+    }
     error = {
       type: e.constructor.name,
       message: e.message,
