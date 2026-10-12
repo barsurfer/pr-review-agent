@@ -44619,7 +44619,7 @@ function getAgentVersion() {
     const pkg = JSON.parse((0, import_fs4.readFileSync)(pkgPath, "utf-8"));
     return pkg.version;
   } catch {
-    if (true) return "0.0.23";
+    if (true) return "0.0.24";
     return "unknown";
   }
 }
@@ -44631,7 +44631,7 @@ function getBuildCommit() {
     const dirty = (0, import_child_process.execSync)("git status --porcelain", opts2).toString().trim() ? "-dirty" : "";
     return hash + dirty;
   } catch {
-    if (true) return "86b0d81";
+    if (true) return "99be27d";
     return "unknown";
   }
 }
@@ -44873,8 +44873,10 @@ async function transition(state, ctx) {
         console.log(`  Found ${ctx.replies.length} unanswered reply(s) \u2014 responding... (${agentReplyCount}/${config.reply.maxComments || "\u221E"} replies used)`);
         return 6 /* RESPOND_TO_REPLIES */;
       }
-      ctx.action = "DEDUP_SKIP";
-      ctx.skipReason = "no new commits and no unanswered questions";
+      if (ctx.action !== "NO_CHANGE") {
+        ctx.action = "DEDUP_SKIP";
+        ctx.skipReason = "no new commits and no unanswered questions";
+      }
       return 15 /* SKIP */;
     }
     case 6 /* RESPOND_TO_REPLIES */: {
@@ -44902,6 +44904,7 @@ async function transition(state, ctx) {
         console.log("Done. Reply posted to PR.\n");
       }
       ctx.action = "REPLY";
+      ctx.skipReason = void 0;
       return 16 /* DONE */;
     }
     case 7 /* LOAD_PROMPT */: {
@@ -45042,7 +45045,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
         console.log("  Reviewer: NO_CHANGE");
         ctx.action = "NO_CHANGE";
         ctx.skipReason = "No changes since last review";
-        return 15 /* SKIP */;
+        return 5 /* CHECK_REPLIES */;
       }
       return 12 /* JUDGE_REVIEW */;
     }
