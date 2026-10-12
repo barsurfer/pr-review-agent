@@ -200,8 +200,12 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         return State.RESPOND_TO_REPLIES
       }
 
-      ctx.action = 'DEDUP_SKIP'
-      ctx.skipReason = 'no new commits and no unanswered questions'
+      // Preserve a NO_CHANGE set upstream (a re-review fell through to here); only label the pure
+      // dedup path, where no action was set yet.
+      if (ctx.action !== 'NO_CHANGE') {
+        ctx.action = 'DEDUP_SKIP'
+        ctx.skipReason = 'no new commits and no unanswered questions'
+      }
       return State.SKIP
     }
 
@@ -232,6 +236,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         console.log('Done. Reply posted to PR.\n')
       }
       ctx.action = 'REPLY'
+      ctx.skipReason = undefined   // a reply isn't a skip; drop any NO_CHANGE reason set upstream
       return State.DONE
     }
 
@@ -385,7 +390,9 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         console.log('  Reviewer: NO_CHANGE')
         ctx.action = 'NO_CHANGE'
         ctx.skipReason = 'No changes since last review'
-        return State.SKIP
+        // No code change, but a developer may have replied since the last review — answer them
+        // rather than skip, so a reply on a PR with only trivial new commits isn't dropped.
+        return State.CHECK_REPLIES
       }
       return State.JUDGE_REVIEW
     }

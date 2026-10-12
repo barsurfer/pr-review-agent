@@ -30,7 +30,7 @@ FETCH_PR_INFO
                       │    └─ [none] → SKIP → DONE
                       └─ LOAD_PROMPT → FETCH_CONTEXT → CALL_CLAUDE
                            └─ CHECK_NO_CHANGE
-                                ├─ [NO_CHANGE] → SKIP → DONE
+                                ├─ [NO_CHANGE] → CHECK_REPLIES (answer a dev reply even with no code change; else SKIP, label kept NO_CHANGE)
                                 └─ JUDGE_REVIEW
                                      ├─ [JUDGING_MODEL set] → validate → POST_REVIEW → DONE
                                      └─ [no judge] → POST_REVIEW → DONE
@@ -45,8 +45,8 @@ FETCH_PR_INFO
 4. Skip — same commit, no replies
 5. Skip — delta diff empty, no replies
 6. Skip — reply limit reached
-7. Skip — NO_CHANGE stop word
-8. Reply — developer question answered
+7. Skip — NO_CHANGE stop word (falls through to CHECK_REPLIES first; skips only when no reply is pending)
+8. Reply — developer question answered (including after a NO_CHANGE re-review)
 9. Post review — new review comment
 
 ---

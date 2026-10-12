@@ -100,7 +100,7 @@ FETCH_PR_INFO → CHECK_BRANCHES
                                        │   └─ [none] → SKIP → DONE
                                        └─ LOAD_PROMPT → FETCH_CONTEXT → CALL_CLAUDE
                                             → CHECK_NO_CHANGE
-                                               ├─ [NO_CHANGE] → SKIP → DONE
+                                               ├─ [NO_CHANGE] → CHECK_REPLIES (reply if one is pending, else SKIP) → DONE
                                                └─ JUDGE_REVIEW
                                                     ├─ [JUDGING_MODEL set] → validate → POST_REVIEW → DONE
                                                     └─ [no judge] → POST_REVIEW → DONE

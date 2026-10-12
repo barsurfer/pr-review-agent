@@ -920,6 +920,51 @@ describe('Claude returns NO_CHANGE on a re-review → skip', () => {
     expect(adapter.postComment).not.toHaveBeenCalled()
   })
 
+  const noChangeReReview = (replies: CommentReply[], agentReplyCount = 0) => makeAdapter({
+    getPreviousReviewComments: vi.fn().mockResolvedValue([{ id: '200', body: '### Old' + footer(1, PRIOR_COMMIT), createdOn: PRIOR_AT }]),
+    getCommitDiff: vi.fn().mockResolvedValue(DIFF),   // new commits → delta re-review path
+    getRepliesToReviewComments: vi.fn().mockResolvedValue({ replies, agentReplyCount }),
+  })
+
+  it('answers an unanswered developer reply even when the re-review is NO_CHANGE (PR 8989 bug)', async () => {
+    const adapter = noChangeReReview([devReply('2026-03-10T11:00:00Z', '200')])
+    setupClaudeMocks('NO_CHANGE')   // reviewer finds no material change in the delta
+
+    const record = await review(adapter, '100', false)
+
+    expect(mockRunReview).toHaveBeenCalledTimes(1)   // the delta re-review actually ran
+    expect(mockRunJudge).not.toHaveBeenCalled()      // NO_CHANGE → nothing to judge
+    expect(record!.action).toBe('REPLY')
+    expect(record!.skip_reason).toBeNull()           // a reply is not a skip
+    expect(adapter.postReply).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(adapter.postReply).mock.calls[0][1]).toBe('200')   // threaded under the review
+    expect(adapter.postComment).not.toHaveBeenCalled()
+  })
+
+  it('does not answer a stale reply after NO_CHANGE (older than the latest review)', async () => {
+    const adapter = noChangeReReview([devReply('2026-03-08T10:00:00Z', '200')])   // before PRIOR_AT
+    setupClaudeMocks('NO_CHANGE')
+
+    const record = await review(adapter, '100', true)
+
+    expect(record!.action).toBe('NO_CHANGE')
+    expect(mockRunCommentResponse).not.toHaveBeenCalled()
+    expect(adapter.postReply).not.toHaveBeenCalled()
+  })
+
+  it('does not answer after NO_CHANGE once the reply limit is reached', async () => {
+    cfg.reply.maxComments = 2
+    const adapter = noChangeReReview([devReply('2026-03-10T11:00:00Z', '200')], 2)
+    setupClaudeMocks('NO_CHANGE')
+
+    const record = await review(adapter, '100', false)
+
+    expect(record!.action).toBe('DEDUP_SKIP')
+    expect(record!.skip_reason).toMatch(/reply limit/i)
+    expect(mockRunCommentResponse).not.toHaveBeenCalled()
+    expect(adapter.postReply).not.toHaveBeenCalled()
+  })
+
   it('errors instead of silently skipping when NO_CHANGE fires on a FIRST review (build 10233 bug)', async () => {
     const adapter = makeAdapter()   // no previous reviews → first review
     setupClaudeMocks('NO_CHANGE')
