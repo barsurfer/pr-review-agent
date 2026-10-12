@@ -43646,9 +43646,17 @@ var AnthropicProvider = class {
     });
   }
 };
+var TruncatedResponseError = class extends Error {
+  constructor(message, usage) {
+    super(message);
+    this.usage = usage;
+    this.name = "TruncatedResponseError";
+  }
+  usage;
+};
 function textOf(response, maxTokens) {
   if (response.stop_reason === "max_tokens") {
-    throw new Error(`Model response truncated at ${maxTokens} output tokens \u2014 refusing to post a cut-off response`);
+    throw new TruncatedResponseError(`Model response truncated at ${maxTokens} output tokens \u2014 refusing to post a cut-off response`, mapUsage(response.usage));
   }
   const block = response.content.find((b) => b.type === "text");
   if (!block || block.type !== "text") throw new Error("Unexpected response type from Claude (no text block)");
@@ -44611,7 +44619,7 @@ function getAgentVersion() {
     const pkg = JSON.parse((0, import_fs4.readFileSync)(pkgPath, "utf-8"));
     return pkg.version;
   } catch {
-    if (true) return "0.0.22";
+    if (true) return "0.0.23";
     return "unknown";
   }
 }
@@ -44623,7 +44631,7 @@ function getBuildCommit() {
     const dirty = (0, import_child_process.execSync)("git status --porcelain", opts2).toString().trim() ? "-dirty" : "";
     return hash + dirty;
   } catch {
-    if (true) return "981e557";
+    if (true) return "86b0d81";
     return "unknown";
   }
 }
@@ -44669,6 +44677,7 @@ function buildUsageRecord(ctx, durationMs, error) {
     action: ctx.action,
     skip_reason: ctx.skipReason ?? null,
     model: config.anthropic.model,
+    effort: config.review.effort || null,
     tokens: {
       input: ctx.usage.input_tokens,
       output: ctx.usage.output_tokens,
@@ -44681,6 +44690,7 @@ function buildUsageRecord(ctx, durationMs, error) {
       output: ctx.usage.output_tokens - (judgeTokens?.output ?? 0)
     }, config.anthropic.model) + (judgeCost ?? 0),
     judge_model: judgeModel,
+    judge_effort: config.judge.effort || null,
     judge_tokens: judgeTokens,
     judge_cost_usd: judgeCost,
     duration_ms: durationMs,
@@ -45228,6 +45238,12 @@ Starting review for PR #${prId}`);
   } catch (err) {
     ctx.action = "ERROR";
     const e = err;
+    if (e.usage) {
+      ctx.usage.input_tokens += e.usage.input_tokens;
+      ctx.usage.output_tokens += e.usage.output_tokens;
+      ctx.usage.cache_read += e.usage.cache_read_input_tokens ?? 0;
+      ctx.usage.cache_write += e.usage.cache_creation_input_tokens ?? 0;
+    }
     error = {
       type: e.constructor.name,
       message: e.message,
