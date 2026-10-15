@@ -83,8 +83,9 @@ Complexity: medium-high. Language-specific import parsing required.
 
 > **Completed.** After loading any prompt (local, repo, or default), the loader
 > logs which sections (ROLE, REVIEW PRIORITIES, MENTAL MODEL) were parsed from
-> the file and which fell back to defaults. A `--validate-prompt` flag (requires
-> `--prompt <path>`) parses a local prompt file and exits without running a review.
+> the file and which fell back to defaults. A `--validate-prompt` flag parses the
+> prompt and exits without running a review — against a local file with `--prompt <path>`,
+> or against the repo prompt resolved for a PR with `--pr-id <id>`.
 
 ---
 

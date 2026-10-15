@@ -167,7 +167,7 @@ stage('AI Review') {
                             --repo-slug ${env.APP_NAME} \
                             --pr-id ${env.CHANGE_ID} \
                             --model "claude-haiku-4-5-20251001" \
-                            --judge-model "claude-sonnet-4-6"
+                            --judge-model "claude-sonnet-5"
                     """
                 }
             }

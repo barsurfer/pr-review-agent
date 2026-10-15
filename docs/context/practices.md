@@ -14,7 +14,7 @@ The agent derives all state from the PR's comment history via API on each run. N
 
 ## API-Only Access
 
-Nothing is ever checked out. All file content (diffs, full files, `.agent-review-instructions.md`) is fetched via Bitbucket REST API. This is an explicit constraint — not a limitation.
+Nothing is ever checked out. All file content (diffs, full files, `.agent-review-instructions.md`) is fetched via the VCS REST API (Bitbucket in production, Azure DevOps experimentally) through the adapter. This is an explicit constraint — not a limitation.
 
 ## FSM Orchestration
 

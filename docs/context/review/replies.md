@@ -53,7 +53,7 @@ The agent reply is posted as a **threaded reply** under the review comment (pare
 
 Reply comments use a lighter footer than review comments:
 ```
-*Reply by Claude (claude-sonnet-4-6)*
+*Reply by Claude (claude-haiku-4-5-20251001)*
 ```
 
 This footer is what the detection algorithm uses to identify agent replies in the thread (the `"Reply by"` check).

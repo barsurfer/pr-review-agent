@@ -19,8 +19,9 @@ structured review as a PR comment.
 > Phase 1, 1b, and 2 are complete. Jenkins integration is live via Generic
 > Webhook Trigger — Bitbucket PR events (create, update, comment) auto-trigger reviews.
 >
-> [Multi-VCS Support](phases/phase-3-multi-vcs.md) has been moved to the backlog —
-> Bitbucket is the only VCS needed for now.
+> [Multi-VCS Support](phases/phase-3-multi-vcs.md) (GitHub/GitLab) stays in the backlog.
+> Bitbucket is the primary target; an experimental Azure DevOps adapter is validated
+> live on a cloud project, and a filesystem adapter backs `--benchmark` runs.
 
 ---
 

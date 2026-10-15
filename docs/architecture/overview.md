@@ -22,33 +22,47 @@ pr-review-agent/
 ├── src/
 │   ├── index.ts                  # Entry point, CLI arg parsing
 │   ├── config.ts                 # Config loading, env vars, thresholds
+│   ├── benchmark.ts              # ReviewBench (--benchmark) mode: read RB_* env, write findings JSON
 │   ├── review/
-│   │   ├── index.ts             # FSM orchestrator: transition loop, public review() API
-│   │   ├── types.ts             # State enum, ReviewContext interface
-│   │   ├── parsers.ts           # Diff filtering, line counting, verdict/findings/delta parsing
-│   │   ├── formatter.ts         # Comment footer builders, commit hash extraction
-│   │   └── usage.ts             # UsageRecord type, cost estimation, record builder
+│   │   ├── index.ts              # FSM orchestrator: transition loop, public review() API
+│   │   ├── types.ts              # State enum, ReviewContext interface
+│   │   ├── parsers.ts            # Diff filtering, line counting, verdict/findings/delta parsing
+│   │   ├── formatter.ts          # Structured review object → markdown, footer builders, hash extraction
+│   │   ├── usage.ts              # UsageRecord type, cost estimation (MODEL_PRICING), record builder
+│   │   ├── findings-output.ts    # Benchmark findings: judge-markdown + structured-recovery merge
+│   │   ├── aggregate.ts          # Merge/dedupe findings across bundles
+│   │   ├── bundler.ts            # Split an over-budget PR into directory bundles
+│   │   └── bundled.ts            # Per-bundle reviewer+judge orchestration
 │   ├── claude/
-│   │   └── client.ts             # Anthropic API wrapper (review + judge + reply endpoints)
+│   │   └── client.ts             # Review/judge/reply calls + REVIEW/JUDGE output schemas
+│   ├── llm/
+│   │   └── provider.ts           # LLMProvider seam over the Anthropic SDK (complete/completeStructured)
 │   ├── vcs/
-│   │   ├── adapter.ts            # VCS interface (abstract)
-│   │   ├── bitbucket.ts          # Bitbucket implementation
+│   │   ├── adapter.ts            # VCSAdapter interface + provider selection
+│   │   ├── bitbucket.ts          # Bitbucket Cloud implementation
+│   │   ├── azure.ts              # Azure DevOps implementation (experimental, live on cloud)
+│   │   ├── reviewbench.ts        # Filesystem adapter for --benchmark
 │   │   ├── github.ts             # GitHub stub (backlog)
 │   │   └── gitlab.ts             # GitLab stub (backlog)
 │   ├── prompt/
-│   │   ├── loader.ts             # Loads base template, parses repo sections, fills placeholders
-│   │   ├── base-prompt.txt       # Shared review template (SCOPE, RULES, OUTPUT FORMAT)
-│   │   ├── judge-prompt.txt      # System prompt for judge model (finding validation)
-│   │   ├── reply-prompt.txt      # System prompt for conversational replies to developer questions
-│   │   └── defaults.ts           # Default values for ROLE, REVIEW PRIORITIES, MENTAL MODEL
+│   │   ├── loader.ts             # Loads base template, parses repo sections, composes stacks, fills placeholders
+│   │   ├── stack.ts              # Tech-stack detection (base-by-extension + framework overlays)
+│   │   ├── base-prompt.txt       # Shared review template (SCOPE, SECURITY, RULES, structured OUTPUT)
+│   │   ├── judge-prompt.txt      # System prompt for the judge model
+│   │   ├── reply-prompt.txt      # System prompt for developer-reply responses
+│   │   ├── defaults.ts           # Default ROLE, REVIEW PRIORITIES, SECURITY, MENTAL MODEL, EXCEPTIONS
+│   │   └── stacks/               # ~26 composable stack rule sets (language bases + framework overlays)
 │   └── context/
-│       ├── fetcher.ts            # Fetches additional context files beyond diff
-│       └── diffParser.ts         # Unified diff parser for line mapping (Phase 4)
+│       └── fetcher.ts            # Fetches full-file context beyond the diff
 ├── prompts/                      # Example repo-specific prompts
-│   ├── java-spring.txt           # Agent-only (Java / Spring Boot)
-│   ├── angular-ionic.txt         # Agent-only (Angular / Ionic)
+│   ├── angular-ionic.txt                  # Agent-only (Angular / Ionic)
+│   ├── java-spring.txt                    # Agent-only (Java / Spring Boot)
+│   ├── angular-ionic-copilot.prompt.md    # Copilot + Agent (Angular / Ionic)
 │   ├── angular-copilot.prompt.md          # Copilot + Agent (Angular)
-│   └── angular-ionic-copilot.prompt.md    # Copilot + Agent (Angular / Ionic)
+│   └── java-spring-copilot.prompt.md      # Copilot + Agent (Java / Spring Boot)
+├── azure/                        # Azure DevOps pipelines (review + reply)
+├── jenkins/                      # Jenkins pipeline
+├── reviewbench/                  # ReviewBench Docker image + harness
 ├── scripts/
 │   └── bundle.mjs                # esbuild config — single-file CJS bundle
 ├── dist/
@@ -66,7 +80,7 @@ pr-review-agent/
 | Concern | Choice |
 |---------|--------|
 | Language | TypeScript |
-| Runtime | Node.js via `tsx` / `ts-node` |
+| Runtime | Node.js 22+ (single-file esbuild bundle; `tsx` for dev) |
 | Claude API | `@anthropic-ai/sdk` |
 | HTTP client | `axios` |
 | CLI args | `commander` |

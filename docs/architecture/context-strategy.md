@@ -83,6 +83,9 @@ pnpm-lock.yaml
 ## Diff:
 {unified diff, with lock files stripped}
 
+## Changes Since Your Last Review:
+{re-review only — the commit-to-commit delta so the model sees exactly which lines are new or fixed}
+
 ## Full file context:
 ### src/main/java/com/example/SomeService.java
 {full file content}
@@ -179,7 +182,7 @@ The footer serves multiple purposes:
 | Review number | Sequential count for this PR |
 | Commit hash | **Deduplication key** — on re-trigger, the agent compares this against the current source commit to skip redundant API calls |
 
-Reply comments use a lighter footer: `*Reply by Claude (claude-sonnet-4-6)*`
+Reply comments use a lighter footer: `*Reply by Claude (claude-haiku-4-5-20251001)*`
 
 The base prompt includes a FORBIDDEN rule preventing Claude from generating its own footer
 (it was observed copying the footer pattern from previous reviews included in context).

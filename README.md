@@ -167,6 +167,8 @@ The context fetcher is selective about which files get full content:
 - **Excluded:** lockfiles, `.min.js`, `.map`, snapshots, migrations, generated files
 - **Skipped:** files over `MAX_FILE_LINES` (default: 500) unless they have high churn
   (>30% of lines changed)
+- **Prioritized:** high-churn files are fetched first since they benefit most from
+  full context
 
 ### Judge Model (on by default)
 
@@ -177,8 +179,6 @@ produces a clean final comment with only validated findings and a verdict score.
 
 This enables a cost-effective **generator-verifier** pattern: use a cheap model (Haiku) to
 generate candidate findings, then a stronger model (Sonnet) to validate them.
-- **Prioritized:** high-churn files are fetched first since they benefit most from
-  full context
 
 ### Re-reviews and Delta Logic
 
@@ -495,6 +495,7 @@ The file can include any combination of these sections:
 |---------|---------|-------------------|
 | `## ROLE` | Reviewer persona | "Senior Architect and Production Gatekeeper" |
 | `## REVIEW PRIORITIES` | Technology-specific checklist | Generic priorities (logic, safety, correctness) |
+| `## SECURITY` | Security checklist | Generic OWASP-informed baseline (`DEFAULT_SECURITY`); a repo/stack section replaces it |
 | `## EXCEPTIONS` | Things to skip during review | No exceptions |
 | `## MENTAL MODEL` | Assumptions about the environment | Production load, real users, large dataset, 3am |
 

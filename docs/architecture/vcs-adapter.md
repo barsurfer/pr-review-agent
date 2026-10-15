@@ -3,12 +3,14 @@
 ## Design Intent
 
 The adapter pattern decouples orchestration logic from VCS-specific API details.
-All VCS implementations must satisfy the same interface. Jenkins selects the adapter
-via the `VCS_PROVIDER` env var.
+All VCS implementations must satisfy the same interface. The adapter is selected by the
+`VCS_PROVIDER` env var (the `--vcs` CLI flag overrides it for one-off runs).
 
-> **Priority:** Bitbucket is the only production target. GitHub and GitLab adapters
-> are stubs that throw `NotImplementedError` until Phase 3 is actively worked.
-> The interface exists to avoid architectural lock-in, not to drive parallel implementation.
+> **Priority:** Bitbucket is the primary production target. An Azure DevOps adapter is
+> implemented (experimental, validated live against a cloud project) and a filesystem
+> adapter backs `--benchmark` runs. GitHub and GitLab adapters remain stubs that throw
+> `NotImplementedError` until Phase 3 is actively worked. The interface exists to avoid
+> architectural lock-in, not to drive parallel implementation.
 
 ---
 
@@ -24,6 +26,7 @@ interface VCSAdapter {
   getRepoFileContent(filePath: string, ref?: string): Promise<string | null>  // for .agent-review-instructions.md
   postComment(prId: string, body: string): Promise<void>
   getPreviousReviewComments(prId: string): Promise<ReviewComment[]>  // for delta reviews
+  getCommitDiff(fromCommit: string, toCommit: string): Promise<string>  // commit-to-commit delta for re-reviews
 
   // Phase 1b — Comment replies
   getRepliesToReviewComments(prId: string, reviewCommentIds: string[], includeAnswered?: boolean): Promise<ReplyResult>  // ReplyResult = { replies: CommentReply[]; agentReplyCount: number }
@@ -49,10 +52,12 @@ Set `VCS_PROVIDER` env var to one of:
 | Value | Adapter | Status |
 |-------|---------|--------|
 | `bitbucket` | `BitbucketAdapter` | Phase 1 — fully implemented |
+| `azure` | `AzureDevOpsAdapter` | Experimental — validated live on a cloud project |
 | `github` | `GitHubAdapter` | Phase 3 — stub only |
 | `gitlab` | `GitLabAdapter` | Phase 3 — stub only |
 
-Default and only tested value: `bitbucket`.
+Default and primary production value: `bitbucket`. `--benchmark` runs use a filesystem
+adapter selected by the flag, not `VCS_PROVIDER`.
 
 ---
 

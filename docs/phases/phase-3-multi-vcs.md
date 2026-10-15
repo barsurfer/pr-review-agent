@@ -7,9 +7,11 @@ The adapter pattern established in Phase 1 makes this straightforward.
 
 ## Status: 📋 Backlog
 
-> Moved to backlog — not a priority. Bitbucket is the only VCS we need for now.
-> GitHub and GitLab adapters exist as empty stubs implementing the interface.
-> Revisit when there's a concrete need for another VCS provider.
+> Moved to backlog — not a priority. This phase covers **GitHub and GitLab**, which
+> exist as empty stubs implementing the interface. (Azure DevOps was added separately
+> as an experimental adapter, validated live on a cloud project — see
+> [architecture/vcs-adapter.md](../architecture/vcs-adapter.md).)
+> Revisit when there's a concrete need for GitHub or GitLab support.
 
 ---
 

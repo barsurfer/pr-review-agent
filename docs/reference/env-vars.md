@@ -167,6 +167,6 @@ MAX_CHANGED_LINES=3000
 # Diff exclusion patterns (comma-separated, default includes lock files, .json, .spec.ts)
 # DIFF_EXCLUDE_PATTERNS=*.lock,package-lock.json,yarn.lock,pnpm-lock.yaml,*.json,*.spec.ts
 
-# Judge model (optional — validates findings before posting, empty = skip)
-# JUDGING_MODEL=claude-sonnet-4-6
+# Judge model (on by default — validates findings before posting; set empty to skip)
+# JUDGING_MODEL=claude-sonnet-5
 ```

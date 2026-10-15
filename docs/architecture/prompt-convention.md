@@ -14,10 +14,11 @@ The agent composes the final system prompt from two parts:
 |---------|---------------|-------------------|
 | Role | `## ROLE` | "Senior Architect and Production Gatekeeper" |
 | Review Priorities | `## REVIEW PRIORITIES` | Generic priorities (logic, safety, correctness) |
+| Security | `## SECURITY` | Generic OWASP-informed baseline (`DEFAULT_SECURITY`); a repo/stack section replaces it |
 | Mental Model | `## MENTAL MODEL` | Production load, real users, large dataset, 3am |
 | Exceptions | `## EXCEPTIONS` | No repo-specific exceptions |
 
-The base template has `{{ROLE}}`, `{{REVIEW_PRIORITIES}}`, `{{MENTAL_MODEL}}`, and `{{EXCEPTIONS}}`
+The base template has `{{ROLE}}`, `{{REVIEW_PRIORITIES}}`, `{{SECURITY}}`, `{{MENTAL_MODEL}}`, and `{{EXCEPTIONS}}`
 placeholders. The loader parses the repo prompt for these sections and injects them. Missing
 sections fall back to the defaults in `src/prompt/defaults.ts`.
 
@@ -273,7 +274,7 @@ The `.agent-review-instructions.md` file can include a YAML-style header to over
 
 ```markdown
 mode: inline
-model: claude-sonnet-4-6
+model: claude-sonnet-5
 ```
 
 | Key | Values | Effect |
