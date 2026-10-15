@@ -23,7 +23,7 @@ interface VCSAdapter {
   getPreviousReviewComments(prId: string): Promise<ReviewComment[]>
 
   // Comment replies
-  getRepliesToReviewComments(prId: string, reviewCommentIds: string[]): Promise<CommentReply[]>
+  getRepliesToReviewComments(prId: string, reviewCommentIds: string[], includeAnswered?: boolean): Promise<ReplyResult>  // ReplyResult = { replies: CommentReply[]; agentReplyCount: number }
   postReply(prId: string, parentId: string, body: string): Promise<void>
 
   // Commit diff (for delta diff pre-check)
@@ -74,7 +74,7 @@ interface VCSAdapter {
 
 ## Azure DevOps Implementation Details (WIP)
 
-`src/vcs/azure.ts` — experimental. Purely additive: no existing adapter, the interface, or `review/*` was touched. **Validated end-to-end against a live Azure DevOps Services (cloud) org** — `getPullRequestInfo`, diff reconstruction, `getChangedFiles`, `getFileContent` context, `getRepoFileContent`, `postComment`, and footer dedup (`getPreviousReviewComments`) all confirmed on a real PR (dry-run → post → dedup-skip). Still WIP: on-prem **Server**, a real pipeline `System.AccessToken` run, and the `getCommitDiff`-delta path are unverified. The reply flow (below) is now validated live.
+`src/vcs/azure.ts` — experimental. Purely additive: no existing adapter, the interface, or `review/*` was touched. **Validated end-to-end against a live Azure DevOps Services (cloud) org** — `getPullRequestInfo`, diff reconstruction, `getChangedFiles`, `getFileContent` context, `getRepoFileContent`, `postComment`, and footer dedup (`getPreviousReviewComments`) all confirmed on a real PR (dry-run → post → dedup-skip). Still WIP: on-prem **Server** only — cloud Services is validated live end-to-end, including `System.AccessToken` pipeline auth, the `getCommitDiff` delta path, and the reply flow.
 
 - **Auth (dual, config-selected):** the auth header is computed **once** in the constructor by precedence — if `AZURE_ACCESS_TOKEN` is set it wins as `Authorization: Bearer {token}` (OAuth, e.g. an Azure Pipelines `System.AccessToken` — zero-PAT); otherwise `AZURE_PAT` is used as HTTP Basic with an empty username, `Authorization: Basic base64(":{PAT}")`. `validateAzureConfig()` requires `AZURE_ORG`, `AZURE_PROJECT`, and **at least one** of `AZURE_PAT` / `AZURE_ACCESS_TOKEN`. `?api-version=7.1` is sent on every call (axios instance default param).
 - **Config / base URL:** `AZURE_BASE_URL` (default `https://dev.azure.com`, point at an on-prem Server collection URL for self-hosted) + `AZURE_ORG` + `AZURE_PROJECT` + `AZURE_PAT`/`AZURE_ACCESS_TOKEN`; repo via `--repo-slug`. `--workspace` aliases `AZURE_ORG`. Base URL is built as `{baseUrl}/{org}/{project}/_apis/git`. Mirrors the Bitbucket config pattern (`optional()` defaults + `validateAzureConfig()`).
@@ -97,6 +97,7 @@ interface PRInfo {
   id: string
   title: string
   description: string
+  author: string         // PR author display name (logged, not used for dedup)
   sourceBranch: string
   targetBranch: string
   sourceCommit: string   // commit hash used for dedup
@@ -111,6 +112,7 @@ interface ReviewComment {
   id: string
   body: string
   createdOn: string
+  resolved?: boolean     // a human-resolved review is excluded from the supersede boundary
 }
 
 interface CommentReply {
@@ -119,6 +121,11 @@ interface CommentReply {
   author: string         // display name of the reply author
   body: string
   createdOn: string      // ISO timestamp, used for reply dedup
+}
+
+interface ReplyResult {
+  replies: CommentReply[]
+  agentReplyCount: number   // agent replies already on the PR (for MAX_REPLY_COMMENTS)
 }
 ```
 

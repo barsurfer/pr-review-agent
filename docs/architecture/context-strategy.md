@@ -127,7 +127,7 @@ The agent scans all PR comments looking for replies to its review comments:
    - Otherwise → it's a **human reply** — collect it
 3. Filter human replies to only those posted **after** the agent's latest reply
    (already-answered questions are excluded)
-4. Additionally filter out human replies older than the latest review comment — a new
+4. Additionally filter out human replies older than the latest unresolved review comment (`supersedeBoundary`) — a new
    review supersedes the prior discussion thread. This prevents stale replies from a
    previous review cycle from re-triggering a reply loop (a production reply-loop incident).
 

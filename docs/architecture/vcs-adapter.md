@@ -21,12 +21,12 @@ interface VCSAdapter {
   getDiff(prId: string): Promise<string>
   getFileContent(filePath: string, ref: string): Promise<string>
   getChangedFiles(prId: string): Promise<ChangedFile[]>
-  getRepoFileContent(filePath: string): Promise<string | null>  // for .agent-review-instructions.md
+  getRepoFileContent(filePath: string, ref?: string): Promise<string | null>  // for .agent-review-instructions.md
   postComment(prId: string, body: string): Promise<void>
   getPreviousReviewComments(prId: string): Promise<ReviewComment[]>  // for delta reviews
 
   // Phase 1b — Comment replies
-  getRepliesToReviewComments(prId: string, reviewCommentIds: string[]): Promise<CommentReply[]>
+  getRepliesToReviewComments(prId: string, reviewCommentIds: string[], includeAnswered?: boolean): Promise<ReplyResult>  // ReplyResult = { replies: CommentReply[]; agentReplyCount: number }
   postReply(prId: string, parentId: string, body: string): Promise<void>
 }
 ```

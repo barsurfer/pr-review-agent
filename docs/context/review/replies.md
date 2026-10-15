@@ -13,12 +13,12 @@ How the agent detects and responds to developer questions on review comments. Re
 
 The agent scans all PR comments recursively to find unanswered developer questions:
 
-1. Collect all **review comment IDs** — comments whose body contains `"Reviewed by"`.
+1. Collect all **review comment IDs** — comments carrying the agent's review footer line (`hasReviewFooter`).
 2. For each comment with a `parent.id` in that set:
-   - If body contains `"Reply by"` → **agent reply**: add its ID to the parent set (enables reply-to-reply discovery) and record its timestamp.
+   - If it carries the reply footer (`hasReplyFooter`) → **agent reply**: add its ID to the parent set (enables reply-to-reply discovery) and record its timestamp.
    - Otherwise → **human reply**: collect for filtering.
 3. Filter human replies to only those posted **after** the agent's latest reply timestamp (already-answered questions excluded).
-4. Additionally exclude human replies older than the latest review comment. Stale replies from a previous review cycle must not re-trigger replies (learned from a production incident: stale discussion re-triggered a reply loop after a re-review).
+4. Additionally exclude human replies older than the latest *unresolved* review comment (`supersedeBoundary` — a human-resolved review does not supersede an unanswered reply). Stale replies from a previous review cycle must not re-trigger replies (learned from a production incident: stale discussion re-triggered a reply loop after a re-review).
 
 This recursive parent tracking finds developer questions at any nesting depth.
 

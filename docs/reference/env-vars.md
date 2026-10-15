@@ -79,8 +79,8 @@ Controls dedup bypass behavior. The flag is optional-value — its behavior depe
 ## Azure DevOps (Experimental / WIP)
 
 Selected with `--vcs azure` or `VCS_PROVIDER=azure`. Implements the full adapter interface
-but is validated against mocked API shapes only — **not yet exercised against a live
-instance**. Prints a one-line WIP warning on construction.
+and is **validated live end-to-end against Azure DevOps Services (cloud)** — on-prem
+**Server** is still WIP. Prints a one-line WIP warning on construction.
 
 | Variable | Example | Description |
 |----------|---------|-------------|

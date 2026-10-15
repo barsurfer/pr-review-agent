@@ -23,9 +23,9 @@ grant the **{Project} Build Service ({Org})** identity **Contribute to pull requ
 "CI integration" subsection.
 
 ### First-setup gotchas
-- **`AGENT_TAG`** — the pinned `v0.0.3` tag predates the Azure adapter. Until a release tag
-  ships, point it at the adapter branch (`feature/azure-devops-adapter`). Sanity-check a ref
-  with `curl …/<ref>/dist/pr-review-agent.cjs | grep -c AzureDevOpsAdapter` (must be > 0).
+- **`AGENT_TAG`** — pin to a release tag `>= v0.0.4` (the first that includes the Azure
+  adapter); bump it to pick up later fixes. Sanity-check a ref with
+  `curl …/<ref>/dist/pr-review-agent.cjs | grep -c AzureDevOpsAdapter` (must be > 0).
 - **`SKIP_TARGET_BRANCHES`** defaults to `main,master`, so a PR into `main` is skipped. Set
   `SKIP_TARGET_BRANCHES: ''` in the pipeline `env:` to review PRs into `main`.
 - **YAML location** — build validation resolves the pipeline YAML from the PR's *source branch*,

@@ -377,9 +377,9 @@ See [docs/reference/env-vars.md](docs/reference/env-vars.md) for the complete li
 Select the adapter with `--vcs azure` or `VCS_PROVIDER=azure`. It implements the full
 adapter interface and has been validated **end-to-end against a live Azure DevOps Services
 (cloud) org** — PR info, diff reconstruction, context fetch, comment posting, and footer
-dedup all confirmed. Still flagged WIP: not yet exercised on **Server / on-prem**, in a real
-pipeline via `System.AccessToken`, or on the reply / delta-review paths against a live
-instance. On construction it prints a one-line WIP warning.
+dedup all confirmed — along with the `System.AccessToken` pipeline, reply, and delta-review
+paths, all verified live. Still flagged WIP only for **Server / on-prem**. On construction it
+prints a one-line WIP warning.
 
 **Why the adapter reconstructs the diff.** Azure has no unified-diff REST endpoint — the
 [`diffs/commits`](https://learn.microsoft.com/en-us/rest/api/azure/devops/git/diffs/get?view=azure-devops-rest-7.1)
@@ -429,7 +429,7 @@ Prefer a stored PAT instead of the OAuth token? Swap `AZURE_ACCESS_TOKEN: $(Syst
 for `AZURE_PAT: $(AZURE_PAT)` in the pipeline's `env:` block.
 
 > **Verified-live status, first-setup gotchas, the CI repo-prompt mechanism, and the
-> reply-flow open questions** live in the dedicated doc:
+> reply-flow setup** lives in the dedicated doc:
 > [docs/reference/azure-devops.md](docs/reference/azure-devops.md).
 
 ### How to Provide Environment Variables
