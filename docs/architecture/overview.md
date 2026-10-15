@@ -133,7 +133,7 @@ When a previous review exists with a different commit hash, the agent fetches th
 commit-to-commit diff (last reviewed commit → current head) before proceeding. After
 applying `DIFF_EXCLUDE_PATTERNS`, if zero lines remain, no review is produced — but the
 agent still falls through to `CHECK_REPLIES` to answer any unanswered developer questions
-before exiting. If there are no pending replies either, the run exits as `NO_CHANGE` with
+before exiting. If there are no pending replies either, the run exits as `DEDUP_SKIP` with
 no API call. This catches cases where new commits only touch excluded files (tests, lock
 files, translations).
 

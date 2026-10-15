@@ -29,7 +29,7 @@ sections fall back to the defaults in `src/prompt/defaults.ts`.
 2. `.agent-review-instructions.md` from the PR's **source commit** — root, then `docs/`,
    then the module fallback (below)
 3. `.agent-review-instructions.md` from the PR's **target branch** — same path list
-4. If not found, all five sections use defaults
+4. If no repo prompt is found, compose the detected tech-stack rule sets (`src/prompt/stacks/*.txt`); if no stack is detected, all five sections use defaults
 
 **Module fallback (monorepos):** when every changed file in the PR lives under a single
 top-level directory (e.g. `web-app/`), the agent also probes
@@ -223,7 +223,7 @@ Claude to respond with **only** `NO_CHANGE` if ALL of these conditions are met:
 2. No new findings (LOW, MEDIUM, or HIGH) are introduced
 3. The new commits only contain cosmetic changes (typos, formatting, comments, renames)
 
-The orchestrator in `src/review/index.ts` checks for this stop word and skips posting a comment.
+The orchestrator in `src/review/index.ts` posts no review on `NO_CHANGE` but still runs `CHECK_REPLIES`, answering any pending developer reply.
 This prevents near-duplicate review comments on cosmetic-only pushes.
 
 ---

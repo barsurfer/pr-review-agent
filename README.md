@@ -196,7 +196,7 @@ context. The prompt instructs Claude to treat developer replies as authoritative
 codebase state outside the diff.
 
 If the new commits contain only cosmetic changes (typos, formatting, renames) with no
-new or resolved findings, Claude returns a `NO_CHANGE` stop word and no comment is posted.
+new or resolved findings, Claude sets `no_change` (rendered as the `NO_CHANGE` sentinel); no review is posted, but the run still answers a pending developer reply via `CHECK_REPLIES`.
 
 ### Commit Hash Deduplication
 

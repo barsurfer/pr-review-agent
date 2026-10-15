@@ -14,7 +14,7 @@ Focus on shared vocabulary used across code, docs, and prompts.
 |------|-----------|-----------------|
 | **PR Review** | Structured comment posted by the agent on a pull request | AI comment, bot comment |
 | **Delta Review** | Re-review after new commits; focuses only on code changed since the last review | Re-review, partial review |
-| **NO_CHANGE** | Stop word returned by Claude when new commits are purely cosmetic — agent skips posting | Empty review |
+| **NO_CHANGE** | Reviewer sets `no_change` when new commits are purely cosmetic — no review posted (a pending developer reply is still answered) | Empty review |
 | **Review Footer** | Structured metadata line appended to every review comment: model, prompt source, review #, commit hash | Signature, trailer |
 | **Reply Comment** | Threaded agent reply to a review comment, answering developer questions — distinct from a full Review | Response, follow-up |
 
@@ -42,7 +42,7 @@ Focus on shared vocabulary used across code, docs, and prompts.
 - A **PR Review** belongs to exactly one PR and one commit (keyed by commit hash in the footer)
 - A **Delta Review** builds on the most recent PR Review, which is included in context
 - A **Reply Comment** is a child of a PR Review comment; can itself receive replies (recursive threading)
-- A **NO_CHANGE** response produces no PR Review — the run exits silently
+- A **NO_CHANGE** response produces no PR Review; the run still posts a Reply if a developer question is pending
 - The **Generator-Verifier** pattern uses a `CLAUDE_MODEL` (reviewer) and a `JUDGING_MODEL` (judge, on by default); set `JUDGING_MODEL` empty and the reviewer output posts directly
 
 ## Example dialogue
