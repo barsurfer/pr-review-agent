@@ -37,8 +37,8 @@ Beyond the diff, the agent fetches full file content for changed files so Claude
 ### Exclusion Rules
 
 Always skip (diff-only, no full content):
-- `*.lock`, `package-lock.json`, `yarn.lock`
-- `*-generated.*`, `*.min.js`, `*.map`
+- `*.lock`, `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`
+- `*-generated.*`, `*.min.js`, `*.min.css`, `*.map`
 - `db/migrate/*`
 - `*.snap`
 - Files over `MAX_FILE_LINES` lines (default: 500)

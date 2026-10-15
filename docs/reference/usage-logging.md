@@ -48,10 +48,13 @@ context and use a shorter system prompt. The `max_tokens` cap is 2,048 (vs 4,096
 *.lock
 package-lock.json
 yarn.lock
+pnpm-lock.yaml
 *-generated.*
 *.min.js
+*.min.css
 db/migrate/*
 *.snap
+*.map
 ```
 
 ### Excluded from Diff (Stripped Before API Call)

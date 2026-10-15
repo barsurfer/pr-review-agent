@@ -38,16 +38,19 @@ FETCH_PR_INFO
 
 **Bundled path (`ENABLE_BUNDLED_REVIEW=true`, default off):** after `FETCH_CONTEXT`, `ESTIMATE_TOKENS` drops file contexts if over `MAX_INPUT_TOKENS`; if the diff alone is still over budget it routes to `BUNDLED_REVIEW` instead of SKIP, then `POST_REVIEW`. In-budget PRs never enter it.
 
-**16 states. 9 possible outcomes:**
+**17 states. 10 possible outcomes:**
 1. Skip — branch exclusion
 2. Skip — no reviewable changes after exclusions
 3. Skip — threshold (too few/many reviewable files or lines)
 4. Skip — same commit, no replies
 5. Skip — delta diff empty, no replies
 6. Skip — reply limit reached
-7. Skip — NO_CHANGE stop word (falls through to CHECK_REPLIES first; skips only when no reply is pending)
-8. Reply — developer question answered (including after a NO_CHANGE re-review)
-9. Post review — new review comment
+7. Skip — NO_CHANGE re-review (falls through to CHECK_REPLIES first; skips only when no reply is pending)
+8. Skip — re-review produced no new findings and the prior review was clean (`NO_NEW_FINDINGS`)
+9. Reply — developer question answered (including after a NO_CHANGE re-review)
+10. Post review — new review comment
+
+(Fine-grained skips — input-budget exceeded, context-window overflow, a bundled review that needs too many bundles, and the pre-post race — fall under outcomes 1–3; see [skip-logic.md](skip-logic.md).)
 
 ---
 
@@ -73,7 +76,7 @@ FETCH_PR_INFO
 
 ## POST_REVIEW Safety Guards
 
-Three guards run before every post, even on `--force`:
+Three guards run before every post (guard 3 only when `--force` is off; all skipped in benchmark/outcome-sink mode):
 
 1. **Empty/NO_CHANGE guard** — cleanup strips prior footers, `DELTA_STATS`, leaked preamble before the first `### Summary` heading (`stripPreamble()`), and any echoed jenkins comment; if what remains is empty or contains a standalone `NO_CHANGE` line, skip. Catches model misbehavior when `CHECK_NO_CHANGE` is bypassed.
 

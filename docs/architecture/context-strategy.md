@@ -18,8 +18,8 @@ For each file in the diff:
 ### Exclusion Rules
 
 Always skip (send diff-only):
-- `*.lock`, `package-lock.json`, `yarn.lock`
-- `*-generated.*`, `*.min.js`
+- `*.lock`, `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`
+- `*-generated.*`, `*.min.js`, `*.min.css`, `*.map`
 - `db/migrate/*`
 - `*.snap`
 - Files over `MAX_FILE_LINES` lines (default: `500`)

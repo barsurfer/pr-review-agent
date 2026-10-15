@@ -18,7 +18,7 @@ Rule: Each entry has a 1-sentence summary: key concepts, keywords, tech; ends wi
 ## Domain Specs
 
 - [review/](review/)
-  - [review/fsm.md](review/fsm.md) — 16-state FSM: all states, transitions, 9 skip/review outcomes, BUNDLED_REVIEW big-PR path (directory bundles, per-bundle reviewer+judge, merge/dedupe, ENABLE_BUNDLED_REVIEW/MAX_BUNDLES), ReviewContext interface, POST_REVIEW safety guards; read when changing orchestration logic.
+  - [review/fsm.md](review/fsm.md) — 17-state FSM: all states, transitions, 10 skip/review outcomes, BUNDLED_REVIEW big-PR path (directory bundles, per-bundle reviewer+judge, merge/dedupe, ENABLE_BUNDLED_REVIEW/MAX_BUNDLES), ReviewContext interface, POST_REVIEW safety guards; read when changing orchestration logic.
   - [review/skip-logic.md](review/skip-logic.md) — All skip mechanisms: commit hash dedup, delta diff pre-check, branch exclusion, size thresholds, reply limit; read when debugging unexpected skips.
   - [review/replies.md](review/replies.md) — Reply detection algorithm, recursive parent tracking, stale-reply loop fix, bundled response, reply footer, reply limit; read when working on comment threading.
 

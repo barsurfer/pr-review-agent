@@ -106,15 +106,15 @@ FETCH_PR_INFO → CHECK_BRANCHES
                                                     └─ [no judge] → POST_REVIEW → DONE
 ```
 
-**15 states**, **9 possible outcomes**: skip (branch exclusion), skip (no reviewable changes),
+**17 states**, **10 possible outcomes**: skip (branch exclusion), skip (no reviewable changes),
 skip (threshold), skip (same commit, no replies), skip (delta diff empty, no replies),
-skip (reply limit reached), reply to developer, skip (NO_CHANGE), or post review. The optional `JUDGE_REVIEW` state sends the review output and diff to a
+skip (reply limit reached), skip (no new findings), reply to developer, skip (NO_CHANGE), or post review. The optional `JUDGE_REVIEW` state sends the review output and diff to a
 separate judge model (`JUDGING_MODEL`) that validates each finding against the actual code
 before posting. When no judge is configured, this state is a no-op passthrough.
 
 ### POST_REVIEW Safety Guards
 
-Before posting, `POST_REVIEW` applies two guards:
+Before posting, `POST_REVIEW` applies three guards:
 
 1. **Empty/NO_CHANGE guard** — cleanup strips prior footers, `DELTA_STATS`, and any leaked
    preamble before the first `### Summary` heading; if the remaining text is empty or
@@ -122,7 +122,11 @@ Before posting, `POST_REVIEW` applies two guards:
    comments, stop-word leftovers, or model reasoning when `CHECK_NO_CHANGE` is bypassed
    or the model misbehaves.
 
-2. **Pre-post dedup** — on non-dry-run runs with `--force` off, the agent re-fetches the
+2. **Cut guard** — a complete review ends with its final mandatory section (judge → `Merge
+   Confidence`; reviewer-only → `Unresolved Questions`). A truncated response that slips past
+   the `max_tokens` guard is rejected (run → `ERROR`, nothing posted, retried next trigger).
+
+3. **Pre-post dedup** — on non-dry-run runs with `--force` off, the agent re-fetches the
    latest review comments immediately before posting and checks whether another concurrent
    run already reviewed the same commit. If a matching review is found, the post is skipped.
    Prevents duplicate reviews from parallel Jenkins triggers on the same PR update.
