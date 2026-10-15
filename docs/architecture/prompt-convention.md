@@ -8,7 +8,7 @@ The agent composes the final system prompt from two parts:
    SCOPE, MANDATORY RULES, FORBIDDEN, re-review instructions, OUTPUT STRUCTURE.
 
 2. **Repo-specific sections** (`.agent-review-instructions.md` in the target repo) — customisable
-   per technology stack. Four sections can be overridden:
+   per technology stack. Five sections can be overridden:
 
 | Section | Header in file | Default if missing |
 |---------|---------------|-------------------|
@@ -29,10 +29,10 @@ sections fall back to the defaults in `src/prompt/defaults.ts`.
 2. `.agent-review-instructions.md` from the PR's **source commit** — root, then `docs/`,
    then the module fallback (below)
 3. `.agent-review-instructions.md` from the PR's **target branch** — same path list
-4. If not found, all four sections use defaults
+4. If not found, all five sections use defaults
 
 **Module fallback (monorepos):** when every changed file in the PR lives under a single
-top-level directory (e.g. `alice-web/`), the agent also probes
+top-level directory (e.g. `web-app/`), the agent also probes
 `<dir>/.agent-review-instructions.md` and `<dir>/docs/.agent-review-instructions.md`.
 Root-level changed files don't disqualify the detection; a second top-level directory
 does — the agent never guesses on ambiguous PRs. Repo-root locations always win.
@@ -97,7 +97,7 @@ You are a Senior Frontend Architect.
 ...
 ```
 
-Only the four recognised `## SECTION` headers are extracted — all other content (frontmatter,
+Only the five recognised `## SECTION` headers are extracted — all other content (frontmatter,
 extra headers, free-form text) is silently ignored.
 
 ### Symlink Support
@@ -117,7 +117,7 @@ ln -s ../.github/prompts/review.prompt.md docs/.agent-review-instructions.md
 ```
 
 Both tools read the same markdown. Copilot uses the full file as-is; the review agent extracts
-only the four recognised sections.
+only the five recognised sections.
 
 ---
 

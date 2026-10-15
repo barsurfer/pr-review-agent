@@ -26,9 +26,9 @@ function changed(...paths: string[]): ChangedFile[] {
 
 describe('loadPrompt module-dir fallback', () => {
   it('finds instructions inside a single top-level module dir', async () => {
-    const adapter = adapterWith({ 'alice-web/docs/.agent-review-instructions.md': MODULE_PROMPT })
+    const adapter = adapterWith({ 'web-app/docs/.agent-review-instructions.md': MODULE_PROMPT })
 
-    const result = await loadPrompt(adapter, PR, undefined, changed('alice-web/src/a.groovy', 'alice-web/docs/x.md'))
+    const result = await loadPrompt(adapter, PR, undefined, changed('web-app/src/a.groovy', 'web-app/docs/x.md'))
 
     expect(result.source).toBe('repo')
     expect(result.content).toContain('Module reviewer.')
@@ -37,33 +37,33 @@ describe('loadPrompt module-dir fallback', () => {
   it('repo-root instructions win over module instructions', async () => {
     const adapter = adapterWith({
       '.agent-review-instructions.md': '## ROLE\nRoot reviewer.',
-      'alice-web/docs/.agent-review-instructions.md': MODULE_PROMPT,
+      'web-app/docs/.agent-review-instructions.md': MODULE_PROMPT,
     })
 
-    const result = await loadPrompt(adapter, PR, undefined, changed('alice-web/src/a.groovy'))
+    const result = await loadPrompt(adapter, PR, undefined, changed('web-app/src/a.groovy'))
 
     expect(result.content).toContain('Root reviewer.')
     expect(result.content).not.toContain('Module reviewer.')
   })
 
   it('does not guess when changes span multiple top-level dirs', async () => {
-    const adapter = adapterWith({ 'alice-web/docs/.agent-review-instructions.md': MODULE_PROMPT })
+    const adapter = adapterWith({ 'web-app/docs/.agent-review-instructions.md': MODULE_PROMPT })
 
-    const result = await loadPrompt(adapter, PR, undefined, changed('alice-web/src/a.groovy', 'alice-api/src/b.groovy'))
+    const result = await loadPrompt(adapter, PR, undefined, changed('web-app/src/a.groovy', 'api-app/src/b.groovy'))
 
     expect(result.source).toBe('default')
   })
 
   it('root-level changed files do not break single-module detection', async () => {
-    const adapter = adapterWith({ 'alice-web/docs/.agent-review-instructions.md': MODULE_PROMPT })
+    const adapter = adapterWith({ 'web-app/docs/.agent-review-instructions.md': MODULE_PROMPT })
 
-    const result = await loadPrompt(adapter, PR, undefined, changed('alice-web/src/a.groovy', 'Jenkinsfile'))
+    const result = await loadPrompt(adapter, PR, undefined, changed('web-app/src/a.groovy', 'Jenkinsfile'))
 
     expect(result.source).toBe('repo')
   })
 
   it('falls back to defaults when nothing is found anywhere', async () => {
-    const result = await loadPrompt(adapterWith({}), PR, undefined, changed('alice-web/src/a.groovy'))
+    const result = await loadPrompt(adapterWith({}), PR, undefined, changed('web-app/src/a.groovy'))
 
     expect(result.source).toBe('default')
   })

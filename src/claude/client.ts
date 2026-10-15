@@ -31,7 +31,7 @@ export interface JudgeResult extends ClaudeResult {
 }
 
 // Structured output keeps validation reasoning physically separate from the
-// posted review — prompt-only suppression proved leaky (PR 8722)
+// posted review — prompt-only suppression proved leaky  — proved leaky in production
 export const JUDGE_OUTPUT_SCHEMA = {
   type: 'object',
   properties: {

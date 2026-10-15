@@ -18,7 +18,7 @@ The agent scans all PR comments recursively to find unanswered developer questio
    - If body contains `"Reply by"` → **agent reply**: add its ID to the parent set (enables reply-to-reply discovery) and record its timestamp.
    - Otherwise → **human reply**: collect for filtering.
 3. Filter human replies to only those posted **after** the agent's latest reply timestamp (already-answered questions excluded).
-4. Additionally exclude human replies older than the latest review comment. Stale replies from a previous review cycle must not re-trigger replies (learned from PR 712: old discussion was causing a reply loop after the PR was re-reviewed).
+4. Additionally exclude human replies older than the latest review comment. Stale replies from a previous review cycle must not re-trigger replies (learned from a production incident: stale discussion re-triggered a reply loop after a re-review).
 
 This recursive parent tracking finds developer questions at any nesting depth.
 

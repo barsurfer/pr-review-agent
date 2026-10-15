@@ -54,7 +54,7 @@ Separately, a deterministic `TODO`/`FIXME`/`HACK` scan (`scanTodos`, `ENABLE_TOD
 5. All five sections default if nothing above applies
 
 **Module fallback:** when every changed file in the PR lives under a single top-level
-directory (monorepo module, e.g. `alice-web/`), that directory is treated as an effective
+directory (monorepo module, e.g. `web-app/`), that directory is treated as an effective
 root and `<dir>/.agent-review-instructions.md` → `<dir>/docs/...` are probed after the
 repo-root paths. Root-level changed files don't disqualify detection; a second top-level
 directory does (no guessing on ambiguous PRs).
@@ -66,7 +66,7 @@ directory does (no guessing on ambiguous PRs).
 - **Compose:** `loadPrompt(..., changedFiles, diff)` merges fragments into the prompt sections: first ROLE (largest base) wins; priorities/exceptions/mental model concatenate, identical bullet lines de-duplicated; stacks carry no `## SECURITY`, so the OWASP baseline applies. `source` becomes `stack:java+spring` etc. (shown in the review footer).
 - Files are embedded by `scripts/bundle.mjs` as `__STACK_PROMPTS__` (same dual-load as the base template) and copied to `dist/prompt/stacks` by `copy-assets`. They are generic: org-specific exceptions live in `prompts/` / repo files.
 
-YAML frontmatter in the file is stripped before parsing. Only the four `## SECTION` headers are extracted — all other content is ignored.
+YAML frontmatter in the file is stripped before parsing. Only the five `## SECTION` headers are extracted — all other content is ignored.
 
 **Symlink support:** When the file is a git symlink (stored as a single line containing the target path), the loader detects it, resolves the relative path, and fetches the real file via VCS API.
 
@@ -83,7 +83,7 @@ Each rule has a documented reason:
 | Never contradict yourself across sections | Opus was observed marking an item resolved in Findings but questioning it in Unresolved Questions |
 | Do not recommend fixes for non-existent features | Model was suggesting "track open conversation ID" when devs said conversation view doesn't exist yet |
 | Do not re-raise findings after developer addressed them | If developer acknowledges a limitation as a known trade-off, that is not an open question |
-| Do not raise a finding the code already handles | A guard/annotation/test/framework guarantee already covers it — "for awareness / already mitigated" is noise, not a finding (observed on alice-platform PR 8722) |
+| Do not raise a finding the code already handles | A guard/annotation/test/framework guarantee already covers it — "for awareness / already mitigated" is noise, not a finding (seen in production) |
 | Keep findings terse; no essays | Reviewer/judge were writing multi-paragraph descriptions restating what the code does — a finding is a flag, not a report |
 | No praise, filler, or nitpicks | "Great job" / style-naming preferences are not review value (from PR-Agent + OpenReview prompt conventions) |
 

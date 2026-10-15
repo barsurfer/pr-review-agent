@@ -47,14 +47,16 @@ raw counts are kept for usage-record metrics.
 ### Excluded from Diff
 
 ```
+*.lock
 package-lock.json
 yarn.lock
 pnpm-lock.yaml
-*.lock
+*.json
+*.spec.ts
 ```
 
-JSON files (e.g. i18n translations) are **not** filtered — their diffs can reveal
-missing keys or inconsistent additions across locales.
+`*.json` (including i18n bundles) is excluded by default — remove it from
+`DIFF_EXCLUDE_PATTERNS` to review JSON diffs (e.g. missing locale keys).
 
 ---
 
@@ -127,7 +129,7 @@ The agent scans all PR comments looking for replies to its review comments:
    (already-answered questions are excluded)
 4. Additionally filter out human replies older than the latest review comment — a new
    review supersedes the prior discussion thread. This prevents stale replies from a
-   previous review cycle from re-triggering a reply loop (PR 712 incident).
+   previous review cycle from re-triggering a reply loop (a production reply-loop incident).
 
 This recursive parent tracking means the agent finds developer questions at any nesting
 depth — not just direct replies to the review, but also follow-ups to the agent's own
@@ -148,10 +150,10 @@ On the next trigger:
 ### Reply Limit (`MAX_REPLY_COMMENTS`)
 
 To prevent runaway token usage from extended back-and-forth conversations, the agent
-enforces a per-PR reply cap. Default: **3 replies**.
+enforces a per-PR reply cap. Default: **5 replies**.
 
 Once the limit is reached, the agent logs the unanswered questions but skips the API
-call: `"reply limit reached (3/3)"`. This prevents:
+call: `"reply limit reached (5/5)"`. This prevents:
 - Developers gaming the agent with infinite follow-up questions
 - Token cost spiraling on contentious PRs
 - The agent getting baited into off-topic conversations

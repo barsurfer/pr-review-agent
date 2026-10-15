@@ -164,7 +164,7 @@ function resolveSymlink(symlinkDir: string, target: string): string {
 }
 
 /** When every changed file lives under one top-level directory (monorepo module,
- *  e.g. alice-web/), that directory acts as the effective repo root for prompt lookup.
+ *  e.g. web-app/), that directory acts as the effective repo root for prompt lookup.
  *  Root-level files don't disqualify the detection — only a second directory does. */
 function detectModuleDir(changedFiles: ChangedFile[]): string | null {
   const dirs = new Set<string>()

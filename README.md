@@ -137,7 +137,7 @@ BITBUCKET_TOKEN=ATATT3x...
 
 # Anthropic
 ANTHROPIC_API_KEY=sk-ant-...
-CLAUDE_MODEL=claude-sonnet-4-6
+CLAUDE_MODEL=claude-haiku-4-5-20251001
 
 # Agent identity (defaults to BITBUCKET_USERNAME, then 'Claude')
 # AGENT_IDENTITY=
@@ -341,9 +341,9 @@ All credentials and settings are provided via environment variables.
 |----------|---------|-------------|
 | `VCS_PROVIDER` | `bitbucket` | Which VCS adapter to use (`bitbucket` \| `azure` \| `github` \| `gitlab`) |
 | `BITBUCKET_BASE_URL` | `https://api.bitbucket.org/2.0` | Bitbucket Cloud API base URL (Server/DC is not supported — different v1 API) |
-| `CLAUDE_MODEL` | `claude-sonnet-4-6` | Claude model ID to use for reviews |
+| `CLAUDE_MODEL` | `claude-haiku-4-5-20251001` | Reviewer model ID |
 | `MAX_RETRIES` | `3` | Max retries on 429/5xx errors (exponential backoff) |
-| `MAX_INPUT_TOKENS` | `150000` | Over budget → drop file contexts and review diff-only; skip only if the diff alone still exceeds it (0 = disabled) |
+| `MAX_INPUT_TOKENS` | `250000` | Over budget → drop file contexts and review diff-only; skip only if the diff alone still exceeds it (0 = disabled) |
 | `ENABLE_BUNDLED_REVIEW` | `false` | Over-budget PR is split into directory bundles, each reviewed + judged, then merged/deduped, instead of skipped (2 calls per bundle) |
 | `MAX_BUNDLES` | `8` | Skip if a bundled review would need more bundles (0 = unlimited) |
 | `MAX_CONTEXT_FILES` | `20` | Max files to fetch full content for |
@@ -467,11 +467,11 @@ withCredentials([
 ## Customising the Review Prompt
 
 The agent uses a **base template** with shared rules (scope, mandatory rules, forbidden,
-output format) and fills in four customisable sections per repo. To customise, add a file
+output format) and fills in five customisable sections per repo. To customise, add a file
 called `.agent-review-instructions.md` to the **root or `docs/` directory** of the target repo (not this repo). The agent checks the PR's source branch first, then the target branch.
 
 **Monorepo fallback:** if every changed file in the PR lives under a single top-level
-directory (e.g. `alice-web/`), the agent also checks `<dir>/.agent-review-instructions.md`
+directory (e.g. `web-app/`), the agent also checks `<dir>/.agent-review-instructions.md`
 and `<dir>/docs/.agent-review-instructions.md` after the repo-root locations.
 
 The file can include any combination of these sections:

@@ -125,7 +125,7 @@ A reply is "unanswered" if:
 3. It was posted AFTER the most recent agent reply (timestamp comparison)
 4. It was posted AFTER the latest review comment — replies predating the newest review
    are ignored, as the new review supersedes that discussion thread. This prevents stale
-   replies from triggering an infinite reply loop when a PR is re-reviewed (PR 712 incident).
+   replies from triggering an infinite reply loop when a PR is re-reviewed (a production reply-loop incident).
 
 ### Agent replies in delta review context
 

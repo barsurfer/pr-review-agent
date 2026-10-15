@@ -84,7 +84,7 @@ The record is also printed to stdout at the end of every run regardless of the f
 | `pr_id` | `string` | Pull request ID |
 | `pr_author` | `string` | PR author display name |
 | `source_commit` | `string` | Source commit hash at time of review |
-| `source_branch` | `string` | Source branch name (e.g. `feature/AL-1234`) |
+| `source_branch` | `string` | Source branch name (e.g. `feature/PROJ-123`) |
 | `target_branch` | `string` | e.g. `main`, `develop` |
 | `changed_files` | `number` | Number of files changed in the PR |
 | `changed_lines` | `number` | Total lines changed (additions + deletions) |

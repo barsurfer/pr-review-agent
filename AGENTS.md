@@ -18,5 +18,5 @@
 - Stop at the edit. Finish the change, run what needs running, then report and wait. The user reviews the diff before anything becomes a commit; committing unprompted skips that review.
 - Asking for an edit is not asking for a commit. Neither is a long task, a green test run, nor the rhythm of the work so far.
 - Stage only the files you touched, by path. Never `git add -A` or `git add .`.
-- The message is a single line: `<KEY> -> <type>(<scope>): <imperative summary>`, with `<KEY>` taken from a Jira-style key in the branch name (e.g. `AL-20587 -> fix(csv-parser): preserve block positions, bound trailer mapping`). No key prefix on branches without one (main, develop, feature/*). Match recent `git log --oneline`.
+- The message is a single line: `<KEY> -> <type>(<scope>): <imperative summary>`, with `<KEY>` taken from a Jira-style key in the branch name (e.g. `PROJ-123 -> fix(parser): handle empty input`). No key prefix on branches without one (main, develop, feature/*). Match recent `git log --oneline`.
 - No multi-line body unless explicitly asked, and no `Co-Authored-By` or "Generated with" trailer.

@@ -8,8 +8,8 @@ import { parseFindings } from '../parsers.js'
 
 describe('buildReviewFooter', () => {
   it('includes all fields', () => {
-    const footer = buildReviewFooter('alice@co.com', 'claude-sonnet-4-6', 'repo', 2, 'a1b2c3d4e5f6', '919a10b')
-    expect(footer).toContain('alice@co.com')
+    const footer = buildReviewFooter('dev@example.com', 'claude-sonnet-4-6', 'repo', 2, 'a1b2c3d4e5f6', '919a10b')
+    expect(footer).toContain('dev@example.com')
     expect(footer).toContain('claude-sonnet-4-6')
     expect(footer).toContain('Prompt: repo')
     expect(footer).toContain('Build: 919a10b')
@@ -36,7 +36,7 @@ describe('buildReplyFooter', () => {
 
 describe('stripPreviousFooter', () => {
   it('removes a standard review footer', () => {
-    const text = '### Summary\nAll good.\n---\n*Reviewed by alice@co.com (claude-sonnet-4-6) | Prompt: repo | Review #1 | Commit: abc123*'
+    const text = '### Summary\nAll good.\n---\n*Reviewed by dev@example.com (claude-sonnet-4-6) | Prompt: repo | Review #1 | Commit: abc123*'
     expect(stripPreviousFooter(text)).toBe('### Summary\nAll good.')
   })
 
@@ -268,7 +268,7 @@ describe('stripPreamble', () => {
 
 describe('extractCommitHash', () => {
   it('extracts hash from review footer', () => {
-    const body = '*Reviewed by alice@co.com (claude-sonnet-4-6) | Prompt: repo | Review #1 | Commit: a1b2c3d4e5f6*'
+    const body = '*Reviewed by dev@example.com (claude-sonnet-4-6) | Prompt: repo | Review #1 | Commit: a1b2c3d4e5f6*'
     expect(extractCommitHash(body)).toBe('a1b2c3d4e5f6')
   })
 

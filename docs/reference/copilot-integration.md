@@ -4,7 +4,7 @@
 
 The review agent's prompt file format (`.agent-review-instructions.md`) is compatible with
 GitHub Copilot prompt files (`.prompt.md`). A single file can serve both tools — the review
-agent extracts its four recognised sections, and Copilot uses the full file as context.
+agent extracts its five recognised sections, and Copilot uses the full file as context.
 
 ---
 
@@ -80,7 +80,7 @@ Ready-to-use Copilot-compatible prompt files are in the `prompts/` directory:
 These files include YAML frontmatter (`name`, `description`, `agent`, `argument-hint`, `tools`)
 and a `## HOW TO REVIEW` section that tells Copilot how to run the review (get the diff,
 scope rules, output structure, scoring). The review agent strips both when parsing — only
-the four recognised sections are extracted.
+the five recognised sections are extracted.
 
 Copy one of these files to your repo, rename to `.agent-review-instructions.md`, customise
 the sections, then symlink for Copilot (see Setup above).

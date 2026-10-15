@@ -70,7 +70,7 @@ pr-review-agent/
 | Claude API | `@anthropic-ai/sdk` |
 | HTTP client | `axios` |
 | CLI args | `commander` |
-| Model | `claude-sonnet-4-6` (configurable via `CLAUDE_MODEL` env var) |
+| Model | reviewer `claude-haiku-4-5-20251001` (`CLAUDE_MODEL`), judge `claude-sonnet-5` (`JUDGING_MODEL`, on by default) |
 
 ---
 

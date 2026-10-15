@@ -101,7 +101,7 @@ Copy the contents of [`jenkins/pipeline.groovy`](../../jenkins/pipeline.groovy) 
 The pipeline includes:
 - **Quiet period** (30s) — coalesces rapid triggers into one build
 - **`lock(skipIfLocked: true)`** — only one review per repo+PR at a time (requires Lockable Resources plugin)
-- **Build display name** — `#42-alice-mobile-app-709` instead of just `#42`
+- **Build display name** — `#42-my-app-709` instead of just `#42`
 - **`archiveArtifacts`** — saves `results.jsonl` per build
 - **Plot plugin** — visualizes cost, tokens, duration, and touch rate across builds (see [Metrics & Plots](#metrics--plots))
 

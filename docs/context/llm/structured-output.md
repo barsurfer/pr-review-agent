@@ -28,7 +28,7 @@ The reviewer returns a typed object (`REVIEW_OUTPUT_SCHEMA` in `src/claude/clien
 
 `renderReview(obj)` (`src/review/formatter.ts`) builds the posted markdown from those fields. Because the code owns the rendering, the model cannot leak preamble, tone, or a footer into the review. `no_change: true` renders the `NO_CHANGE` sentinel (reuses the existing `isNoChange` path). Merge Confidence is NOT rendered here — the judge adds it.
 
-**Why:** prompt-only suppression of leaks proved unreliable (PR 8722); typed fields make the output shape guaranteed and the metrics exact.
+**Why:** prompt-only suppression of leaks proved unreliable in production; typed fields make the output shape guaranteed and the metrics exact.
 
 ---
 

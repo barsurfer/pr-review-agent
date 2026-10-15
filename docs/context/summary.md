@@ -8,4 +8,4 @@ PR Review Agent is a stateless CLI tool that reviews Bitbucket pull requests usi
 
 **Stack:** TypeScript, Node.js, `@anthropic-ai/sdk`, `axios`, `commander`, esbuild (single-file CJS bundle).  
 **VCS:** Bitbucket (production). GitHub/GitLab adapters are stubs.  
-**Default model:** `claude-sonnet-4-6`, configurable via `CLAUDE_MODEL`. Optional judge model via `JUDGING_MODEL`.
+**Default models:** reviewer `claude-haiku-4-5-20251001` (`CLAUDE_MODEL`), judge `claude-sonnet-5` (`JUDGING_MODEL`, on by default; set empty to disable).
