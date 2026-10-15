@@ -45,7 +45,7 @@ Complexity: medium-high. Language-specific import parsing required.
 > review number, and commit hash:
 >
 > ```
-> *Reviewed by Claude (claude-sonnet-4-6) | Prompt: .agent-review-instructions.md | Review #2 | Commit: a1b2c3d4e5f6*
+> *Reviewed by Claude (claude-haiku-4-5-20251001) | Prompt: repo | Review #2 | Commit: a1b2c3d4e5f6*
 > ```
 >
 > Agent version is now tracked in `results.jsonl` (`agent_version` field, injected at bundle time).
@@ -99,7 +99,7 @@ Complexity: medium-high. Language-specific import parsing required.
 ### ~~Node.js Version Check at Startup~~ ✅ Implemented
 
 > **Completed.** The entry point (`src/index.ts`) checks `process.versions.node`
-> before any imports and exits with a clear error if the major version is below 20.
+> before any imports and exits with a clear error if the major version is below 22.
 
 ---
 

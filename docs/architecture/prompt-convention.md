@@ -238,6 +238,7 @@ Full example prompts are in the [`prompts/`](../../prompts/) directory:
 | `prompts/java-spring.txt` | Java / Spring Boot / Hibernate | Agent only |
 | `prompts/angular-ionic-copilot.prompt.md` | Angular / Ionic / Capacitor | Copilot + Agent |
 | `prompts/angular-copilot.prompt.md` | Angular (web) | Copilot + Agent |
+| `prompts/java-spring-copilot.prompt.md` | Java / Spring Boot | Copilot + Agent |
 
 The `.txt` files are agent-only templates. The `.prompt.md` files include YAML frontmatter
 and a `## HOW TO REVIEW` section for GitHub Copilot — the agent strips both when parsing.

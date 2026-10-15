@@ -138,7 +138,7 @@ does not re-raise them in subsequent reviews.
 
 Responses use a lighter footer:
 ```
-*Reply by Claude (claude-sonnet-4-6)*
+*Reply by Claude (claude-haiku-4-5-20251001)*
 ```
 
 No review number or commit hash — these are conversational replies, not reviews.

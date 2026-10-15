@@ -13,7 +13,7 @@ All mechanisms that cause the agent to exit without posting a review. Related: [
 
 Every review comment ends with a footer:
 ```
-*Reviewed by Claude (claude-sonnet-4-6) | Prompt: .agent-review-instructions.md | Review #2 | Commit: a1b2c3d4e5f6 | Build: 919a10b*
+*Reviewed by Claude (claude-haiku-4-5-20251001) | Prompt: repo | Review #2 | Commit: a1b2c3d4e5f6 | Build: 919a10b*
 ```
 `Commit:` is the PR source commit (dedup anchor); `Build:` is the agent's own deployed
 commit (runtime `git rev-parse` in its checkout, `-dirty` suffix on local uncommitted runs).

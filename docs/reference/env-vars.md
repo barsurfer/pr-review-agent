@@ -102,7 +102,7 @@ The diff is reconstructed from the `diffs/commits` change list + per-file blob c
 
 ---
 
-## Phase 3 — Inline Comments
+## Phase 4 — Inline Comments (planned — not implemented)
 
 | Variable | Example | Description |
 |----------|---------|-------------|

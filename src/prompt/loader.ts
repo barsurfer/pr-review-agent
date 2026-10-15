@@ -44,7 +44,7 @@ interface RepoPromptSections {
 
 /**
  * Parse a repo-specific prompt into sections.
- * Looks for ## ROLE, ## REVIEW PRIORITIES, and ## MENTAL MODEL headers.
+ * Splits on ## headers; ROLE, REVIEW PRIORITIES, SECURITY, MENTAL MODEL, EXCEPTION(S) are kept, others ignored.
  * Content between headers belongs to the preceding section.
  */
 function stripFrontmatter(content: string): string {

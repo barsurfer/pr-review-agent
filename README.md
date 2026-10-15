@@ -203,7 +203,7 @@ new or resolved findings, Claude sets `no_change` (rendered as the `NO_CHANGE` s
 Every review comment includes a footer with the source commit hash:
 
 ```
-*Reviewed by Claude (claude-sonnet-4-6) | Prompt: .agent-review-instructions.md | Review #2 | Commit: a1b2c3d4e5f6 | Build: 919a10b*
+*Reviewed by Claude (claude-haiku-4-5-20251001) | Prompt: repo | Review #2 | Commit: a1b2c3d4e5f6 | Build: 919a10b*
 ```
 
 `Commit:` is the PR source commit used for dedup; `Build:` is the commit of the agent
@@ -548,6 +548,7 @@ details and more examples. Full example prompts are in the [`prompts/`](prompts/
 | `prompts/java-spring.txt` | Java / Spring Boot / Hibernate | Agent only |
 | `prompts/angular-ionic-copilot.prompt.md` | Angular / Ionic / Capacitor | Copilot + Agent |
 | `prompts/angular-copilot.prompt.md` | Angular (web) | Copilot + Agent |
+| `prompts/java-spring-copilot.prompt.md` | Java / Spring Boot | Copilot + Agent |
 
 The `.prompt.md` files include YAML frontmatter and a `## HOW TO REVIEW` section for
 GitHub Copilot — see [docs/reference/copilot-integration.md](docs/reference/copilot-integration.md).
@@ -592,7 +593,7 @@ All design decisions, architecture, and per-phase plans live in [`docs/`](docs/)
 | [docs/architecture/overview.md](docs/architecture/overview.md) | Repo structure, tech stack |
 | [docs/architecture/prompt-convention.md](docs/architecture/prompt-convention.md) | How `.agent-review-instructions.md` works |
 | [docs/reference/env-vars.md](docs/reference/env-vars.md) | All environment variables |
-| [docs/reference/local-testing.md](docs/reference/local-testing.md) | Local test guide + troubleshooting |
+| [docs/context/fetching/strategy.md](docs/context/fetching/strategy.md) | Context strategy + local drift-testing note |
 
 ---
 

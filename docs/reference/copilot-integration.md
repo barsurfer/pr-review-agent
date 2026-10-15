@@ -76,6 +76,7 @@ Ready-to-use Copilot-compatible prompt files are in the `prompts/` directory:
 |------|-------|
 | `prompts/angular-ionic-copilot.prompt.md` | Angular / Ionic / Capacitor |
 | `prompts/angular-copilot.prompt.md` | Angular (web, no Ionic/Capacitor) |
+| `prompts/java-spring-copilot.prompt.md` | Java / Spring Boot |
 
 These files include YAML frontmatter (`name`, `description`, `agent`, `argument-hint`, `tools`)
 and a `## HOW TO REVIEW` section that tells Copilot how to run the review (get the diff,

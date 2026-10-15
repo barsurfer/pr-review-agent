@@ -167,7 +167,7 @@ Set `MAX_REPLY_COMMENTS=0` to disable the limit (unlimited replies).
 Every review comment posted by the agent includes a structured footer:
 
 ```
-*Reviewed by Claude (claude-sonnet-4-6) | Prompt: .agent-review-instructions.md | Review #2 | Commit: a1b2c3d4e5f6*
+*Reviewed by Claude (claude-haiku-4-5-20251001) | Prompt: repo | Review #2 | Commit: a1b2c3d4e5f6*
 ```
 
 The footer serves multiple purposes:
