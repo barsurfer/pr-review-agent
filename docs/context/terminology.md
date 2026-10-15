@@ -43,7 +43,7 @@ Focus on shared vocabulary used across code, docs, and prompts.
 - A **Delta Review** builds on the most recent PR Review, which is included in context
 - A **Reply Comment** is a child of a PR Review comment; can itself receive replies (recursive threading)
 - A **NO_CHANGE** response produces no PR Review — the run exits silently
-- The **Generator-Verifier** pattern requires both a `CLAUDE_MODEL` (reviewer) and a `JUDGING_MODEL` (judge); without the latter, the reviewer output posts directly
+- The **Generator-Verifier** pattern uses a `CLAUDE_MODEL` (reviewer) and a `JUDGING_MODEL` (judge, on by default); set `JUDGING_MODEL` empty and the reviewer output posts directly
 
 ## Example dialogue
 

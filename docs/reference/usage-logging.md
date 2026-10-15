@@ -91,9 +91,10 @@ The record is also printed to stdout at the end of every run regardless of the f
 | `context_files_fetched` | `number` | Number of files fetched for full context (0 if dropped by degradation) |
 | `degraded` | `boolean` | `true` if file contexts were dropped to fit `MAX_INPUT_TOKENS` — the review ran diff-only instead of being skipped |
 | `review_number` | `number` | 1 = initial review, 2+ = re-review |
-| `action` | `string` | `REVIEW` \| `RE_REVIEW` \| `REPLY` \| `NO_CHANGE` \| `SKIP` \| `DEDUP_SKIP` \| `ERROR` |
-| `skip_reason` | `string \| null` | Human-readable reason when action is not `REVIEW` |
-| `model` | `string` | Claude model ID used |
+| `action` | `string` | `REVIEW` \| `RE_REVIEW` \| `REPLY` \| `NO_CHANGE` \| `NO_NEW_FINDINGS` \| `SKIP` \| `DEDUP_SKIP` \| `ERROR` |
+| `skip_reason` | `string \| null` | Human-readable reason when action is not `REVIEW`/`REPLY` |
+| `model` | `string` | Reviewer model ID used |
+| `effort` | `string \| null` | Reviewer thinking effort (`REVIEW_EFFORT` / `--effort`); null = model default |
 | `tokens.input` | `number` | Input tokens (from API response) |
 | `tokens.output` | `number` | Output tokens (from API response) |
 | `tokens.estimated_input` | `number` | Pre-call estimate (`chars / 4`) — compare with `tokens.input` for accuracy |
@@ -101,21 +102,23 @@ The record is also printed to stdout at the end of every run regardless of the f
 | `tokens.cache_write` | `number` | Cache write tokens (reserved for prompt caching) |
 | `cost_usd` | `number` | Total estimated cost (review + judge) from hardcoded per-model pricing table |
 | `judge_model` | `string \| null` | Judge model ID, or null if no judge pass |
-| `judge_tokens.input` | `number` | Judge input tokens (0 if no judge) |
-| `judge_tokens.output` | `number` | Judge output tokens (0 if no judge) |
+| `judge_effort` | `string \| null` | Judge thinking effort (`JUDGE_EFFORT`); null = model default |
+| `judge_tokens` | `object \| null` | `{ input, output }`, or null if no judge pass |
 | `judge_cost_usd` | `number \| null` | Judge call cost, or null if no judge |
 | `duration_ms` | `number` | Wall-clock time for the full run |
 | `dry_run` | `boolean` | Whether `--dry-run` was used |
 | `force` | `string` | Force mode: `"off"`, `"clean"` (no prior context), or `"re-review"` (bypass dedup, keep context) |
-| `prompt_source` | `string` | Prompt file path or `default` |
+| `prompt_source` | `string` | `repo`, a `--prompt` path, `stack:<bases+overlays>`, or `default` |
 | `verdict_score` | `number \| null` | Merge Confidence percentage (0–100) parsed from final output (judge if used, reviewer otherwise) |
 | `computed_score` | `number \| null` | Code-computed score: `max(0, 100 − HIGHs×12 − MEDIUMs×4)` from final findings |
 | `review_findings` | `object \| null` | `{ high, medium, low }` — raw findings from reviewer before judge validation |
 | `findings` | `object \| null` | `{ high, medium, low }` — final findings (from judge if used, from reviewer otherwise) |
+| `finding_scores` | `array \| null` | Judge per-finding `{ title, severity, score, file?, lines? }`; null if no judge |
+| `min_finding_score` | `number \| null` | Lowest kept finding score |
 | `touch_rate` | `number \| null` | Re-review only: `resolved / (resolved + still_open) × 100` — percentage of previous findings addressed by the developer |
 | `delta` | `object \| null` | Re-review only: `{ developer_replies, resolved, still_open, new_findings }` |
 | `jenkins` | `object \| null` | `{ job, build, url }` from Jenkins env (`JOB_NAME`/`BUILD_NUMBER`/`BUILD_URL`), or null off-CI — maps a run to its build/artifact |
-| `error` | `object \| null` | `{ type, message, status }` on failure |
+| `error` | `object \| null` | `{ type, message, status }` on failure. On a max-tokens truncation, `type` is `TruncatedResponseError` and `tokens.*` still hold the real spend (not zeros) |
 
 ### Action Values
 
@@ -124,22 +127,15 @@ The record is also printed to stdout at the end of every run regardless of the f
 | `REVIEW` | First review posted (or printed in dry-run) |
 | `RE_REVIEW` | Subsequent review (`review_number > 1`) — includes `delta` stats |
 | `REPLY` | Reply to developer question posted |
-| `NO_CHANGE` | Claude determined only cosmetic changes — comment suppressed |
-| `SKIP` | PR out of scope (size thresholds) — no API call |
-| `DEDUP_SKIP` | Commit hash matched previous review, no unanswered replies — no API call |
+| `NO_CHANGE` | Re-review found nothing material; no review posted. Still runs `CHECK_REPLIES` — answers a pending developer reply (→ `REPLY`), else skips keeping this label |
+| `NO_NEW_FINDINGS` | Re-review produced 0 findings and the prior review was clean with nothing open — nothing posted |
+| `SKIP` | Out of scope — branch exclusion, size thresholds, input budget, or context-window overflow — no review posted |
+| `DEDUP_SKIP` | Commit already reviewed with no unanswered reply, or the reply limit / a pre-post race — no review posted |
 | `ERROR` | Agent failed — see `error` field. Includes the **cut guard**: a review truncated before its final section (judge → Merge Confidence; reviewer → Unresolved Questions) is refused rather than posted partial, and retries on the next trigger. |
 
 ### Cost Estimation
 
-Cost is calculated client-side from token counts and hardcoded per-model pricing (per 1M tokens):
-
-| Model | Input | Output |
-|-------|-------|--------|
-| `claude-sonnet-4-6` | $3.00 | $15.00 |
-| `claude-opus-4-6` | $15.00 | $75.00 |
-| `claude-haiku-4-5-20251001` | $0.80 | $4.00 |
-
-Unknown models fall back to Sonnet pricing. Update the pricing table in `src/review/usage.ts` when Anthropic changes rates.
+Cost is calculated client-side from token counts and a per-model pricing table (per 1M tokens) in `MODEL_PRICING` (`src/review/usage.ts`) — the single source of truth, covering the haiku / sonnet / opus 4.x and 5.x families (`claude-haiku-5-5` is tiered by input size). Unknown models fall back to Sonnet pricing. Update that table when Anthropic changes rates.
 
 ### Useful Queries
 

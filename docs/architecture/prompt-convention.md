@@ -143,9 +143,9 @@ These sections are always provided by the base template and cannot be overridden
 This prevents teams from accidentally breaking the review output format or omitting
 critical behavioral rules.
 
-### Judge Model (Optional Finding Validation)
+### Judge Model (Finding Validation, on by default)
 
-When `JUDGING_MODEL` is set, the review output is sent to a second model for validation
+The judge runs by default (`JUDGING_MODEL=claude-sonnet-5`; set it empty to disable). The review output is sent to a second model for validation
 before posting. The judge receives the diff + review text and validates each MEDIUM/HIGH
 finding against the actual code. Invalid findings are dropped; the judge produces a clean
 final comment with only validated findings and a **Merge Confidence** score.

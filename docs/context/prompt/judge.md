@@ -19,7 +19,7 @@ Implements the **generator-verifier** pattern: the reviewer model generates cand
 
 ## When the Judge Runs
 
-- `JUDGING_MODEL` env var is set to a valid Claude model ID
+- `JUDGING_MODEL` is set (defaults to `claude-sonnet-5`; empty disables the judge)
 - The reviewer model produced at least one finding (judge is auto-skipped on zero findings)
 - `JUDGE_REVIEW` state in the FSM (see [review/fsm.md](../review/fsm.md))
 
@@ -73,8 +73,8 @@ The posted review must read as if a single reviewer wrote it — dropped finding
 trace in any section. The judge responds via **structured output** (JSON schema, three
 fields): `review_markdown` (the posted comment), `judge_notes` (drop/downgrade rationale —
 logged, never posted), and `finding_scores` (`[{title, severity, score, file?, lines?}]`, one
-per kept finding, `score` 0–10, with an optional transcribed anchor the benchmark uses to
-re-locate a finding the judge wrote as prose). This physically separates validation reasoning from the comment;
+per kept finding, `score` 0–10, with an optional transcribed anchor; the benchmark prefers the
+matched reviewer finding's anchor and falls back to the judge's own pair). This physically separates validation reasoning from the comment;
 `stripPreamble()`/`stripJudgeNotes()` in POST_REVIEW remain as defense-in-depth. See
 [llm/structured-output.md](../llm/structured-output.md) for the schema. The judge itself still
 emits `review_markdown` as prose, so final findings/verdict are parsed from it (not yet a

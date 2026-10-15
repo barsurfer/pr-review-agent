@@ -168,9 +168,9 @@ The context fetcher is selective about which files get full content:
 - **Skipped:** files over `MAX_FILE_LINES` (default: 500) unless they have high churn
   (>30% of lines changed)
 
-### Optional Judge Model
+### Judge Model (on by default)
 
-When `JUDGING_MODEL` is set, the review output goes through a second validation pass before
+The judge runs by default (`JUDGING_MODEL=claude-sonnet-5`; set it empty to disable). The review output goes through a second validation pass before
 posting. The judge model receives the diff + review text and validates each MEDIUM/HIGH
 finding against the actual code. Invalid or fabricated findings are dropped. The judge
 produces a clean final comment with only validated findings and a verdict score.
@@ -306,7 +306,7 @@ bundle build on every push to `main` and every PR — the gate that keeps `main`
 | `--workspace <workspace>` | No | Overrides `BITBUCKET_WORKSPACE` (or `AZURE_ORG` when `--vcs azure`) |
 | `--vcs <provider>` | No | `bitbucket` \| `azure` (WIP) \| `github` \| `gitlab` — overrides `VCS_PROVIDER` env var (default: `bitbucket`) |
 | `--dry-run` | No | Print the review to stdout instead of posting to the PR |
-| `--force` | No | Ignore previous reviews and produce a fresh review |
+| `--force [mode]` | No | Bypass dedup. Bare or `re-review`: keep prior context; `clean`: drop prior context |
 | `--log-usage [bool]` | No | Log usage record to `results.jsonl` (default: `true`, use `--log-usage false` to disable). See [docs/reference/usage-logging.md](docs/reference/usage-logging.md) for schema. |
 | `--prompt <path>` | No | Path to a local prompt file (overrides repo `.agent-review-instructions.md`) |
 | `--validate-prompt` | No | Validate prompt and exit — local via `--prompt`, or repo via `--pr-id` |
@@ -316,6 +316,11 @@ bundle build on every push to `main` and every PR — the gate that keeps `main`
 | `--max-changed-files <n>` | No | Skip review if PR has more changed files (overrides `MAX_CHANGED_FILES`) |
 | `--min-changed-lines <n>` | No | Skip review if PR has fewer changed lines (overrides `MIN_CHANGED_LINES`) |
 | `--max-changed-lines <n>` | No | Skip review if PR has more changed lines (overrides `MAX_CHANGED_LINES`) |
+| `--max-input-tokens <n>` | No | Input-token budget before degrade/skip (overrides `MAX_INPUT_TOKENS`) |
+| `--max-output-tokens <n>` | No | Max output tokens for reviewer + judge (overrides `MAX_OUTPUT_TOKENS`) |
+| `--effort <level>` | No | Reviewer thinking effort `low`\|`medium`\|`high`\|`xhigh`\|`max` (overrides `REVIEW_EFFORT`) |
+| `--judge-effort <level>` | No | Judge thinking effort (overrides `JUDGE_EFFORT`) |
+| `--benchmark` | No | ReviewBench mode — read the PR from `RB_*` env + mounted files, write findings JSON to `RB_OUT`, never post |
 
 \* Not required when using `--validate-prompt --prompt <path>` (local file validation).
 
@@ -356,6 +361,16 @@ All credentials and settings are provided via environment variables.
 | `ENABLE_SPLIT_CHECK` | `true` | Reviewer adds a "Can Be Split" section when the PR spans independent themes (set `false` to disable) |
 | `ENABLE_TODO_SCAN` | `true` | Scan added lines for `TODO`/`FIXME`/`HACK` and append a "TODOs Introduced" section |
 | `AGENT_IDENTITY` | `BITBUCKET_USERNAME` | Name shown in review footers. Falls back to `BITBUCKET_USERNAME`, then `'Claude'` |
+| `JUDGING_MODEL` | `claude-sonnet-5` | Judge model for finding validation — on by default; set empty to disable |
+| `REVIEW_EFFORT` / `JUDGE_EFFORT` | (model default) | Thinking effort for reviewer / judge (`low`\|`medium`\|`high`\|`xhigh`\|`max`) |
+| `MAX_OUTPUT_TOKENS` | `32000` | Max output tokens per reviewer/judge call (raise for big PRs at high effort) |
+| `MODEL_CONTEXT_TOKENS` | `0` (derive) | Override the model's context-window size used for budgeting |
+| `MAX_REPLY_COMMENTS` | `5` | Max agent replies per PR (0 = unlimited) |
+| `SKIP_SOURCE_BRANCHES` / `SKIP_TARGET_BRANCHES` | `main,master,release/*,hotfix/*` / `main,master` | Branch-exclusion globs |
+| `DIFF_EXCLUDE_PATTERNS` | `*.lock,package-lock.json,yarn.lock,pnpm-lock.yaml,*.json,*.spec.ts` | Globs excluded from the reviewable diff |
+| `ANTHROPIC_WORKSPACE_ID` | — | Sets the `anthropic-workspace-id` header (required for workspace-scoped / user keys) |
+
+See [docs/reference/env-vars.md](docs/reference/env-vars.md) for the complete list.
 
 ### Azure DevOps (experimental / WIP)
 

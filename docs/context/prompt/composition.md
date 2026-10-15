@@ -23,7 +23,7 @@ Final system prompt = base-prompt.txt + repo prompt sections
 - SCOPE LOCK — prompt injection defense
 - Re-review / delta instructions + the `no_change` field (set true when a re-review has nothing material)
 - Developer discussion trust rules
-- OUTPUT — the reviewer fills a typed object (`summary`, `findings[]`, `behavioral_diff[]`, `production_risk[]`, `unresolved_questions[]`), not markdown; `renderReview` builds the posted comment (see [llm/structured-output.md](../llm/structured-output.md))
+- OUTPUT — the reviewer fills a typed object (`summary`, `findings[]`, `behavioral_diff[]`, `production_risk[]`, `unresolved_questions[]`), not markdown; `renderReview` builds the posted comment (see [llm/structured-output.md](../llm/structured-output.md)). A finding's `lines` is digits only — a number or range, never a symbol name or quoted code
 
 **Runtime add-ons** (appended to the assembled system prompt in `CALL_CLAUDE`, opt-in, never touch the base template):
 - `MAX_FINDINGS` > 0 → a `## FINDINGS LIMIT` instruction capping reported findings

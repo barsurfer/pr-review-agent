@@ -15,7 +15,7 @@ All model calls go through `LLMProvider` (`src/llm/provider.ts`), never the SDK 
 - `complete(system, user, opts)` → `{ text, usage }`
 - `completeStructured<T>(system, user, schema, opts)` → `{ object: T, usage }` (JSON-schema-constrained)
 
-`createProvider(apiKey)` selects the impl by `LLM_PROVIDER` (default and only value: `anthropic`). The Anthropic SDK lives in exactly one file, so a second provider is a new class — not a re-plumb across the codebase. `completeStructured` throws on invalid JSON and on a `max_tokens` cut-off, so a truncated object is never returned.
+`createProvider(apiKey)` selects the impl by `LLM_PROVIDER` (default and only value: `anthropic`). The Anthropic SDK lives in exactly one file, so a second provider is a new class — not a re-plumb across the codebase. Both `complete` and `completeStructured` throw a `TruncatedResponseError` on a `max_tokens` cut-off — it carries the response usage, so the record keeps real token counts (not zeros); `completeStructured` also throws on invalid JSON or missing required keys, so a truncated or malformed object is never returned. Effort rides `output_config.effort` with a one-shot retry without it on a 400.
 
 **Why:** keep the SDK in one place and make structured output (and a future non-Anthropic backend) an implementation detail. Prompts stay Claude-tuned — provider portability is a separate per-model effort.
 
@@ -37,7 +37,7 @@ The reviewer returns a typed object (`REVIEW_OUTPUT_SCHEMA` in `src/claude/clien
 The judge (`JUDGE_OUTPUT_SCHEMA`) returns three fields:
 - `review_markdown` — the posted comment; the judge still writes this as prose, including `### Merge Confidence: X%`
 - `judge_notes` — drop/downgrade rationale; logged, never posted
-- `finding_scores[{title, severity, score, file?, lines?}]` — per-finding 0–10 confidence, scored independently of severity, with an optional transcribed anchor (benchmark uses it to re-locate a prose-only finding); logged to `results.jsonl` as `finding_scores` + `min_finding_score`, never posted
+- `finding_scores[{title, severity, score, file?, lines?}]` — per-finding 0–10 confidence, scored independently of severity, with an optional transcribed anchor — the benchmark prefers the matched reviewer finding's file+line (`anchorSource: 'reviewer'`), falls back to the judge's own pair (`'judge'`), and uses the judge file to veto a wrong-file title match; logged to `results.jsonl` as `finding_scores` + `min_finding_score`, never posted
 
 The judge is **not** yet fully structured (it emits `review_markdown` prose), so the final `findings` counts and `verdict_score` are still parsed from that markdown. Making the judge emit structured findings — and rendering the scores in the review — is a deferred step (the "visible / structured-judge" path).
 
