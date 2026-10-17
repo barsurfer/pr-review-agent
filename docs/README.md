@@ -19,9 +19,10 @@ structured review as a PR comment.
 > Phase 1, 1b, and 2 are complete. Jenkins integration is live via Generic
 > Webhook Trigger — Bitbucket PR events (create, update, comment) auto-trigger reviews.
 >
-> [Multi-VCS Support](phases/phase-3-multi-vcs.md) (GitHub/GitLab) stays in the backlog.
-> Bitbucket is the primary target; an experimental Azure DevOps adapter is validated
-> live on a cloud project, and a filesystem adapter backs `--benchmark` runs.
+> [Multi-VCS Support](phases/phase-3-multi-vcs.md) is partially shipped: Bitbucket is the
+> primary target; an experimental Azure DevOps adapter is validated live on a cloud project;
+> an experimental GitHub adapter handles same-repo PRs via GitHub Actions; and a filesystem
+> adapter backs `--benchmark` runs. The GitLab adapter stays in the backlog.
 
 ---
 
@@ -52,5 +53,5 @@ structured review as a PR comment.
 - **Smart skip logic** — commit hash dedup, NO_CHANGE stop word, timestamp-based reply dedup
 - **Conversational** — responds to developer questions on review comments
 - **Optional judge model** — validates findings against the diff before posting (generator-verifier pattern)
-- **VCS-agnostic architecture** — Bitbucket now, GitHub/GitLab later via adapter pattern
+- **VCS-agnostic architecture** — Bitbucket (production), Azure DevOps and GitHub (experimental), GitLab later, all via the adapter pattern
 - **Repo-specific prompts** — each target repo can tune review behaviour via `.agent-review-instructions.md`

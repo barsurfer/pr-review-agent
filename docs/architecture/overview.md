@@ -4,8 +4,8 @@
 
 The PR Review Agent is a stateless CLI tool that:
 
-1. Is triggered by Jenkins when a PR is opened or updated
-2. Fetches the diff and relevant file context from Bitbucket (or later: GitHub/GitLab)
+1. Is triggered when a PR is opened or updated — by Jenkins for Bitbucket, or by GitHub Actions for GitHub
+2. Fetches the diff and relevant file context from Bitbucket, Azure DevOps, or GitHub (GitLab later)
 3. Assembles a structured prompt and sends it to Claude
 4. Posts the review as a comment on the PR
 5. On re-triggers: skips if already reviewed (commit hash dedup), responds to developer
@@ -42,7 +42,7 @@ pr-review-agent/
 │   │   ├── bitbucket.ts          # Bitbucket Cloud implementation
 │   │   ├── azure.ts              # Azure DevOps implementation (experimental, live on cloud)
 │   │   ├── reviewbench.ts        # Filesystem adapter for --benchmark
-│   │   ├── github.ts             # GitHub stub (backlog)
+│   │   ├── github.ts             # GitHub implementation (experimental, same-repo PRs via Actions)
 │   │   └── gitlab.ts             # GitLab stub (backlog)
 │   ├── prompt/
 │   │   ├── loader.ts             # Loads base template, parses repo sections, composes stacks, fills placeholders
@@ -60,6 +60,10 @@ pr-review-agent/
 │   ├── angular-ionic-copilot.prompt.md    # Copilot + Agent (Angular / Ionic)
 │   ├── angular-copilot.prompt.md          # Copilot + Agent (Angular)
 │   └── java-spring-copilot.prompt.md      # Copilot + Agent (Java / Spring Boot)
+├── .github/workflows/
+│   ├── ci.yml                    # Typecheck + tests + bundle build (the release gate)
+│   ├── pr-review.yml             # GitHub Actions trigger: review on PR events, reply on PR comments
+│   └── reviewbench-image.yml     # Builds/publishes the ReviewBench GHCR image on v* tags
 ├── azure/                        # Azure DevOps pipelines (review + reply)
 ├── jenkins/                      # Jenkins pipeline
 ├── reviewbench/                  # ReviewBench Docker image + harness

@@ -6,11 +6,11 @@ The adapter pattern decouples orchestration logic from VCS-specific API details.
 All VCS implementations must satisfy the same interface. The adapter is selected by the
 `VCS_PROVIDER` env var (the `--vcs` CLI flag overrides it for one-off runs).
 
-> **Priority:** Bitbucket is the primary production target. An Azure DevOps adapter is
-> implemented (experimental, validated live against a cloud project) and a filesystem
-> adapter backs `--benchmark` runs. GitHub and GitLab adapters remain stubs that throw
-> `NotImplementedError` until Phase 3 is actively worked. The interface exists to avoid
-> architectural lock-in, not to drive parallel implementation.
+> **Priority:** Bitbucket is the primary production target. Azure DevOps (experimental,
+> validated live against a cloud project) and GitHub (experimental, same-repo PRs triggered
+> via GitHub Actions) adapters are implemented, and a filesystem adapter backs `--benchmark`
+> runs. The GitLab adapter remains a stub until Phase 3 is actively worked. The interface
+> exists to avoid architectural lock-in, not to drive parallel implementation.
 
 ---
 
@@ -53,7 +53,7 @@ Set `VCS_PROVIDER` env var to one of:
 |-------|---------|--------|
 | `bitbucket` | `BitbucketAdapter` | Phase 1 — fully implemented |
 | `azure` | `AzureDevOpsAdapter` | Experimental — validated live on a cloud project |
-| `github` | `GitHubAdapter` | Phase 3 — stub only |
+| `github` | `GitHubAdapter` | Experimental — same-repo PRs, triggered via GitHub Actions (flat issue-comment model; no inline comments) |
 | `gitlab` | `GitLabAdapter` | Phase 3 — stub only |
 
 Default and primary production value: `bitbucket`. `--benchmark` runs use a filesystem
@@ -80,6 +80,7 @@ interface PRInfo {
   id: string
   title: string
   description: string
+  author: string                // PR author display name / login
   sourceBranch: string
   targetBranch: string
   sourceCommit: string          // used for commit hash dedup in review footer

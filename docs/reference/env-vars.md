@@ -17,7 +17,7 @@ credentials in source code or commit them to version control.**
 
 | Variable | Example | Description |
 |----------|---------|-------------|
-| `VCS_PROVIDER` | `bitbucket` | Which VCS adapter to use. `bitbucket` is production; `azure` is experimental/WIP (see below); `github`/`gitlab` are stubs. |
+| `VCS_PROVIDER` | `bitbucket` | Which VCS adapter to use. `bitbucket` is production; `azure` and `github` are experimental (see below); `gitlab` is a stub. |
 | `BITBUCKET_BASE_URL` | `https://api.bitbucket.org/2.0` | Bitbucket Cloud API base URL (Server/DC is not supported — different v1 API) |
 | `BITBUCKET_WORKSPACE` | `my-workspace` | Bitbucket workspace slug |
 | `BITBUCKET_USERNAME` | `you@company.com` | Your Atlassian account email (used for HTTP Basic Auth) |
@@ -102,6 +102,36 @@ The diff is reconstructed from the `diffs/commits` change list + per-file blob c
 
 ---
 
+## GitHub (Experimental — same-repo PRs)
+
+Selected with `--vcs github` or `VCS_PROVIDER=github`. Fully implemented for **same-repo**
+PRs and triggered via GitHub Actions; fork PRs are out of scope (read-only token, no secrets).
+Reviews and replies are flat issue comments (no threading); no inline comments yet.
+
+| Variable | Example | Description |
+|----------|---------|-------------|
+| `GITHUB_BASE_URL` | `https://api.github.com` | API base URL. Point at `https://<host>/api/v3` for GitHub Enterprise Server. |
+| `GITHUB_OWNER` | `my-org` | Repository owner (org or user). Required. Can also be set via `--workspace`. |
+| `GITHUB_TOKEN` | `ghp_…` / `github_pat_…` | Token with PR read/write on the repo. Required. In Actions, the workflow-provided `GITHUB_TOKEN` secret is used. |
+
+`validateGitHubConfig()` requires `GITHUB_OWNER` and `GITHUB_TOKEN`. Repository is passed via
+`--repo-slug`. A large PR whose diff the PR endpoint refuses (406) falls back to the `/compare`
+endpoint; past 3000 changed files or a 25 MB diff the run is a clean SKIP, never an error.
+
+**GitHub Actions trigger.** [`.github/workflows/pr-review.yml`](../../.github/workflows/pr-review.yml)
+is the GitHub-native equivalent of the Jenkins/Azure pipelines. It reviews on `pull_request`
+(opened/synchronize/reopened) and replies on `issue_comment` (created), guarded to same-repo
+PRs and non-bot commenters, with `permissions: pull-requests: write` / `contents: read`. It sets
+two env values worth noting:
+
+- `AGENT_IDENTITY: github-actions[bot]` — the name shown in review/reply footers. (The agent
+  doesn't answer itself: the `issue_comment` guard drops `Bot` authors, and the adapter also
+  detects its own comments by footer, not author.)
+- `SKIP_TARGET_BRANCHES: ""` — the GitHub flow targets `main` directly, so the `main,master`
+  default would skip every PR; it must be emptied for the Actions path.
+
+---
+
 ## Phase 4 — Inline Comments (planned — not implemented)
 
 | Variable | Example | Description |
@@ -111,10 +141,10 @@ The diff is reconstructed from the `diffs/commits` change list + per-file blob c
 
 ---
 
-## Backlog — GitHub / GitLab Adapters
+## Backlog — GitLab Adapter
 
 See [phases/phase-3-multi-vcs.md](../phases/phase-3-multi-vcs.md) for env vars
-needed when GitHub/GitLab adapters are implemented.
+needed when the GitLab adapter is implemented.
 
 ---
 
@@ -136,6 +166,12 @@ BITBUCKET_TOKEN=
 # AZURE_PROJECT=
 # AZURE_ACCESS_TOKEN=
 # AZURE_PAT=
+
+# GitHub (experimental — same-repo PRs) — set VCS_PROVIDER=github to use.
+# Triggered via GitHub Actions (.github/workflows/pr-review.yml); fork PRs out of scope.
+# GITHUB_BASE_URL=https://api.github.com   # GitHub Enterprise: https://<host>/api/v3
+# GITHUB_OWNER=                            # org or user (can also use --workspace)
+# GITHUB_TOKEN=
 
 # Claude
 ANTHROPIC_API_KEY=

@@ -50,7 +50,7 @@ FETCH_PR_INFO
 9. Reply — developer question answered (including after a NO_CHANGE re-review)
 10. Post review — new review comment
 
-(Fine-grained skips — input-budget exceeded, context-window overflow, a bundled review that needs too many bundles, and the pre-post race — fall under outcomes 1–3; see [skip-logic.md](skip-logic.md).)
+(Fine-grained skips — input-budget exceeded, context-window overflow, a bundled review that needs too many bundles, an oversized diff the adapter can't fetch (`PrTooLargeError`, GitHub), and the pre-post race — fall under outcomes 1–3; see [skip-logic.md](skip-logic.md).)
 
 ---
 
@@ -58,7 +58,7 @@ FETCH_PR_INFO
 
 | State | What happens |
 |-------|-------------|
-| `FETCH_DIFF` | Fetches raw diff from VCS API; calls `filterDiff()` to produce filtered copy; computes reviewable (post-filter) line/file counts; skips immediately if zero reviewable lines |
+| `FETCH_DIFF` | Fetches raw diff from VCS API; calls `filterDiff()` to produce filtered copy; computes reviewable (post-filter) line/file counts; skips immediately if zero reviewable lines. A `PrTooLargeError` from the adapter (diff over the provider's size ceilings — GitHub only today) is caught here and becomes a clean SKIP, not an ERROR |
 | `CHECK_THRESHOLDS` | Compares reviewable (post-filter) line/file counts against `MIN/MAX_CHANGED_*` env vars |
 | `CHECK_BRANCHES` | Compares source/target branch names against `SKIP_SOURCE_BRANCHES` / `SKIP_TARGET_BRANCHES` glob patterns |
 | `CHECK_PREVIOUS_REVIEWS` | Parses commit hash from last review footer; triggers delta diff pre-check if different commit |

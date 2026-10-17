@@ -1,6 +1,6 @@
 ---
 type: domain
-topic: VCS adapter interface, Bitbucket implementation, supporting types
+topic: VCS adapter interface, Bitbucket/Azure/GitHub implementations, supporting types
 ---
 
 # VCS Adapter
@@ -43,8 +43,8 @@ interface VCSAdapter {
 |-------|-------|--------|
 | `bitbucket` | `BitbucketAdapter` | Production — fully implemented |
 | `azure` | `AzureDevOpsAdapter` | **Experimental / WIP** — all 10 methods implemented; validated end-to-end against a live cloud Services org (read / write / footer dedup). Not yet Server/on-prem or a live pipeline-OAuth run |
-| `github` | `GitHubAdapter` | Stub — throws `NotImplementedError` |
-| `gitlab` | `GitLabAdapter` | Stub — throws `NotImplementedError` |
+| `github` | `GitHubAdapter` | **Experimental** — fully implemented for **same-repo** PRs, triggered via GitHub Actions (`.github/workflows/pr-review.yml`). Fork PRs out of scope (read-only token). Flat issue-comment review/reply model; no inline comments yet |
+| `gitlab` | `GitLabAdapter` | Stub — throws `not implemented` |
 
 `--vcs azure` (or `VCS_PROVIDER=azure`) selects it. Prints a one-line WIP warning on construction.
 
@@ -87,6 +87,28 @@ interface VCSAdapter {
 - **PR info:** `sourceRefName`/`targetRefName` strip `refs/heads/`; source commit = `lastMergeSourceCommit.commitId`; PR-diff base/target = `lastMergeTargetCommit`/`lastMergeSourceCommit`.
 - **Repo file lookup (prompt/instructions):** `getRepoFileContent(path, ref)` picks the Items API `versionDescriptor.versionType` **by ref shape** — a 7–40-char hex ref → `commit`; anything else (e.g. a branch name like `main`, which `loadPrompt` passes as a fallback ref) → `branch`. A hardcoded `commit` here 400s on a branch name — the original WIP bug that killed the run instead of falling back. A missing file returns `null` (catches **404 and 400**) so the loader cleanly defaults. `getFileContent` (diff/context path) always receives commit SHAs, so it stays `versionType: 'commit'`.
 - **Dependency:** adds `diff` (jsdiff) + `@types/diff`; esbuild bundles it automatically.
+
+---
+
+## GitHub Implementation Details (experimental)
+
+`src/vcs/github.ts` — fully implemented for **same-repo** PRs; triggered via GitHub Actions (see below). Purely additive: the `VCSAdapter` interface was unchanged (it already had `getCommitDiff`).
+
+- **Auth / config:** `Authorization: Bearer {GITHUB_TOKEN}`, `Accept: application/vnd.github+json`, `X-GitHub-Api-Version: 2022-11-28`. `GITHUB_OWNER` (aliased by `--workspace`) + `--repo-slug` → repo; `GITHUB_BASE_URL` defaults to `https://api.github.com`, point it at `<host>/api/v3` for GitHub Enterprise. `validateGitHubConfig()` requires `GITHUB_OWNER` and `GITHUB_TOKEN`. Every request has a 30s timeout.
+- **REST mapping:** PR info from `GET /repos/{owner}/{repo}/pulls/{id}`; changed files from `…/pulls/{id}/files`; file content from `…/contents/{path}` with `Accept: application/vnd.github.raw` (`getRepoFileContent` omits `ref` to hit the default branch and maps 404 → `null`); diff from the PR endpoint with `Accept: application/vnd.github.diff`. File-status mapping normalizes GitHub's `removed` → `deleted` (added/renamed pass through, everything else → `modified`).
+- **Flat issue-comment review/reply model:** reviews and replies are both plain **issue comments** (`POST …/issues/{id}/comments`) — GitHub issue comments have no `parent.id`, so there is no threading. The agent treats the whole PR as one thread: a "reply" is any non-agent comment posted **after the agent's latest comment** (review or reply), detected by footer (`hasReviewFooter`/`hasReplyFooter`). `postReply` ignores `parentId` and posts a new issue comment; `parentId` on returned replies is just the latest review's id so the FSM has an anchor. Contrast Bitbucket/Azure, whose threaded models follow `parent.id` recursively (see [review/replies.md](../review/replies.md)).
+- **Pagination:** list endpoints (`/files`, `/issues/{id}/comments`) page via the `Link` header `rel="next"`, not a body field — `getPaginated` walks it with `per_page=100`.
+- **Large-PR diff fallback:** the PR diff endpoint returns **406** past GitHub's render limits (~300 files / 20k lines / 1 MB). On 406 only (every other error re-throws), `getDiff` falls back to the `/compare/{base}...{head}` endpoint, which has no diff-size ceiling and returns a byte-identical git diff. The anchor is `base.ref` for an open PR (reproduces GitHub's merge-base diff) or the recorded `base.sha` for a closed one. The fallback is bounded: **>3000 changed files** → `PrTooLargeError` before download, and a compare body over **25 MB** aborts the stream → `PrTooLargeError`. The FSM turns `PrTooLargeError` into a clean **SKIP**, never an ERROR (consistent with "AI review never gates a merge"); a non-size compare failure surfaces as a real error. `getCommitDiff` (delta reviews) hits the same `/compare/{from}...{to}` endpoint for the commit-to-commit delta.
+
+### GitHub Actions deployment
+
+`.github/workflows/pr-review.yml` is the GitHub-native trigger (the equivalent of the Jenkins/Azure pipelines):
+- **Triggers:** `pull_request` (opened, synchronize, reopened) for reviews + `issue_comment` (created) for replies.
+- **Guards:** same-repo PRs only (`head.repo.full_name == github.repository` — fork PRs get a read-only token and no secrets); `issue_comment` runs only on PR comments from a non-`Bot` user (skips plain issues and the agent's own comments).
+- **Permissions:** `pull-requests: write`, `contents: read`. One run per PR via `concurrency` with `cancel-in-progress`.
+- **Env:** `ANTHROPIC_API_KEY` + the workflow-provided `GITHUB_TOKEN` as secrets; `AGENT_IDENTITY: github-actions[bot]` (the footer display name); `SKIP_TARGET_BRANCHES: ""` because the GitHub flow targets `main` directly and the `main,master` default would skip every PR. The job runs `npm ci && npm run bundle` then invokes the agent with `--vcs github --workspace {owner} --repo-slug {repo} --pr-id {number}`.
+
+The agent's own comments don't re-trigger it: the `issue_comment` guard drops `Bot` authors (the agent posts as the Actions bot), and the adapter separately recognizes its comments by footer, not author.
 
 ---
 

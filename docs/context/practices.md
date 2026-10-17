@@ -14,7 +14,7 @@ The agent derives all state from the PR's comment history via API on each run. N
 
 ## API-Only Access
 
-Nothing is ever checked out. All file content (diffs, full files, `.agent-review-instructions.md`) is fetched via the VCS REST API (Bitbucket in production, Azure DevOps experimentally) through the adapter. This is an explicit constraint — not a limitation.
+Nothing is ever checked out. All file content (diffs, full files, `.agent-review-instructions.md`) is fetched via the VCS REST API (Bitbucket in production; Azure DevOps and GitHub experimentally) through the adapter. This is an explicit constraint — not a limitation.
 
 ## FSM Orchestration
 
@@ -46,7 +46,7 @@ See [llm/structured-output.md](llm/structured-output.md).
 
 ## VCS Adapter
 
-All VCS interactions go through `VCSAdapter` interface in `src/vcs/adapter.ts`. Orchestration logic never calls Bitbucket APIs directly. GitHub/GitLab adapters are stubs — extending to a new VCS means implementing the interface, not touching orchestration.
+All VCS interactions go through `VCSAdapter` interface in `src/vcs/adapter.ts`. Orchestration logic never calls Bitbucket APIs directly. Bitbucket (production), Azure DevOps and GitHub (both experimental) implement the interface; the GitLab adapter is still a stub — extending to a new VCS means implementing the interface, not touching orchestration.
 
 See [vcs/adapter.md](vcs/adapter.md).
 

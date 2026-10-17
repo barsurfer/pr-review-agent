@@ -19,7 +19,7 @@ Rule: Each entry has a 1-sentence summary: key concepts, keywords, tech; ends wi
 
 - [review/](review/)
   - [review/fsm.md](review/fsm.md) — 17-state FSM: all states, transitions, 10 skip/review outcomes, BUNDLED_REVIEW big-PR path (directory bundles, per-bundle reviewer+judge, merge/dedupe, ENABLE_BUNDLED_REVIEW/MAX_BUNDLES), ReviewContext interface, POST_REVIEW safety guards; read when changing orchestration logic.
-  - [review/skip-logic.md](review/skip-logic.md) — All skip mechanisms: commit hash dedup, delta diff pre-check, branch exclusion, size thresholds, reply limit; read when debugging unexpected skips.
+  - [review/skip-logic.md](review/skip-logic.md) — All skip mechanisms: commit hash dedup, delta diff pre-check, branch exclusion, size thresholds, reply limit, oversized-diff fetch failure (`PrTooLargeError` → SKIP, GitHub); read when debugging unexpected skips.
   - [review/replies.md](review/replies.md) — Reply detection algorithm, recursive parent tracking, stale-reply loop fix, bundled response, reply footer, reply limit; read when working on comment threading.
 
 - [prompt/](prompt/)
@@ -30,7 +30,7 @@ Rule: Each entry has a 1-sentence summary: key concepts, keywords, tech; ends wi
   - [llm/structured-output.md](llm/structured-output.md) — LLMProvider seam over the SDK (complete/completeStructured, LLM_PROVIDER), structured reviewer output (REVIEW_OUTPUT_SCHEMA → renderReview; no_change/can_be_split/delta_stats fields), structured judge output (finding_scores), and which metrics read the typed object vs regex; read when changing model I/O, output shape, or metrics sourcing.
 
 - [vcs/](vcs/)
-  - [vcs/adapter.md](vcs/adapter.md) — VCSAdapter interface, Bitbucket implementation (auth, redirect handling, required scopes), Azure DevOps adapter (WIP but live-validated on cloud — why the diff is reconstructed since there's no unified-diff REST endpoint, thread model, composite IDs, dual auth, ref version-type lookup), provider selection, ReviewBench filesystem adapter + `--benchmark` findings output, supporting types, Phase 4 inline comment extension; read when changing VCS behavior, adding a new adapter, or touching benchmark mode.
+  - [vcs/adapter.md](vcs/adapter.md) — VCSAdapter interface, Bitbucket implementation (auth, redirect handling, required scopes), Azure DevOps adapter (WIP but live-validated on cloud — why the diff is reconstructed since there's no unified-diff REST endpoint, thread model, composite IDs, dual auth, ref version-type lookup), GitHub adapter (experimental, same-repo via Actions — flat issue-comment reply model, Link pagination, 406→compare diff fallback + `PrTooLargeError`), provider selection, ReviewBench filesystem adapter + `--benchmark` findings output, supporting types, Phase 4 inline comment extension; read when changing VCS behavior, adding a new adapter, or touching benchmark mode.
 
 - [fetching/](fetching/)
   - [fetching/strategy.md](fetching/strategy.md) — Two-form diff (raw vs filtered), full file context exclusion rules, high-churn priority, MAX_CONTEXT_FILES/MAX_FILE_LINES, why local testing runs deliberately low limits (drift observation), full payload format for review and reply; read when changing what context is sent to Claude.
