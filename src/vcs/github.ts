@@ -3,16 +3,15 @@ import { hasReviewFooter, hasReplyFooter } from '../review/formatter.js'
 import { PrTooLargeError } from './adapter.js'
 import type { VCSAdapter, PRInfo, ChangedFile, ReviewComment, CommentReply, ReplyResult } from './adapter.js'
 
-// Bound every GitHub call so a hung request fails fast instead of stalling the whole run
+// Fail a hung request fast instead of stalling the whole run.
 const REQUEST_TIMEOUT_MS = 30_000
 const DIFF_ACCEPT = 'application/vnd.github.diff'
 const RAW_ACCEPT = 'application/vnd.github.raw'
 
-// Cap the compare-fallback download so a vendor/lockfile mega-PR is skipped rather than buffered into memory
+// Cap the compare download so a mega-PR is skipped, not buffered into memory.
 const MAX_COMPARE_DIFF_BYTES = 25 * 1024 * 1024
 
-// The compare fallback only runs for already-oversized (406'd) PRs, whose diff GitHub can take well over
-// the 30s default to generate; give it more room before treating a stall as "too large to review".
+// Big-PR compare diffs can take well over the 30s default to generate.
 const COMPARE_TIMEOUT_MS = 120_000
 
 // GitHub's /files list (and getChangedFiles) silently truncates here, so a complete diff is impossible past it
@@ -57,7 +56,7 @@ export class GitHubAdapter implements VCSAdapter {
       )
       return data as string
     } catch (err: unknown) {
-      // 406 is the only signal that the PR endpoint refused to render the diff (over 300 files / 20k lines / 1 MB); every other error is a genuine failure.
+      // 406 means the diff was too big to render; fall back to compare (any other error is real).
       if (!(axios.isAxiosError(err) && err.response?.status === 406)) throw err
       // Surface why the fallback fired so the stale-base/non-size-406 risks are observable in CI logs.
       const body = typeof err.response?.data === 'string' ? err.response.data.slice(0, 200) : ''
@@ -66,14 +65,14 @@ export class GitHubAdapter implements VCSAdapter {
     }
   }
 
-  // The compare endpoint has no diff-size ceiling and returns a byte-identical git diff, so it recovers a PR the /pulls diff endpoint rejected with 406.
+  // Compare has no diff-size ceiling, so it recovers a PR the /pulls diff endpoint 406'd.
   private async getCompareDiff(prId: string): Promise<string> {
     const { data: pr } = await this.client.get(`${this.repoPath()}/pulls/${prId}`)
     if (pr.changed_files > MAX_CHANGED_FILES) throw new PrTooLargeError(prId, `exceeds ${MAX_CHANGED_FILES} files`)
 
-    // Open PR: GitHub's diff is merge-base(base tip, head), which base.ref reproduces exactly; a closed PR's base branch already contains head, so compare its recorded base.sha instead.
+    // Open PR: base.ref reproduces GitHub's merge-base diff; a closed PR's base already has head, so use base.sha.
     const anchor = pr.state === 'open' ? pr.base.ref : pr.base.sha
-    // encodeURIComponent turns a slash in a branch name into %2F so it isn't read as a path separator; a head sha has no special chars.
+    // Encode the branch name so a slash in it isn't read as a path separator.
     const range = `${encodeURIComponent(anchor)}...${pr.head.sha}`
     console.warn(`PR #${prId} compare fallback using ${range} (state=${pr.state})`)
 
@@ -88,9 +87,9 @@ export class GitHubAdapter implements VCSAdapter {
       return data as string
     } catch (err: unknown) {
       if (axios.isAxiosError(err)) {
-        // A timeout here means even the uncapped compare couldn't deliver in COMPARE_TIMEOUT_MS; for an already-406'd PR that's effectively too large — skip rather than retry a deterministically-slow diff.
+        // A timeout on an already-oversized PR means it's effectively too large — skip, don't retry a slow diff.
         if (err.code === 'ECONNABORTED') throw new PrTooLargeError(prId, 'compare diff timed out (likely too large)')
-        // axios aborts the stream and rejects (no response) once the body passes maxContentLength — that PR is genuinely too big to review.
+        // axios aborts the stream past maxContentLength (no response) — the PR is genuinely too big.
         if (/maxContentLength|maxBodyLength/i.test(err.message)) throw new PrTooLargeError(prId, `diff exceeds ${MAX_COMPARE_DIFF_BYTES / (1024 * 1024)}MB`)
       }
       throw new Error(`PR #${prId} diff exceeded the GitHub PR endpoint (406) and the compare fallback failed: ${(err as Error).message}`, { cause: err })
@@ -135,19 +134,17 @@ export class GitHubAdapter implements VCSAdapter {
   async getPreviousReviewComments(prId: string): Promise<ReviewComment[]> {
     const comments = await this.getIssueComments(prId)
     return comments
-      // Match the agent's exact footer line, not a substring — a human writing
-      // "Reviewed by me" must not be mistaken for an agent review
+      // Match the exact footer line, not a substring, so a human "Reviewed by me" isn't mistaken for one.
       .filter(c => hasReviewFooter(c.body ?? ''))
       .map(c => ({ id: String(c.id), body: c.body as string, createdOn: c.created_at }))
   }
 
-  // Issue comments are flat (no parent id), so the PR is treated as one thread:
-  // a reply is any human comment posted after the agent's latest comment.
+  // Issue comments are flat (no parent id): a reply is any human comment after the agent's latest one.
   async getRepliesToReviewComments(prId: string, _reviewCommentIds: string[], includeAnswered = false): Promise<ReplyResult> {
     const comments = await this.getIssueComments(prId)
     const humanReplies: CommentReply[] = []
     let agentReplyCount = 0
-    let latestAgentComment = ''   // ISO timestamp of the agent's most recent comment
+    let latestAgentComment = ''
     let latestReview: { id: string; createdOn: string } | null = null
 
     for (const c of comments) {

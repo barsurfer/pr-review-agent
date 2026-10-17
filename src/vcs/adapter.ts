@@ -33,7 +33,7 @@ export interface ReplyResult {
   agentReplyCount: number
 }
 
-// Thrown when a PR's complete diff can't be fetched (over GitHub's file/size ceilings); the FSM turns it into a clean SKIP instead of an ERROR.
+// Raised when a PR's full diff exceeds the provider's fetch ceilings; the FSM turns it into a clean SKIP.
 export class PrTooLargeError extends Error {
   constructor(public readonly prId: string, public readonly reason: string) {
     super(`PR too large to review (${reason})`)

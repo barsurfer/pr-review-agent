@@ -2,10 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest'
 import axios from 'axios'
 import http from 'node:http'
 
-// Pins the real-axios error shapes GitHubAdapter.getCompareDiff keys on: ERR_BAD_RESPONSE +
-// a "maxContentLength" message for the 25MB cap, ECONNABORTED for the compare timeout. This
-// fails loudly if an axios upgrade changes them, instead of the adapter silently turning a
-// too-large SKIP into a generic ERROR. See src/vcs/github.ts. (Real axios — not mocked.)
+// Pins the real-axios error shapes getCompareDiff relies on, so an axios upgrade fails here, not silently in prod.
 
 const servers: http.Server[] = []
 const timers: NodeJS.Timeout[] = []
