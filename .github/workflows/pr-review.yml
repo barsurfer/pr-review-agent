@@ -1,0 +1,44 @@
+name: PR Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  issue_comment:
+    types: [created]
+
+permissions:
+  pull-requests: write
+  contents: read
+
+# One run per PR at a time; a newer push supersedes the in-flight review
+concurrency:
+  group: pr-review-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    # Same-repo PRs only (fork PRs get a read-only token and no secrets); comments on plain issues
+    # and the agent's own comments are skipped
+    if: >-
+      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request && github.event.comment.user.type != 'Bot')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci && npm run bundle
+      - run: |
+          node dist/pr-review-agent.cjs \
+            --vcs github \
+            --workspace "${{ github.repository_owner }}" \
+            --repo-slug "${{ github.event.repository.name }}" \
+            --pr-id "${{ github.event.pull_request.number || github.event.issue.number }}"
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          AGENT_IDENTITY: github-actions[bot]
+          # GitHub flow targets main directly; the default main,master would skip every PR
+          SKIP_TARGET_BRANCHES: ""

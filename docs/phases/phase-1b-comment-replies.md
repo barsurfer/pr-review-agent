@@ -46,8 +46,9 @@ getRepliesToReviewComments(prId: string, reviewCommentIds: string[]): Promise<Co
 postReply(prId: string, parentId: string, body: string): Promise<void>
 ```
 
-Implemented in `BitbucketAdapter`. GitHub and GitLab adapters have stubs that throw
-`NotImplementedError`.
+Implemented in `BitbucketAdapter` (Phase 1b). GitHub and Azure adapters were added later;
+the GitLab adapter remains a stub. Current VCS status lives in
+[architecture/vcs-adapter.md](../architecture/vcs-adapter.md).
 
 ### Reply prompt: `src/prompt/reply-prompt.txt`
 

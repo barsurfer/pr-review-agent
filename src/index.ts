@@ -5,7 +5,7 @@ if (major < 22) {
 }
 
 import { Command } from 'commander'
-import { config, validateBitbucketConfig, validateAzureConfig } from './config.js'
+import { config, validateBitbucketConfig, validateAzureConfig, validateGitHubConfig } from './config.js'
 import { BitbucketAdapter } from './vcs/bitbucket.js'
 import { AzureDevOpsAdapter } from './vcs/azure.js'
 import { GitHubAdapter } from './vcs/github.js'
@@ -135,7 +135,17 @@ async function main(): Promise<void> {
     az.setRepoSlug(opts.repoSlug)
     adapter = az
   } else if (provider === 'github') {
-    adapter = new GitHubAdapter()
+    if (opts.workspace) config.github.owner = opts.workspace
+    validateGitHubConfig()
+
+    const gh = new GitHubAdapter(config.github.baseUrl, config.github.owner, config.github.token)
+
+    if (!opts.repoSlug) {
+      console.error('Error: --repo-slug is required for GitHub')
+      process.exit(1)
+    }
+    gh.setRepoSlug(opts.repoSlug)
+    adapter = gh
   } else if (provider === 'gitlab') {
     adapter = new GitLabAdapter()
   } else {

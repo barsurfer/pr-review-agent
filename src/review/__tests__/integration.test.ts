@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { PrTooLargeError } from '../../vcs/adapter.js'
 import type { VCSAdapter, PRInfo, ReviewComment, CommentReply } from '../../vcs/adapter.js'
 
 // ---------------------------------------------------------------------------
@@ -882,6 +883,34 @@ describe('zero reviewable delta → CHECK_REPLIES (not a blind skip)', () => {
     expect(record!.action).toBe('DEDUP_SKIP')
     expect(record!.skip_reason).toContain('no new commits')
     expect(record!.review_number).toBe(1)
+    expect(mockRunReview).not.toHaveBeenCalled()
+  })
+})
+
+// ===========================================================================
+// Scenario 7c: PR too large to fetch completely → clean SKIP (never an ERROR, no Claude)
+// ===========================================================================
+
+describe('getDiff throws PrTooLargeError → SKIP', () => {
+  it('skips cleanly without calling Claude or posting', async () => {
+    const adapter = makeAdapter({
+      getDiff: vi.fn().mockRejectedValue(new PrTooLargeError('100', 'diff exceeds 25MB')),
+    })
+
+    const record = await review(adapter, '100', true)
+
+    expect(record!.action).toBe('SKIP')
+    expect(record!.skip_reason).toContain('PR too large to review')
+    expect(mockRunReview).not.toHaveBeenCalled()
+    expect(adapter.postComment).not.toHaveBeenCalled()
+  })
+
+  it('a generic getDiff error still ERRORs (guards against over-catching)', async () => {
+    const adapter = makeAdapter({
+      getDiff: vi.fn().mockRejectedValue(new Error('boom')),
+    })
+
+    await expect(review(adapter, '100', true)).rejects.toThrow('boom')
     expect(mockRunReview).not.toHaveBeenCalled()
   })
 })

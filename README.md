@@ -4,7 +4,7 @@ Automated pull request code reviewer powered by Claude. When a PR is opened or u
 the agent fetches the diff and relevant file context from your VCS, sends it to Claude,
 and posts a structured review comment directly on the PR.
 
-**Current VCS support:** Bitbucket; Azure DevOps — experimental/WIP (GitHub and GitLab planned)
+**Current VCS support:** Bitbucket; Azure DevOps — experimental/WIP; GitHub — experimental (same-repo PRs via GitHub Actions). GitLab planned.
 
 ### What it does
 
@@ -302,9 +302,9 @@ bundle build on every push to `main` and every PR — the gate that keeps `main`
 | Flag | Required | Description |
 |------|----------|-------------|
 | `--pr-id <id>` | **Yes**\* | Pull request ID to review |
-| `--repo-slug <slug>` | **Yes** (Bitbucket, Azure) | Repository slug (Azure: repo name or GUID) |
-| `--workspace <workspace>` | No | Overrides `BITBUCKET_WORKSPACE` (or `AZURE_ORG` when `--vcs azure`) |
-| `--vcs <provider>` | No | `bitbucket` \| `azure` (WIP) \| `github` \| `gitlab` — overrides `VCS_PROVIDER` env var (default: `bitbucket`) |
+| `--repo-slug <slug>` | **Yes** (Bitbucket, Azure, GitHub) | Repository slug (Azure: repo name or GUID; GitHub: repo name) |
+| `--workspace <workspace>` | No | Overrides `BITBUCKET_WORKSPACE` (or `AZURE_ORG` when `--vcs azure`, `GITHUB_OWNER` when `--vcs github`) |
+| `--vcs <provider>` | No | `bitbucket` \| `azure` (WIP) \| `github` (experimental) \| `gitlab` (stub) — overrides `VCS_PROVIDER` env var (default: `bitbucket`) |
 | `--dry-run` | No | Print the review to stdout instead of posting to the PR |
 | `--force [mode]` | No | Bypass dedup. Bare or `re-review`: keep prior context; `clean`: drop prior context |
 | `--log-usage [bool]` | No | Log usage record to `results.jsonl` (default: `true`, use `--log-usage false` to disable). See [docs/reference/usage-logging.md](docs/reference/usage-logging.md) for schema. |
@@ -344,7 +344,7 @@ All credentials and settings are provided via environment variables.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `VCS_PROVIDER` | `bitbucket` | Which VCS adapter to use (`bitbucket` \| `azure` \| `github` \| `gitlab`) |
+| `VCS_PROVIDER` | `bitbucket` | Which VCS adapter to use — `bitbucket` (production), `azure`/`github` (experimental), `gitlab` (stub) |
 | `BITBUCKET_BASE_URL` | `https://api.bitbucket.org/2.0` | Bitbucket Cloud API base URL (Server/DC is not supported — different v1 API) |
 | `CLAUDE_MODEL` | `claude-haiku-4-5-20251001` | Reviewer model ID |
 | `MAX_RETRIES` | `3` | Max retries on 429/5xx errors (exponential backoff) |
@@ -431,6 +431,42 @@ for `AZURE_PAT: $(AZURE_PAT)` in the pipeline's `env:` block.
 > **Verified-live status, first-setup gotchas, the CI repo-prompt mechanism, and the
 > reply-flow setup** lives in the dedicated doc:
 > [docs/reference/azure-devops.md](docs/reference/azure-devops.md).
+
+### GitHub (experimental — same-repo PRs via GitHub Actions)
+
+Select the adapter with `--vcs github` or `VCS_PROVIDER=github`. It implements the full
+adapter interface for **same-repo** pull requests and is triggered by GitHub Actions. Fork
+PRs are out of scope (they get a read-only token and no secrets). Reviews and replies are
+flat **issue comments** — there is no comment threading and no inline comments yet.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GITHUB_BASE_URL` | `https://api.github.com` | API base URL. Point at `https://<host>/api/v3` for GitHub Enterprise Server |
+| `GITHUB_OWNER` | *(required)* | Repository owner — org or user (can also use `--workspace`) |
+| `GITHUB_TOKEN` | *(required)* | Token with PR read/write. In Actions, the workflow-provided `GITHUB_TOKEN` secret |
+
+Repository is passed via `--repo-slug` (the repo name). A very large PR whose diff GitHub's
+PR endpoint refuses (HTTP 406) falls back to the `/compare` endpoint; past 3000 changed files
+or a 25 MB diff the run is a clean **skip** (never an error — an AI review never gates a merge).
+
+#### CI integration (GitHub Actions)
+
+The GitHub-native equivalent of the Jenkins hook is
+[`.github/workflows/pr-review.yml`](.github/workflows/pr-review.yml). It reviews on
+`pull_request` (opened / synchronize / reopened) and replies on `issue_comment` (created),
+building and running the agent against the PR.
+
+Key points:
+
+- **Guards** — runs only on same-repo PRs (`head.repo.full_name == github.repository`) and, for
+  comments, only PR comments from a non-`Bot` user (skips plain issues and the agent's own
+  comments).
+- **Permissions** — `pull-requests: write` + `contents: read`; one run per PR via `concurrency`
+  with `cancel-in-progress`.
+- **Secrets** — `ANTHROPIC_API_KEY` plus the workflow-provided `GITHUB_TOKEN`.
+- **`AGENT_IDENTITY: github-actions[bot]`** — the name shown in review/reply footers.
+- **`SKIP_TARGET_BRANCHES: ""`** — the GitHub flow targets `main` directly, so the `main,master`
+  default would skip every PR; it is emptied for this path.
 
 ### How to Provide Environment Variables
 

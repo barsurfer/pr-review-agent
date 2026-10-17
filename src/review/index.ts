@@ -20,6 +20,7 @@ function supersedeBoundary<T extends { resolved?: boolean }>(reviews: T[]): T | 
 }
 
 import type { ReviewContext, OutcomeSink } from './types.js'
+import { PrTooLargeError } from '../vcs/adapter.js'
 import type { VCSAdapter } from '../vcs/adapter.js'
 
 import type { UsageRecord } from './usage.js'
@@ -62,7 +63,17 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
 
     case State.FETCH_DIFF: {
       console.log('Fetching diff...')
-      ctx.diff = await ctx.adapter.getDiff(ctx.prId)
+      try {
+        ctx.diff = await ctx.adapter.getDiff(ctx.prId)
+      } catch (err: unknown) {
+        // A PR too large to fetch completely is a deterministic SKIP (no Claude call), not an ERROR that reddens CI.
+        if (err instanceof PrTooLargeError) {
+          ctx.action = 'SKIP'
+          ctx.skipReason = err.message
+          return State.SKIP
+        }
+        throw err
+      }
 
       console.log('Fetching changed files...')
       ctx.changedFiles = await ctx.adapter.getChangedFiles(ctx.prId)

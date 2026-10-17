@@ -89,3 +89,11 @@ All can be overridden via CLI flags (`--min-changed-files`, etc.). `0` disables 
 Once the agent has replied `MAX_REPLY_COMMENTS` times (default: 5) on a PR, further developer questions are logged but not answered. Prevents runaway token usage on contentious PRs or adversarial follow-ups.
 
 Set `MAX_REPLY_COMMENTS=0` to disable.
+
+---
+
+## 6. Oversized Diff (fetch failure) — GitHub
+
+When an adapter cannot fetch a PR's complete diff because it exceeds the provider's size ceilings, it throws `PrTooLargeError` (`src/vcs/adapter.ts`); `FETCH_DIFF` catches it and exits as a clean **SKIP**, never an ERROR — an AI review never gates a merge, so an unreviewable PR fails open.
+
+Currently only `GitHubAdapter` raises it. GitHub's PR diff endpoint returns **406** past its render limits (~300 files / 20k lines / 1 MB); the adapter falls back to the `/compare` endpoint (no size ceiling), bounded by **>3000 changed files** and a **25 MB** download cap — either breach → `PrTooLargeError`. See [../vcs/adapter.md](../vcs/adapter.md). A non-size compare failure is a genuine error (run → ERROR, retried), not a skip.

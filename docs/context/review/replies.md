@@ -22,6 +22,8 @@ The agent scans all PR comments recursively to find unanswered developer questio
 
 This recursive parent tracking finds developer questions at any nesting depth.
 
+**Adapter note:** the `parent.id` recursion applies to the threaded models (Bitbucket, Azure). GitHub issue comments are flat (no `parent.id`), so `GitHubAdapter` treats the whole PR as one thread — a reply is any non-agent comment newer than the agent's latest comment (see [vcs/adapter.md](../vcs/adapter.md)).
+
 ---
 
 ## Bundled Response
