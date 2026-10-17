@@ -36268,6 +36268,12 @@ var config = {
     accessToken: optional("AZURE_ACCESS_TOKEN", "")
     // OAuth Bearer (e.g. pipeline System.AccessToken); preferred over PAT
   },
+  // GitHub (same-repo PRs). owner may be aliased by --workspace; point baseUrl at <host>/api/v3 for GHE.
+  github: {
+    baseUrl: optional("GITHUB_BASE_URL", "https://api.github.com"),
+    owner: optional("GITHUB_OWNER", ""),
+    token: optional("GITHUB_TOKEN", "")
+  },
   anthropic: {
     apiKey: required("ANTHROPIC_API_KEY"),
     // Sent as the anthropic-workspace-id header; a user-scoped key (sk-ant-usr-…) 400s without it.
@@ -36324,6 +36330,10 @@ function validateBitbucketConfig() {
   if (!config.bitbucket.workspace) throw new Error("Missing required environment variable: BITBUCKET_WORKSPACE");
   if (!config.bitbucket.username) throw new Error("Missing required environment variable: BITBUCKET_USERNAME");
   if (!config.bitbucket.token) throw new Error("Missing required environment variable: BITBUCKET_TOKEN");
+}
+function validateGitHubConfig() {
+  if (!config.github.owner) throw new Error("Missing required environment variable: GITHUB_OWNER");
+  if (!config.github.token) throw new Error("Missing required environment variable: GITHUB_TOKEN");
 }
 function validateAzureConfig() {
   if (!config.azure.org) throw new Error("Missing required environment variable: AZURE_ORG");
@@ -43076,36 +43086,218 @@ function buildUnifiedFilePatch(oldPath, newPath, oldContent, newContent) {
 
 // src/vcs/github.ts
 init_define_STACK_PROMPTS();
+
+// src/vcs/adapter.ts
+init_define_STACK_PROMPTS();
+var PrTooLargeError = class extends Error {
+  constructor(prId, reason) {
+    super(`PR too large to review (${reason})`);
+    this.prId = prId;
+    this.reason = reason;
+    this.name = "PrTooLargeError";
+  }
+  prId;
+  reason;
+};
+
+// src/vcs/github.ts
+var REQUEST_TIMEOUT_MS2 = 3e4;
+var DIFF_ACCEPT = "application/vnd.github.diff";
+var RAW_ACCEPT = "application/vnd.github.raw";
+var MAX_COMPARE_DIFF_BYTES = 25 * 1024 * 1024;
+var COMPARE_TIMEOUT_MS = 12e4;
+var MAX_CHANGED_FILES = 3e3;
 var GitHubAdapter = class {
-  getPullRequestInfo(_prId) {
-    throw new Error("GitHubAdapter not implemented \u2014 deferred to Phase 3");
+  client;
+  owner;
+  constructor(baseUrl, owner, token) {
+    this.owner = owner;
+    this.client = axios_default.create({
+      baseURL: baseUrl,
+      timeout: REQUEST_TIMEOUT_MS2,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "Content-Type": "application/json"
+      }
+    });
   }
-  getDiff(_prId) {
-    throw new Error("GitHubAdapter not implemented \u2014 deferred to Phase 3");
+  async getPullRequestInfo(prId) {
+    const { data } = await this.client.get(`${this.repoPath()}/pulls/${prId}`);
+    return {
+      id: String(data.number),
+      title: data.title,
+      description: data.body ?? "",
+      author: data.user?.login ?? "Unknown",
+      sourceBranch: data.head.ref,
+      targetBranch: data.base.ref,
+      sourceCommit: data.head.sha
+    };
   }
-  getFileContent(_filePath, _ref) {
-    throw new Error("GitHubAdapter not implemented \u2014 deferred to Phase 3");
+  async getDiff(prId) {
+    try {
+      const { data } = await this.client.get(
+        `${this.repoPath()}/pulls/${prId}`,
+        { headers: { Accept: DIFF_ACCEPT }, responseType: "text" }
+      );
+      return data;
+    } catch (err) {
+      if (!(axios_default.isAxiosError(err) && err.response?.status === 406)) throw err;
+      const body = typeof err.response?.data === "string" ? err.response.data.slice(0, 200) : "";
+      console.warn(`PR #${prId} diff returned 406; falling back to compare. ${body}`);
+      return this.getCompareDiff(prId);
+    }
   }
-  getChangedFiles(_prId) {
-    throw new Error("GitHubAdapter not implemented \u2014 deferred to Phase 3");
+  // Compare has no diff-size ceiling, so it recovers a PR the /pulls diff endpoint 406'd.
+  async getCompareDiff(prId) {
+    const { data: pr } = await this.client.get(`${this.repoPath()}/pulls/${prId}`);
+    if (pr.changed_files > MAX_CHANGED_FILES) throw new PrTooLargeError(prId, `exceeds ${MAX_CHANGED_FILES} files`);
+    const anchor = pr.state === "open" ? pr.base.ref : pr.base.sha;
+    const range = `${encodeURIComponent(anchor)}...${pr.head.sha}`;
+    console.warn(`PR #${prId} compare fallback using ${range} (state=${pr.state})`);
+    try {
+      const { data } = await this.client.get(`${this.repoPath()}/compare/${range}`, {
+        headers: { Accept: DIFF_ACCEPT },
+        responseType: "text",
+        timeout: COMPARE_TIMEOUT_MS,
+        maxContentLength: MAX_COMPARE_DIFF_BYTES,
+        maxBodyLength: MAX_COMPARE_DIFF_BYTES
+      });
+      return data;
+    } catch (err) {
+      if (axios_default.isAxiosError(err)) {
+        if (err.code === "ECONNABORTED") throw new PrTooLargeError(prId, "compare diff timed out (likely too large)");
+        if (/maxContentLength|maxBodyLength/i.test(err.message)) throw new PrTooLargeError(prId, `diff exceeds ${MAX_COMPARE_DIFF_BYTES / (1024 * 1024)}MB`);
+      }
+      throw new Error(`PR #${prId} diff exceeded the GitHub PR endpoint (406) and the compare fallback failed: ${err.message}`, { cause: err });
+    }
   }
-  getRepoFileContent(_filePath) {
-    throw new Error("GitHubAdapter not implemented \u2014 deferred to Phase 3");
+  async getChangedFiles(prId) {
+    const entries = await this.getPaginated(`${this.repoPath()}/pulls/${prId}/files?per_page=100`);
+    return entries.filter((e) => e.filename).map((e) => ({ path: e.filename, status: this.mapStatus(e.status) }));
   }
-  postComment(_prId, _body) {
-    throw new Error("GitHubAdapter not implemented \u2014 deferred to Phase 3");
+  async getFileContent(filePath, ref) {
+    const { data } = await this.client.get(this.contentsUrl(filePath), {
+      params: { ref },
+      headers: { Accept: RAW_ACCEPT },
+      responseType: "text"
+    });
+    return data;
   }
-  getPreviousReviewComments(_prId) {
-    throw new Error("GitHubAdapter not implemented \u2014 deferred to Phase 3");
+  async getRepoFileContent(filePath, ref) {
+    try {
+      const { data } = await this.client.get(this.contentsUrl(filePath), {
+        // Omitting ref makes GitHub resolve the repo's default branch
+        params: ref ? { ref } : void 0,
+        headers: { Accept: RAW_ACCEPT },
+        responseType: "text"
+      });
+      return data;
+    } catch (err) {
+      if (axios_default.isAxiosError(err) && err.response?.status === 404) return null;
+      throw err;
+    }
   }
-  getRepliesToReviewComments(_prId, _reviewCommentIds, _includeAnswered) {
-    throw new Error("GitHubAdapter not implemented \u2014 deferred to Phase 3");
+  async postComment(prId, body) {
+    await this.client.post(`${this.repoPath()}/issues/${prId}/comments`, { body });
   }
-  postReply(_prId, _parentId, _body) {
-    throw new Error("GitHubAdapter not implemented \u2014 deferred to Phase 3");
+  async getPreviousReviewComments(prId) {
+    const comments = await this.getIssueComments(prId);
+    return comments.filter((c) => hasReviewFooter(c.body ?? "")).map((c) => ({ id: String(c.id), body: c.body, createdOn: c.created_at }));
   }
-  getCommitDiff(_fromCommit, _toCommit) {
-    throw new Error("GitHubAdapter not implemented \u2014 deferred to Phase 3");
+  // Issue comments are flat (no parent id): a reply is any human comment after the agent's latest one.
+  async getRepliesToReviewComments(prId, _reviewCommentIds, includeAnswered = false) {
+    const comments = await this.getIssueComments(prId);
+    const humanReplies = [];
+    let agentReplyCount = 0;
+    let latestAgentComment = "";
+    let latestReview = null;
+    for (const c of comments) {
+      const body = c.body ?? "";
+      if (hasReviewFooter(body)) {
+        if (!latestReview || c.created_at > latestReview.createdOn) latestReview = { id: String(c.id), createdOn: c.created_at };
+        if (c.created_at > latestAgentComment) latestAgentComment = c.created_at;
+      } else if (hasReplyFooter(body)) {
+        agentReplyCount++;
+        if (c.created_at > latestAgentComment) latestAgentComment = c.created_at;
+      }
+    }
+    if (!latestReview) return { replies: [], agentReplyCount };
+    const parentId = latestReview.id;
+    for (const c of comments) {
+      const body = c.body ?? "";
+      if (hasReviewFooter(body)) continue;
+      if (hasReplyFooter(body)) {
+        if (includeAnswered) {
+          humanReplies.push({ id: String(c.id), parentId, author: "Agent (prior reply)", body, createdOn: c.created_at });
+        }
+        continue;
+      }
+      humanReplies.push({ id: String(c.id), parentId, author: c.user?.login ?? "Unknown", body, createdOn: c.created_at });
+    }
+    if (includeAnswered) return { replies: humanReplies, agentReplyCount };
+    return { replies: humanReplies.filter((r) => r.createdOn > latestAgentComment), agentReplyCount };
+  }
+  async postReply(prId, _parentId, body) {
+    await this.client.post(`${this.repoPath()}/issues/${prId}/comments`, { body });
+  }
+  async getCommitDiff(fromCommit, toCommit) {
+    const { data } = await this.client.get(
+      `${this.repoPath()}/compare/${fromCommit}...${toCommit}`,
+      { headers: { Accept: DIFF_ACCEPT }, responseType: "text" }
+    );
+    return data;
+  }
+  // repo slug is passed in at call sites via CLI — store it after construction
+  repoSlug = "";
+  setRepoSlug(slug) {
+    this.repoSlug = slug;
+  }
+  getRepoSlug() {
+    if (!this.repoSlug) throw new Error("repo slug not set on GitHubAdapter");
+    return this.repoSlug;
+  }
+  repoPath() {
+    return `/repos/${this.owner}/${this.getRepoSlug()}`;
+  }
+  contentsUrl(filePath) {
+    const encoded = filePath.split("/").map(encodeURIComponent).join("/");
+    return `${this.repoPath()}/contents/${encoded}`;
+  }
+  getIssueComments(prId) {
+    return this.getPaginated(`${this.repoPath()}/issues/${prId}/comments?per_page=100`);
+  }
+  // GitHub paginates via the Link header (rel="next"), not a body field
+  async getPaginated(firstUrl) {
+    const items = [];
+    let url2 = firstUrl;
+    while (url2) {
+      const res = await this.client.get(url2);
+      items.push(...res.data);
+      url2 = this.nextLink(res.headers?.link);
+    }
+    return items;
+  }
+  nextLink(header) {
+    if (typeof header !== "string") return null;
+    for (const part of header.split(",")) {
+      const m = part.match(/<([^>]+)>\s*;\s*rel="next"/);
+      if (m) return m[1];
+    }
+    return null;
+  }
+  mapStatus(s) {
+    switch (s) {
+      case "added":
+        return "added";
+      case "removed":
+        return "deleted";
+      case "renamed":
+        return "renamed";
+      default:
+        return "modified";
+    }
   }
 };
 
@@ -44619,7 +44811,7 @@ function getAgentVersion() {
     const pkg = JSON.parse((0, import_fs4.readFileSync)(pkgPath, "utf-8"));
     return pkg.version;
   } catch {
-    if (true) return "0.0.24";
+    if (true) return "0.0.25";
     return "unknown";
   }
 }
@@ -44631,7 +44823,7 @@ function getBuildCommit() {
     const dirty = (0, import_child_process.execSync)("git status --porcelain", opts2).toString().trim() ? "-dirty" : "";
     return hash + dirty;
   } catch {
-    if (true) return "0642334";
+    if (true) return "60f1ea1";
     return "unknown";
   }
 }
@@ -44757,7 +44949,16 @@ async function transition(state, ctx) {
     }
     case 2 /* FETCH_DIFF */: {
       console.log("Fetching diff...");
-      ctx.diff = await ctx.adapter.getDiff(ctx.prId);
+      try {
+        ctx.diff = await ctx.adapter.getDiff(ctx.prId);
+      } catch (err) {
+        if (err instanceof PrTooLargeError) {
+          ctx.action = "SKIP";
+          ctx.skipReason = err.message;
+          return 15 /* SKIP */;
+        }
+        throw err;
+      }
       console.log("Fetching changed files...");
       ctx.changedFiles = await ctx.adapter.getChangedFiles(ctx.prId);
       ctx.lineCount = countChangedLines(ctx.diff);
@@ -45503,7 +45704,15 @@ async function main() {
     az.setRepoSlug(opts.repoSlug);
     adapter2 = az;
   } else if (provider === "github") {
-    adapter2 = new GitHubAdapter();
+    if (opts.workspace) config.github.owner = opts.workspace;
+    validateGitHubConfig();
+    const gh = new GitHubAdapter(config.github.baseUrl, config.github.owner, config.github.token);
+    if (!opts.repoSlug) {
+      console.error("Error: --repo-slug is required for GitHub");
+      process.exit(1);
+    }
+    gh.setRepoSlug(opts.repoSlug);
+    adapter2 = gh;
   } else if (provider === "gitlab") {
     adapter2 = new GitLabAdapter();
   } else {
