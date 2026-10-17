@@ -54,6 +54,13 @@ export const config = {
     accessToken: optional('AZURE_ACCESS_TOKEN', ''),   // OAuth Bearer (e.g. pipeline System.AccessToken); preferred over PAT
   },
 
+  // GitHub (same-repo PRs). owner may be aliased by --workspace; point baseUrl at <host>/api/v3 for GHE.
+  github: {
+    baseUrl: optional('GITHUB_BASE_URL', 'https://api.github.com'),
+    owner: optional('GITHUB_OWNER', ''),
+    token: optional('GITHUB_TOKEN', ''),
+  },
+
   anthropic: {
     apiKey: required('ANTHROPIC_API_KEY'),
     // Sent as the anthropic-workspace-id header; a user-scoped key (sk-ant-usr-…) 400s without it.
@@ -120,6 +127,11 @@ export function validateBitbucketConfig(): void {
   if (!config.bitbucket.workspace) throw new Error('Missing required environment variable: BITBUCKET_WORKSPACE')
   if (!config.bitbucket.username) throw new Error('Missing required environment variable: BITBUCKET_USERNAME')
   if (!config.bitbucket.token) throw new Error('Missing required environment variable: BITBUCKET_TOKEN')
+}
+
+export function validateGitHubConfig(): void {
+  if (!config.github.owner) throw new Error('Missing required environment variable: GITHUB_OWNER')
+  if (!config.github.token) throw new Error('Missing required environment variable: GITHUB_TOKEN')
 }
 
 export function validateAzureConfig(): void {
