@@ -80,6 +80,7 @@ describe('getDiff / getCommitDiff', () => {
 
 describe('getDiff large-PR fallback (406 → compare)', () => {
   const CAP = 25 * 1024 * 1024
+  const COMPARE_TIMEOUT = 120_000
   const prJson = (over: Partial<any> = {}) => ({
     data: { state: 'open', changed_files: 336, base: { ref: 'main', sha: 'base00sha' }, head: { sha: 'head11sha' }, ...over },
   })
@@ -101,6 +102,7 @@ describe('getDiff large-PR fallback (406 → compare)', () => {
     expect(clientMock.get).toHaveBeenNthCalledWith(3, '/repos/org/repo/compare/main...head11sha', {
       headers: { Accept: 'application/vnd.github.diff' },
       responseType: 'text',
+      timeout: COMPARE_TIMEOUT,
       maxContentLength: CAP,
       maxBodyLength: CAP,
     })
@@ -170,6 +172,26 @@ describe('getDiff large-PR fallback (406 → compare)', () => {
       .mockRejectedValueOnce({ code: 'ERR_BAD_RESPONSE', message: 'maxContentLength size of 26214400 exceeded' })
 
     await expect(makeAdapter().getDiff('7')).rejects.toBeInstanceOf(PrTooLargeError)
+  })
+
+  it('throws PrTooLargeError when the compare request times out', async () => {
+    isAxiosError.mockReturnValue(true)
+    clientMock.get
+      .mockRejectedValueOnce({ response: { status: 406 } })
+      .mockResolvedValueOnce(prJson({ changed_files: 100 }))
+      .mockRejectedValueOnce({ code: 'ECONNABORTED', message: 'timeout of 120000ms exceeded' })
+
+    await expect(makeAdapter().getDiff('7')).rejects.toBeInstanceOf(PrTooLargeError)
+  })
+
+  it('throws PrTooLargeError for a closed PR over the file cap (compare not attempted)', async () => {
+    isAxiosError.mockReturnValue(true)
+    clientMock.get
+      .mockRejectedValueOnce({ response: { status: 406 } })
+      .mockResolvedValueOnce(prJson({ state: 'closed', changed_files: 3001 }))
+
+    await expect(makeAdapter().getDiff('7')).rejects.toBeInstanceOf(PrTooLargeError)
+    expect(clientMock.get).toHaveBeenCalledTimes(2)
   })
 
   it('rethrows a non-size compare failure with context (not PrTooLargeError)', async () => {

@@ -11,6 +11,10 @@ const RAW_ACCEPT = 'application/vnd.github.raw'
 // Cap the compare-fallback download so a vendor/lockfile mega-PR is skipped rather than buffered into memory
 const MAX_COMPARE_DIFF_BYTES = 25 * 1024 * 1024
 
+// The compare fallback only runs for already-oversized (406'd) PRs, whose diff GitHub can take well over
+// the 30s default to generate; give it more room before treating a stall as "too large to review".
+const COMPARE_TIMEOUT_MS = 120_000
+
 // GitHub's /files list (and getChangedFiles) silently truncates here, so a complete diff is impossible past it
 const MAX_CHANGED_FILES = 3000
 
@@ -77,14 +81,17 @@ export class GitHubAdapter implements VCSAdapter {
       const { data } = await this.client.get(`${this.repoPath()}/compare/${range}`, {
         headers: { Accept: DIFF_ACCEPT },
         responseType: 'text',
+        timeout: COMPARE_TIMEOUT_MS,
         maxContentLength: MAX_COMPARE_DIFF_BYTES,
         maxBodyLength: MAX_COMPARE_DIFF_BYTES,
       })
       return data as string
     } catch (err: unknown) {
-      // axios aborts the stream and rejects (no response) once the body passes maxContentLength — that PR is genuinely too big to review.
-      if (axios.isAxiosError(err) && /maxContentLength|maxBodyLength/i.test(err.message)) {
-        throw new PrTooLargeError(prId, `diff exceeds ${MAX_COMPARE_DIFF_BYTES / (1024 * 1024)}MB`)
+      if (axios.isAxiosError(err)) {
+        // A timeout here means even the uncapped compare couldn't deliver in COMPARE_TIMEOUT_MS; for an already-406'd PR that's effectively too large — skip rather than retry a deterministically-slow diff.
+        if (err.code === 'ECONNABORTED') throw new PrTooLargeError(prId, 'compare diff timed out (likely too large)')
+        // axios aborts the stream and rejects (no response) once the body passes maxContentLength — that PR is genuinely too big to review.
+        if (/maxContentLength|maxBodyLength/i.test(err.message)) throw new PrTooLargeError(prId, `diff exceeds ${MAX_COMPARE_DIFF_BYTES / (1024 * 1024)}MB`)
       }
       throw new Error(`PR #${prId} diff exceeded the GitHub PR endpoint (406) and the compare fallback failed: ${(err as Error).message}`, { cause: err })
     }
