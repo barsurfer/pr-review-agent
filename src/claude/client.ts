@@ -1,6 +1,7 @@
 import { readFileSync } from 'fs'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
+import { createHash } from 'crypto'
 import { createProvider } from '../llm/provider.js'
 import { renderReview, type ReviewObject, type FindingScore } from '../review/formatter.js'
 import type { PRInfo, ReviewComment, CommentReply } from '../vcs/adapter.js'
@@ -28,6 +29,8 @@ export interface JudgeResult extends ClaudeResult {
   notes?: string
   /** Per-finding 0–10 confidence for the kept findings — logged to results.jsonl, never posted. */
   scores?: FindingScore[]
+  /** sha256-12 of the judge system prompt actually used — config attribution for usage records. */
+  promptHash?: string
 }
 
 // Structured output keeps validation reasoning physically separate from the
@@ -211,14 +214,16 @@ export async function runJudge(
   parts.push(`## Review to Validate:\n${reviewText}`)
   const userMessage = parts.join('\n\n')
 
+  const judgePrompt = getJudgePrompt()
   console.log(`Sending to judge (${model}, maxRetries: ${maxRetries})...`)
   const { object: parsed, usage } = await createProvider(apiKey).completeStructured<{ review_markdown: string; judge_notes: string; finding_scores: FindingScore[] }>(
-    getJudgePrompt(), userMessage, JUDGE_OUTPUT_SCHEMA, { model, maxTokens, maxRetries, effort: effort || undefined },
+    judgePrompt, userMessage, JUDGE_OUTPUT_SCHEMA, { model, maxTokens, maxRetries, effort: effort || undefined },
   )
 
   console.log(`Judge received (${usage.input_tokens} in / ${usage.output_tokens} out tokens)`)
 
-  return { text: parsed.review_markdown, usage, notes: parsed.judge_notes, scores: parsed.finding_scores }
+  const promptHash = createHash('sha256').update(judgePrompt).digest('hex').slice(0, 12)
+  return { text: parsed.review_markdown, usage, notes: parsed.judge_notes, scores: parsed.finding_scores, promptHash }
 }
 
 function getReplyPrompt(): string {

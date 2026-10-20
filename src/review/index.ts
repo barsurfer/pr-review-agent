@@ -448,10 +448,12 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       }
 
       if (!config.judge.model) {
+        ctx.judgeStatus = 'disabled'
         return State.POST_REVIEW
       }
 
       if (noFindings) {
+        ctx.judgeStatus = 'skipped_no_findings'
         console.log('  Skipping judge — no findings to validate')
         return State.POST_REVIEW
       }
@@ -469,6 +471,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         )
         ctx.reviewText = result.text
         ctx.judgeScores = result.scores
+        ctx.judgePromptHash = result.promptHash
         if (result.notes) {
           console.log(`  Judge notes (not posted): ${result.notes}`)
         }
@@ -480,7 +483,9 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         ctx.usage.output_tokens += result.usage.output_tokens
         ctx.usage.cache_read += result.usage.cache_read_input_tokens ?? 0
         ctx.usage.cache_write += result.usage.cache_creation_input_tokens ?? 0
+        ctx.judgeStatus = 'succeeded'
       } catch (err: unknown) {
+        ctx.judgeStatus = 'failed'
         // Benchmark: a judge failure falls back to the unjudged reviewer findings (judged stays false) rather than erroring; normal mode still throws so CI retries.
         if (!ctx.outcomeSink) throw err
         console.warn(`  Judge failed (${(err as Error).message}) — proceeding with unjudged reviewer findings`)

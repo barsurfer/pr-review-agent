@@ -70,6 +70,8 @@ export interface ReviewContext {
   usage: { input_tokens: number; output_tokens: number; cache_read: number; cache_write: number }
   judgeUsage?: { input_tokens: number; output_tokens: number }
   judgeScores?: FindingScore[]   // judge's per-finding 0–10 confidence — logged, never posted
+  judgeStatus?: 'disabled' | 'skipped_no_findings' | 'succeeded' | 'failed'   // what the judge did this run; unset when the judge stage wasn't reached
+  judgePromptHash?: string   // sha256-12 of the judge prompt, set only when the judge actually ran
   estimatedInputTokens: number
 
   // Tracking

@@ -4,6 +4,7 @@
 
 import { appendFileSync, readFileSync } from 'fs'
 import { execSync, type ExecSyncOptions } from 'child_process'
+import { createHash } from 'crypto'
 import { dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { config } from '../config.js'
@@ -11,6 +12,11 @@ import { parseVerdictScore, parseFindings } from './parsers.js'
 import { countFindings } from './formatter.js'
 import type { FindingScore } from './formatter.js'
 import type { ReviewContext } from './types.js'
+
+// 12 hex chars of sha256 — enough to tell prompt/code versions apart across runs without bloating the record.
+function hash12(s: string): string {
+  return createHash('sha256').update(s).digest('hex').slice(0, 12)
+}
 
 export interface UsageRecord {
   run_id: string
@@ -43,6 +49,10 @@ export interface UsageRecord {
   dry_run: boolean
   force: string
   prompt_source: string
+  agent_commit: string
+  prompt_hash: string | null
+  judge_prompt_hash: string | null
+  judge_status: 'disabled' | 'skipped_no_findings' | 'succeeded' | 'failed' | null
   verdict_score: number | null
   computed_score: number | null
   review_findings: { high: number; medium: number; low: number } | null
@@ -209,6 +219,10 @@ export function buildUsageRecord(
     dry_run: ctx.dryRun,
     force: ctx.force,
     prompt_source: ctx.prompt?.source ?? 'none',
+    agent_commit: getBuildCommit(),
+    prompt_hash: ctx.prompt ? hash12(ctx.prompt.content) : null,
+    judge_prompt_hash: ctx.judgePromptHash ?? null,
+    judge_status: ctx.judgeStatus ?? null,
     verdict_score: verdictScore,
     computed_score: findings ? Math.max(0, 100 - findings.high * 12 - findings.medium * 4) : null,
     review_findings: reviewFindings,
