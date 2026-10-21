@@ -24,5 +24,13 @@ ENV CLAUDE_MODEL=claude-haiku-5-5 \
     ENABLE_BUNDLED_REVIEW=true \
     MAX_BUNDLES=3
 
+# Judge policy flags are baked per image (an experiment build passes --build-arg …=true), so the digest pins the config.
+ARG JUDGE_KEEP_MINOR=false
+ARG JUDGE_KEEP_UNVERIFIED=false
+ARG JUDGE_FILE_CONTEXT=false
+ENV ENABLE_JUDGE_KEEP_MINOR=$JUDGE_KEEP_MINOR \
+    ENABLE_JUDGE_KEEP_UNVERIFIED=$JUDGE_KEEP_UNVERIFIED \
+    ENABLE_JUDGE_FILE_CONTEXT=$JUDGE_FILE_CONTEXT
+
 # Runs as root like the reference agents: /work/out is a host mount whose owner we don't control.
 ENTRYPOINT ["node", "/app/entrypoint.mjs"]
