@@ -123,7 +123,7 @@ The record is also printed to stdout at the end of every run regardless of the f
 | `finding_scores` | `array \| null` | Judge per-finding `{ title, severity, score, file?, lines? }`; null if no judge |
 | `min_finding_score` | `number \| null` | Lowest kept finding score |
 | `review_candidates` | `array \| null` | Reviewer findings stored once with ids (`c0…`): `{ id, severity, title, file, lines, body }`; judge-run only |
-| `judge_decisions` | `array \| null` | One per candidate: `{ candidate_id, reason_category, reclassified_from, action, original_severity, final_severity, score, evidence, note, rewritten, anchor_source }`; judge-run only |
+| `judge_decisions` | `array \| null` | One per candidate: `{ candidate_id, reason_category, reclassified_from, action, original_severity, final_severity, score, evidence, note, rewritten, anchor_source, anchor_file, anchor_lines }`; the resolved anchor is logged for **every decided candidate** (kept or dropped) so an offline re-score can place a finding a different policy would keep; judge-run only |
 | `judge_anomalies` | `object \| null` | `{ unknown_ids, undecided, duplicate_ids, drop_without_evidence }`; judge-run only |
 | `judge_policy` | `object \| null` | `{ keep_minor, keep_unverified, file_context }` flags in effect; only when the judge ran |
 | `anchored_findings` | `array \| null` | Compact kept-finding rows `{ anchor, severity, type, description }` resolved to a real line; judge-run only |

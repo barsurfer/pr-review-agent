@@ -177,12 +177,18 @@ describe('anchors: reviewer first when strictly numeric, else the judge pair', (
     expect(r.decisions[0].anchor_source).toBe('none')
   })
 
-  it('has no anchor source for dropped or moved candidates', () => {
+  it('records the resolved anchor on dropped/moved decisions so an offline re-score can place them', () => {
     const r = applyJudgeDecisions(
-      [finding(), finding({ title: 'Lib?' })],
-      output([decision({ reason_category: 'style_only', anchor_lines: '5' }), decision({ candidate_id: 'c1', reason_category: 'framework_uncertainty' })]),
+      [finding({ lines: '42' }), finding({ title: 'Lib?', lines: '7' })],
+      output([decision({ reason_category: 'style_only' }), decision({ candidate_id: 'c1', reason_category: 'framework_uncertainty' })]),
     )
-    expect(r.decisions.map(d => d.anchor_source)).toEqual([null, null])
+    expect(r.decisions[0]).toMatchObject({ action: 'drop', anchor_source: 'reviewer', anchor_file: 'src/pool.ts', anchor_lines: '42' })
+    expect(r.decisions[1]).toMatchObject({ action: 'move_to_unresolved', anchor_source: 'reviewer', anchor_lines: '7' })
+  })
+
+  it('leaves the anchor null for an undecided candidate (no judge ruling)', () => {
+    const r = applyJudgeDecisions([finding({ lines: '42' })], output([]))
+    expect(r.decisions[0]).toMatchObject({ action: 'drop', reason_category: null, anchor_source: null, anchor_file: null, anchor_lines: null })
   })
 })
 

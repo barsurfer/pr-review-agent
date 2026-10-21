@@ -56,7 +56,10 @@ export interface AppliedDecision {
   evidence: string
   note: string
   rewritten: boolean
-  anchor_source: AnchorSource | null   // null unless the candidate was kept
+  // Resolved anchor for the candidate regardless of keep/drop, so an offline re-score under a different policy can place a finding this policy dropped. Null only for an undecided candidate.
+  anchor_source: AnchorSource | null
+  anchor_file: string | null
+  anchor_lines: string | null
 }
 
 export interface JudgeAnomalies {
@@ -202,7 +205,8 @@ function resolve(d: JudgeDecision, candidate: ReviewFinding, policy: JudgePolicy
   return {
     candidate_id: '', reason_category: reason, reclassified_from, action,
     original_severity: candidate.severity, final_severity: severity, score,
-    evidence, note: String(d.note ?? '').trim(), rewritten, anchor_source: kept ? anchor.source : null,
+    evidence, note: String(d.note ?? '').trim(), rewritten,
+    anchor_source: anchor.source, anchor_file: anchor.file ?? null, anchor_lines: anchor.lines ?? null,
     question: String(d.question ?? '').trim() || undefined,
     body: rewritten ? rewrite : candidate.body,
     anchor,
@@ -231,7 +235,7 @@ export function applyJudgeDecisions(candidates: readonly ReviewFinding[], output
       anomalies.undecided++
       decisions.push({
         candidate_id: id, reason_category: null, reclassified_from: null, action: 'drop',
-        original_severity: candidate.severity, final_severity: null, score: null, evidence: '', note: '', rewritten: false, anchor_source: null,
+        original_severity: candidate.severity, final_severity: null, score: null, evidence: '', note: '', rewritten: false, anchor_source: null, anchor_file: null, anchor_lines: null,
       })
       return
     }
