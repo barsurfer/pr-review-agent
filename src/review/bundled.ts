@@ -114,16 +114,22 @@ export async function runBundledReview(ctx: ReviewContext, maxInputTokens: numbe
     let text = result.text
     const found = result.review ? countFindings(result.review) : { high: 0, medium: 0, low: 0 }
     console.log(`  Reviewer findings: ${found.high}H / ${found.medium}M / ${found.low}L`)
-    if (config.judge.model && found.high + found.medium + found.low > 0) {
+    if (config.judge.model && result.review && found.high + found.medium + found.low > 0) {
       try {
-        const verdict = await runJudge(config.anthropic.apiKey, config.judge.model, config.judge.maxRetries, config.anthropic.maxTokens, config.judge.effort, diff, text)
+        const verdict = await runJudge(
+          config.anthropic.apiKey, config.judge.model, config.judge.maxRetries, config.anthropic.maxTokens, config.judge.effort,
+          diff, result.review, config.judge.fileContext ? bundleContexts : [], config.judge.policy,
+        )
         addUsage(ctx, verdict.usage)
         judgeUsage.input_tokens += verdict.usage.input_tokens
         judgeUsage.output_tokens += verdict.usage.output_tokens
         judgeScores.push(...(verdict.scores ?? []))
         text = verdict.text
         judged = true
+        ctx.judgeStatus = 'succeeded'
+        ctx.judgePromptHash = verdict.promptHash
       } catch (err: unknown) {
+        ctx.judgeStatus = 'failed'
         // Benchmark: a judge failure falls back to the unjudged bundle findings; normal mode still throws so CI retries.
         if (!ctx.outcomeSink) throw err
         console.warn(`  Bundle ${i + 1} judge failed (${(err as Error).message}) — proceeding with unjudged reviewer findings`)

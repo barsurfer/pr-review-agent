@@ -1,10 +1,13 @@
-import { describe, it, expect, beforeAll } from 'vitest'
+import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest'
+import type { ReviewContext } from '../types.js'
+import type { KeptFinding } from '../findings-output.js'
 
 // usage.ts pulls in config (required ANTHROPIC_API_KEY) at import — set it before the dynamic import.
 let estimateCost: (tokens: { input: number; output: number }, model: string) => number
+let buildUsageRecord: (typeof import('../usage.js'))['buildUsageRecord']
 beforeAll(async () => {
   process.env.ANTHROPIC_API_KEY = 'test-key'
-  ;({ estimateCost } = await import('../usage.js'))
+  ;({ estimateCost, buildUsageRecord } = await import('../usage.js'))
 })
 
 describe('estimateCost', () => {
@@ -27,5 +30,129 @@ describe('estimateCost', () => {
 
   it('falls back to sonnet-4-6 rates for an unknown model', () => {
     expect(estimateCost({ input: 1_000_000, output: 0 }, 'mystery-model')).toBe(3)
+  })
+})
+
+describe('buildUsageRecord provenance fields', () => {
+  const baseCtx = (over: Partial<ReviewContext> = {}): ReviewContext => ({
+    adapter: {}, prId: '7', dryRun: false, force: 'off', logUsage: false, repoSlug: 'repo',
+    usage: { input_tokens: 10, output_tokens: 5, cache_read: 0, cache_write: 0 },
+    estimatedInputTokens: 10, action: 'REVIEW', reviewNumber: 1,
+    ...over,
+  } as unknown as ReviewContext)
+
+  it('stamps agent_commit + a 12-hex prompt_hash and passes judge_prompt_hash from ctx', () => {
+    const r = buildUsageRecord(baseCtx({ prompt: { content: 'SYS', source: 'repo' } as never, judgePromptHash: 'abc123def456' }), 100, null)
+    expect(r.agent_commit).toBeTruthy()
+    expect(r.prompt_hash).toMatch(/^[0-9a-f]{12}$/)
+    expect(r.judge_prompt_hash).toBe('abc123def456')
+  })
+
+  it('judge_prompt_hash is null when the judge did not run', () => {
+    expect(buildUsageRecord(baseCtx(), 1, null).judge_prompt_hash).toBeNull()
+  })
+
+  it('prompt_hash is null without a loaded prompt and stable for identical content', () => {
+    expect(buildUsageRecord(baseCtx(), 1, null).prompt_hash).toBeNull()
+    const p = { content: 'X', source: 'repo' } as never
+    expect(buildUsageRecord(baseCtx({ prompt: p }), 1, null).prompt_hash)
+      .toBe(buildUsageRecord(baseCtx({ prompt: p }), 1, null).prompt_hash)
+  })
+
+  it('passes judge_status through, null when the judge stage was not reached', () => {
+    expect(buildUsageRecord(baseCtx({ judgeStatus: 'succeeded' }), 1, null).judge_status).toBe('succeeded')
+    expect(buildUsageRecord(baseCtx(), 1, null).judge_status).toBeNull()
+  })
+})
+
+describe('buildUsageRecord judge decision fields', () => {
+  const baseCtx = (over: Partial<ReviewContext> = {}): ReviewContext => ({
+    adapter: {}, prId: '7', dryRun: false, force: 'off', logUsage: false, repoSlug: 'repo',
+    usage: { input_tokens: 10, output_tokens: 5, cache_read: 0, cache_write: 0 },
+    estimatedInputTokens: 10, action: 'REVIEW', reviewNumber: 1,
+    ...over,
+  } as unknown as ReviewContext)
+
+  const reviewObject = {
+    summary: 's',
+    findings: [
+      { severity: 'HIGH', title: 'Race', file: 'a.ts', lines: '3-4', body: 'racy' },
+      { severity: 'LOW', title: 'Naming', body: 'rename' },
+    ],
+    behavioral_diff: [], production_risk: [], unresolved_questions: [],
+  }
+  const judgeDecisions = [
+    { candidate_id: 'c0', reason_category: 'unconfirmed_high', reclassified_from: null, action: 'downgrade', original_severity: 'HIGH', final_severity: 'MEDIUM', score: 7, evidence: 'a.ts:3', note: 'n', rewritten: false, anchor_source: 'reviewer', anchor_file: 'a.ts', anchor_lines: '3-4' },
+    { candidate_id: 'c1', reason_category: 'style_only', reclassified_from: null, action: 'drop', original_severity: 'LOW', final_severity: null, score: 2, evidence: '', note: 'n', rewritten: false, anchor_source: null, anchor_file: null, anchor_lines: null },
+  ]
+  const judgeAnomalies = { unknown_ids: 0, undecided: 1, duplicate_ids: 0, drop_without_evidence: 2 }
+  const judged = (over: Partial<ReviewContext> = {}) => baseCtx({
+    reviewObject, judgeDecisions, judgeAnomalies, judgeUsage: { input_tokens: 4, output_tokens: 2 }, judgeStatus: 'succeeded', ...over,
+  } as Partial<ReviewContext>)
+
+  let cfg: { judge: { model: string; policy: { keepMinor: boolean; keepUnverified: boolean }; fileContext: boolean } }
+  let saved: typeof cfg.judge
+  beforeAll(async () => { cfg = (await import('../../config.js')).config as unknown as typeof cfg })
+  beforeEach(() => { saved = { ...cfg.judge, policy: { ...cfg.judge.policy } }; cfg.judge.model = 'claude-sonnet-5' })
+  afterEach(() => { Object.assign(cfg.judge, saved) })
+
+  it('logs candidates once with ids, and the decisions, anomalies and policy that produced the posted review', () => {
+    cfg.judge.policy = { keepMinor: true, keepUnverified: false }
+    cfg.judge.fileContext = true
+
+    const r = buildUsageRecord(judged(), 1, null)
+
+    expect(r.review_candidates).toEqual([
+      { id: 'c0', severity: 'HIGH', title: 'Race', file: 'a.ts', lines: '3-4', body: 'racy' },
+      { id: 'c1', severity: 'LOW', title: 'Naming', file: null, lines: null, body: 'rename' },
+    ])
+    expect(r.judge_decisions).toEqual(judgeDecisions)
+    expect(r.judge_anomalies).toEqual(judgeAnomalies)
+    expect(r.judge_policy).toEqual({ keep_minor: true, keep_unverified: false, file_context: true })
+  })
+
+  it('leaves every decision field null when the judge never ran or failed', () => {
+    for (const judgeStatus of ['disabled', 'skipped_no_findings', 'failed'] as const) {
+      const r = buildUsageRecord(baseCtx({ reviewObject, judgeStatus } as Partial<ReviewContext>), 1, null)
+      expect([r.review_candidates, r.judge_decisions, r.judge_anomalies, r.judge_policy]).toEqual([null, null, null, null])
+    }
+  })
+
+  it('logs no policy when the judge is configured off', () => {
+    cfg.judge.model = ''
+    expect(buildUsageRecord(judged(), 1, null).judge_policy).toBeNull()
+  })
+
+  it('logs the policy but no per-candidate decisions for a bundled run, which does not persist them', () => {
+    const r = buildUsageRecord(baseCtx({ reviewObject, judgeUsage: { input_tokens: 4, output_tokens: 2 } } as Partial<ReviewContext>), 1, null)
+    expect([r.review_candidates, r.judge_decisions, r.judge_anomalies]).toEqual([null, null, null])
+    expect(r.judge_policy).toEqual({ keep_minor: false, keep_unverified: false, file_context: false })
+  })
+})
+
+describe('buildUsageRecord anchored_findings', () => {
+  const baseCtx = (over: Partial<ReviewContext> = {}): ReviewContext => ({
+    adapter: {}, prId: '7', dryRun: false, force: 'off', logUsage: false, repoSlug: 'repo',
+    usage: { input_tokens: 10, output_tokens: 5, cache_read: 0, cache_write: 0 },
+    estimatedInputTokens: 10, action: 'REVIEW', reviewNumber: 1,
+    ...over,
+  } as unknown as ReviewContext)
+
+  const judgedFindings: KeptFinding[] = [
+    { severity: 'HIGH', title: 'Race', body: 'get/put race. Also more detail.', file: 'pool.ts', lines: '2-3', score: 9, type: 'correctness', anchorSource: 'reviewer' },
+    { severity: 'LOW', title: 'Naming', body: 'rename x', anchorSource: 'none' },
+    { severity: 'MEDIUM', title: 'Slow', body: 'O(n^2) scan on each put', file: 'src/pool.ts', lines: '4', score: 6, anchorSource: 'diff' },
+  ]
+
+  it('projects one normalized row per anchored kept finding and drops the unanchored one', () => {
+    const r = buildUsageRecord(baseCtx({ judgedFindings, changedFiles: [{ path: 'src/pool.ts', status: 'modified' }] } as Partial<ReviewContext>), 1, null)
+    expect(r.anchored_findings).toEqual([
+      { anchor: 'src/pool.ts:2-3', severity: 'HIGH', type: 'correctness', description: 'get/put race.' },
+      { anchor: 'src/pool.ts:4', severity: 'MEDIUM', type: 'other', description: 'O(n^2) scan on each put' },
+    ])
+  })
+
+  it('is null when the structured judge produced no kept findings (bundled or no judge)', () => {
+    expect(buildUsageRecord(baseCtx(), 1, null).anchored_findings).toBeNull()
   })
 })

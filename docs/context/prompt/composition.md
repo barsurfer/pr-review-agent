@@ -31,6 +31,8 @@ Final system prompt = base-prompt.txt + repo prompt sections
 
 Separately, a deterministic `TODO`/`FIXME`/`HACK` scan (`scanTodos`, `ENABLE_TODO_SCAN` default on) appends a "TODOs Introduced" section to the posted comment in `POST_REVIEW` — not model-driven, so it can't be missed or hallucinated.
 
+**`ENABLE_NITPICKS`** (off by default) relaxes the low-severity certainty rule under `## DETERMINING WHAT TO FLAG` (the "be certain before flagging" line). It is a byte-exact string replace of that one line, not an appended add-on: off, `getBaseTemplate()` is byte-identical to `base-prompt.txt`; the two `## FORBIDDEN` style/nitpick lines stay. On, the reviewer keeps the anti-speculation bar for uncertain correctness but also emits real, concrete, low-impact findings (stale/misleading docs, comments or names; dead code; duplicated logic; vacuous tests), each tagged with its `type`. These classify as `minor` at the judge, so they post only under `ENABLE_JUDGE_KEEP_MINOR` (judge-policy-gated).
+
 **Repo prompt sections** (from `.agent-review-instructions.md` in the target repo):
 
 | Section header | Placeholder | Default if missing |

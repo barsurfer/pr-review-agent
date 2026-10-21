@@ -45,10 +45,14 @@ credentials in source code or commit them to version control.**
 | `JUDGING_MODEL` | `claude-sonnet-5` | Judge model for finding validation — **on by default**. Set empty to disable the judge pass. |
 | `REVIEW_EFFORT` | *(unset)* | Reviewer thinking effort: `low`\|`medium`\|`high`\|`xhigh`\|`max`. Unset = model default (a strong model like Opus 4.8 at its adaptive default needs no effort flag). Only the 5-family / Opus-4.6+ / Sonnet-5 support it; models that don't (e.g. Haiku 4.5) are retried without it. `xhigh`/`max` need a larger `MAX_OUTPUT_TOKENS` (~64k) — thinking counts against the output cap and otherwise truncates the review. |
 | `JUDGE_EFFORT` | *(unset)* | Judge thinking effort — same scale and fallback behavior as `REVIEW_EFFORT`. |
+| `ENABLE_JUDGE_KEEP_MINOR` | `false` | Post candidates the judge classifies `minor` (real problem, no runtime impact: stale docs/comments, misleading names, duplication, weak tests in the diff) as LOW instead of dropping them. More LOW comments. See [prompt/judge.md](../context/prompt/judge.md). |
+| `ENABLE_JUDGE_KEEP_UNVERIFIED` | `false` | Post candidates the judge classifies `unverifiable` or `framework_uncertainty` (score capped at 5) instead of dropping / moving them to Unresolved Questions. |
+| `ENABLE_JUDGE_FILE_CONTEXT` | `false` | Send the judge the same full-file context the reviewer got, not just the diff. Roughly doubles judge input tokens. |
 | `MAX_REPLY_COMMENTS` | `5` | Max agent reply comments per PR (0 = unlimited). Prevents runaway token usage on extended conversations. Default: `5` |
 | `MAX_FINDINGS` | `0` | Cap the number of findings the reviewer reports (0 = unlimited). When set, appends a findings-limit instruction to the reviewer prompt. |
 | `ENABLE_SPLIT_CHECK` | `true` | Reviewer adds a "Can Be Split" section when the PR spans independent themes that could be separate PRs. Set `false` to disable. |
 | `ENABLE_TODO_SCAN` | `true` | Deterministically scan added lines for `TODO`/`FIXME`/`HACK` markers and append a "TODOs Introduced" section (file:line) to the review. |
+| `ENABLE_NITPICKS` | `false` | Relax the base template's low-severity certainty rule so the reviewer also surfaces real, concrete, low-impact findings (stale/misleading docs, comments or names; dead code; duplicated logic; vacuous tests), each tagged with its `type`. Off, the assembled base template is byte-identical to `base-prompt.txt`; the two FORBIDDEN style/nitpick lines are never touched. These land as `minor` at the judge, so they post only under `ENABLE_JUDGE_KEEP_MINOR`. See [prompt/composition.md](../context/prompt/composition.md). |
 | `AGENT_IDENTITY` | *(BITBUCKET_USERNAME)* | Name shown in review/reply footers. Falls back to `BITBUCKET_USERNAME`, then `'Claude'` |
 
 > Threshold variables can also be set via CLI flags (`--min-changed-files`, etc.)
@@ -205,4 +209,8 @@ MAX_CHANGED_LINES=3000
 
 # Judge model (on by default — validates findings before posting; set empty to skip)
 # JUDGING_MODEL=claude-sonnet-5
+
+# Surface real-but-minor findings (dead code, stale docs/comments, misleading names,
+# duplicated logic, vacuous tests). They reach the PR only with ENABLE_JUDGE_KEEP_MINOR.
+# ENABLE_NITPICKS=false
 ```

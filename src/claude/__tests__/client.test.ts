@@ -9,6 +9,7 @@ vi.mock('../../llm/provider.js', () => ({
 
 import { runReview, runJudge, runCommentResponse, REVIEW_OUTPUT_SCHEMA, JUDGE_OUTPUT_SCHEMA } from '../client.js'
 import { renderReview, type ReviewObject } from '../../review/formatter.js'
+import { REASON_CATEGORIES } from '../../review/judge-decisions.js'
 import type { PRInfo, ReviewComment, CommentReply } from '../../vcs/adapter.js'
 import type { LoadedPrompt } from '../../prompt/loader.js'
 
@@ -117,22 +118,60 @@ describe('runCommentResponse', () => {
 describe('runJudge (structured output)', () => {
   beforeEach(() => { complete.mockReset(); completeStructured.mockReset() })
 
-  it('passes the judged markdown, notes, and per-finding scores through', async () => {
-    completeStructured.mockResolvedValue({
-      object: {
-        review_markdown: '### Summary\nok\n\n### Merge Confidence: 80%',
-        judge_notes: 'dropped a LOW',
-        finding_scores: [{ title: 'X', severity: 'MEDIUM', score: 7 }],
-      },
-      usage,
-    })
+  const review: ReviewObject = {
+    summary: 'reviewer summary',
+    findings: [
+      { severity: 'MEDIUM', title: 'X', file: 'a.ts', lines: '3', body: 'x body' },
+      { severity: 'LOW', title: 'Y', file: 'a.ts', lines: '9', body: 'y body' },
+    ],
+    behavioral_diff: [], production_risk: [], unresolved_questions: [],
+  }
+  const judged = {
+    decisions: [
+      { candidate_id: 'c0', reason_category: 'validated', evidence: 'a.ts:3', note: 'real', score: 7 },
+      { candidate_id: 'c1', reason_category: 'style_only', evidence: '', note: 'naming', score: 3 },
+    ],
+    summary: 'ok', behavioral_diff: [], production_risk: [], unresolved_questions: [], merge_confidence: 80,
+  }
 
-    const res = await runJudge('key', 'model', 3, 16000, '', 'DIFF', '### Summary\nreviewer text')
+  it('sends id-tagged candidates and renders the kept ones with the reviewer anchor', async () => {
+    completeStructured.mockResolvedValue({ object: judged, usage })
 
-    expect(res.text).toBe('### Summary\nok\n\n### Merge Confidence: 80%')
-    expect(res.notes).toBe('dropped a LOW')
-    expect(res.scores).toEqual([{ title: 'X', severity: 'MEDIUM', score: 7 }])
+    const res = await runJudge('key', 'model', 3, 16000, '', 'DIFF', review)
+
+    const userMessage = completeStructured.mock.calls[0][1] as string
+    expect(userMessage).toContain('- [c0] **MEDIUM – X** (`a.ts:3`)')
+    expect(userMessage).not.toContain('## Full file context')
+    expect(res.text).toContain('- **MEDIUM – X** (`a.ts:3`)\n  x body')
+    expect(res.text).not.toContain('Y')
+    expect(res.text).not.toContain('[c0]')
+    expect(res.text).toMatch(/### Merge Confidence: 80%\n\n\*"This verdict is opinionated and must be validated by a human reviewer\."\*$/)
+    expect(res.scores).toEqual([{ title: 'X', severity: 'MEDIUM', score: 7, file: 'a.ts', lines: '3' }])
+    expect(res.notes).toContain('c1 style_only → drop')
     expect(complete).not.toHaveBeenCalled()
+  })
+
+  it('anchors a symbol-located candidate from the judge pair and carries can_be_split through to the posted review', async () => {
+    const symbolic: ReviewObject = { ...review, findings: [{ ...review.findings[0], lines: 'Pool.get' }], can_be_split: ['Pool', 'Docs'] }
+    completeStructured.mockResolvedValue({ object: { ...judged, decisions: [{ ...judged.decisions[0], anchor_file: 'a.ts', anchor_lines: '12-14' }] }, usage })
+    // The judge anchor is validated against the diff, so a.ts needs added lines covering 12-14.
+    const diff = ['diff --git a/a.ts b/a.ts', '--- a/a.ts', '+++ b/a.ts', '@@ -0,0 +1,20 @@',
+      ...Array.from({ length: 20 }, (_, i) => `+const v${i + 1} = ${i + 1}`)].join('\n')
+
+    const res = await runJudge('key', 'model', 3, 16000, '', diff, symbolic)
+
+    expect(res.text).toContain('- **MEDIUM – X** (`a.ts:12-14`)')
+    expect(res.text).toContain('### Can Be Split\n- Pool\n- Docs\n\n### Merge Confidence: 80%')
+    expect(res.scores).toEqual([{ title: 'X', severity: 'MEDIUM', score: 7, file: 'a.ts', lines: '12-14' }])
+    expect(res.kept?.[0].anchorSource).toBe('judge')
+  })
+
+  it('adds the file context to the judge input only when given', async () => {
+    completeStructured.mockResolvedValue({ object: judged, usage })
+
+    await runJudge('key', 'model', 3, 16000, '', 'DIFF', review, [{ path: 'a.ts', content: 'const a = 1' }])
+
+    expect(completeStructured.mock.calls[0][1]).toContain('## Full file context:\n\n### a.ts\n```\nconst a = 1\n```')
   })
 })
 
@@ -145,10 +184,18 @@ describe('output schema ↔ type parity (drift canary)', () => {
       ['behavioral_diff', 'findings', 'production_risk', 'summary', 'unresolved_questions'])
     expect(Object.keys(REVIEW_OUTPUT_SCHEMA.properties).sort()).toEqual(
       ['behavioral_diff', 'can_be_split', 'delta_stats', 'findings', 'no_change', 'production_risk', 'summary', 'unresolved_questions'])
+    expect(Object.keys(REVIEW_OUTPUT_SCHEMA.properties.findings.items.properties).sort()).toEqual(
+      ['body', 'file', 'lines', 'severity', 'title', 'type'])
   })
 
-  it('JUDGE_OUTPUT_SCHEMA required keys match JudgeResult usage', () => {
-    expect([...JUDGE_OUTPUT_SCHEMA.required].sort()).toEqual(['finding_scores', 'judge_notes', 'review_markdown'])
+  it('JUDGE_OUTPUT_SCHEMA keys match JudgeOutput / JudgeDecision', () => {
+    expect([...JUDGE_OUTPUT_SCHEMA.required].sort()).toEqual(
+      ['behavioral_diff', 'decisions', 'merge_confidence', 'production_risk', 'summary', 'unresolved_questions'])
+    const decision = JUDGE_OUTPUT_SCHEMA.properties.decisions.items
+    expect(Object.keys(decision.properties).sort()).toEqual(
+      ['anchor_file', 'anchor_lines', 'anchor_quote', 'candidate_id', 'evidence', 'note', 'question', 'reason_category', 'rewritten_body', 'score'])
+    expect([...decision.required].sort()).toEqual(['candidate_id', 'evidence', 'note', 'reason_category', 'score'])
+    expect(decision.properties.reason_category.enum).toEqual([...REASON_CATEGORIES])
   })
 
   it('renderReview of a schema-required-only object emits no "undefined" (renderer reads only guaranteed fields)', () => {

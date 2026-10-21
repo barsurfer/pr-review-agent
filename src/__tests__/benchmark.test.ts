@@ -10,10 +10,10 @@ vi.mock('../config.js', () => ({
     llmProvider: 'anthropic',
     vcsProvider: 'bitbucket',
     anthropic: { apiKey: 'test-key', model: 'claude-haiku-4-5-20251001', baseUrl: '', maxRetries: 1, maxInputTokens: 250000, maxTokens: 32000 },
-    judge: { model: 'claude-sonnet-5', maxRetries: 1, effort: '' },
+    judge: { model: 'claude-sonnet-5', maxRetries: 1, effort: '', policy: { keepMinor: false, keepUnverified: false }, fileContext: false },
     agentIdentity: 'test-bot',
     reply: { maxComments: 5 },
-    review: { maxFindings: 0, splitCheck: true, todoScan: true, effort: '' },
+    review: { maxFindings: 0, splitCheck: true, todoScan: true, effort: '', enableNitpicks: false },
     context: { maxFiles: 20, maxFileLines: 500 },
     skipSourceBranches: ['main', 'master', 'release/*', 'hotfix/*'],
     skipTargetBranches: ['main', 'master'],
@@ -34,6 +34,7 @@ import { runBenchmark } from '../benchmark.js'
 import { config } from '../config.js'
 import { REVIEW_OUTPUT_SCHEMA } from '../claude/client.js'
 import type { ReviewObject } from '../review/formatter.js'
+import type { JudgeOutput } from '../review/judge-decisions.js'
 
 const cfg = config as any
 const HEAD = 'c0ffee'.padEnd(40, '1')
@@ -67,24 +68,21 @@ const REVIEW: ReviewObject = {
   unresolved_questions: ['Is Pool shared across workers?'],
 }
 
-const JUDGED = {
-  review_markdown: [
-    '### Summary', 'Adds an unsynchronized pool.', '',
-    '### Findings',
-    '- **MEDIUM – Race on conns** (`src/pool.ts:2-3`)', '  get/put mutate conns without a lock.',
-    '- **LOW – PR-level concern**', '  No tests for the pool.',
-    '- **MEDIUM – Cited by basename** (pool.ts:4)', '  put accepts null.', '',
-    '### Merge Confidence: 70%',
-  ].join('\n'),
-  judge_notes: 'Dropped Speculative leak — line 9 is not in the diff.',
-  finding_scores: [
-    { title: 'Race on conns', severity: 'MEDIUM', score: 9 },
-    { title: 'PR-level concern', severity: 'LOW', score: 6 },
-    { title: 'Cited by basename', severity: 'MEDIUM', score: 7 },
+const JUDGED: JudgeOutput = {
+  decisions: [
+    { candidate_id: 'c0', reason_category: 'validated', evidence: 'src/pool.ts:2-3 `this.conns.pop()`', note: 'Unsynchronized mutation.', score: 9 },
+    { candidate_id: 'c1', reason_category: 'validated', evidence: '', note: 'No tests were added.', score: 6 },
+    { candidate_id: 'c2', reason_category: 'unconfirmed_high', evidence: 'src/pool.ts:4', note: 'No confirmed crash.', score: 7 },
+    { candidate_id: 'c3', reason_category: 'unverifiable', evidence: '', note: 'Line 9 is not in the diff.', score: 2 },
   ],
+  summary: 'Adds an unsynchronized pool.',
+  behavioral_diff: ['Pool added.'],
+  production_risk: ['Races under load.'],
+  unresolved_questions: [],
+  merge_confidence: 70,
 }
 
-function mockModel(review: ReviewObject = REVIEW, judged = JUDGED) {
+function mockModel(review: ReviewObject = REVIEW, judged: JudgeOutput = JUDGED) {
   completeStructured.mockImplementation(async (_system: string, _user: string, schema: unknown) =>
     ({ object: schema === REVIEW_OUTPUT_SCHEMA ? review : judged, usage }))
 }
@@ -132,7 +130,8 @@ beforeEach(() => {
   mockModel()
   cfg.vcsProvider = 'bitbucket'
   cfg.anthropic.model = 'claude-haiku-4-5-20251001'
-  cfg.judge = { model: 'claude-sonnet-5', maxRetries: 1, effort: '' }
+  cfg.anthropic.maxInputTokens = 250000
+  cfg.judge ={ model: 'claude-sonnet-5', maxRetries: 1, effort: '', policy: { keepMinor: false, keepUnverified: false }, fileContext: false }
   cfg.review = { maxFindings: 0, splitCheck: true, todoScan: true, effort: '' }
   cfg.skipSourceBranches = ['main', 'master', 'release/*', 'hotfix/*']
   cfg.skipTargetBranches = ['main', 'master']
@@ -202,48 +201,150 @@ describe('benchmark mode end-to-end (model + judge mocked)', () => {
     expect(readOut(env).findings.length).toBeGreaterThan(0)
   })
 
-  it('recovers kept findings when the judge wrote locations as prose, not (file:line)', async () => {
-    // The real regression: judge keeps findings and scores them, but omits the (file:line) paren.
+  it('keeps the reviewer anchor when the judge rewrites a kept body', async () => {
     mockModel(REVIEW, {
-      review_markdown: '### Summary\ns\n\n### Findings\n- **MEDIUM – Race on conns**\n  conns mutated without a lock.\n- **MEDIUM – Cited by basename**\n  put accepts null.\n\n### Merge Confidence: 70%',
-      judge_notes: '',
-      finding_scores: [{ title: 'Race on conns', severity: 'MEDIUM', score: 9 }, { title: 'Cited by basename', severity: 'MEDIUM', score: 7 }],
+      ...JUDGED,
+      decisions: [{ ...JUDGED.decisions[0], rewritten_body: 'conns races between get and put.' }, ...JUDGED.decisions.slice(1)],
     })
     const env = fixture()
 
     await runBenchmark(env)
 
-    // Anchors recovered from the reviewer's structured findings despite the prose-only judge markdown.
+    expect(readOut(env).findings[0]).toEqual({ file: 'src/pool.ts', start_line: 2, end_line: 3, message: 'Race on conns: conns races between get and put.', producer: 'my-agent' })
+  })
+
+  it('drops candidates the judge never ruled on and warns with the count', async () => {
+    mockModel(REVIEW, { ...JUDGED, decisions: [JUDGED.decisions[0]] })
+    const warnSpy = vi.spyOn(console, 'warn')
+    const env = fixture()
+
+    await runBenchmark(env)
+
+    expect(readOut(env).findings.map((f: any) => f.message.split(':')[0])).toEqual(['Race on conns'])
+    expect(warnSpy.mock.calls.map(c => c.join(' ')).join('\n')).toContain('undecided 3')
+    warnSpy.mockRestore()
+  })
+
+  it('keeps unverifiable candidates only when ENABLE_JUDGE_KEEP_UNVERIFIED is on, and logs the flag', async () => {
+    cfg.judge.policy.keepUnverified = true
+    const env = fixture()
+
+    await runBenchmark(env)
+
+    expect(readOut(env).findings.map((f: any) => f.message.split(':')[0])).toEqual(['Race on conns', 'Cited by basename', 'Speculative leak'])
+    const stdout = logSpy.mock.calls.map(c => c.join(' ')).join('\n')
+    expect(stdout).toContain('judge_keep_unverified=true')
+    expect(stdout).toContain('judge_keep_minor=false')
+  })
+
+  it('gives the judge id-tagged candidates, and the file context only with ENABLE_JUDGE_FILE_CONTEXT', async () => {
+    await runBenchmark(fixture())
+    const judgeUser = completeStructured.mock.calls[1][1] as string
+    expect(judgeUser).toContain('- [c0] **MEDIUM – Race on conns**')
+    expect(judgeUser).toContain('- [c3] **MEDIUM – Speculative leak**')
+    expect(judgeUser).not.toContain('## Full file context')
+
+    completeStructured.mockClear()
+    cfg.judge.fileContext = true
+    await runBenchmark(fixture())
+    expect(completeStructured.mock.calls[1][1]).toContain('## Full file context:\n\n### src/pool.ts')
+  })
+})
+
+describe('benchmark anchors: reviewer first, judge fallback, otherwise dropped and warned', () => {
+  const messages = (env: Record<string, string>) => readOut(env).findings.map((f: any) => f.message.split(':')[0])
+  const warnings = (spy: { mock: { calls: unknown[][] } }) => spy.mock.calls.map(c => c.join(' ')).join('\n')
+
+  it('anchors a locationless reviewer finding from the judge pair on a changed line', async () => {
+    mockModel(REVIEW, { ...JUDGED, decisions: [JUDGED.decisions[0], { ...JUDGED.decisions[1], anchor_file: 'src/pool.ts', anchor_lines: '4' }, ...JUDGED.decisions.slice(2)] })
+    const env = fixture()
+
+    await runBenchmark(env)
+
     expect(readOut(env).findings).toEqual([
       { file: 'src/pool.ts', start_line: 2, end_line: 3, message: 'Race on conns: get/put mutate conns without a lock.', producer: 'my-agent' },
+      { file: 'src/pool.ts', start_line: 4, end_line: 4, message: 'PR-level concern: No tests for the pool.', producer: 'my-agent' },
       { file: 'src/pool.ts', start_line: 4, end_line: 4, message: 'Cited by basename: put accepts null.', producer: 'my-agent' },
     ])
   })
 
-  it('still emits located markdown findings when the judge returns an empty finding_scores', async () => {
-    mockModel(REVIEW, {
-      review_markdown: '### Summary\ns\n\n### Findings\n- **MEDIUM – Race on conns** (`src/pool.ts:2-3`)\n  body.\n- **HIGH – Cited by basename** (`src/pool.ts:4`)\n  body.\n\n### Merge Confidence: 60%',
-      judge_notes: '',
-      finding_scores: [],
-    })
+  it('drops a judge anchor that points at an unchanged context line', async () => {
+    const warnSpy = vi.spyOn(console, 'warn')
+    // Line 5 (` }`) is context, not an added line — the judge channel is diff-validated, so it falls through.
+    mockModel(REVIEW, { ...JUDGED, decisions: [JUDGED.decisions[0], { ...JUDGED.decisions[1], anchor_file: 'src/pool.ts', anchor_lines: '5' }, ...JUDGED.decisions.slice(2)] })
     const env = fixture()
 
     await runBenchmark(env)
 
-    expect(readOut(env).findings.map((f: any) => `${f.file}:${f.start_line}`)).toEqual(['src/pool.ts:2', 'src/pool.ts:4'])
+    expect(messages(env)).toEqual(['Race on conns', 'Cited by basename'])
+    expect(warnings(warnSpy)).toContain('PR-level concern')
+    warnSpy.mockRestore()
   })
 
-  it('warns when a kept finding reaches no row (certain silent drop)', async () => {
-    // "Orphan prose finding" is kept and scored but located only in prose, with no reviewer finding to anchor it.
-    mockModel(REVIEW, {
-      review_markdown: '### Summary\ns\n\n### Findings\n- **MEDIUM – Race on conns** (`src/pool.ts:2-3`)\n  x\n- **MEDIUM – Orphan prose finding**\n  described in prose only.\n\n### Merge Confidence: 60%',
-      judge_notes: '',
-      finding_scores: [{ title: 'Race on conns', severity: 'MEDIUM', score: 9 }, { title: 'Orphan prose finding', severity: 'MEDIUM', score: 7 }],
-    })
+  it('drops a kept finding that neither the reviewer nor the judge located, and warns by title', async () => {
     const warnSpy = vi.spyOn(console, 'warn')
-    await runBenchmark(fixture())
-    expect(warnSpy.mock.calls.map(c => c.join(' ')).join('\n')).toContain('Parse check:')
+    const env = fixture()
+
+    await runBenchmark(env)
+
+    expect(messages(env)).toEqual(['Race on conns', 'Cited by basename'])
+    expect(warnings(warnSpy)).toContain('Parse check: 1 kept finding(s) with no usable file:line')
+    expect(warnings(warnSpy)).toContain('PR-level concern')
     warnSpy.mockRestore()
+  })
+
+  it('does not anchor a symbol that merely contains a digit, and the judge pair replaces it', async () => {
+    const symbolic: ReviewObject = { ...REVIEW, findings: [{ ...REVIEW.findings[0], lines: 'Phase 4 idiomisation block' }] }
+    const warnSpy = vi.spyOn(console, 'warn')
+    mockModel(symbolic, { ...JUDGED, decisions: [JUDGED.decisions[0]] })
+    const unanchoredEnv = fixture()
+
+    await runBenchmark(unanchoredEnv)
+
+    expect(readOut(unanchoredEnv).findings).toEqual([])
+    expect(warnings(warnSpy)).toContain('Parse check: 1 kept finding(s)')
+
+    mockModel(symbolic, { ...JUDGED, decisions: [{ ...JUDGED.decisions[0], anchor_file: 'src/pool.ts', anchor_lines: '3' }] })
+    const rescuedEnv = fixture()
+
+    await runBenchmark(rescuedEnv)
+
+    expect(readOut(rescuedEnv).findings).toEqual([
+      { file: 'src/pool.ts', start_line: 3, end_line: 3, message: 'Race on conns: get/put mutate conns without a lock.', producer: 'my-agent' },
+    ])
+    warnSpy.mockRestore()
+  })
+})
+
+describe('benchmark bundled review (prose merge path)', () => {
+  const section = (path: string, lines: number) =>
+    `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -1,1 +1,${lines} @@\n${Array.from({ length: lines }, (_, i) => `+const line${i} = ${i};`).join('\n')}\n`
+  const BUNDLED_DIFF = DIFF + section('src/big-one.ts', 380) + section('src/big-two.ts', 380)
+
+  beforeEach(() => {
+    cfg.review.bundledReview = true
+    cfg.review.maxBundles = 8
+    cfg.anthropic.maxInputTokens = 8000
+  })
+
+  it('reads a bundled outcome through the prose merge, not the structured judged findings', async () => {
+    // Only the bundle holding pool.ts finds anything, as in a real PR where bundles cover disjoint files.
+    completeStructured.mockImplementation(async (_system: string, user: string, schema: unknown) =>
+      ({ object: schema !== REVIEW_OUTPUT_SCHEMA ? JUDGED : user.includes('src/pool.ts') ? REVIEW : { ...REVIEW, findings: [] }, usage }))
+    const env = fixture({ diff: BUNDLED_DIFF })
+
+    await runBenchmark(env)
+
+    const stdout = logSpy.mock.calls.map(c => c.join(' ')).join('\n')
+    expect(stdout).toContain('switching to bundled review')
+    expect(stdout).toMatch(/Merge: bullets \d+ \(located/)
+    expect(stdout).not.toContain('Benchmark findings: reviewer')
+    const out = readOut(env)
+    expectAccepted(out)
+    expect(out.findings.map((f: any) => `${f.file}:${f.start_line}-${f.end_line} ${f.message.split(':')[0]}`).sort()).toEqual([
+      'src/pool.ts:2-3 Race on conns',
+      'src/pool.ts:4-4 Cited by basename',
+    ])
   })
 })
 
@@ -263,7 +364,7 @@ describe('benchmark mode fail-safe', () => {
   it('falls back to the unjudged reviewer findings when the judge fails (not empty)', async () => {
     completeStructured.mockImplementation(async (_s: string, _u: string, schema: unknown) => {
       if (schema === REVIEW_OUTPUT_SCHEMA) return { object: REVIEW, usage }
-      throw new Error('Structured output missing required field(s): finding_scores')
+      throw new Error('Structured output missing required field(s): decisions')
     })
     const env = fixture()
 

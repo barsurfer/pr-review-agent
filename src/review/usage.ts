@@ -4,13 +4,26 @@
 
 import { appendFileSync, readFileSync } from 'fs'
 import { execSync, type ExecSyncOptions } from 'child_process'
+import { createHash } from 'crypto'
 import { dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { config } from '../config.js'
 import { parseVerdictScore, parseFindings } from './parsers.js'
-import { countFindings } from './formatter.js'
-import type { FindingScore } from './formatter.js'
+import { countFindings, normalizeIssueType } from './formatter.js'
+import type { FindingScore, ReviewFinding, IssueType } from './formatter.js'
+import { isAnchored, parseLineRange, normalizeFindingPath } from './findings-output.js'
+import { candidateId, type AppliedDecision, type JudgeAnomalies } from './judge-decisions.js'
 import type { ReviewContext } from './types.js'
+
+// 12 hex chars of sha256 — enough to tell prompt/code versions apart across runs without bloating the record.
+function hash12(s: string): string {
+  return createHash('sha256').update(s).digest('hex').slice(0, 12)
+}
+
+function firstSentence(body: string): string {
+  const s = body.trim()
+  return (s.match(/^.*?[.!?](?=\s|$)/)?.[0] ?? s).trim()
+}
 
 export interface UsageRecord {
   run_id: string
@@ -43,12 +56,23 @@ export interface UsageRecord {
   dry_run: boolean
   force: string
   prompt_source: string
+  agent_commit: string
+  prompt_hash: string | null
+  judge_prompt_hash: string | null
+  judge_status: 'disabled' | 'skipped_no_findings' | 'succeeded' | 'failed' | null
   verdict_score: number | null
   computed_score: number | null
   review_findings: { high: number; medium: number; low: number } | null
   findings: { high: number; medium: number; low: number } | null
   finding_scores: FindingScore[] | null
   min_finding_score: number | null
+  // One compact read-only row per anchored kept finding; null when the structured judge didn't run.
+  anchored_findings: Array<{ anchor: string; severity: ReviewFinding['severity']; type: IssueType; description: string }> | null
+  // Candidates are stored once; judge_decisions join to them by candidate_id.
+  review_candidates: Array<{ id: string; severity: ReviewFinding['severity']; title: string; file: string | null; lines: string | null; body: string }> | null
+  judge_decisions: AppliedDecision[] | null
+  judge_anomalies: JudgeAnomalies | null
+  judge_policy: { keep_minor: boolean; keep_unverified: boolean; file_context: boolean } | null
   touch_rate: number | null
   delta: { developer_replies: number; resolved: number; still_open: number; new_findings: number } | null
   jenkins: { job: string; build: string; url: string } | null
@@ -209,12 +233,34 @@ export function buildUsageRecord(
     dry_run: ctx.dryRun,
     force: ctx.force,
     prompt_source: ctx.prompt?.source ?? 'none',
+    agent_commit: getBuildCommit(),
+    prompt_hash: ctx.prompt ? hash12(ctx.prompt.content) : null,
+    judge_prompt_hash: ctx.judgePromptHash ?? null,
+    judge_status: ctx.judgeStatus ?? null,
     verdict_score: verdictScore,
     computed_score: findings ? Math.max(0, 100 - findings.high * 12 - findings.medium * 4) : null,
     review_findings: reviewFindings,
     findings,
     finding_scores: judgeScores,
     min_finding_score: judgeScores?.length ? Math.min(...judgeScores.map(s => s.score)) : null,
+    anchored_findings: ctx.judgedFindings
+      ? ctx.judgedFindings.filter(isAnchored).map(k => {
+          const r = parseLineRange(k.lines)!
+          const file = normalizeFindingPath(k.file, ctx.changedFiles?.map(f => f.path) ?? [])
+          return {
+            anchor: r.start === r.end ? `${file}:${r.start}` : `${file}:${r.start}-${r.end}`,
+            severity: k.severity, type: normalizeIssueType(k.type), description: firstSentence(k.body),
+          }
+        })
+      : null,
+    review_candidates: ctx.judgeDecisions && ctx.reviewObject
+      ? ctx.reviewObject.findings.map((f, i) => ({ id: candidateId(i), severity: f.severity, title: f.title, file: f.file ?? null, lines: f.lines ?? null, body: f.body }))
+      : null,
+    judge_decisions: ctx.judgeDecisions ?? null,
+    judge_anomalies: ctx.judgeAnomalies ?? null,
+    judge_policy: judgeModel && judgeTokens
+      ? { keep_minor: config.judge.policy.keepMinor, keep_unverified: config.judge.policy.keepUnverified, file_context: config.judge.fileContext }
+      : null,
     touch_rate: ctx.reviewNumber > 1 && deltaStats ? (() => {
       const total = deltaStats.resolved + deltaStats.still_open
       return total > 0 ? Math.round((deltaStats.resolved / total) * 100) : null

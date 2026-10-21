@@ -99,18 +99,15 @@ export function parseDeltaStats(text: string): { resolved: number; still_open: n
   }
 }
 
-export interface TodoItem {
+export interface AddedLine {
   file: string
   line: number
-  text: string
+  text: string   // the added line's content, without the leading '+'
 }
 
-/** Scan added (`+`) lines in a unified diff for TODO/FIXME/HACK markers, tracking the
- *  new-file line number from hunk headers. Deterministic — catches breadcrumbs the model
- *  might miss. */
-export function scanTodos(diff: string): TodoItem[] {
-  const todos: TodoItem[] = []
-  const marker = /\b(TODO|FIXME|HACK)\b:?\s*(.*)/i
+// Added (`+`) lines with their new-file line numbers — the single hunk walk shared by scanTodos and the anchor resolver.
+export function addedLines(diff: string): AddedLine[] {
+  const out: AddedLine[] = []
   let file = ''
   let newLine = 0
 
@@ -121,16 +118,32 @@ export function scanTodos(diff: string): TodoItem[] {
     const hunk = raw.match(/^@@ -\d+(?:,\d+)? \+(\d+)/)
     if (hunk) { newLine = parseInt(hunk[1], 10); continue }
     if (raw.startsWith('-')) continue                // removed — new-file counter unchanged
-    if (raw.startsWith('+')) {                       // added line
-      const m = raw.slice(1).match(marker)
-      if (m && file) {
-        const body = m[2].trim()
-        todos.push({ file, line: newLine, text: (body ? `${m[1].toUpperCase()}: ${body}` : m[1].toUpperCase()).slice(0, 140) })
-      }
+    if (raw.startsWith('+')) {
+      if (file) out.push({ file, line: newLine, text: raw.slice(1) })
       newLine++
       continue
     }
+    if (raw.startsWith('\\')) continue               // "\ No newline at end of file" is a marker, not a line
     newLine++                                        // context line advances the counter
+  }
+  return out
+}
+
+export interface TodoItem {
+  file: string
+  line: number
+  text: string
+}
+
+// Deterministic TODO/FIXME/HACK scan of added lines — catches breadcrumbs a model might miss.
+export function scanTodos(diff: string): TodoItem[] {
+  const marker = /\b(TODO|FIXME|HACK)\b:?\s*(.*)/i
+  const todos: TodoItem[] = []
+  for (const { file, line, text } of addedLines(diff)) {
+    const m = text.match(marker)
+    if (!m) continue
+    const body = m[2].trim()
+    todos.push({ file, line, text: (body ? `${m[1].toUpperCase()}: ${body}` : m[1].toUpperCase()).slice(0, 140) })
   }
   return todos
 }

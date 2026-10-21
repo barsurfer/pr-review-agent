@@ -26,7 +26,9 @@ If ReviewBench grants a longer time limit, raise `BENCHMARK_DEADLINE_SECONDS` to
 | `RB_MODEL_BASE_URL` | Anthropic SDK `baseURL`. Register `https://api.anthropic.com`; a trailing `/v1` is stripped. |
 | `RB_CONFIG_MODEL` / `RB_CONFIG_EFFORT` | Reviewer model / effort |
 | `RB_CONFIG_JUDGE_MODEL` / `RB_CONFIG_JUDGE_EFFORT` | Judge model / effort |
-| Image `ENV` defaults | `CLAUDE_MODEL=claude-sonnet-5`, `JUDGING_MODEL=claude-sonnet-5`, `MAX_OUTPUT_TOKENS=64000` |
+| Image `ENV` defaults | `CLAUDE_MODEL=claude-haiku-5-5`, `JUDGING_MODEL=claude-sonnet-5`, `MAX_OUTPUT_TOKENS=64000`, `ENABLE_BUNDLED_REVIEW=true`, `MAX_BUNDLES=3` |
+| Build args `JUDGE_KEEP_MINOR` / `JUDGE_KEEP_UNVERIFIED` / `JUDGE_FILE_CONTEXT` | Default `false`. Baked into `ENABLE_JUDGE_*` (see `docs/reference/env-vars.md`). An experiment image passes `--build-arg …=true`; the release workflow passes none. The values are echoed in the `Benchmark settings:` line, the only record of them in a run. |
+| Build arg `NITPICKS` | Default `false`. Baked into `ENABLE_NITPICKS` (see `docs/reference/env-vars.md`); same experiment-vs-release handling as the three above. |
 
 Applied settings are printed as `Benchmark settings: model=… effort=…`, because the run flags any label whose value never appears in the output. Unsupported `RB_CONFIG_*` labels are logged as ignored, and their values are not echoed. All other agent env vars still work (see `docs/reference/env-vars.md`), for example `DIFF_EXCLUDE_PATTERNS`, `MAX_FINDINGS` and `MAX_CONTEXT_FILES`.
 

@@ -1,6 +1,6 @@
 ---
 type: domain
-topic: Judge model — finding validation, calibration rules, Merge Confidence score
+topic: Judge model — decision contract, reason categories, policy table and flags, Merge Confidence score
 ---
 
 # Judge Model
@@ -11,7 +11,7 @@ The optional second-pass validation model (`JUDGING_MODEL`). Related: [prompt/co
 
 ## Purpose
 
-Implements the **generator-verifier** pattern: the reviewer model generates candidate findings; the judge model validates each MEDIUM/HIGH finding against the actual diff before posting. Invalid or fabricated findings are dropped.
+Implements the **generator-verifier** pattern: the reviewer model generates candidate findings; the judge model classifies each one against the actual code, and the app applies a policy table to decide what posts. Invalid or fabricated findings are dropped.
 
 **Why:** Cheap reviewer models (Haiku) produce many candidate findings with variable accuracy. A stronger judge (Sonnet) filters noise cheaply compared to using a strong model for generation. The combination improves precision without proportionally increasing cost.
 
@@ -34,54 +34,61 @@ Implements the **generator-verifier** pattern: the reviewer model generates cand
 ## Diff:
 {filtered diff}
 
-## Review to validate:
-{reviewer output}
+## Full file context:          ← only with ENABLE_JUDGE_FILE_CONTEXT=true
+{the reviewer's file contexts}
+
+## Review to Validate:
+{reviewer output, each finding tagged [c0], [c1], …}
 ```
+
+By default the judge sees only the diff, while the reviewer also saw full files. That means it can't confirm a claim that rests on unchanged code; such candidates land in `unverifiable`.
+
+When `ENABLE_NITPICKS` is on (see [composition.md](composition.md)), the reviewer emits more real-but-low-impact candidates (dead code, stale docs/comments, misleading names, duplication, vacuous tests); these classify as `minor`, so they post only under `ENABLE_JUDGE_KEEP_MINOR`.
 
 ---
 
-## Calibration Rules (Applied by Judge)
+## Decision Contract: the judge classifies, the app decides
 
-| Rule | Effect |
-|------|--------|
-| Style/formatting findings | Dropped |
-| LOW findings with no runtime impact (style preference, configurability opinion) | Dropped |
-| Already-handled concern (guard/annotation/test/framework guarantee covers it; "for awareness") | Dropped |
-| Low-value anti-patterns (docstring/type-hint/comment adds, unused-import removal, missing-import, "use a more specific exception", "verify/ensure X") | Dropped |
-| HIGH without confirmed runtime failure in diff | Downgraded to MEDIUM |
-| Findings requiring 3+ chained hypotheticals | Downgraded to LOW |
-| Framework/library uncertainty | Moved to Unresolved Questions |
-| Verbose / multi-paragraph finding | Trimmed to a terse flag (problem, why, fix) |
+The judge returns one decision per candidate id, each with a `reason_category`. `applyJudgeDecisions` (`src/review/judge-decisions.ts`) maps each category to an action through a fixed policy table. Severity changes are derived from the category, never taken from the model, so a decision can't inflate severity.
 
-These rules are cherry-picked from the reviewer's FORBIDDEN section to ensure the judge applies the same calibration. If a finding survives after calibration, it's included in the output.
+| `reason_category` | Prompt rule it encodes | Default action | With a flag on |
+|---|---|---|---|
+| `validated` | diff shows the problem | keep | — |
+| `unconfirmed_high` | HIGH without confirmed crash/data loss/breach/outage | downgrade → MEDIUM | — |
+| `chained_hypothetical` | needs 3+ chained hypotheticals | downgrade → LOW | — |
+| `incorrect` | the code contradicts the claim (guard, default, try-catch present) | drop | — |
+| `already_handled` | the finding's own reasoning says it's mitigated ("for awareness") | drop | — |
+| `unverifiable` | no concrete line shows the problem | drop | `ENABLE_JUDGE_KEEP_UNVERIFIED` → keep, score ≤ 5 |
+| `style_only` | formatting / style / naming preference | drop | — |
+| `low_value` | pure asks: add a docstring/type-hint/import, configurability opinions, "verify/ensure X" | drop | — |
+| `minor` | real problem with no runtime impact: unused imports/variables or dead code, stale docs/comments, misleading names, duplication, weak tests in the diff | drop | `ENABLE_JUDGE_KEEP_MINOR` → keep as LOW |
+| `duplicate` | same root cause **and** same location; the same defect elsewhere is a separate finding | drop | — |
+| `out_of_scope` | not code this diff adds or modifies | drop | — |
+| `framework_uncertainty` | rests on framework/library internals | move to Unresolved Questions (the judge's `question`) | `ENABLE_JUDGE_KEEP_UNVERIFIED` → keep, score ≤ 5 |
+
+**Why policy is app-side:** the judge's output doesn't depend on the flags, so one judged run can be re-scored offline under any flag combination from the logged decisions. Paid runs are scarce, so this replaces ablation runs. With all flags off the app's actions follow the pre-contract rules, but two prompt-level changes are not inert. `minor` is a new category that is dropped by default (stale docs/comments, dead code, duplicated logic, vacuous tests; the old prompt left these to the judge's discretion), so LOW recall can fall until `ENABLE_JUDGE_KEEP_MINOR` is on. `duplicate` now means the same root cause at the same location; the same defect at two places is two findings.
+
+**Edge handling (precision-safe):**
+- Unknown or hallucinated id → ignored and counted.
+- No decision for a candidate → dropped and counted (`undecided`).
+- Several decisions for one id → any drop wins.
+- A category outside the enum → treated as `unverifiable`.
+- `incorrect` / `already_handled` with empty `evidence` → reclassified `unverifiable` (still dropped by default) and counted (`drop_without_evidence`).
+- `rewritten_body` over 600 chars → the reviewer's body is used (even when it is empty).
+- Anchors (`locateInDiff`, first that resolves wins): (1) the reviewer's `file:line` when `lines` is strictly numeric (`42`, `26-31`, `L10-L12`; a symbol that merely contains a digit like `Phase 4` is not a line) — **ungated / `anchor_source: reviewer`**, never diff-validated, since the reviewer sees full files and may cite context/out-of-diff lines; (2) else the judge's `anchor_file`/`anchor_lines` (numeric), accepted only when the line is a changed line in the diff → `anchor_source: judge`; (3) else a single verbatim `anchor_quote` (≥12 chars) located in the diff → `anchor_source: diff`. With none, the finding still posts but has no usable location, so the benchmark drops it from `findings.json` with a `Parse check` warning. Only the judge/quote channels are proven against the diff; the reviewer anchor is additive-only so nothing that anchors today is lost.
 
 ---
 
 ## Judge Output
 
-The judge produces a clean final comment with:
-- Only validated findings (LOW/MEDIUM/HIGH after calibration)
-- A **Merge Confidence** score — holistic merge-safety percentage (0–100%)
-- A per-finding **0–10 confidence score** (`finding_scores`) for each kept finding, scored independently of severity — logged, never posted (see below)
-
-The prompt instructs the judge to validate **silently** — the response must start directly
-at `### Summary`. As a code-side guard, `POST_REVIEW` runs `stripPreamble()` to drop any
-leaked validation reasoning before the first `### Summary` heading, so judge deliberation
-never reaches the posted comment.
-
-The posted review must read as if a single reviewer wrote it — dropped findings leave no
-trace in any section. The judge responds via **structured output** (JSON schema, three
-fields): `review_markdown` (the posted comment), `judge_notes` (drop/downgrade rationale —
-logged, never posted), and `finding_scores` (`[{title, severity, score, file?, lines?}]`, one
-per kept finding, `score` 0–10, with an optional transcribed anchor; the benchmark prefers the
-matched reviewer finding's anchor and falls back to the judge's own pair). This physically separates validation reasoning from the comment;
-`stripPreamble()`/`stripJudgeNotes()` in POST_REVIEW remain as defense-in-depth. See
-[llm/structured-output.md](../llm/structured-output.md) for the schema. The judge itself still
-emits `review_markdown` as prose, so final findings/verdict are parsed from it (not yet a
-fully structured judge object).
-
-`finding_scores` is logged to `results.jsonl` as `finding_scores` (the array) and
-`min_finding_score` (the least-confident kept finding) — a calibration signal, never posted.
+- **Structured output:** `decisions[{candidate_id, reason_category, evidence, note, score, rewritten_body?, question?, anchor_file?, anchor_lines?, anchor_quote?}]`, plus `summary`, `behavioral_diff[]`, `production_risk[]`, `unresolved_questions[]`, `merge_confidence`. `anchor_quote` is a verbatim diff line for deterministic anchoring. Schema: [llm/structured-output.md](../llm/structured-output.md).
+- **The app renders the posted comment** (`renderJudgedReview`): kept findings with the reviewer's `file:line` (the judge's anchor when the reviewer's is not numeric) and `rewritten_body ?? reviewer body`, then the reviewer's `Can Be Split` section when present (carried through so `ENABLE_SPLIT_CHECK` works with the judge on; the judge never rules on it), then `### Merge Confidence: X%` and the disclaimer line, byte-compatible with what the judge used to write. Validation reasoning lives only in `note` and `evidence`, so nothing leaks into the post; `stripPreamble()`/`stripJudgeNotes()` stay as defense-in-depth.
+- **Logged to `results.jsonl`, never posted:**
+  - `review_candidates[]` (stored once, with ids) and `judge_decisions[]` (joined by `candidate_id`; effective category, `reclassified_from`, action, original and final severity, score, evidence, note, and the resolved `anchor_source`/`anchor_file`/`anchor_lines` on **every decided candidate** — dropped included — so an offline re-score under a different policy can place what it would keep);
+  - `judge_anomalies`, and `judge_policy` (only when the judge ran);
+  - `finding_scores` / `min_finding_score`, now a projection of kept decisions;
+  - `anchored_findings[]` — one compact `{anchor, severity, type, description}` row per kept finding that resolved to a real line.
+- **Bundled review** runs the same contract per bundle and re-parses each bundle's rendered markdown. Its decisions are not persisted (ids would need per-bundle namespacing).
 
 **Merge Confidence is NOT arithmetic.** The judge considers:
 - Number and severity of findings

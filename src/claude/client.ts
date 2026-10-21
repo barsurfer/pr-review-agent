@@ -1,8 +1,14 @@
 import { readFileSync } from 'fs'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
+import { createHash } from 'crypto'
 import { createProvider } from '../llm/provider.js'
-import { renderReview, type ReviewObject, type FindingScore } from '../review/formatter.js'
+import { renderReview, ISSUE_TYPES, type ReviewObject, type FindingScore } from '../review/formatter.js'
+import type { KeptFinding } from '../review/findings-output.js'
+import {
+  REASON_CATEGORIES, DEFAULT_JUDGE_POLICY, applyJudgeDecisions, renderCandidatesForJudge, summarizeDecisions,
+  type JudgeOutput, type JudgePolicy, type AppliedDecision, type JudgeAnomalies,
+} from '../review/judge-decisions.js'
 import type { PRInfo, ReviewComment, CommentReply } from '../vcs/adapter.js'
 import type { FileContext } from '../context/fetcher.js'
 import type { LoadedPrompt } from '../prompt/loader.js'
@@ -28,39 +34,45 @@ export interface JudgeResult extends ClaudeResult {
   notes?: string
   /** Per-finding 0–10 confidence for the kept findings — logged to results.jsonl, never posted. */
   scores?: FindingScore[]
+  /** sha256-12 of the judge system prompt actually used — config attribution for usage records. */
+  promptHash?: string
+  decisions?: AppliedDecision[]
+  anomalies?: JudgeAnomalies
+  kept?: KeptFinding[]
 }
 
-// Structured output keeps validation reasoning physically separate from the
-// posted review — prompt-only suppression proved leaky  — proved leaky in production
+// The judge rules on candidate ids and the app renders the comment, so reasoning can't leak; the judge only anchors candidates whose reviewer location has no numeric line.
 export const JUDGE_OUTPUT_SCHEMA = {
   type: 'object',
   properties: {
-    review_markdown: {
-      type: 'string',
-      description: 'The final review comment exactly as it will be posted, starting with the "### Summary" heading. No validation reasoning, no preamble.',
-    },
-    judge_notes: {
-      type: 'string',
-      description: 'Validation reasoning: which findings were dropped or downgraded and why. Internal — never posted.',
-    },
-    finding_scores: {
+    decisions: {
       type: 'array',
-      description: 'One entry per finding KEPT in review_markdown — the 0–10 confidence that it is real and correctly severed. Empty if no findings survive. Internal — logged, never posted.',
+      description: 'Exactly one decision per candidate id in the review. Internal — logged, never posted.',
       items: {
         type: 'object',
         properties: {
-          title: { type: 'string', description: "The kept finding's title, matching its heading in review_markdown." },
-          severity: { type: 'string', enum: ['LOW', 'MEDIUM', 'HIGH'], description: 'Final severity after calibration.' },
-          score: { type: 'integer', description: '0–10 confidence: 10 = certain with quoted diff evidence; 5 = plausible but not fully verifiable; 0 = speculative. Independent of severity.' },
-          file: { type: 'string', description: "The kept finding's file path, copied from its (file:line) reference in review_markdown. Omit only if the finding is not line-specific." },
-          lines: { type: 'string', description: 'Digits only — the line number or range, e.g. "42" or "26-31", never a symbol name or quoted code. Omit only for a genuinely file-level finding.' },
+          candidate_id: { type: 'string', description: 'The candidate id from the review, e.g. "c0".' },
+          reason_category: { type: 'string', enum: [...REASON_CATEGORIES], description: 'The single category that best explains the decision.' },
+          evidence: { type: 'string', description: 'file:line and a short quote of the code that settles it. For incorrect and already_handled, the code that contradicts or covers the claim. Empty string when there is none.' },
+          note: { type: 'string', description: 'One sentence: why this category.' },
+          score: { type: 'integer', description: '0–10 confidence the candidate is a real problem at its stated severity: 10 = certain with quoted evidence; 5 = plausible but not fully verifiable; 0 = speculative. Independent of severity.' },
+          rewritten_body: { type: 'string', description: 'Only for a candidate you keep whose body is verbose or unclear: problem, why it matters, fix, in 1–3 sentences. Omit to keep the reviewer text.' },
+          question: { type: 'string', description: 'framework_uncertainty only: the open question, one line, as it should appear under Unresolved Questions.' },
+          anchor_file: { type: 'string', description: 'Only when the candidate shows no numeric line: the file path where the problem is in the diff.' },
+          anchor_lines: { type: 'string', description: 'Only when the candidate shows no numeric line: digits only — the line number or range, e.g. "42" or "26-31", never a symbol name or quoted code.' },
+          anchor_quote: { type: 'string', description: 'For a candidate you keep: a verbatim copy of the single diff line that best locates it — exactly as it appears, one line only, not a line number, not a paraphrase, not multiple lines joined. Lets the system anchor it from the diff when the line number is unknown.' },
         },
-        required: ['title', 'severity', 'score'],
+        required: ['candidate_id', 'reason_category', 'evidence', 'note', 'score'],
         additionalProperties: false,
       },
     },
+    summary: { type: 'string', description: 'One-line production risk assessment of the PR itself — what changed and whether it is safe.' },
+    behavioral_diff: { type: 'array', items: { type: 'string' }, description: 'What changed and why it matters, one short line each.' },
+    production_risk: { type: 'array', items: { type: 'string' }, description: 'Failure scenarios tied to kept findings only.' },
+    unresolved_questions: { type: 'array', items: { type: 'string' }, description: 'Questions still open after validation, excluding framework_uncertainty candidates.' },
+    merge_confidence: { type: 'integer', description: '0–100: overall confidence the PR is safe to merge.' },
   },
-  required: ['review_markdown', 'judge_notes', 'finding_scores'],
+  required: ['decisions', 'summary', 'behavioral_diff', 'production_risk', 'unresolved_questions', 'merge_confidence'],
   additionalProperties: false,
 } as const
 
@@ -82,6 +94,7 @@ export const REVIEW_OUTPUT_SCHEMA = {
           file: { type: 'string', description: 'File path when the finding is tied to specific code. Omit if not line-specific.' },
           lines: { type: 'string', description: 'The diff line number or range as digits only, e.g. "42" or "26-31". NEVER a function/symbol name or quoted code. Omit only for a genuinely file-level finding.' },
           body: { type: 'string', description: 'Problem, why it matters, fix. Terse — no essays.' },
+          type: { type: 'string', enum: [...ISSUE_TYPES], description: 'The one dominant issue category. performance = slow/expensive under normal operation; reliability = hangs/leaks/fails under error, timeout, or retry. Omit if none clearly applies.' },
         },
         required: ['severity', 'title', 'body'],
         additionalProperties: false,
@@ -176,14 +189,13 @@ function buildUserMessage(
     parts.push(`## Changes Since Your Last Review:\nThe diff below is ONLY the lines changed since your previous review above — use it to see exactly what was added or fixed. Credit findings these changes resolve, and assess anything new. The complete PR diff is above for full context.\n\`\`\`diff\n${changesSinceLastReview}\n\`\`\``)
   }
 
-  if (fileContexts.length > 0) {
-    parts.push('## Full file context:')
-    for (const file of fileContexts) {
-      parts.push(`### ${file.path}\n\`\`\`\n${file.content}\n\`\`\``)
-    }
-  }
+  if (fileContexts.length > 0) parts.push(renderFileContexts(fileContexts))
 
   return parts.join('\n\n')
+}
+
+function renderFileContexts(fileContexts: FileContext[]): string {
+  return ['## Full file context:', ...fileContexts.map(f => `### ${f.path}\n\`\`\`\n${f.content}\n\`\`\``)].join('\n\n')
 }
 
 function getJudgePrompt(): string {
@@ -204,21 +216,30 @@ export async function runJudge(
   maxTokens: number,
   effort: string,
   diff: string,
-  reviewText: string,
+  review: ReviewObject,
+  fileContexts: FileContext[] = [],
+  policy: JudgePolicy = DEFAULT_JUDGE_POLICY,
 ): Promise<JudgeResult> {
   const parts: string[] = []
   parts.push(`## Diff:\n\`\`\`diff\n${diff}\n\`\`\``)
-  parts.push(`## Review to Validate:\n${reviewText}`)
+  if (fileContexts.length > 0) parts.push(renderFileContexts(fileContexts))
+  parts.push(`## Review to Validate:\n${renderCandidatesForJudge(review)}`)
   const userMessage = parts.join('\n\n')
 
-  console.log(`Sending to judge (${model}, maxRetries: ${maxRetries})...`)
-  const { object: parsed, usage } = await createProvider(apiKey).completeStructured<{ review_markdown: string; judge_notes: string; finding_scores: FindingScore[] }>(
-    getJudgePrompt(), userMessage, JUDGE_OUTPUT_SCHEMA, { model, maxTokens, maxRetries, effort: effort || undefined },
+  const judgePrompt = getJudgePrompt()
+  console.log(`Sending to judge (${model}, maxRetries: ${maxRetries}${fileContexts.length ? `, ${fileContexts.length} context file(s)` : ''})...`)
+  const { object, usage } = await createProvider(apiKey).completeStructured<JudgeOutput>(
+    judgePrompt, userMessage, JUDGE_OUTPUT_SCHEMA, { model, maxTokens, maxRetries, effort: effort || undefined },
   )
 
   console.log(`Judge received (${usage.input_tokens} in / ${usage.output_tokens} out tokens)`)
 
-  return { text: parsed.review_markdown, usage, notes: parsed.judge_notes, scores: parsed.finding_scores }
+  const judged = applyJudgeDecisions(review.findings, object, policy, review.can_be_split, diff)
+  const promptHash = createHash('sha256').update(judgePrompt).digest('hex').slice(0, 12)
+  return {
+    text: judged.markdown, usage, notes: summarizeDecisions(judged.decisions), scores: judged.scores, promptHash,
+    decisions: judged.decisions, anomalies: judged.anomalies, kept: judged.kept,
+  }
 }
 
 function getReplyPrompt(): string {

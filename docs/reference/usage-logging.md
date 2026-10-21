@@ -112,12 +112,21 @@ The record is also printed to stdout at the end of every run regardless of the f
 | `dry_run` | `boolean` | Whether `--dry-run` was used |
 | `force` | `string` | Force mode: `"off"`, `"clean"` (no prior context), or `"re-review"` (bypass dedup, keep context) |
 | `prompt_source` | `string` | `repo`, a `--prompt` path, `stack:<bases+overlays>`, or `default` |
+| `agent_commit` | `string` | Deploy commit of the agent (`getBuildCommit()`) — config attribution |
+| `prompt_hash` | `string \| null` | sha256-12 of the resolved reviewer prompt; null if no prompt loaded |
+| `judge_prompt_hash` | `string \| null` | sha256-12 of the judge prompt actually used; null when the judge didn't run |
+| `judge_status` | `string \| null` | `disabled` \| `skipped_no_findings` \| `succeeded` \| `failed`; null when the judge stage wasn't reached |
 | `verdict_score` | `number \| null` | Merge Confidence percentage (0–100) parsed from final output (judge if used, reviewer otherwise) |
 | `computed_score` | `number \| null` | Code-computed score: `max(0, 100 − HIGHs×12 − MEDIUMs×4)` from final findings |
 | `review_findings` | `object \| null` | `{ high, medium, low }` — raw findings from reviewer before judge validation |
 | `findings` | `object \| null` | `{ high, medium, low }` — final findings (from judge if used, from reviewer otherwise) |
 | `finding_scores` | `array \| null` | Judge per-finding `{ title, severity, score, file?, lines? }`; null if no judge |
 | `min_finding_score` | `number \| null` | Lowest kept finding score |
+| `review_candidates` | `array \| null` | Reviewer findings stored once with ids (`c0…`): `{ id, severity, title, file, lines, body }`; judge-run only |
+| `judge_decisions` | `array \| null` | One per candidate: `{ candidate_id, reason_category, reclassified_from, action, original_severity, final_severity, score, evidence, note, rewritten, anchor_source, anchor_file, anchor_lines }`; the resolved anchor is logged for **every decided candidate** (kept or dropped) so an offline re-score can place a finding a different policy would keep; judge-run only |
+| `judge_anomalies` | `object \| null` | `{ unknown_ids, undecided, duplicate_ids, drop_without_evidence }`; judge-run only |
+| `judge_policy` | `object \| null` | `{ keep_minor, keep_unverified, file_context }` flags in effect; only when the judge ran |
+| `anchored_findings` | `array \| null` | Compact kept-finding rows `{ anchor, severity, type, description }` resolved to a real line; judge-run only |
 | `touch_rate` | `number \| null` | Re-review only: `resolved / (resolved + still_open) × 100` — percentage of previous findings addressed by the developer |
 | `delta` | `object \| null` | Re-review only: `{ developer_replies, resolved, still_open, new_findings }` |
 | `jenkins` | `object \| null` | `{ job, build, url }` from Jenkins env (`JOB_NAME`/`BUILD_NUMBER`/`BUILD_URL`), or null off-CI — maps a run to its build/artifact |
