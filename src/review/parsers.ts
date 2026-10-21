@@ -105,9 +105,7 @@ export interface AddedLine {
   text: string   // the added line's content, without the leading '+'
 }
 
-/** Every added (`+`) line in a unified diff with its new-file line number, derived from the hunk
- *  headers. The one hunk walk reused by scanTodos and the anchor resolver — context lines advance
- *  the counter, removed lines don't, extended headers (`+++ b/`) are not content. */
+// Added (`+`) lines with their new-file line numbers — the single hunk walk shared by scanTodos and the anchor resolver.
 export function addedLines(diff: string): AddedLine[] {
   const out: AddedLine[] = []
   let file = ''
@@ -125,6 +123,7 @@ export function addedLines(diff: string): AddedLine[] {
       newLine++
       continue
     }
+    if (raw.startsWith('\\')) continue               // "\ No newline at end of file" is a marker, not a line
     newLine++                                        // context line advances the counter
   }
   return out
@@ -136,8 +135,7 @@ export interface TodoItem {
   text: string
 }
 
-/** Scan added lines for TODO/FIXME/HACK markers. Deterministic — catches breadcrumbs the model
- *  might miss. */
+// Deterministic TODO/FIXME/HACK scan of added lines — catches breadcrumbs a model might miss.
 export function scanTodos(diff: string): TodoItem[] {
   const marker = /\b(TODO|FIXME|HACK)\b:?\s*(.*)/i
   const todos: TodoItem[] = []

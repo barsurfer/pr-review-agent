@@ -56,7 +56,7 @@ export interface AppliedDecision {
   evidence: string
   note: string
   rewritten: boolean
-  // Resolved anchor for the candidate regardless of keep/drop, so an offline re-score under a different policy can place a finding this policy dropped. Null only for an undecided candidate.
+  // Resolved anchor on every decided candidate, so an offline re-score can place even a dropped finding; null only when undecided.
   anchor_source: AnchorSource | null
   anchor_file: string | null
   anchor_lines: string | null
@@ -114,7 +114,7 @@ const MIN_QUOTE_LEN = 12
 
 interface DiffIndex { byFile: Map<string, AddedLine[]>; present: boolean }
 
-// Added lines by new-side path; `present` is false for an empty/unparseable diff, where the judge anchor stays ungated.
+// Added lines by new-side path; `present` is false for an empty/unparseable diff, where the judge anchor cannot be validated and is not accepted.
 function buildDiffIndex(diff: string): DiffIndex {
   const byFile = new Map<string, AddedLine[]>()
   for (const l of addedLines(diff)) {
@@ -156,7 +156,7 @@ function quoteMatches(idx: DiffIndex, file: string | undefined, quote: string): 
   return pool.filter(a => a.text.trim().includes(q))
 }
 
-// First source that resolves wins; the reviewer's numeric anchor is additive-only (never gated) so nothing that anchors today is lost, while the newer judge/quote sources must be proven against the diff.
+// First source that resolves wins; the reviewer anchor is ungated (additive-only), while the judge/quote sources must be proven against the diff.
 export function locateInDiff(candidate: ReviewFinding, d: JudgeDecision, diff: string): Anchor {
   return resolveAnchor(candidate, d, buildDiffIndex(diff))
 }
@@ -165,10 +165,10 @@ function resolveAnchor(candidate: ReviewFinding, d: JudgeDecision, idx: DiffInde
   // Ungated: the reviewer saw full files and may cite context/deletion/out-of-diff lines that must keep anchoring.
   if (candidate.file && isNumericLines(candidate.lines)) return { file: candidate.file, lines: candidate.lines, source: 'reviewer' }
 
-  // The judge is the untrusted channel, so its numeric anchor is honored only on a changed line (ungated when no diff is available, for unit parity).
+  // The judge is the untrusted channel, so its numeric anchor is honored only on a changed line of a present diff — a model-typed line with no diff to validate it against would post a ghost anchor.
   const judgeFile = normalizeFindingPath(String(d.anchor_file ?? '')) || candidate.file
   const judgeLines = String(d.anchor_lines ?? '').trim()
-  if (judgeFile && isNumericLines(judgeLines) && (!idx.present || onChangedLine(idx, judgeFile, judgeLines))) {
+  if (judgeFile && isNumericLines(judgeLines) && idx.present && onChangedLine(idx, judgeFile, judgeLines)) {
     return { file: judgeFile, lines: judgeLines, source: 'judge' }
   }
 
@@ -179,7 +179,8 @@ function resolveAnchor(candidate: ReviewFinding, d: JudgeDecision, idx: DiffInde
     if (hits.length === 1) return { file: hits[0].file, lines: String(hits[0].line), source: 'diff' }
   }
 
-  return { file: candidate.file, lines: candidate.lines, source: 'none' }
+  // An unanchored finding must not carry a non-numeric `lines`: the bundled path re-parses any digit in it and mis-anchors.
+  return { file: candidate.file, lines: isNumericLines(candidate.lines) ? candidate.lines : undefined, source: 'none' }
 }
 
 const normalizeId = (id: string): string => String(id).trim().replace(/^\[|\]$/g, '').toLowerCase()

@@ -52,6 +52,7 @@ credentials in source code or commit them to version control.**
 | `MAX_FINDINGS` | `0` | Cap the number of findings the reviewer reports (0 = unlimited). When set, appends a findings-limit instruction to the reviewer prompt. |
 | `ENABLE_SPLIT_CHECK` | `true` | Reviewer adds a "Can Be Split" section when the PR spans independent themes that could be separate PRs. Set `false` to disable. |
 | `ENABLE_TODO_SCAN` | `true` | Deterministically scan added lines for `TODO`/`FIXME`/`HACK` markers and append a "TODOs Introduced" section (file:line) to the review. |
+| `ENABLE_NITPICKS` | `false` | Relax the base template's low-severity certainty rule so the reviewer also surfaces real, concrete, low-impact findings (stale/misleading docs, comments or names; dead code; duplicated logic; vacuous tests), each tagged with its `type`. Off, the assembled base template is byte-identical to `base-prompt.txt`; the two FORBIDDEN style/nitpick lines are never touched. These land as `minor` at the judge, so they post only under `ENABLE_JUDGE_KEEP_MINOR`. See [prompt/composition.md](../context/prompt/composition.md). |
 | `AGENT_IDENTITY` | *(BITBUCKET_USERNAME)* | Name shown in review/reply footers. Falls back to `BITBUCKET_USERNAME`, then `'Claude'` |
 
 > Threshold variables can also be set via CLI flags (`--min-changed-files`, etc.)
@@ -208,4 +209,8 @@ MAX_CHANGED_LINES=3000
 
 # Judge model (on by default — validates findings before posting; set empty to skip)
 # JUDGING_MODEL=claude-sonnet-5
+
+# Surface real-but-minor findings (dead code, stale docs/comments, misleading names,
+# duplicated logic, vacuous tests). They reach the PR only with ENABLE_JUDGE_KEEP_MINOR.
+# ENABLE_NITPICKS=false
 ```

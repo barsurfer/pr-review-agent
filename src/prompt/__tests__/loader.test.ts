@@ -123,16 +123,16 @@ describe('getBaseTemplate / ENABLE_NITPICKS transform', () => {
     expect(applyNitpickTransform(embedLike)).toBe(embedLike)
   })
 
-  it('on: removes the :39 suppressor, keeps the anti-speculation clause, adds minor-issue guidance', () => {
+  it('on: relaxes the low-severity certainty rule, keeps the anti-speculation clause, adds minor-issue guidance', () => {
     config.review.enableNitpicks = true
     const out = getBaseTemplate()
     expect(out).not.toContain(NITPICK_SENTINELS[0])
     expect(out).toContain('prefer not reporting over guessing')   // anti-speculation clause preserved
-    expect(out).toContain('duplicated logic')
-    expect(out).toContain('`type`')
+    expect(out).toContain('duplicated logic')   // relaxed-only phrase (absent from the raw template), so this proves the transform ran
+    expect(out).toContain('dead code')
   })
 
-  it('on: leaves the :52/:57 FORBIDDEN style lines untouched', () => {
+  it('on: leaves the FORBIDDEN style/nitpick lines untouched', () => {
     config.review.enableNitpicks = true
     const out = getBaseTemplate()
     expect(out).toContain(NITPICK_SENTINELS[1])

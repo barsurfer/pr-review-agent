@@ -154,8 +154,11 @@ describe('runJudge (structured output)', () => {
   it('anchors a symbol-located candidate from the judge pair and carries can_be_split through to the posted review', async () => {
     const symbolic: ReviewObject = { ...review, findings: [{ ...review.findings[0], lines: 'Pool.get' }], can_be_split: ['Pool', 'Docs'] }
     completeStructured.mockResolvedValue({ object: { ...judged, decisions: [{ ...judged.decisions[0], anchor_file: 'a.ts', anchor_lines: '12-14' }] }, usage })
+    // The judge anchor is validated against the diff, so a.ts needs added lines covering 12-14.
+    const diff = ['diff --git a/a.ts b/a.ts', '--- a/a.ts', '+++ b/a.ts', '@@ -0,0 +1,20 @@',
+      ...Array.from({ length: 20 }, (_, i) => `+const v${i + 1} = ${i + 1}`)].join('\n')
 
-    const res = await runJudge('key', 'model', 3, 16000, '', 'DIFF', symbolic)
+    const res = await runJudge('key', 'model', 3, 16000, '', diff, symbolic)
 
     expect(res.text).toContain('- **MEDIUM – X** (`a.ts:12-14`)')
     expect(res.text).toContain('### Can Be Split\n- Pool\n- Docs\n\n### Merge Confidence: 80%')

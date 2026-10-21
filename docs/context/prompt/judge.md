@@ -43,6 +43,8 @@ Implements the **generator-verifier** pattern: the reviewer model generates cand
 
 By default the judge sees only the diff, while the reviewer also saw full files. That means it can't confirm a claim that rests on unchanged code; such candidates land in `unverifiable`.
 
+When `ENABLE_NITPICKS` is on (see [composition.md](composition.md)), the reviewer emits more real-but-low-impact candidates (dead code, stale docs/comments, misleading names, duplication, vacuous tests); these classify as `minor`, so they post only under `ENABLE_JUDGE_KEEP_MINOR`.
+
 ---
 
 ## Decision Contract: the judge classifies, the app decides
@@ -58,8 +60,8 @@ The judge returns one decision per candidate id, each with a `reason_category`. 
 | `already_handled` | the finding's own reasoning says it's mitigated ("for awareness") | drop | — |
 | `unverifiable` | no concrete line shows the problem | drop | `ENABLE_JUDGE_KEEP_UNVERIFIED` → keep, score ≤ 5 |
 | `style_only` | formatting / style / naming preference | drop | — |
-| `low_value` | docstring/type-hint/import asks, configurability opinions, "verify/ensure X" | drop | — |
-| `minor` | real problem with no runtime impact: stale docs/comments, misleading names, duplication, weak tests in the diff | drop | `ENABLE_JUDGE_KEEP_MINOR` → keep as LOW |
+| `low_value` | pure asks: add a docstring/type-hint/import, configurability opinions, "verify/ensure X" | drop | — |
+| `minor` | real problem with no runtime impact: unused imports/variables or dead code, stale docs/comments, misleading names, duplication, weak tests in the diff | drop | `ENABLE_JUDGE_KEEP_MINOR` → keep as LOW |
 | `duplicate` | same root cause **and** same location; the same defect elsewhere is a separate finding | drop | — |
 | `out_of_scope` | not code this diff adds or modifies | drop | — |
 | `framework_uncertainty` | rests on framework/library internals | move to Unresolved Questions (the judge's `question`) | `ENABLE_JUDGE_KEEP_UNVERIFIED` → keep, score ≤ 5 |

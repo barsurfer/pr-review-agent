@@ -82,8 +82,8 @@ describe('buildUsageRecord judge decision fields', () => {
     behavioral_diff: [], production_risk: [], unresolved_questions: [],
   }
   const judgeDecisions = [
-    { candidate_id: 'c0', reason_category: 'unconfirmed_high', reclassified_from: null, action: 'downgrade', original_severity: 'HIGH', final_severity: 'MEDIUM', score: 7, evidence: 'a.ts:3', note: 'n', rewritten: false, anchor_source: 'reviewer' },
-    { candidate_id: 'c1', reason_category: 'style_only', reclassified_from: null, action: 'drop', original_severity: 'LOW', final_severity: null, score: 2, evidence: '', note: 'n', rewritten: false, anchor_source: null },
+    { candidate_id: 'c0', reason_category: 'unconfirmed_high', reclassified_from: null, action: 'downgrade', original_severity: 'HIGH', final_severity: 'MEDIUM', score: 7, evidence: 'a.ts:3', note: 'n', rewritten: false, anchor_source: 'reviewer', anchor_file: 'a.ts', anchor_lines: '3-4' },
+    { candidate_id: 'c1', reason_category: 'style_only', reclassified_from: null, action: 'drop', original_severity: 'LOW', final_severity: null, score: 2, evidence: '', note: 'n', rewritten: false, anchor_source: null, anchor_file: null, anchor_lines: null },
   ]
   const judgeAnomalies = { unknown_ids: 0, undecided: 1, duplicate_ids: 0, drop_without_evidence: 2 }
   const judged = (over: Partial<ReviewContext> = {}) => baseCtx({

@@ -126,7 +126,10 @@ export async function runBundledReview(ctx: ReviewContext, maxInputTokens: numbe
         judgeScores.push(...(verdict.scores ?? []))
         text = verdict.text
         judged = true
+        ctx.judgeStatus = 'succeeded'
+        ctx.judgePromptHash = verdict.promptHash
       } catch (err: unknown) {
+        ctx.judgeStatus = 'failed'
         // Benchmark: a judge failure falls back to the unjudged bundle findings; normal mode still throws so CI retries.
         if (!ctx.outcomeSink) throw err
         console.warn(`  Bundle ${i + 1} judge failed (${(err as Error).message}) — proceeding with unjudged reviewer findings`)

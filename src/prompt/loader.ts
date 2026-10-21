@@ -8,19 +8,19 @@ import { config } from '../config.js'
 
 const REPO_PROMPT_FILE = '.agent-review-instructions.md'
 
-// base-prompt.txt low-severity suppressors; ENABLE_NITPICKS relaxes only :39 (:52/:57 stay); a sentinel test pins all three verbatim so a prompt edit can't silently no-op the on-transform.
-const NITPICK_SUPPRESSOR_39 = '- For lower-severity concerns, be certain before flagging. If you cannot explain the problem with a concrete failing scenario, do not flag it — prefer not reporting over guessing.'
-const FORBIDDEN_FORMATTING_52 = '- Do not focus on formatting or style.'
-const FORBIDDEN_NITPICK_57 = '- Do not nitpick. Style, naming, and formatting preferences are not findings.'
-export const NITPICK_SENTINELS = [NITPICK_SUPPRESSOR_39, FORBIDDEN_FORMATTING_52, FORBIDDEN_NITPICK_57]
+// base-prompt.txt low-severity suppressors; ENABLE_NITPICKS relaxes only the low-severity certainty rule (the two FORBIDDEN style lines stay); a sentinel test pins all three verbatim so a prompt edit can't silently no-op the on-transform.
+const LOW_SEVERITY_CERTAINTY_RULE = '- For lower-severity concerns, be certain before flagging. If you cannot explain the problem with a concrete failing scenario, do not flag it — prefer not reporting over guessing.'
+const FORBIDDEN_FORMATTING_RULE = '- Do not focus on formatting or style.'
+const FORBIDDEN_NITPICK_RULE = '- Do not nitpick. Style, naming, and formatting preferences are not findings.'
+export const NITPICK_SENTINELS = [LOW_SEVERITY_CERTAINTY_RULE, FORBIDDEN_FORMATTING_RULE, FORBIDDEN_NITPICK_RULE]
 
-// Keeps :39's anti-speculation bar for uncertain correctness, but permits concrete real-but-minor findings.
-const NITPICK_SUPPRESSOR_39_RELAXED = '- For lower-severity concerns, keep the anti-speculation bar for uncertain correctness: if you cannot explain a suspected bug with a concrete failing scenario, do not flag it — prefer not reporting over guessing. But DO surface real, concrete, low-impact issues that are plainly visible in the diff — stale or misleading docs, comments, or names; dead code; duplicated logic; tests that cannot fail or miss the case they claim to cover — tagging each with its `type` and a concrete reason it is wrong. These are findings, not the style, naming, or formatting preferences forbidden below.'
+// Keeps the anti-speculation bar for uncertain correctness, but permits concrete real-but-minor findings.
+const LOW_SEVERITY_CERTAINTY_RULE_RELAXED = '- For lower-severity concerns, keep the anti-speculation bar for uncertain correctness: if you cannot explain a suspected bug with a concrete failing scenario, do not flag it — prefer not reporting over guessing. But DO surface real, concrete, low-impact issues that are plainly visible in the diff — stale or misleading docs, comments, or names; dead code; duplicated logic; tests that cannot fail or miss the case they claim to cover — tagging each with its `type` and a concrete reason it is wrong. These are findings, not the style, naming, or formatting preferences forbidden below.'
 
-// Off: bytes untouched (byte-identical by construction); on: exact-string replace :39 so the reviewer also emits real-but-minor findings. One gate for both load paths.
+// Off: bytes untouched (byte-identical by construction); on: exact-string replace the low-severity certainty rule so the reviewer also emits real-but-minor findings. One gate for both load paths.
 export function applyNitpickTransform(template: string): string {
   if (!config.review.enableNitpicks) return template
-  return template.replace(NITPICK_SUPPRESSOR_39, NITPICK_SUPPRESSOR_39_RELAXED)
+  return template.replace(LOW_SEVERITY_CERTAINTY_RULE, LOW_SEVERITY_CERTAINTY_RULE_RELAXED)
 }
 
 export function getBaseTemplate(): string {

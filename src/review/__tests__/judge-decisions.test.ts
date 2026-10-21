@@ -143,9 +143,17 @@ describe('applyJudgeDecisions', () => {
 
 describe('anchors: reviewer first when strictly numeric, else the judge pair', () => {
   const bare = (over: Partial<ReviewFinding> = {}) => finding({ file: undefined, lines: undefined, ...over })
+  // The judge anchor is validated against the diff, so these cases supply one whose added lines (1–40 of src/pool.ts) cover the anchors below.
+  const POOL_DIFF = [
+    'diff --git a/src/pool.ts b/src/pool.ts',
+    '--- a/src/pool.ts',
+    '+++ b/src/pool.ts',
+    '@@ -0,0 +1,40 @@',
+    ...Array.from({ length: 40 }, (_, i) => `+  const line${i + 1} = ${i + 1}`),
+  ].join('\n')
 
   it('anchors a locationless candidate from the judge pair, in the finding, the score and the rendered review', () => {
-    const r = applyJudgeDecisions([bare()], output([decision({ anchor_file: '`src/pool.ts`', anchor_lines: '10-12' })]))
+    const r = applyJudgeDecisions([bare()], output([decision({ anchor_file: '`src/pool.ts`', anchor_lines: '10-12' })]), DEFAULT_JUDGE_POLICY, [], POOL_DIFF)
     expect(r.kept[0]).toMatchObject({ file: 'src/pool.ts', lines: '10-12', anchorSource: 'judge' })
     expect(r.decisions[0].anchor_source).toBe('judge')
     expect(r.scores[0]).toMatchObject({ file: 'src/pool.ts', lines: '10-12' })
@@ -153,16 +161,16 @@ describe('anchors: reviewer first when strictly numeric, else the judge pair', (
   })
 
   it('takes the file from the candidate when the judge supplies only lines', () => {
-    const r = applyJudgeDecisions([finding({ lines: 'ExchangeCode' })], output([decision({ anchor_lines: '7' })]))
+    const r = applyJudgeDecisions([finding({ lines: 'ExchangeCode' })], output([decision({ anchor_lines: '7' })]), DEFAULT_JUDGE_POLICY, [], POOL_DIFF)
     expect(r.kept[0]).toMatchObject({ file: 'src/pool.ts', lines: '7', anchorSource: 'judge' })
   })
 
   it.each(['_F2C_RETURN_TYPES / _PTR_ARG', 'Phase 4 idiomisation block', 'ExchangeCode: if sess.CodeChallenge != "" {', 'validate2()'])(
     'a symbol-only reviewer location (%s) is not an anchor, even when it contains digits', symbol => {
-      const unanchored = applyJudgeDecisions([finding({ lines: symbol })], output([decision()]))
+      const unanchored = applyJudgeDecisions([finding({ lines: symbol })], output([decision()]), DEFAULT_JUDGE_POLICY, [], POOL_DIFF)
       expect(unanchored.kept[0].anchorSource).toBe('none')
 
-      const rescued = applyJudgeDecisions([finding({ lines: symbol })], output([decision({ anchor_file: 'src/pool.ts', anchor_lines: '31' })]))
+      const rescued = applyJudgeDecisions([finding({ lines: symbol })], output([decision({ anchor_file: 'src/pool.ts', anchor_lines: '31' })]), DEFAULT_JUDGE_POLICY, [], POOL_DIFF)
       expect(rescued.kept[0]).toMatchObject({ file: 'src/pool.ts', lines: '31', anchorSource: 'judge' })
     })
 
@@ -255,8 +263,10 @@ describe('locateInDiff — deterministic anchor resolver (correct line or null, 
       .toEqual({ file: 'src/cache.ts', lines: '12', source: 'diff' })
   })
 
-  it('without a diff the judge numeric anchor is accepted ungated (unit-test parity with the old resolver)', () => {
-    expect(locateInDiff(bare(), decision({ anchor_file: 'src/pool.ts', anchor_lines: '5' }), '').source).toBe('judge')
+  it('a judge numeric anchor is accepted only when a present diff validates it against a changed line, else none', () => {
+    expect(locateInDiff(bare(), decision({ anchor_file: 'src/pool.ts', anchor_lines: '3' }), DIFF).source).toBe('judge')
+    // No diff to validate against → a model-typed line is not trusted (it would otherwise post a ghost anchor).
+    expect(locateInDiff(bare(), decision({ anchor_file: 'src/pool.ts', anchor_lines: '3' }), '').source).toBe('none')
   })
 })
 
