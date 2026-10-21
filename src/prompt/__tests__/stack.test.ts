@@ -1,4 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
+// loader.ts imports config, which requires ANTHROPIC_API_KEY at load.
+vi.hoisted(() => { process.env.ANTHROPIC_API_KEY ??= 'test-key' })
 import { detectStacks } from '../stack.js'
 import { loadPrompt } from '../loader.js'
 import type { VCSAdapter, PRInfo, ChangedFile } from '../../vcs/adapter.js'
