@@ -1,6 +1,16 @@
-import { describe, it, expect, vi } from 'vitest'
-import { loadPrompt } from '../loader.js'
+import { describe, it, expect, vi, afterEach } from 'vitest'
+import { readFileSync } from 'fs'
+import { join, dirname } from 'path'
+import { fileURLToPath } from 'url'
+
+// loader.ts now imports config, which requires ANTHROPIC_API_KEY at load.
+vi.hoisted(() => { process.env.ANTHROPIC_API_KEY ??= 'test-key' })
+
+import { loadPrompt, getBaseTemplate, applyNitpickTransform, NITPICK_SENTINELS } from '../loader.js'
+import { config } from '../../config.js'
 import type { VCSAdapter, PRInfo, ChangedFile } from '../../vcs/adapter.js'
+
+const RAW_BASE_PROMPT = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../base-prompt.txt'), 'utf-8')
 
 // ---------------------------------------------------------------------------
 // Module-dir fallback — PRs confined to one top-level directory (monorepo
@@ -95,5 +105,50 @@ describe('security baseline', () => {
 
     expect(result.content).toContain('Only check our custom auth flow.')
     expect(result.content).not.toContain('SSRF')
+  })
+})
+
+describe('getBaseTemplate / ENABLE_NITPICKS transform', () => {
+  afterEach(() => { config.review.enableNitpicks = false })
+
+  it('off: getBaseTemplate returns the raw base-prompt bytes unchanged (file path)', () => {
+    config.review.enableNitpicks = false
+    expect(getBaseTemplate()).toBe(RAW_BASE_PROMPT)
+  })
+
+  it('off: the transform is the identity (the single gate for both the file and embed load paths)', () => {
+    config.review.enableNitpicks = false
+    expect(applyNitpickTransform(RAW_BASE_PROMPT)).toBe(RAW_BASE_PROMPT)
+    const embedLike = 'arbitrary\nembedded\nbytes'
+    expect(applyNitpickTransform(embedLike)).toBe(embedLike)
+  })
+
+  it('on: removes the :39 suppressor, keeps the anti-speculation clause, adds minor-issue guidance', () => {
+    config.review.enableNitpicks = true
+    const out = getBaseTemplate()
+    expect(out).not.toContain(NITPICK_SENTINELS[0])
+    expect(out).toContain('prefer not reporting over guessing')   // anti-speculation clause preserved
+    expect(out).toContain('duplicated logic')
+    expect(out).toContain('`type`')
+  })
+
+  it('on: leaves the :52/:57 FORBIDDEN style lines untouched', () => {
+    config.review.enableNitpicks = true
+    const out = getBaseTemplate()
+    expect(out).toContain(NITPICK_SENTINELS[1])
+    expect(out).toContain(NITPICK_SENTINELS[2])
+  })
+
+  it('on: composes through loadPrompt — nitpick guidance present and repo EXCEPTIONS still injected', async () => {
+    config.review.enableNitpicks = true
+    const adapter = adapterWith({ '.agent-review-instructions.md': '## ROLE\nX\n\n## EXCEPTIONS\n- Ignore generated files.' })
+    const result = await loadPrompt(adapter, PR, undefined, changed('src/a.ts'))
+    expect(result.content).toContain('duplicated logic')
+    expect(result.content).toContain('Ignore generated files.')
+    expect(result.content).not.toContain(NITPICK_SENTINELS[0])
+  })
+
+  it('sentinel: the 3 target sentences still exist verbatim in base-prompt.txt', () => {
+    for (const sentence of NITPICK_SENTINELS) expect(RAW_BASE_PROMPT).toContain(sentence)
   })
 })

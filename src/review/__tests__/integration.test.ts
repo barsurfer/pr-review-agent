@@ -12,7 +12,7 @@ vi.mock('../../config.js', () => ({
     judge: { model: '', maxRetries: 1, effort: '', policy: { keepMinor: false, keepUnverified: false }, fileContext: false },
     agentIdentity: 'test-bot',
     reply: { maxComments: 3 },
-    review: { maxFindings: 0, splitCheck: false, todoScan: true, effort: '' },
+    review: { maxFindings: 0, splitCheck: false, todoScan: true, effort: '', enableNitpicks: false },
     context: { maxFiles: 20, maxFileLines: 500 },
     skipSourceBranches: ['main', 'master', 'release/*', 'hotfix/*'],
     skipTargetBranches: ['main', 'master'],

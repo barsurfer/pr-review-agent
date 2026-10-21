@@ -7,7 +7,7 @@ vi.mock('../../config.js', () => ({
     judge: { model: 'judge-model', maxRetries: 1, effort: '', policy: { keepMinor: false, keepUnverified: false }, fileContext: false },
     agentIdentity: 'test-bot',
     reply: { maxComments: 3 },
-    review: { maxFindings: 0, splitCheck: false, todoScan: false, effort: '', bundledReview: true, maxBundles: 8 },
+    review: { maxFindings: 0, splitCheck: false, todoScan: false, effort: '', bundledReview: true, maxBundles: 8, enableNitpicks: false },
     context: { maxFiles: 20, maxFileLines: 500 },
     skipSourceBranches: [],
     skipTargetBranches: [],

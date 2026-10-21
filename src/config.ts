@@ -104,6 +104,8 @@ export const config = {
     // Off by default: each bundle costs a reviewer + judge call, so a huge PR is a real spend.
     bundledReview: optional('ENABLE_BUNDLED_REVIEW', 'false') === 'true',
     maxBundles: parseInt(optional('MAX_BUNDLES', '8'), 10),   // 0 = unlimited
+    // Off by default: lets the reviewer emit real-but-minor findings; posting them still needs ENABLE_JUDGE_KEEP_MINOR (policy drops minor otherwise).
+    enableNitpicks: optional('ENABLE_NITPICKS', 'false') === 'true',
   },
 
   context: {

@@ -34,7 +34,11 @@ function applyBenchmarkConfig(env: NodeJS.ProcessEnv): void {
   applyConfigLabels(env)
   // The harness flags any config label whose value never appears in the agent's output.
   // Judge flags are baked into the image, not passed as labels, so this line is the only record of what ran.
-  console.log(`Benchmark settings: model=${config.anthropic.model} effort=${config.review.effort || 'default'} judge_model=${config.judge.model || 'off'} judge_effort=${config.judge.effort || 'default'} judge_keep_minor=${config.judge.policy.keepMinor} judge_keep_unverified=${config.judge.policy.keepUnverified} judge_file_context=${config.judge.fileContext}`)
+  console.log(`Benchmark settings: model=${config.anthropic.model} effort=${config.review.effort || 'default'} judge_model=${config.judge.model || 'off'} judge_effort=${config.judge.effort || 'default'} judge_keep_minor=${config.judge.policy.keepMinor} judge_keep_unverified=${config.judge.policy.keepUnverified} judge_file_context=${config.judge.fileContext} nitpicks=${config.review.enableNitpicks}`)
+  // Nitpicks emit but the default policy drops minor, so without keepMinor nothing new posts.
+  if (config.review.enableNitpicks && !config.judge.policy.keepMinor) {
+    console.warn('  ENABLE_NITPICKS=true but ENABLE_JUDGE_KEEP_MINOR is off — nitpicks are logged for offline scoring only; set ENABLE_JUDGE_KEEP_MINOR=true to post them.')
+  }
 }
 
 export async function runBenchmark(env: NodeJS.ProcessEnv = process.env): Promise<void> {
