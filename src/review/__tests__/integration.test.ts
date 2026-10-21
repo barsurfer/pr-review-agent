@@ -9,7 +9,7 @@ import type { VCSAdapter, PRInfo, ReviewComment, CommentReply } from '../../vcs/
 vi.mock('../../config.js', () => ({
   config: {
     anthropic: { apiKey: 'test-key', model: 'claude-haiku-4-5-20251001', maxRetries: 1, maxInputTokens: 150000, maxTokens: 32000 },
-    judge: { model: '', maxRetries: 1, effort: '' },
+    judge: { model: '', maxRetries: 1, effort: '', policy: { keepMinor: false, keepUnverified: false }, fileContext: false },
     agentIdentity: 'test-bot',
     reply: { maxComments: 3 },
     review: { maxFindings: 0, splitCheck: false, todoScan: true, effort: '' },

@@ -3,7 +3,7 @@
 import { config } from './config.js'
 import { review } from './review/index.js'
 import { ReviewBenchAdapter, readReviewBenchEnv, readPrJson } from './vcs/reviewbench.js'
-import { mergeJudgedFindingsWithStats, mapFindings, buildFindingsReport, writeFindingsReport, countFindingBullets, type ReportFinding } from './review/findings-output.js'
+import { mergeJudgedFindingsWithStats, mapFindings, keptToReportFindings, isAnchored, buildFindingsReport, writeFindingsReport, countFindingBullets, type ReportFinding } from './review/findings-output.js'
 import type { ReviewOutcome } from './review/types.js'
 
 const CONFIG_LABELS: Record<string, (value: string) => void> = {
@@ -33,7 +33,8 @@ function applyBenchmarkConfig(env: NodeJS.ProcessEnv): void {
   config.review.splitCheck = false   // can_be_split has no place in the findings file
   applyConfigLabels(env)
   // The harness flags any config label whose value never appears in the agent's output.
-  console.log(`Benchmark settings: model=${config.anthropic.model} effort=${config.review.effort || 'default'} judge_model=${config.judge.model || 'off'} judge_effort=${config.judge.effort || 'default'}`)
+  // Judge flags are baked into the image, not passed as labels, so this line is the only record of what ran.
+  console.log(`Benchmark settings: model=${config.anthropic.model} effort=${config.review.effort || 'default'} judge_model=${config.judge.model || 'off'} judge_effort=${config.judge.effort || 'default'} judge_keep_minor=${config.judge.policy.keepMinor} judge_keep_unverified=${config.judge.policy.keepUnverified} judge_file_context=${config.judge.fileContext}`)
 }
 
 export async function runBenchmark(env: NodeJS.ProcessEnv = process.env): Promise<void> {
@@ -51,8 +52,14 @@ export async function runBenchmark(env: NodeJS.ProcessEnv = process.env): Promis
     const outcome = outcomes[0]
     if (outcome) {
       const changedPaths = (await adapter.getChangedFiles(prNumber)).map(f => f.path)
-      if (outcome.judged) {
-        // Judged: the judge's own cited anchors plus structured recoveries for the ones it located as prose.
+      if (outcome.judgedFindings) {
+        findings = keptToReportFindings(outcome.judgedFindings, rb.agent, changedPaths)
+        console.log(`Benchmark findings: reviewer ${outcome.review.findings.length}, judge kept ${outcome.judgedFindings.length}, line-anchored ${findings.length}`)
+        // A kept finding without a usable file:line scores zero, so surface it instead of losing it silently.
+        const unanchored = outcome.judgedFindings.filter(k => !isAnchored(k))
+        if (unanchored.length > 0) console.warn(`  Parse check: ${unanchored.length} kept finding(s) with no usable file:line, dropped from findings.json: ${unanchored.map(k => k.title).join(' | ')}`)
+      } else if (outcome.judged) {
+        // Bundled review re-parses each bundle's judged markdown, so it alone still needs the prose merge.
         const { findings: judged, stats: s } = mergeJudgedFindingsWithStats(outcome.reviewText, outcome.review.findings, outcome.judgeScores, rb.agent, changedPaths)
         findings = judged
         console.log(`Merge: bullets ${s.bullets} (located ${s.located}, prose ${s.prose}) | scores ${s.scores} | rows ${findings.length} = markdown ${s.rowsMarkdown} + recovered ${s.rowsRecovered} | paired-located ${s.dupOfLocated} | borrowed-text ${s.borrowed} | unpaired-scores ${s.unpairedScoreTitles.length}`)

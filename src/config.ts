@@ -81,6 +81,13 @@ export const config = {
     model: optional('JUDGING_MODEL', 'claude-sonnet-5'),   // on by default; set empty to disable
     maxRetries: parseInt(optional('MAX_RETRIES', '3'), 10),
     effort: optional('JUDGE_EFFORT', ''),   // output_config.effort; empty = model default (unsent)
+    // Off by default: each keeps findings today's judge drops, so turning one on means more (mostly LOW) comments.
+    policy: {
+      keepMinor: optional('ENABLE_JUDGE_KEEP_MINOR', 'false') === 'true',
+      keepUnverified: optional('ENABLE_JUDGE_KEEP_UNVERIFIED', 'false') === 'true',
+    },
+    // Off by default: sending the reviewer's file context roughly doubles judge input tokens.
+    fileContext: optional('ENABLE_JUDGE_FILE_CONTEXT', 'false') === 'true',
   },
 
   agentIdentity: process.env.AGENT_IDENTITY || process.env.BITBUCKET_USERNAME || 'Claude',

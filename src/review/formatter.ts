@@ -82,12 +82,23 @@ export function hasReplyFooter(body: string): boolean {
 // Structured reviewer output → posted markdown
 // ---------------------------------------------------------------------------
 
+// Bounded, model-assigned classification — analytics only; nothing keys off it and the judge never reassigns it.
+export const ISSUE_TYPES = [
+  'correctness', 'security', 'performance', 'reliability', 'data', 'api-contract', 'maintainability', 'tests', 'other',
+] as const
+export type IssueType = typeof ISSUE_TYPES[number]
+
+// A missing or off-enum value (a provider that doesn't enforce the schema) collapses to `other`.
+export const normalizeIssueType = (t: string | undefined): IssueType =>
+  (ISSUE_TYPES as readonly string[]).includes(String(t)) ? (t as IssueType) : 'other'
+
 export interface ReviewFinding {
   severity: 'LOW' | 'MEDIUM' | 'HIGH'
   title: string
   file?: string
   lines?: string
   body: string
+  type?: IssueType
 }
 
 export interface ReviewObject {
@@ -118,15 +129,15 @@ const listOrNone = (items: string[]): string => (items.length ? bullets(items) :
 /** Render the reviewer's structured output into the posted markdown. The reviewer emits typed
  *  fields, not prose, so preamble/tone/footer can't leak in — this owns the shape the judge,
  *  dedup, and metrics parse. Merge Confidence is added downstream by the judge, not here. */
-export function renderReview(r: ReviewObject): string {
+export function renderReview(r: ReviewObject, opts: { emptyFindings?: string; tag?: (index: number) => string } = {}): string {
   if (r.no_change) return 'NO_CHANGE'
 
   const findings = r.findings.length
-    ? r.findings.map(f => {
+    ? r.findings.map((f, i) => {
         const loc = f.file ? ` (\`${f.file}${f.lines ? `:${f.lines}` : ''}\`)` : ''
-        return `- **${f.severity} – ${f.title}**${loc}\n  ${f.body}`
+        return `- ${opts.tag?.(i) ?? ''}**${f.severity} – ${f.title}**${loc}\n  ${f.body}`
       }).join('\n\n')
-    : 'No findings.'
+    : opts.emptyFindings ?? 'No findings.'
 
   const parts = [
     `### Summary\n${r.summary}`,

@@ -4,7 +4,7 @@ import type { VCSAdapter, PRInfo } from '../../vcs/adapter.js'
 vi.mock('../../config.js', () => ({
   config: {
     anthropic: { apiKey: 'k', model: 'claude-haiku-4-5-20251001', maxRetries: 1, maxInputTokens: 2000, maxTokens: 32000 },
-    judge: { model: 'judge-model', maxRetries: 1, effort: '' },
+    judge: { model: 'judge-model', maxRetries: 1, effort: '', policy: { keepMinor: false, keepUnverified: false }, fileContext: false },
     agentIdentity: 'test-bot',
     reply: { maxComments: 3 },
     review: { maxFindings: 0, splitCheck: false, todoScan: false, effort: '', bundledReview: true, maxBundles: 8 },
@@ -68,8 +68,8 @@ beforeEach(() => {
   cfg.judge.model = 'judge-model'
   vi.mocked(loadPrompt).mockResolvedValue({ content: 'System prompt here', source: 'repo' })
   vi.mocked(fetchContext).mockResolvedValue([])
-  mockRunJudge.mockImplementation(async (_k, _m, _r, _t, _e, _diff, text) => ({
-    text: text + '\n\n### Merge Confidence: 80%\n\n*"x"*', usage, scores: [{ title: 't', severity: 'MEDIUM', score: 8 }],
+  mockRunJudge.mockImplementation(async (_k, _m, _r, _t, _e, _diff, review) => ({
+    text: renderReview(review) + '\n\n### Merge Confidence: 80%\n\n*"x"*', usage, scores: [{ title: 't', severity: 'MEDIUM', score: 8 }],
   }))
 })
 

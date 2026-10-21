@@ -123,6 +123,10 @@ write markdown headings or a footer; the system renders and formats them.
     `src/user-list.ts`, lines `26-31`). `lines` is digits only — a line number or range from the
     diff, never a function/symbol name or quoted code. Omit both only when it is not line-specific.
   - `body` — problem, why it matters, fix. Terse — a few sentences at most, never an essay.
+  - `type` — the one dominant category: `correctness`, `security`, `performance`, `reliability`,
+    `data`, `api-contract`, `maintainability`, `tests`, or `other` (performance = slow/expensive
+    under normal operation; reliability = hangs/leaks/fails under error, timeout, or retry). Omit
+    if none clearly applies.
   On a re-review, include ONLY new findings from the new commits. Previous findings are already
   on record — do not re-list them.
 - `behavioral_diff` — what changed vs the target branch and why it matters, as short bullets.

@@ -4,7 +4,7 @@
 
 import { mkdirSync, renameSync, writeFileSync } from 'fs'
 import { dirname } from 'path'
-import type { ReviewFinding, FindingScore } from './formatter.js'
+import type { ReviewFinding, FindingScore, IssueType } from './formatter.js'
 
 export interface ReportFinding {
   file: string
@@ -24,7 +24,8 @@ export interface KeptFinding {
   file?: string
   lines?: string
   score?: number
-  anchorSource?: 'reviewer' | 'judge' | 'none'   // where file/lines came from, so a consumer can trust only what it wants
+  type?: IssueType   // carried from the reviewer finding; analytics only
+  anchorSource?: 'reviewer' | 'judge' | 'diff' | 'none'   // where file/lines came from, so a consumer can trust only what it wants
 }
 
 export interface FindingsReport {
@@ -222,13 +223,16 @@ export function resolveKeptFindings(reviewerFindings: readonly ReviewFinding[], 
   })
 }
 
+// The one definition of 'has a usable anchor', shared by the report mapper and the benchmark's dropped-finding warning.
+export const isAnchored = (k: KeptFinding): k is KeptFinding & { file: string } => !!k.file && k.anchorSource !== 'none' && !!parseLineRange(k.lines)
+
 // Kept findings → the line-anchored report shape. Findings with no usable file/line are dropped
 // (the schema requires both), same as the reviewer/markdown mappers.
 export function keptToReportFindings(kept: readonly KeptFinding[], producer: string, changedPaths: readonly string[] = []): ReportFinding[] {
   const out: ReportFinding[] = []
   const seen = new Set<string>()
   for (const k of kept) {
-    if (!k.file || k.anchorSource === 'none') continue
+    if (!isAnchored(k)) continue
     const file = normalizeFindingPath(k.file, changedPaths)
     const range = parseLineRange(k.lines)
     if (!file || !range) continue

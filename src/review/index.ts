@@ -467,13 +467,22 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
           config.anthropic.maxTokens,
           config.judge.effort,
           ctx.filteredDiff!,
-          ctx.reviewText!,
+          ctx.reviewObject!,
+          config.judge.fileContext ? ctx.fileContexts ?? [] : [],
+          config.judge.policy,
         )
         ctx.reviewText = result.text
         ctx.judgeScores = result.scores
         ctx.judgePromptHash = result.promptHash
+        ctx.judgeDecisions = result.decisions
+        ctx.judgeAnomalies = result.anomalies
+        ctx.judgedFindings = result.kept
         if (result.notes) {
           console.log(`  Judge notes (not posted): ${result.notes}`)
+        }
+        const a = result.anomalies
+        if (a && (a.unknown_ids || a.undecided || a.duplicate_ids || a.drop_without_evidence)) {
+          console.warn(`  Judge anomalies: unknown_ids ${a.unknown_ids}, undecided ${a.undecided}, duplicate_ids ${a.duplicate_ids}, drop_without_evidence ${a.drop_without_evidence}`)
         }
         if (result.scores?.length) {
           console.log(`  Judge finding scores: ${result.scores.map(s => `${s.severity} ${s.score}/10`).join(', ')}`)
@@ -520,7 +529,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
     case State.POST_REVIEW: {
       // The sink takes the structured review instead of a posted comment, so cleanup, cut guard and footer don't apply.
       if (ctx.outcomeSink) {
-        await ctx.outcomeSink({ review: ctx.reviewObject!, reviewText: ctx.reviewText!, judged: ctx.judgeUsage !== undefined, judgeScores: ctx.judgeScores })
+        await ctx.outcomeSink({ review: ctx.reviewObject!, reviewText: ctx.reviewText!, judged: ctx.judgeUsage !== undefined, judgeScores: ctx.judgeScores, judgedFindings: ctx.judgedFindings })
         ctx.action = 'REVIEW'
         return State.DONE
       }
