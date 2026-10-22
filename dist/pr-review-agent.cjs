@@ -36320,8 +36320,8 @@ var config = {
     // 0 = unlimited
     // Off by default: lets the reviewer emit real-but-minor findings; posting them still needs ENABLE_JUDGE_KEEP_MINOR (policy drops minor otherwise).
     enableNitpicks: optional("ENABLE_NITPICKS", "false") === "true",
-    // Off by default: prefixing every diff and context line with its number costs input tokens and changes what the reviewer sees.
-    lineNumbers: optional("ENABLE_LINE_NUMBERS", "false") === "true"
+    // On by default: without numbered lines ~40% of findings carried no line; set false to send the raw diff/context (saves the per-line gutter tokens).
+    lineNumbers: optional("ENABLE_LINE_NUMBERS", "true") !== "false"
   },
   context: {
     maxFiles: parseInt(optional("MAX_CONTEXT_FILES", "20"), 10),
@@ -43451,10 +43451,16 @@ function shellShebangPaths(diff) {
   });
   return out;
 }
+var WRAPPER_EXTENSIONS = /* @__PURE__ */ new Set(["template", "tmpl", "example", "sample", "dist", "in"]);
 function extensionOf(path4) {
-  const base = path4.slice(path4.lastIndexOf("/") + 1);
-  const dot = base.lastIndexOf(".");
-  return dot > 0 ? base.slice(dot + 1).toLowerCase() : "";
+  let base = path4.slice(path4.lastIndexOf("/") + 1).toLowerCase();
+  for (; ; ) {
+    const dot = base.lastIndexOf(".");
+    if (dot <= 0) return "";
+    const ext = base.slice(dot + 1);
+    if (!WRAPPER_EXTENSIONS.has(ext)) return ext;
+    base = base.slice(0, dot);
+  }
 }
 function classifyFile(path4, frontendSignal, shellScripts) {
   const ext = extensionOf(path4);
@@ -43971,10 +43977,12 @@ function parseChangedFiles(diff) {
   return files;
 }
 function countDiffLines(diff) {
-  let added = 0, removed = 0;
+  let added = 0, removed = 0, inHunk = false;
   for (const line of diff.split("\n")) {
-    if (line.startsWith("+") && !line.startsWith("+++")) added++;
-    else if (line.startsWith("-") && !line.startsWith("---")) removed++;
+    if (line.startsWith("diff --git")) inHunk = false;
+    else if (line.startsWith("@@")) inHunk = true;
+    else if (inHunk && line.startsWith("+")) added++;
+    else if (inHunk && line.startsWith("-")) removed++;
   }
   return { added, removed };
 }
@@ -43983,10 +43991,14 @@ function countChangedLines(diff) {
   return added + removed;
 }
 var GUTTER = 5;
+function shownLength(s, numbered) {
+  return s.length + (numbered && s ? (GUTTER + 1) * s.split("\n").length : 0);
+}
 function numberDiffLines(diff) {
   let newLine = 0;
   let inHunk = false;
-  return diff.split("\n").map((raw) => {
+  const lines = diff.split("\n");
+  return lines.map((raw, i) => {
     if (raw.startsWith("diff --git")) {
       inHunk = false;
       return raw;
@@ -43997,7 +44009,7 @@ function numberDiffLines(diff) {
       inHunk = true;
       return raw;
     }
-    if (!inHunk || raw === "" || raw.startsWith("\\")) return raw;
+    if (!inHunk || raw.startsWith("\\") || raw === "" && i === lines.length - 1) return raw;
     if (raw.startsWith("-")) return `${"".padStart(GUTTER)} ${raw}`;
     return `${String(newLine++).padStart(GUTTER)} ${raw}`;
   }).join("\n");
@@ -44230,11 +44242,13 @@ function firstAddedLines(diff) {
   }
   return first;
 }
-function anchorToFile(kept, firstAdded, changedPaths = []) {
+function anchorToFile(kept, firstAdded, changedFiles = []) {
+  const changedPaths = changedFiles.map((f) => f.path);
+  const live = new Set(changedFiles.filter((f) => f.status !== "deleted").map((f) => f.path));
   return kept.map((k) => {
     if (isAnchored(k) || !k.file) return k;
     const file = normalizeFindingPath(k.file, changedPaths);
-    const line = firstAdded.get(file);
+    const line = firstAdded.get(file) ?? (live.has(file) ? 1 : void 0);
     return line ? { ...k, file, lines: String(line), anchorSource: "file" } : k;
   });
 }
@@ -44408,12 +44422,12 @@ function resolveAnchor(candidate, d, idx) {
   if (judgeFile && isNumericLines(judgeLines) && idx.present && onChangedLine(idx, judgeFile, judgeLines)) {
     return { file: judgeFile, lines: judgeLines, source: "judge" };
   }
-  const quote = String(d.anchor_quote ?? "").trim();
+  const quote = String(d.anchor_quote ?? "").trim().replace(/^\d+\s+/, "").replace(/^\+/, "").trim();
   if (idx.present && quote.length >= MIN_QUOTE_LEN) {
     const hits = quoteMatches(idx, quoteFile(candidate, d, idx), quote);
     if (hits.length === 1) return { file: hits[0].file, lines: String(hits[0].line), source: "diff" };
   }
-  return { file: candidate.file, lines: isNumericLines(candidate.lines) ? candidate.lines : void 0, source: "none" };
+  return { file: candidate.file ?? quoteFile(candidate, d, idx), lines: isNumericLines(candidate.lines) ? candidate.lines : void 0, source: "none" };
 }
 var normalizeId = (id) => String(id).trim().replace(/^\[|\]$/g, "").toLowerCase();
 var clampScore = (n) => Math.max(0, Math.min(10, Math.round(Number(n) || 0)));
@@ -44967,7 +44981,8 @@ async function runBundledReview(ctx, maxInputTokens) {
   }
   const diffByFile = splitDiffByFile(ctx.filteredDiff);
   const deltaByFile = ctx.deltaDiff ? splitDiffByFile(ctx.deltaDiff) : /* @__PURE__ */ new Map();
-  const units = [...diffByFile].map(([path4, text]) => ({ path: path4, tokens: estimateTokens(text.length + (deltaByFile.get(path4)?.length ?? 0)) }));
+  const numbered = config.review.lineNumbers;
+  const units = [...diffByFile].map(([path4, text]) => ({ path: path4, tokens: estimateTokens(shownLength(text, numbered) + shownLength(deltaByFile.get(path4) ?? "", numbered)) }));
   const plan = planBundles(units, diffBudget);
   if (!plan.bundles.length) return { ok: false, reason: "No file fits a single bundle within the input budget" };
   const maxBundles = config.review.maxBundles;
@@ -44994,7 +45009,7 @@ Bundle ${i + 1}/${plan.bundles.length}: ${bundle.label} (~${bundle.tokens.toLoca
     if (room > 0) {
       const fetched = await fetchContext(ctx.adapter, ctx.changedFiles.filter((f) => inBundle.has(f.path)), prInfo.sourceCommit, diff, config.context.maxFiles, config.context.maxFileLines);
       for (const c of fetched) {
-        const t = estimateTokens(c.content.length);
+        const t = estimateTokens(shownLength(c.content, numbered));
         if (t > room) continue;
         contexts.push(c);
         room -= t;
@@ -45163,7 +45178,7 @@ function getAgentVersion() {
     const pkg = JSON.parse((0, import_fs4.readFileSync)(pkgPath, "utf-8"));
     return pkg.version;
   } catch {
-    if (true) return "0.0.28";
+    if (true) return "0.0.29";
     return "unknown";
   }
 }
@@ -45175,7 +45190,7 @@ function getBuildCommit() {
     const dirty = (0, import_child_process.execSync)("git status --porcelain", opts2).toString().trim() ? "-dirty" : "";
     return hash + dirty;
   } catch {
-    if (true) return "35899c2";
+    if (true) return "2ded060";
     return "unknown";
   }
 }
@@ -45513,13 +45528,14 @@ async function transition(state, ctx) {
     }
     case 9 /* ESTIMATE_TOKENS */: {
       const tok = (chars) => Math.ceil(chars / 4);
+      const shown = (s2) => shownLength(s2, config.review.lineNumbers);
       const sizes = () => {
-        const files = ctx.fileContexts.reduce((sum2, f) => sum2 + f.content.length, 0);
+        const files = ctx.fileContexts.reduce((sum2, f) => sum2 + shown(f.content), 0);
         const reviews = (ctx.previousReviews ?? []).reduce((sum2, r) => sum2 + r.body.length, 0);
         const replies = (ctx.replies ?? []).reduce((sum2, r) => sum2 + r.body.length, 0);
         const prompt = ctx.prompt.content.length;
-        const diff = ctx.filteredDiff.length;
-        const delta = (ctx.deltaDiff ?? "").length;
+        const diff = shown(ctx.filteredDiff);
+        const delta = shown(ctx.deltaDiff ?? "");
         return {
           total: tok(prompt + diff + delta + files + reviews + replies),
           prompt: tok(prompt),
@@ -46028,9 +46044,10 @@ async function runBenchmark(env = process.env) {
     });
     const outcome = outcomes[0];
     if (outcome) {
-      const changedPaths = (await adapter2.getChangedFiles(prNumber)).map((f) => f.path);
+      const changedFiles = await adapter2.getChangedFiles(prNumber);
+      const changedPaths = changedFiles.map((f) => f.path);
       if (outcome.judgedFindings) {
-        const placed = anchorToFile(outcome.judgedFindings, firstAddedLines(await adapter2.getDiff(prNumber)), changedPaths);
+        const placed = anchorToFile(outcome.judgedFindings, firstAddedLines(await adapter2.getDiff(prNumber)), changedFiles);
         findings = keptToReportFindings(placed, rb.agent, changedPaths);
         const fileLevel = placed.filter((k) => k.anchorSource === "file");
         console.log(`Benchmark findings: reviewer ${outcome.review.findings.length}, judge kept ${outcome.judgedFindings.length}, line-anchored ${findings.length} (${fileLevel.length} placed on the file's first changed line)`);
