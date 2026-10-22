@@ -19,6 +19,7 @@
 
 - Stop at the edit. Finish the change, run what needs running, then report and wait. The user reviews the diff before anything becomes a commit; committing unprompted skips that review.
 - Asking for an edit is not asking for a commit. Neither is a long task, a green test run, nor the rhythm of the work so far.
+- Commit, version bump (`npm version`), tag and push are each a separate approval. "Ship it", "we have to ship X", or agreeing to a plan is not one. An approval covers only the diff that existed when it was given: if more work was requested alongside the "yes", finish it, show the new diff and commit plan, and ask again. A pushed `v*` tag publishes the ReviewBench image, so never infer it.
 - Stage only the files you touched, by path. Never `git add -A` or `git add .`.
 - The message is a single line: `<KEY> -> <type>(<scope>): <imperative summary>`, with `<KEY>` taken from a Jira-style key in the branch name (e.g. `PROJ-123 -> fix(parser): handle empty input`). No key prefix on branches without one (main, develop, feature/*). Match recent `git log --oneline`.
 - No multi-line body unless explicitly asked, and no `Co-Authored-By` or "Generated with" trailer.
