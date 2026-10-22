@@ -59,12 +59,14 @@ export function parseChangedFiles(diff: string): ChangedFile[] {
   return files
 }
 
-/** Count added and removed lines in a unified diff (excludes --- and +++ headers). */
+// Hunk-aware: file headers only precede a file's first @@, so a removed `---` YAML rule or an added `+++i;` is still content.
 export function countDiffLines(diff: string): { added: number; removed: number } {
-  let added = 0, removed = 0
+  let added = 0, removed = 0, inHunk = false
   for (const line of diff.split('\n')) {
-    if (line.startsWith('+') && !line.startsWith('+++')) added++
-    else if (line.startsWith('-') && !line.startsWith('---')) removed++
+    if (line.startsWith('diff --git')) inHunk = false
+    else if (line.startsWith('@@')) inHunk = true
+    else if (inHunk && line.startsWith('+')) added++
+    else if (inHunk && line.startsWith('-')) removed++
   }
   return { added, removed }
 }
@@ -77,15 +79,22 @@ export function countChangedLines(diff: string): number {
 
 const GUTTER = 5
 
+// Budget estimates must count the gutter the model actually sees, or a near-budget PR overflows once numbering is on.
+export function shownLength(s: string, numbered: boolean): number {
+  return s.length + (numbered && s ? (GUTTER + 1) * s.split('\n').length : 0)
+}
+
 // Models can't reliably count lines from @@ headers, so ~40% of findings came back with no line; show the new-file number on every added/context line.
 export function numberDiffLines(diff: string): string {
   let newLine = 0
   let inHunk = false
-  return diff.split('\n').map(raw => {
+  const lines = diff.split('\n')
+  return lines.map((raw, i) => {
     if (raw.startsWith('diff --git')) { inHunk = false; return raw }
     const hunk = raw.match(/^@@ -\d+(?:,\d+)? \+(\d+)/)
     if (hunk) { newLine = parseInt(hunk[1], 10); inHunk = true; return raw }
-    if (!inHunk || raw === '' || raw.startsWith('\\')) return raw
+    // A blank line mid-hunk is context (as addedLines counts it); only the trailing newline's empty tail is not.
+    if (!inHunk || raw.startsWith('\\') || (raw === '' && i === lines.length - 1)) return raw
     if (raw.startsWith('-')) return `${''.padStart(GUTTER)} ${raw}`
     return `${String(newLine++).padStart(GUTTER)} ${raw}`
   }).join('\n')

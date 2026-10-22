@@ -522,17 +522,28 @@ describe('file-level fallback anchor', () => {
     expect([...firstAddedLines(DIFF)]).toEqual([['docs/a.md', 4]])
   })
 
+  const files = [
+    { path: 'docs/a.md', status: 'modified' as const },
+    { path: 'gone.ts', status: 'modified' as const },
+    { path: 'moved/tech-lead.md', status: 'renamed' as const },
+    { path: 'deleted.ts', status: 'deleted' as const },
+  ]
+
   it('places an unanchored kept finding on its file’s first changed line, so it reaches the report', () => {
-    const [placed] = anchorToFile([kept({ file: 'a.md', lines: undefined })], firstAddedLines(DIFF), ['docs/a.md', 'gone.ts'])
+    const [placed] = anchorToFile([kept({ file: 'a.md', lines: undefined })], firstAddedLines(DIFF), files)
     expect(placed).toMatchObject({ file: 'docs/a.md', lines: '4', anchorSource: 'file' })
     expect(keptToReportFindings([placed], 'p')).toEqual([{ file: 'docs/a.md', start_line: 4, end_line: 4, message: 'Stale doc: b', producer: 'p' }])
   })
 
-  it('leaves anchored, locationless and deletion-only-file findings alone', () => {
+  it('uses line 1 for a file that exists at head but has no added line (rename-only, removals-only)', () => {
+    const out = anchorToFile([kept({ file: 'moved/tech-lead.md' }), kept({ file: 'gone.ts' })], firstAddedLines(DIFF), files)
+    expect(out.map(k => [k.file, k.lines, k.anchorSource])).toEqual([['moved/tech-lead.md', '1', 'file'], ['gone.ts', '1', 'file']])
+  })
+
+  it('leaves anchored, locationless, deleted-file and unknown-file findings alone', () => {
     const anchored = kept({ file: 'docs/a.md', lines: '9', anchorSource: 'reviewer' })
-    const out = anchorToFile([anchored, kept({}), kept({ file: 'gone.ts' })], firstAddedLines(DIFF))
+    const out = anchorToFile([anchored, kept({}), kept({ file: 'deleted.ts' }), kept({ file: 'not/in/pr.ts' })], firstAddedLines(DIFF), files)
     expect(out[0]).toBe(anchored)
-    expect(out[1].anchorSource).toBe('none')
-    expect(out[2].anchorSource).toBe('none')
+    expect(out.slice(1).map(k => k.anchorSource)).toEqual(['none', 'none', 'none'])
   })
 })

@@ -63,6 +63,20 @@ describe('detectStacks bases', () => {
   })
 })
 
+describe('detectStacks wrapper extensions', () => {
+  it('classifies template/sample copies by their inner extension, so docs templates no longer outvote real stacks', () => {
+    const templates = Array.from({ length: 9 }, (_, i) => `src/user/t${i}/AGENTS.md.template`)
+    const docs = Array.from({ length: 26 }, (_, i) => `docs/d${i}.md`)
+    const sel = detectStacks(changed(...templates, ...docs, 'scripts/install.sh', 'tools/find-polluter.sh', 'src/cli.ts'))
+    expect(sel.bases).toEqual(['shell', 'typescript-node'])
+  })
+
+  it('looks through stacked wrappers and treats a wrapper with no inner extension as neutral', () => {
+    expect(detectStacks(changed('config/app.py.in.example')).bases).toEqual(['python'])
+    expect(detectStacks(changed('.env.example', 'deploy.template', 'main.go')).bases).toEqual(['go'])
+  })
+})
+
 describe('detectStacks overlays', () => {
   it('plain java without a spring marker stays generic', () => {
     expect(detectStacks(changed('src/A.java'), addLines('import java.util.List;', '@Service')).overlays).toEqual([])

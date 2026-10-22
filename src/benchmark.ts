@@ -69,9 +69,10 @@ export async function runBenchmark(env: NodeJS.ProcessEnv = process.env): Promis
 
     const outcome = outcomes[0]
     if (outcome) {
-      const changedPaths = (await adapter.getChangedFiles(prNumber)).map(f => f.path)
+      const changedFiles = await adapter.getChangedFiles(prNumber)
+      const changedPaths = changedFiles.map(f => f.path)
       if (outcome.judgedFindings) {
-        const placed = anchorToFile(outcome.judgedFindings, firstAddedLines(await adapter.getDiff(prNumber)), changedPaths)
+        const placed = anchorToFile(outcome.judgedFindings, firstAddedLines(await adapter.getDiff(prNumber)), changedFiles)
         findings = keptToReportFindings(placed, rb.agent, changedPaths)
         const fileLevel = placed.filter(k => k.anchorSource === 'file')
         console.log(`Benchmark findings: reviewer ${outcome.review.findings.length}, judge kept ${outcome.judgedFindings.length}, line-anchored ${findings.length} (${fileLevel.length} placed on the file's first changed line)`)

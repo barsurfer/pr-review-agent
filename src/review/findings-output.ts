@@ -6,6 +6,7 @@ import { mkdirSync, renameSync, writeFileSync } from 'fs'
 import { dirname } from 'path'
 import type { ReviewFinding, FindingScore, IssueType } from './formatter.js'
 import { addedLines } from './parsers.js'
+import type { ChangedFile } from '../vcs/adapter.js'
 
 export interface ReportFinding {
   file: string
@@ -237,12 +238,14 @@ export function firstAddedLines(diff: string): Map<string, number> {
   return first
 }
 
-// ReviewBench matches by meaning within a file (line ranges are only hints), so a file-level finding scores once it carries any line of a changed file.
-export function anchorToFile(kept: readonly KeptFinding[], firstAdded: ReadonlyMap<string, number>, changedPaths: readonly string[] = []): KeptFinding[] {
+// ReviewBench matches by meaning within a file, so a file-level finding needs only some line of it: the first added one, else line 1 for a rename-only file (a deleted file has none).
+export function anchorToFile(kept: readonly KeptFinding[], firstAdded: ReadonlyMap<string, number>, changedFiles: readonly ChangedFile[] = []): KeptFinding[] {
+  const changedPaths = changedFiles.map(f => f.path)
+  const live = new Set(changedFiles.filter(f => f.status !== 'deleted').map(f => f.path))
   return kept.map(k => {
     if (isAnchored(k) || !k.file) return k
     const file = normalizeFindingPath(k.file, changedPaths)
-    const line = firstAdded.get(file)
+    const line = firstAdded.get(file) ?? (live.has(file) ? 1 : undefined)
     return line ? { ...k, file, lines: String(line), anchorSource: 'file' } : k
   })
 }

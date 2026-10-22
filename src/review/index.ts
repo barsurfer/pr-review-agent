@@ -6,7 +6,7 @@ import { config, modelContextWindow } from '../config.js'
 import { loadPrompt } from '../prompt/loader.js'
 import { fetchContext } from '../context/fetcher.js'
 import { runReview, runCommentResponse, runJudge } from '../claude/client.js'
-import { filterDiff, countChangedLines, parseVerdictScore, isPathExcluded, scanTodos, isContextLengthError } from './parsers.js'
+import { filterDiff, countChangedLines, parseVerdictScore, isPathExcluded, scanTodos, isContextLengthError, shownLength } from './parsers.js'
 import { buildReviewFooter, buildReplyFooter, stripPreviousFooter, stripDeltaStats, stripJudgeNotes, stripJenkinsMeta, stripPreamble, isNoChange, extractCommitHash, countFindings, markdownHasFindings, hasReplyFooter } from './formatter.js'
 import { runBundledReview } from './bundled.js'
 import { buildUsageRecord, logUsageRecord, getBuildCommit, getJobUrl } from './usage.js'
@@ -276,13 +276,14 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       const tok = (chars: number) => Math.ceil(chars / 4)
       // Per-section sizes (~chars/4) so an over-budget run shows WHERE the tokens went —
       // a huge diff vs many file contexts vs a long review/reply history — not just a total.
+      const shown = (s: string) => shownLength(s, config.review.lineNumbers)
       const sizes = () => {
-        const files = ctx.fileContexts!.reduce((sum, f) => sum + f.content.length, 0)
+        const files = ctx.fileContexts!.reduce((sum, f) => sum + shown(f.content), 0)
         const reviews = (ctx.previousReviews ?? []).reduce((sum, r) => sum + r.body.length, 0)
         const replies = (ctx.replies ?? []).reduce((sum, r) => sum + r.body.length, 0)
         const prompt = ctx.prompt!.content.length
-        const diff = ctx.filteredDiff!.length
-        const delta = (ctx.deltaDiff ?? '').length
+        const diff = shown(ctx.filteredDiff!)
+        const delta = shown(ctx.deltaDiff ?? '')
         return {
           total: tok(prompt + diff + delta + files + reviews + replies),
           prompt: tok(prompt), diff: tok(diff), delta: tok(delta),

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { filterDiff, countChangedLines, countDiffLines, numberDiffLines, numberFileLines, parseVerdictScore, parseFindings, parseDeltaStats, isPathExcluded, scanTodos, parseChangedFiles, isContextLengthError } from '../parsers.js'
+import { filterDiff, countChangedLines, countDiffLines, numberDiffLines, numberFileLines, shownLength, parseVerdictScore, parseFindings, parseDeltaStats, isPathExcluded, scanTodos, parseChangedFiles, isContextLengthError } from '../parsers.js'
 
 describe('isContextLengthError', () => {
   const err = (status: number, message: string) => ({ status, message })
@@ -424,5 +424,26 @@ describe('line numbering for the model input', () => {
   it('counts added and removed lines separately, ignoring file headers', () => {
     expect(countDiffLines(DIFF)).toEqual({ added: 1, removed: 1 })
     expect(countChangedLines(DIFF)).toBe(2)
+  })
+})
+
+describe('numbering and counting edge cases', () => {
+  it('advances over a bare blank line mid-hunk exactly as addedLines does', () => {
+    const diff = 'diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1,3 +1,4 @@\n a\n\n b\n+new\n'
+    expect(numberDiffLines(diff)).toContain('    4 +new')
+    expect(numberDiffLines(diff).endsWith('\n')).toBe(true)
+  })
+
+  it('counts removed `---` and added `+++` content lines inside hunks, not the file headers', () => {
+    const diff = 'diff --git a/x.md b/x.md\n--- a/x.md\n+++ b/x.md\n@@ -1,2 +1,2 @@\n----\n-old\n+++i;\n+new'
+    expect(countDiffLines(diff)).toEqual({ added: 2, removed: 2 })
+  })
+})
+
+describe('shownLength', () => {
+  it('adds the numbered gutter per line only when numbering is on', () => {
+    expect(shownLength('a\nb', false)).toBe(3)
+    expect(shownLength('a\nb', true)).toBe(3 + 2 * 6)
+    expect(shownLength('', true)).toBe(0)
   })
 })

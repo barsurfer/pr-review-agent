@@ -74,6 +74,24 @@ beforeEach(() => {
 })
 
 describe('bundled review', () => {
+  it('passes ENABLE_LINE_NUMBERS to every bundle reviewer and judge call', async () => {
+    cfg.review.lineNumbers = true
+    mockRunReview.mockImplementation(async (...args) => {
+      const o = obj('Alpha problem', (args[6] as string).includes('a/one.ts') ? 'a/one.ts' : 'b/one.ts')
+      return { text: renderReview(o), usage, review: o }
+    })
+    try {
+      await review(adapter(BIG_DIFF, ['a/one.ts', 'a/two.ts', 'b/one.ts', 'b/two.ts']), '1', false)
+      // The gutter is counted in the bundle budget, so the split may differ from the unnumbered case; every call must carry the flag.
+      expect(mockRunReview.mock.calls.length).toBeGreaterThan(1)
+      expect(mockRunReview.mock.calls.every(c => c[12] === true)).toBe(true)
+      expect(mockRunJudge.mock.calls.length).toBe(mockRunReview.mock.calls.length)
+      expect(mockRunJudge.mock.calls.every(c => c[9] === true)).toBe(true)
+    } finally {
+      cfg.review.lineNumbers = false
+    }
+  })
+
   it('over budget + enabled: one reviewer+judge per bundle, one combined review', async () => {
     mockRunReview.mockImplementation(async (...args) => {
       const diff = args[6] as string

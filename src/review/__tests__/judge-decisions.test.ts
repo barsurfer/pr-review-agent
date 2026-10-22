@@ -227,6 +227,17 @@ describe('locateInDiff — deterministic anchor resolver (correct line or null, 
   // No path:line prefix in evidence — otherwise the file source resolves and scopes the quote search.
   const quoteOnly = (over: Partial<JudgeDecision> = {}) => decision({ evidence: '', ...over })
 
+  it('matches a quote copied with the numbered gutter or the `+` marker', () => {
+    for (const anchor_quote of ['   12 +  function store(k) { cache[k] = 1 }', '+  function store(k) { cache[k] = 1 }']) {
+      expect(locateInDiff(bare(), quoteOnly({ anchor_quote }), DIFF)).toEqual({ file: 'src/cache.ts', lines: '12', source: 'diff' })
+    }
+  })
+
+  it('keeps a judge-named changed file when its line is rejected, so file-level placement can still use it', () => {
+    expect(locateInDiff(bare(), quoteOnly({ anchor_file: 'src/pool.ts', anchor_lines: '5' }), DIFF)).toEqual({ file: 'src/pool.ts', lines: undefined, source: 'none' })
+    expect(locateInDiff(bare(), quoteOnly({ anchor_file: 'src/nope.ts', anchor_lines: '5' }), DIFF)).toEqual({ file: undefined, lines: undefined, source: 'none' })
+  })
+
   it('step 1: passes a numeric reviewer anchor through ungated, even for a line not in the diff', () => {
     expect(locateInDiff(finding({ lines: '99' }), decision(), DIFF)).toEqual({ file: 'src/pool.ts', lines: '99', source: 'reviewer' })
   })

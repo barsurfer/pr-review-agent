@@ -8,7 +8,7 @@ import { runReview, runJudge } from '../claude/client.js'
 import { planBundles, splitDiffByFile, estimateTokens as tok } from './bundler.js'
 import { parseReviewMarkdown, mergeReviews, type BundleReview } from './aggregate.js'
 import { countFindings, isNoChange } from './formatter.js'
-import { isContextLengthError } from './parsers.js'
+import { isContextLengthError, shownLength } from './parsers.js'
 import type { ReviewContext } from './types.js'
 
 // The chars/4 estimate under-counts code-heavy diffs; packing to 85% keeps real usage under the cap.
@@ -31,7 +31,8 @@ export async function runBundledReview(ctx: ReviewContext, maxInputTokens: numbe
 
   const diffByFile = splitDiffByFile(ctx.filteredDiff!)
   const deltaByFile = ctx.deltaDiff ? splitDiffByFile(ctx.deltaDiff) : new Map<string, string>()
-  const units = [...diffByFile].map(([path, text]) => ({ path, tokens: tok(text.length + (deltaByFile.get(path)?.length ?? 0)) }))
+  const numbered = config.review.lineNumbers
+  const units = [...diffByFile].map(([path, text]) => ({ path, tokens: tok(shownLength(text, numbered) + shownLength(deltaByFile.get(path) ?? '', numbered)) }))
   const plan = planBundles(units, diffBudget)
 
   if (!plan.bundles.length) return { ok: false, reason: 'No file fits a single bundle within the input budget' }
@@ -61,7 +62,7 @@ export async function runBundledReview(ctx: ReviewContext, maxInputTokens: numbe
     if (room > 0) {
       const fetched = await fetchContext(ctx.adapter, ctx.changedFiles!.filter(f => inBundle.has(f.path)), prInfo.sourceCommit, diff, config.context.maxFiles, config.context.maxFileLines)
       for (const c of fetched) {
-        const t = tok(c.content.length)
+        const t = tok(shownLength(c.content, numbered))
         if (t > room) continue
         contexts.push(c)
         room -= t

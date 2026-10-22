@@ -252,7 +252,8 @@ describe('benchmark mode end-to-end (model + judge mocked)', () => {
     await runBenchmark({ ...fixture(), RB_CONFIG_LNUM: '1' })
 
     expect(cfg.review.lineNumbers).toBe(true)
-    expect(completeStructured.mock.calls[0][1]).toContain('    2 +  conns: Conn[] = []')
+    expect(completeStructured.mock.calls[0][1]).toContain('    2 +  conns: Conn[] = []')   // reviewer
+    expect(completeStructured.mock.calls[1][1]).toContain('    2 +  conns: Conn[] = []')   // judge
     expect(logSpy.mock.calls.map(c => c.join(' ')).join('\n')).toContain('lnum=1')
   })
 
@@ -309,10 +310,19 @@ describe('benchmark anchors: reviewer first, judge fallback, otherwise dropped a
     expect(logSpy.mock.calls.map(c => c.join(' ')).join('\n')).toContain('1 placed on the file\'s first changed line')
   })
 
-  it('drops a judge anchor that points at an unchanged context line', async () => {
-    const warnSpy = vi.spyOn(console, 'warn')
-    // Line 5 (` }`) is context, not an added line — the judge channel is diff-validated, so it falls through.
+  it('rejects a judge line on an unchanged context line but keeps its changed file for file-level placement', async () => {
+    // Line 5 (` }`) is context, not an added line — the judge channel is diff-validated, so the line is not used.
     mockModel(REVIEW, { ...JUDGED, decisions: [JUDGED.decisions[0], { ...JUDGED.decisions[1], anchor_file: 'src/pool.ts', anchor_lines: '5' }, ...JUDGED.decisions.slice(2)] })
+    const env = fixture()
+
+    await runBenchmark(env)
+
+    expect(readOut(env).findings[1]).toEqual({ file: 'src/pool.ts', start_line: 2, end_line: 2, message: 'PR-level concern: No tests for the pool.', producer: 'my-agent' })
+  })
+
+  it('still drops a kept finding whose judge-named file is not in the diff', async () => {
+    const warnSpy = vi.spyOn(console, 'warn')
+    mockModel(REVIEW, { ...JUDGED, decisions: [JUDGED.decisions[0], { ...JUDGED.decisions[1], anchor_file: 'src/elsewhere.ts', anchor_lines: '5' }, ...JUDGED.decisions.slice(2)] })
     const env = fixture()
 
     await runBenchmark(env)

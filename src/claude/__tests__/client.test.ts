@@ -56,7 +56,6 @@ describe('runReview (structured output)', () => {
   })
 })
 
-// The FSM passes discussion + delta in; if they don't reach the model, a dev's "Fixed in <sha>" goes unseen.
 describe('ENABLE_LINE_NUMBERS: numbered views in the model input', () => {
   beforeEach(() => { complete.mockReset(); completeStructured.mockReset() })
   const DIFF = 'diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1,1 +1,2 @@\n keep\n+added'
@@ -79,6 +78,24 @@ describe('ENABLE_LINE_NUMBERS: numbered views in the model input', () => {
     expect(msg).toContain('    2 added')
   })
 
+  it('on: the re-review delta diff is numbered too', async () => {
+    completeStructured.mockResolvedValue({ object, usage })
+    const prior: ReviewComment[] = [{ id: '1', body: 'PRIOR', createdOn: '2026-03-10T10:00:00Z' }]
+    await runReview('key', 'model', 3, 16000, '', prInfo, DIFF, [], prompt, prior, [], DIFF, true)
+    const msg = completeStructured.mock.calls[0][1] as string
+    expect(msg.split('## Changes Since Your Last Review:')[1]).toContain('    2 +added')
+  })
+
+  it('on: the judge numbers its file context as well', async () => {
+    const review: ReviewObject = { ...object, findings: [{ severity: 'LOW', title: 'X', file: 'a.ts', lines: '2', body: 'b' }] }
+    completeStructured.mockResolvedValue({
+      object: { decisions: [{ candidate_id: 'c0', reason_category: 'validated', evidence: 'a.ts:2', note: 'n', score: 8 }], summary: 's', behavioral_diff: [], production_risk: [], unresolved_questions: [], merge_confidence: 80 },
+      usage,
+    })
+    await runJudge('key', 'model', 3, 16000, '', DIFF, review, [{ path: 'a.ts', content: 'keep\nadded' }], undefined, true)
+    expect(completeStructured.mock.calls[0][1]).toContain('### a.ts\n```\n    1 keep\n    2 added\n```')
+  })
+
   it('on: the judge sees the numbered diff, while anchoring still parses the raw one', async () => {
     const review: ReviewObject = { ...object, findings: [{ severity: 'MEDIUM', title: 'X', file: 'a.ts', body: 'b' }] }
     completeStructured.mockResolvedValue({
@@ -91,6 +108,7 @@ describe('ENABLE_LINE_NUMBERS: numbered views in the model input', () => {
   })
 })
 
+// The FSM passes discussion + delta in; if they don't reach the model, a dev's "Fixed in <sha>" goes unseen.
 describe('runReview user message (re-review context)', () => {
   beforeEach(() => { complete.mockReset(); completeStructured.mockReset() })
 

@@ -106,8 +106,8 @@ export const config = {
     maxBundles: parseInt(optional('MAX_BUNDLES', '8'), 10),   // 0 = unlimited
     // Off by default: lets the reviewer emit real-but-minor findings; posting them still needs ENABLE_JUDGE_KEEP_MINOR (policy drops minor otherwise).
     enableNitpicks: optional('ENABLE_NITPICKS', 'false') === 'true',
-    // Off by default: prefixing every diff and context line with its number costs input tokens and changes what the reviewer sees.
-    lineNumbers: optional('ENABLE_LINE_NUMBERS', 'false') === 'true',
+    // On by default: without numbered lines ~40% of findings carried no line; set false to send the raw diff/context (saves the per-line gutter tokens).
+    lineNumbers: optional('ENABLE_LINE_NUMBERS', 'true') !== 'false',
   },
 
   context: {

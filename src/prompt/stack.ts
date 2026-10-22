@@ -67,10 +67,18 @@ function shellShebangPaths(diff: string): Set<string> {
   return out
 }
 
+// AGENTS.md.template or config.json.example are the inner file's type; counted as 'other' they outvoted real stacks.
+const WRAPPER_EXTENSIONS = new Set(['template', 'tmpl', 'example', 'sample', 'dist', 'in'])
+
 function extensionOf(path: string): string {
-  const base = path.slice(path.lastIndexOf('/') + 1)
-  const dot = base.lastIndexOf('.')
-  return dot > 0 ? base.slice(dot + 1).toLowerCase() : ''
+  let base = path.slice(path.lastIndexOf('/') + 1).toLowerCase()
+  for (;;) {
+    const dot = base.lastIndexOf('.')
+    if (dot <= 0) return ''
+    const ext = base.slice(dot + 1)
+    if (!WRAPPER_EXTENSIONS.has(ext)) return ext
+    base = base.slice(0, dot)
+  }
 }
 
 // 'other' = real source in an unsupported language; it counts against every base

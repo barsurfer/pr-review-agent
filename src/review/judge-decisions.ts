@@ -172,15 +172,15 @@ function resolveAnchor(candidate: ReviewFinding, d: JudgeDecision, idx: DiffInde
     return { file: judgeFile, lines: judgeLines, source: 'judge' }
   }
 
-  // Deterministic recovery: a single long-enough verbatim match, never a guess.
-  const quote = String(d.anchor_quote ?? '').trim()
+  // Deterministic recovery: a single long-enough verbatim match, never a guess. The judge may copy the numbered gutter or the `+` marker it was shown.
+  const quote = String(d.anchor_quote ?? '').trim().replace(/^\d+\s+/, '').replace(/^\+/, '').trim()
   if (idx.present && quote.length >= MIN_QUOTE_LEN) {
     const hits = quoteMatches(idx, quoteFile(candidate, d, idx), quote)
     if (hits.length === 1) return { file: hits[0].file, lines: String(hits[0].line), source: 'diff' }
   }
 
-  // An unanchored finding must not carry a non-numeric `lines`: the bundled path re-parses any digit in it and mis-anchors.
-  return { file: candidate.file, lines: isNumericLines(candidate.lines) ? candidate.lines : undefined, source: 'none' }
+  // Non-numeric `lines` is dropped (the bundled path re-parses any digit and mis-anchors); a judge-named changed file is kept for file-level placement.
+  return { file: candidate.file ?? quoteFile(candidate, d, idx), lines: isNumericLines(candidate.lines) ? candidate.lines : undefined, source: 'none' }
 }
 
 const normalizeId = (id: string): string => String(id).trim().replace(/^\[|\]$/g, '').toLowerCase()
