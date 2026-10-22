@@ -36319,7 +36319,9 @@ var config = {
     maxBundles: parseInt(optional("MAX_BUNDLES", "8"), 10),
     // 0 = unlimited
     // Off by default: lets the reviewer emit real-but-minor findings; posting them still needs ENABLE_JUDGE_KEEP_MINOR (policy drops minor otherwise).
-    enableNitpicks: optional("ENABLE_NITPICKS", "false") === "true"
+    enableNitpicks: optional("ENABLE_NITPICKS", "false") === "true",
+    // Off by default: prefixing every diff and context line with its number costs input tokens and changes what the reviewer sees.
+    lineNumbers: optional("ENABLE_LINE_NUMBERS", "false") === "true"
   },
   context: {
     maxFiles: parseInt(optional("MAX_CONTEXT_FILES", "20"), 10),
@@ -43573,9 +43575,11 @@ var import_meta = {};
 var REPO_PROMPT_FILE = ".agent-review-instructions.md";
 var LOW_SEVERITY_CERTAINTY_RULE = "- For lower-severity concerns, be certain before flagging. If you cannot explain the problem with a concrete failing scenario, do not flag it \u2014 prefer not reporting over guessing.";
 var LOW_SEVERITY_CERTAINTY_RULE_RELAXED = "- For lower-severity concerns, keep the anti-speculation bar for uncertain correctness: if you cannot explain a suspected bug with a concrete failing scenario, do not flag it \u2014 prefer not reporting over guessing. But DO surface real, concrete, low-impact issues that are plainly visible in the diff \u2014 stale or misleading docs, comments, or names; dead code; duplicated logic; tests that cannot fail or miss the case they claim to cover \u2014 tagging each with its `type` and a concrete reason it is wrong. These are findings, not the style, naming, or formatting preferences forbidden below.";
+var NON_CODE_FILES_RULE = "- Non-code files in the diff \u2014 agent or tool instructions, templates, markdown docs, config, CI and shell scripts \u2014 are reviewed like code. Flag concrete defects in them: a reference to a file, path, command, flag, or setting that does not exist or no longer matches the change; instructions or docs that contradict each other or the implementation; syntax or conventions that only work for one tool, platform, or OS used where others consume the file; scripts that depend on unavailable commands, skip cleanup, or mishandle errors. Cite the file and the line, and state the concrete consequence.";
 function applyNitpickTransform(template) {
   if (!config.review.enableNitpicks) return template;
-  return template.replace(LOW_SEVERITY_CERTAINTY_RULE, LOW_SEVERITY_CERTAINTY_RULE_RELAXED);
+  return template.replace(LOW_SEVERITY_CERTAINTY_RULE, `${LOW_SEVERITY_CERTAINTY_RULE_RELAXED}
+${NON_CODE_FILES_RULE}`);
 }
 function getBaseTemplate() {
   return applyNitpickTransform(loadBaseTemplateBytes());
@@ -43926,6 +43930,139 @@ init_define_STACK_PROMPTS();
 init_define_STACK_PROMPTS();
 var import_fs2 = require("fs");
 var import_path70 = require("path");
+
+// src/review/parsers.ts
+init_define_STACK_PROMPTS();
+function isContextLengthError(err) {
+  const e = err;
+  return e?.status === 400 && /prompt is too long|exceed context limit|context (window|length)/i.test(e?.message ?? "");
+}
+function patternToRegex(pattern) {
+  if (!pattern.includes("*")) return new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "$");
+  const escaped = pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\\\*/g, ".*");
+  return new RegExp(escaped + "$");
+}
+function isPathExcluded(path4, excludePatterns) {
+  return excludePatterns.some((p) => patternToRegex(p).test(path4));
+}
+function filterDiff(diff, excludePatterns) {
+  const regexes = excludePatterns.map(patternToRegex);
+  const sections2 = diff.split(/(?=^diff --git )/m);
+  const kept = sections2.filter((section) => {
+    const match = section.match(/^diff --git a\/(.+?) b\//);
+    if (!match) return true;
+    return !regexes.some((r) => r.test(match[1]));
+  });
+  return { filtered: kept.join(""), removedCount: sections2.length - kept.length };
+}
+function parseChangedFiles(diff) {
+  const files = [];
+  for (const section of diff.split(/(?=^diff --git )/m)) {
+    const header = section.match(/^diff --git a\/(.+?) b\/(.+)$/m);
+    if (!header) continue;
+    const meta = section.split(/^@@/m)[0];
+    const renamedTo = meta.match(/^rename to (.+)$/m)?.[1];
+    const newPath = meta.match(/^\+\+\+ b\/(.+)$/m)?.[1];
+    const oldPath = meta.match(/^--- a\/(.+)$/m)?.[1];
+    const status = /^new file mode /m.test(meta) ? "added" : /^deleted file mode /m.test(meta) ? "deleted" : renamedTo ? "renamed" : "modified";
+    const path4 = (renamedTo ?? newPath ?? oldPath ?? header[2]).replace(/\t.*$/, "");
+    files.push({ path: path4, status });
+  }
+  return files;
+}
+function countDiffLines(diff) {
+  let added = 0, removed = 0;
+  for (const line of diff.split("\n")) {
+    if (line.startsWith("+") && !line.startsWith("+++")) added++;
+    else if (line.startsWith("-") && !line.startsWith("---")) removed++;
+  }
+  return { added, removed };
+}
+function countChangedLines(diff) {
+  const { added, removed } = countDiffLines(diff);
+  return added + removed;
+}
+var GUTTER = 5;
+function numberDiffLines(diff) {
+  let newLine = 0;
+  let inHunk = false;
+  return diff.split("\n").map((raw) => {
+    if (raw.startsWith("diff --git")) {
+      inHunk = false;
+      return raw;
+    }
+    const hunk = raw.match(/^@@ -\d+(?:,\d+)? \+(\d+)/);
+    if (hunk) {
+      newLine = parseInt(hunk[1], 10);
+      inHunk = true;
+      return raw;
+    }
+    if (!inHunk || raw === "" || raw.startsWith("\\")) return raw;
+    if (raw.startsWith("-")) return `${"".padStart(GUTTER)} ${raw}`;
+    return `${String(newLine++).padStart(GUTTER)} ${raw}`;
+  }).join("\n");
+}
+function numberFileLines(content) {
+  const lines = content.split("\n");
+  if (lines.at(-1) === "") lines.pop();
+  return lines.map((l, i) => `${String(i + 1).padStart(GUTTER)} ${l}`).join("\n");
+}
+function parseVerdictScore(text) {
+  const match = text.match(/#{1,4}\s*(?:Merge Confidence|Verdict):\s*(\d+)%/);
+  return match ? parseInt(match[1], 10) : null;
+}
+function parseFindings(text) {
+  const findingsMatch = text.match(/#{1,4}\s*Findings\b([\s\S]*?)(?=#{1,4}\s|$)/i);
+  const section = findingsMatch?.[1] ?? "";
+  return {
+    high: (section.match(/\*\*HIGH\b/gi) ?? []).length,
+    medium: (section.match(/\*\*MEDIUM\b/gi) ?? []).length,
+    low: (section.match(/\*\*LOW\b/gi) ?? []).length
+  };
+}
+function addedLines(diff) {
+  const out = [];
+  let file = "";
+  let newLine = 0;
+  for (const raw of diff.split("\n")) {
+    if (raw.startsWith("diff --git")) {
+      file = "";
+      continue;
+    }
+    if (raw.startsWith("+++ b/")) {
+      file = raw.slice(6).trim();
+      continue;
+    }
+    if (raw.startsWith("--- ")) continue;
+    const hunk = raw.match(/^@@ -\d+(?:,\d+)? \+(\d+)/);
+    if (hunk) {
+      newLine = parseInt(hunk[1], 10);
+      continue;
+    }
+    if (raw.startsWith("-")) continue;
+    if (raw.startsWith("+")) {
+      if (file) out.push({ file, line: newLine, text: raw.slice(1) });
+      newLine++;
+      continue;
+    }
+    if (raw.startsWith("\\")) continue;
+    newLine++;
+  }
+  return out;
+}
+function scanTodos(diff) {
+  const marker = /\b(TODO|FIXME|HACK)\b:?\s*(.*)/i;
+  const todos = [];
+  for (const { file, line, text } of addedLines(diff)) {
+    const m = text.match(marker);
+    if (!m) continue;
+    const body = m[2].trim();
+    todos.push({ file, line, text: (body ? `${m[1].toUpperCase()}: ${body}` : m[1].toUpperCase()).slice(0, 140) });
+  }
+  return todos;
+}
+
+// src/review/findings-output.ts
 function parseLineRange(lines) {
   const nums = String(lines ?? "").match(/\d+/g)?.map(Number).filter((n) => n > 0) ?? [];
   if (nums.length === 0) return null;
@@ -44085,6 +44222,22 @@ function resolveKeptFindings(reviewerFindings, judgeScores) {
   });
 }
 var isAnchored = (k) => !!k.file && k.anchorSource !== "none" && !!parseLineRange(k.lines);
+function firstAddedLines(diff) {
+  const first = /* @__PURE__ */ new Map();
+  for (const { file, line } of addedLines(diff)) {
+    const key = normalizeFindingPath(file);
+    if (!first.has(key)) first.set(key, line);
+  }
+  return first;
+}
+function anchorToFile(kept, firstAdded, changedPaths = []) {
+  return kept.map((k) => {
+    if (isAnchored(k) || !k.file) return k;
+    const file = normalizeFindingPath(k.file, changedPaths);
+    const line = firstAdded.get(file);
+    return line ? { ...k, file, lines: String(line), anchorSource: "file" } : k;
+  });
+}
 function keptToReportFindings(kept, producer, changedPaths = []) {
   const out = [];
   const seen = /* @__PURE__ */ new Set();
@@ -44169,109 +44322,6 @@ function writeFindingsReport(path4, report) {
   const tmp = `${path4}.tmp`;
   (0, import_fs2.writeFileSync)(tmp, JSON.stringify(report, null, 2) + "\n");
   (0, import_fs2.renameSync)(tmp, path4);
-}
-
-// src/review/parsers.ts
-init_define_STACK_PROMPTS();
-function isContextLengthError(err) {
-  const e = err;
-  return e?.status === 400 && /prompt is too long|exceed context limit|context (window|length)/i.test(e?.message ?? "");
-}
-function patternToRegex(pattern) {
-  if (!pattern.includes("*")) return new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "$");
-  const escaped = pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\\\*/g, ".*");
-  return new RegExp(escaped + "$");
-}
-function isPathExcluded(path4, excludePatterns) {
-  return excludePatterns.some((p) => patternToRegex(p).test(path4));
-}
-function filterDiff(diff, excludePatterns) {
-  const regexes = excludePatterns.map(patternToRegex);
-  const sections2 = diff.split(/(?=^diff --git )/m);
-  const kept = sections2.filter((section) => {
-    const match = section.match(/^diff --git a\/(.+?) b\//);
-    if (!match) return true;
-    return !regexes.some((r) => r.test(match[1]));
-  });
-  return { filtered: kept.join(""), removedCount: sections2.length - kept.length };
-}
-function parseChangedFiles(diff) {
-  const files = [];
-  for (const section of diff.split(/(?=^diff --git )/m)) {
-    const header = section.match(/^diff --git a\/(.+?) b\/(.+)$/m);
-    if (!header) continue;
-    const meta = section.split(/^@@/m)[0];
-    const renamedTo = meta.match(/^rename to (.+)$/m)?.[1];
-    const newPath = meta.match(/^\+\+\+ b\/(.+)$/m)?.[1];
-    const oldPath = meta.match(/^--- a\/(.+)$/m)?.[1];
-    const status = /^new file mode /m.test(meta) ? "added" : /^deleted file mode /m.test(meta) ? "deleted" : renamedTo ? "renamed" : "modified";
-    const path4 = (renamedTo ?? newPath ?? oldPath ?? header[2]).replace(/\t.*$/, "");
-    files.push({ path: path4, status });
-  }
-  return files;
-}
-function countChangedLines(diff) {
-  let count = 0;
-  for (const line of diff.split("\n")) {
-    if (line.startsWith("+") && !line.startsWith("+++") || line.startsWith("-") && !line.startsWith("---")) {
-      count++;
-    }
-  }
-  return count;
-}
-function parseVerdictScore(text) {
-  const match = text.match(/#{1,4}\s*(?:Merge Confidence|Verdict):\s*(\d+)%/);
-  return match ? parseInt(match[1], 10) : null;
-}
-function parseFindings(text) {
-  const findingsMatch = text.match(/#{1,4}\s*Findings\b([\s\S]*?)(?=#{1,4}\s|$)/i);
-  const section = findingsMatch?.[1] ?? "";
-  return {
-    high: (section.match(/\*\*HIGH\b/gi) ?? []).length,
-    medium: (section.match(/\*\*MEDIUM\b/gi) ?? []).length,
-    low: (section.match(/\*\*LOW\b/gi) ?? []).length
-  };
-}
-function addedLines(diff) {
-  const out = [];
-  let file = "";
-  let newLine = 0;
-  for (const raw of diff.split("\n")) {
-    if (raw.startsWith("diff --git")) {
-      file = "";
-      continue;
-    }
-    if (raw.startsWith("+++ b/")) {
-      file = raw.slice(6).trim();
-      continue;
-    }
-    if (raw.startsWith("--- ")) continue;
-    const hunk = raw.match(/^@@ -\d+(?:,\d+)? \+(\d+)/);
-    if (hunk) {
-      newLine = parseInt(hunk[1], 10);
-      continue;
-    }
-    if (raw.startsWith("-")) continue;
-    if (raw.startsWith("+")) {
-      if (file) out.push({ file, line: newLine, text: raw.slice(1) });
-      newLine++;
-      continue;
-    }
-    if (raw.startsWith("\\")) continue;
-    newLine++;
-  }
-  return out;
-}
-function scanTodos(diff) {
-  const marker = /\b(TODO|FIXME|HACK)\b:?\s*(.*)/i;
-  const todos = [];
-  for (const { file, line, text } of addedLines(diff)) {
-    const m = text.match(marker);
-    if (!m) continue;
-    const body = m[2].trim();
-    todos.push({ file, line, text: (body ? `${m[1].toUpperCase()}: ${body}` : m[1].toUpperCase()).slice(0, 140) });
-  }
-  return todos;
 }
 
 // src/review/judge-decisions.ts
@@ -44571,8 +44621,8 @@ var REVIEW_OUTPUT_SCHEMA = {
   required: ["summary", "findings", "behavioral_diff", "production_risk", "unresolved_questions"],
   additionalProperties: false
 };
-async function runReview(apiKey, model, maxRetries, maxTokens, effort, prInfo, diff, fileContexts, prompt, previousReviews, developerReplies = [], changesSinceLastReview = "") {
-  const userMessage = buildUserMessage(prInfo, diff, fileContexts, previousReviews, developerReplies, changesSinceLastReview);
+async function runReview(apiKey, model, maxRetries, maxTokens, effort, prInfo, diff, fileContexts, prompt, previousReviews, developerReplies = [], changesSinceLastReview = "", lineNumbers = false) {
+  const userMessage = buildUserMessage(prInfo, diff, fileContexts, previousReviews, developerReplies, changesSinceLastReview, lineNumbers);
   console.log(`Sending request to Claude (${model}, maxRetries: ${maxRetries})...`);
   const { object, usage } = await createProvider(apiKey).completeStructured(
     prompt.content,
@@ -44584,7 +44634,7 @@ async function runReview(apiKey, model, maxRetries, maxTokens, effort, prInfo, d
   console.log(`Review received (${usage.input_tokens} in / ${usage.output_tokens} out tokens, ${object.no_change ? "NO_CHANGE" : `${object.findings.length} findings`})`);
   return { text, usage, review: object };
 }
-function buildUserMessage(prInfo, diff, fileContexts, previousReviews, developerReplies, changesSinceLastReview = "") {
+function buildUserMessage(prInfo, diff, fileContexts, previousReviews, developerReplies, changesSinceLastReview = "", lineNumbers = false) {
   const parts = [];
   parts.push(`## Pull Request: ${prInfo.title}`);
   parts.push(`## Branch: ${prInfo.sourceBranch} \u2192 ${prInfo.targetBranch}`);
@@ -44607,24 +44657,32 @@ ${latest.body}`);
 > ${r.body}`);
     }
   }
-  parts.push(`## Diff:
-\`\`\`diff
-${diff}
-\`\`\``);
+  parts.push(renderDiff(diff, lineNumbers));
   if (changesSinceLastReview && previousReviews.length > 0) {
     parts.push(`## Changes Since Your Last Review:
 The diff below is ONLY the lines changed since your previous review above \u2014 use it to see exactly what was added or fixed. Credit findings these changes resolve, and assess anything new. The complete PR diff is above for full context.
 \`\`\`diff
-${changesSinceLastReview}
+${lineNumbers ? numberDiffLines(changesSinceLastReview) : changesSinceLastReview}
 \`\`\``);
   }
-  if (fileContexts.length > 0) parts.push(renderFileContexts(fileContexts));
+  if (fileContexts.length > 0) parts.push(renderFileContexts(fileContexts, lineNumbers));
   return parts.join("\n\n");
 }
-function renderFileContexts(fileContexts) {
-  return ["## Full file context:", ...fileContexts.map((f) => `### ${f.path}
+function renderDiff(diff, lineNumbers) {
+  if (!lineNumbers) return `## Diff:
+\`\`\`diff
+${diff}
+\`\`\``;
+  return `## Diff (each added or unchanged line starts with its line number in the new file \u2014 cite those numbers in \`lines\`):
+\`\`\`diff
+${numberDiffLines(diff)}
+\`\`\``;
+}
+function renderFileContexts(fileContexts, lineNumbers = false) {
+  const heading = lineNumbers ? "## Full file context (each line starts with its line number):" : "## Full file context:";
+  return [heading, ...fileContexts.map((f) => `### ${f.path}
 \`\`\`
-${f.content}
+${lineNumbers ? numberFileLines(f.content) : f.content}
 \`\`\``)].join("\n\n");
 }
 function getJudgePrompt() {
@@ -44636,13 +44694,10 @@ function getJudgePrompt() {
     throw new Error("Cannot load judge prompt: file not found and no embedded copy");
   }
 }
-async function runJudge(apiKey, model, maxRetries, maxTokens, effort, diff, review2, fileContexts = [], policy = DEFAULT_JUDGE_POLICY) {
+async function runJudge(apiKey, model, maxRetries, maxTokens, effort, diff, review2, fileContexts = [], policy = DEFAULT_JUDGE_POLICY, lineNumbers = false) {
   const parts = [];
-  parts.push(`## Diff:
-\`\`\`diff
-${diff}
-\`\`\``);
-  if (fileContexts.length > 0) parts.push(renderFileContexts(fileContexts));
+  parts.push(renderDiff(diff, lineNumbers));
+  if (fileContexts.length > 0) parts.push(renderFileContexts(fileContexts, lineNumbers));
   parts.push(`## Review to Validate:
 ${renderCandidatesForJudge(review2)}`);
   const userMessage = parts.join("\n\n");
@@ -44972,7 +45027,8 @@ This PR is too large for one pass. You are reviewing bundle ${i + 1} of ${plan.b
             { ...ctx.prompt, content },
             ctx.previousReviews ?? [],
             ctx.replies ?? [],
-            delta
+            delta,
+            config.review.lineNumbers
           );
         } catch (err) {
           if (!isContextLengthError(err)) throw err;
@@ -45013,7 +45069,8 @@ This PR is too large for one pass. You are reviewing bundle ${i + 1} of ${plan.b
           diff,
           result.review,
           config.judge.fileContext ? bundleContexts : [],
-          config.judge.policy
+          config.judge.policy,
+          config.review.lineNumbers
         );
         addUsage(ctx, verdict.usage);
         judgeUsage.input_tokens += verdict.usage.input_tokens;
@@ -45106,7 +45163,7 @@ function getAgentVersion() {
     const pkg = JSON.parse((0, import_fs4.readFileSync)(pkgPath, "utf-8"));
     return pkg.version;
   } catch {
-    if (true) return "0.0.27";
+    if (true) return "0.0.28";
     return "unknown";
   }
 }
@@ -45118,7 +45175,7 @@ function getBuildCommit() {
     const dirty = (0, import_child_process.execSync)("git status --porcelain", opts2).toString().trim() ? "-dirty" : "";
     return hash + dirty;
   } catch {
-    if (true) return "d4173b6";
+    if (true) return "35899c2";
     return "unknown";
   }
 }
@@ -45158,6 +45215,20 @@ function buildUsageRecord(ctx, durationMs, error) {
     target_branch: ctx.prInfo?.targetBranch ?? "unknown",
     changed_files: ctx.changedFiles?.length ?? 0,
     changed_lines: ctx.lineCount ?? 0,
+    diff_size: ctx.diff !== void 0 ? (() => {
+      const raw = countDiffLines(ctx.diff);
+      const reviewable = countDiffLines(ctx.filteredDiff ?? "");
+      const files = { added: 0, modified: 0, deleted: 0, renamed: 0 };
+      for (const f of ctx.changedFiles ?? []) files[f.status]++;
+      return {
+        files,
+        lines_added: raw.added,
+        lines_removed: raw.removed,
+        reviewable_files: ctx.reviewableFileCount ?? 0,
+        reviewable_lines_added: reviewable.added,
+        reviewable_lines_removed: reviewable.removed
+      };
+    })() : null,
     context_files_fetched: ctx.fileContexts?.length ?? 0,
     degraded: ctx.degraded ?? false,
     review_number: ctx.reviewNumber,
@@ -45523,7 +45594,8 @@ If this PR spans multiple independent themes that could each be a separate, inde
         reviewPrompt,
         ctx.previousReviews ?? [],
         ctx.replies ?? [],
-        ctx.deltaDiff ?? ""
+        ctx.deltaDiff ?? "",
+        config.review.lineNumbers
       );
       const result = await (async () => {
         for (; ; ) {
@@ -45614,7 +45686,8 @@ If this PR spans multiple independent themes that could each be a separate, inde
           ctx.filteredDiff,
           ctx.reviewObject,
           config.judge.fileContext ? ctx.fileContexts ?? [] : [],
-          config.judge.policy
+          config.judge.policy,
+          config.review.lineNumbers
         );
         ctx.reviewText = result.text;
         ctx.judgeScores = result.scores;
@@ -45913,6 +45986,9 @@ var CONFIG_LABELS = {
   }),
   J_CTX: flag((on) => {
     config.judge.fileContext = on;
+  }),
+  LNUM: flag((on) => {
+    config.review.lineNumbers = on;
   })
 };
 var bit = (on) => on ? "1" : "0";
@@ -45933,7 +46009,7 @@ function applyBenchmarkConfig(env) {
   if (!env.MAX_CHANGED_LINES) config.thresholds.maxChangedLines = 0;
   config.review.splitCheck = false;
   applyConfigLabels(env);
-  console.log(`Benchmark settings: model=${config.anthropic.model} effort=${config.review.effort || "default"} judge_model=${config.judge.model || "off"} judge_effort=${config.judge.effort || "default"} nits=${bit(config.review.enableNitpicks)} j_minor=${bit(config.judge.policy.keepMinor)} j_unver=${bit(config.judge.policy.keepUnverified)} j_ctx=${bit(config.judge.fileContext)}`);
+  console.log(`Benchmark settings: model=${config.anthropic.model} effort=${config.review.effort || "default"} judge_model=${config.judge.model || "off"} judge_effort=${config.judge.effort || "default"} nits=${bit(config.review.enableNitpicks)} j_minor=${bit(config.judge.policy.keepMinor)} j_unver=${bit(config.judge.policy.keepUnverified)} j_ctx=${bit(config.judge.fileContext)} lnum=${bit(config.review.lineNumbers)}`);
   if (config.review.enableNitpicks && !config.judge.policy.keepMinor) {
     console.warn("  NITS=1 but J_MINOR=0 \u2014 nitpicks are logged for offline scoring only; set J_MINOR=1 to post them.");
   }
@@ -45954,9 +46030,12 @@ async function runBenchmark(env = process.env) {
     if (outcome) {
       const changedPaths = (await adapter2.getChangedFiles(prNumber)).map((f) => f.path);
       if (outcome.judgedFindings) {
-        findings = keptToReportFindings(outcome.judgedFindings, rb.agent, changedPaths);
-        console.log(`Benchmark findings: reviewer ${outcome.review.findings.length}, judge kept ${outcome.judgedFindings.length}, line-anchored ${findings.length}`);
-        const unanchored = outcome.judgedFindings.filter((k) => !isAnchored(k));
+        const placed = anchorToFile(outcome.judgedFindings, firstAddedLines(await adapter2.getDiff(prNumber)), changedPaths);
+        findings = keptToReportFindings(placed, rb.agent, changedPaths);
+        const fileLevel = placed.filter((k) => k.anchorSource === "file");
+        console.log(`Benchmark findings: reviewer ${outcome.review.findings.length}, judge kept ${outcome.judgedFindings.length}, line-anchored ${findings.length} (${fileLevel.length} placed on the file's first changed line)`);
+        if (fileLevel.length > 0) console.log(`  File-level findings: ${fileLevel.map((k) => `${k.file}:${k.lines} ${k.title}`).join(" | ")}`);
+        const unanchored = placed.filter((k) => !isAnchored(k));
         if (unanchored.length > 0) console.warn(`  Parse check: ${unanchored.length} kept finding(s) with no usable file:line, dropped from findings.json: ${unanchored.map((k) => k.title).join(" | ")}`);
       } else if (outcome.judged) {
         const { findings: judged, stats: s } = mergeJudgedFindingsWithStats(outcome.reviewText, outcome.review.findings, outcome.judgeScores, rb.agent, changedPaths);
