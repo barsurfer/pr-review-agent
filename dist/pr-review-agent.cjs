@@ -2616,10 +2616,10 @@ Expecting one of '${allowedValues.join("', '")}'`);
        * @param {string} flag
        * @private
        */
-      unknownOption(flag) {
+      unknownOption(flag2) {
         if (this._allowUnknownOption) return;
         let suggestion = "";
-        if (flag.startsWith("--") && this._showSuggestionAfterError) {
+        if (flag2.startsWith("--") && this._showSuggestionAfterError) {
           let candidateFlags = [];
           let command = this;
           do {
@@ -2627,9 +2627,9 @@ Expecting one of '${allowedValues.join("', '")}'`);
             candidateFlags = candidateFlags.concat(moreFlags);
             command = command.parent;
           } while (command && !command._enablePositionalOptions);
-          suggestion = suggestSimilar(flag, candidateFlags);
+          suggestion = suggestSimilar(flag2, candidateFlags);
         }
-        const message = `error: unknown option '${flag}'${suggestion}`;
+        const message = `error: unknown option '${flag2}'${suggestion}`;
         this.error(message, { code: "commander.unknownOption" });
       }
       /**
@@ -45106,7 +45106,7 @@ function getAgentVersion() {
     const pkg = JSON.parse((0, import_fs4.readFileSync)(pkgPath, "utf-8"));
     return pkg.version;
   } catch {
-    if (true) return "0.0.26";
+    if (true) return "0.0.27";
     return "unknown";
   }
 }
@@ -45118,7 +45118,7 @@ function getBuildCommit() {
     const dirty = (0, import_child_process.execSync)("git status --porcelain", opts2).toString().trim() ? "-dirty" : "";
     return hash + dirty;
   } catch {
-    if (true) return "8cd0c50";
+    if (true) return "d4173b6";
     return "unknown";
   }
 }
@@ -45885,6 +45885,10 @@ var ReviewBenchAdapter = class {
 };
 
 // src/benchmark.ts
+var flag = (set) => (v, name) => {
+  if (v === "0" || v === "1") set(v === "1");
+  else console.warn(`  Ignoring config label ${name}=${v}: expected 0 or 1`);
+};
 var CONFIG_LABELS = {
   MODEL: (v) => {
     config.anthropic.model = v;
@@ -45897,14 +45901,27 @@ var CONFIG_LABELS = {
   },
   JUDGE_EFFORT: (v) => {
     config.judge.effort = v;
-  }
+  },
+  NITS: flag((on) => {
+    config.review.enableNitpicks = on;
+  }),
+  J_MINOR: flag((on) => {
+    config.judge.policy.keepMinor = on;
+  }),
+  J_UNVER: flag((on) => {
+    config.judge.policy.keepUnverified = on;
+  }),
+  J_CTX: flag((on) => {
+    config.judge.fileContext = on;
+  })
 };
+var bit = (on) => on ? "1" : "0";
 function applyConfigLabels(env) {
   for (const [name, value] of Object.entries(env)) {
     const key = name.match(/^RB_CONFIG_(.+)$/)?.[1]?.toUpperCase();
     if (!key || !value) continue;
     const apply = CONFIG_LABELS[key];
-    if (apply) apply(value);
+    if (apply) apply(value, name);
     else console.warn(`  Ignoring unsupported config label ${name}`);
   }
 }
@@ -45916,9 +45933,9 @@ function applyBenchmarkConfig(env) {
   if (!env.MAX_CHANGED_LINES) config.thresholds.maxChangedLines = 0;
   config.review.splitCheck = false;
   applyConfigLabels(env);
-  console.log(`Benchmark settings: model=${config.anthropic.model} effort=${config.review.effort || "default"} judge_model=${config.judge.model || "off"} judge_effort=${config.judge.effort || "default"} judge_keep_minor=${config.judge.policy.keepMinor} judge_keep_unverified=${config.judge.policy.keepUnverified} judge_file_context=${config.judge.fileContext} nitpicks=${config.review.enableNitpicks}`);
+  console.log(`Benchmark settings: model=${config.anthropic.model} effort=${config.review.effort || "default"} judge_model=${config.judge.model || "off"} judge_effort=${config.judge.effort || "default"} nits=${bit(config.review.enableNitpicks)} j_minor=${bit(config.judge.policy.keepMinor)} j_unver=${bit(config.judge.policy.keepUnverified)} j_ctx=${bit(config.judge.fileContext)}`);
   if (config.review.enableNitpicks && !config.judge.policy.keepMinor) {
-    console.warn("  ENABLE_NITPICKS=true but ENABLE_JUDGE_KEEP_MINOR is off \u2014 nitpicks are logged for offline scoring only; set ENABLE_JUDGE_KEEP_MINOR=true to post them.");
+    console.warn("  NITS=1 but J_MINOR=0 \u2014 nitpicks are logged for offline scoring only; set J_MINOR=1 to post them.");
   }
 }
 async function runBenchmark(env = process.env) {
