@@ -6,19 +6,32 @@ import { ReviewBenchAdapter, readReviewBenchEnv, readPrJson } from './vcs/review
 import { mergeJudgedFindingsWithStats, mapFindings, keptToReportFindings, isAnchored, buildFindingsReport, writeFindingsReport, countFindingBullets, type ReportFinding } from './review/findings-output.js'
 import type { ReviewOutcome } from './review/types.js'
 
-const CONFIG_LABELS: Record<string, (value: string) => void> = {
+// Strict 0/1: a typo like "ture" must not silently leave a flag off for a whole paid run.
+const flag = (set: (on: boolean) => void) => (v: string, name: string) => {
+  if (v === '0' || v === '1') set(v === '1')
+  else console.warn(`  Ignoring config label ${name}=${v}: expected 0 or 1`)
+}
+
+// Short keys because the manifest allows only 6 configuration entries; flags default off, so set only the ones turned on.
+const CONFIG_LABELS: Record<string, (value: string, name: string) => void> = {
   MODEL: v => { config.anthropic.model = v },
   EFFORT: v => { config.review.effort = v },
   JUDGE_MODEL: v => { config.judge.model = v },
   JUDGE_EFFORT: v => { config.judge.effort = v },
+  NITS: flag(on => { config.review.enableNitpicks = on }),
+  J_MINOR: flag(on => { config.judge.policy.keepMinor = on }),
+  J_UNVER: flag(on => { config.judge.policy.keepUnverified = on }),
+  J_CTX: flag(on => { config.judge.fileContext = on }),
 }
+
+const bit = (on: boolean): string => (on ? '1' : '0')
 
 export function applyConfigLabels(env: NodeJS.ProcessEnv): void {
   for (const [name, value] of Object.entries(env)) {
     const key = name.match(/^RB_CONFIG_(.+)$/)?.[1]?.toUpperCase()
     if (!key || !value) continue
     const apply = CONFIG_LABELS[key]
-    if (apply) apply(value)
+    if (apply) apply(value, name)
     else console.warn(`  Ignoring unsupported config label ${name}`)
   }
 }
@@ -33,11 +46,11 @@ function applyBenchmarkConfig(env: NodeJS.ProcessEnv): void {
   config.review.splitCheck = false   // can_be_split has no place in the findings file
   applyConfigLabels(env)
   // The harness flags any config label whose value never appears in the agent's output.
-  // Judge flags are baked into the image, not passed as labels, so this line is the only record of what ran.
-  console.log(`Benchmark settings: model=${config.anthropic.model} effort=${config.review.effort || 'default'} judge_model=${config.judge.model || 'off'} judge_effort=${config.judge.effort || 'default'} judge_keep_minor=${config.judge.policy.keepMinor} judge_keep_unverified=${config.judge.policy.keepUnverified} judge_file_context=${config.judge.fileContext} nitpicks=${config.review.enableNitpicks}`)
+  // Flags print under their label keys and 0/1 values, so a label set in the UI and a baked ENABLE_* value both show up here.
+  console.log(`Benchmark settings: model=${config.anthropic.model} effort=${config.review.effort || 'default'} judge_model=${config.judge.model || 'off'} judge_effort=${config.judge.effort || 'default'} nits=${bit(config.review.enableNitpicks)} j_minor=${bit(config.judge.policy.keepMinor)} j_unver=${bit(config.judge.policy.keepUnverified)} j_ctx=${bit(config.judge.fileContext)}`)
   // Nitpicks emit but the default policy drops minor, so without keepMinor nothing new posts.
   if (config.review.enableNitpicks && !config.judge.policy.keepMinor) {
-    console.warn('  ENABLE_NITPICKS=true but ENABLE_JUDGE_KEEP_MINOR is off — nitpicks are logged for offline scoring only; set ENABLE_JUDGE_KEEP_MINOR=true to post them.')
+    console.warn('  NITS=1 but J_MINOR=0 — nitpicks are logged for offline scoring only; set J_MINOR=1 to post them.')
   }
 }
 

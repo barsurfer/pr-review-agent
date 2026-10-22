@@ -233,8 +233,30 @@ describe('benchmark mode end-to-end (model + judge mocked)', () => {
 
     expect(readOut(env).findings.map((f: any) => f.message.split(':')[0])).toEqual(['Race on conns', 'Cited by basename', 'Speculative leak'])
     const stdout = logSpy.mock.calls.map(c => c.join(' ')).join('\n')
-    expect(stdout).toContain('judge_keep_unverified=true')
-    expect(stdout).toContain('judge_keep_minor=false')
+    expect(stdout).toContain('j_unver=1')
+    expect(stdout).toContain('j_minor=0')
+  })
+
+  it('sets the four flags from short 0/1 labels and echoes them', async () => {
+    const env = { ...fixture(), RB_CONFIG_NITS: '1', RB_CONFIG_J_MINOR: '1', RB_CONFIG_J_UNVER: '1', RB_CONFIG_J_CTX: '0' }
+
+    await runBenchmark(env)
+
+    expect(cfg.review.enableNitpicks).toBe(true)
+    expect(cfg.judge.policy).toEqual({ keepMinor: true, keepUnverified: true })
+    expect(cfg.judge.fileContext).toBe(false)
+    expect(logSpy.mock.calls.map(c => c.join(' ')).join('\n')).toContain('nits=1 j_minor=1 j_unver=1 j_ctx=0')
+  })
+
+  it('ignores a flag label that is not 0 or 1, and warns', async () => {
+    const warnSpy = vi.spyOn(console, 'warn')
+    const env = { ...fixture(), RB_CONFIG_J_MINOR: 'true' }
+
+    await runBenchmark(env)
+
+    expect(cfg.judge.policy.keepMinor).toBe(false)
+    expect(warnSpy.mock.calls.map(c => c.join(' ')).join('\n')).toContain('RB_CONFIG_J_MINOR=true: expected 0 or 1')
+    warnSpy.mockRestore()
   })
 
   it('gives the judge id-tagged candidates, and the file context only with ENABLE_JUDGE_FILE_CONTEXT', async () => {
