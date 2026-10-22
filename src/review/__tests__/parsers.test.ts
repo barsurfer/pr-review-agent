@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { filterDiff, countChangedLines, parseVerdictScore, parseFindings, parseDeltaStats, isPathExcluded, scanTodos, parseChangedFiles, isContextLengthError } from '../parsers.js'
+import { filterDiff, countChangedLines, countDiffLines, numberDiffLines, numberFileLines, parseVerdictScore, parseFindings, parseDeltaStats, isPathExcluded, scanTodos, parseChangedFiles, isContextLengthError } from '../parsers.js'
 
 describe('isContextLengthError', () => {
   const err = (status: number, message: string) => ({ status, message })
@@ -401,5 +401,28 @@ describe('parseChangedFiles', () => {
 
   it('returns [] for an empty diff', () => {
     expect(parseChangedFiles('')).toEqual([])
+  })
+})
+
+describe('line numbering for the model input', () => {
+  const DIFF = [
+    'diff --git a/a.ts b/a.ts', '--- a/a.ts', '+++ b/a.ts',
+    '@@ -10,3 +10,3 @@', ' keep', '-old', '+new', ' keep2', '\\ No newline at end of file',
+  ].join('\n')
+
+  it('prefixes added and context lines with their new-file number, removed lines with a blank gutter', () => {
+    expect(numberDiffLines(DIFF).split('\n')).toEqual([
+      'diff --git a/a.ts b/a.ts', '--- a/a.ts', '+++ b/a.ts',
+      '@@ -10,3 +10,3 @@', '   10  keep', '      -old', '   11 +new', '   12  keep2', '\\ No newline at end of file',
+    ])
+  })
+
+  it('numbers file content from 1 and drops the trailing newline', () => {
+    expect(numberFileLines('a\nb\n')).toBe('    1 a\n    2 b')
+  })
+
+  it('counts added and removed lines separately, ignoring file headers', () => {
+    expect(countDiffLines(DIFF)).toEqual({ added: 1, removed: 1 })
+    expect(countChangedLines(DIFF)).toBe(2)
   })
 })

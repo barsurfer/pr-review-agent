@@ -3,7 +3,7 @@
 import { config } from './config.js'
 import { review } from './review/index.js'
 import { ReviewBenchAdapter, readReviewBenchEnv, readPrJson } from './vcs/reviewbench.js'
-import { mergeJudgedFindingsWithStats, mapFindings, keptToReportFindings, isAnchored, buildFindingsReport, writeFindingsReport, countFindingBullets, type ReportFinding } from './review/findings-output.js'
+import { mergeJudgedFindingsWithStats, mapFindings, keptToReportFindings, isAnchored, anchorToFile, firstAddedLines, buildFindingsReport, writeFindingsReport, countFindingBullets, type ReportFinding } from './review/findings-output.js'
 import type { ReviewOutcome } from './review/types.js'
 
 // Strict 0/1: a typo like "ture" must not silently leave a flag off for a whole paid run.
@@ -22,6 +22,7 @@ const CONFIG_LABELS: Record<string, (value: string, name: string) => void> = {
   J_MINOR: flag(on => { config.judge.policy.keepMinor = on }),
   J_UNVER: flag(on => { config.judge.policy.keepUnverified = on }),
   J_CTX: flag(on => { config.judge.fileContext = on }),
+  LNUM: flag(on => { config.review.lineNumbers = on }),
 }
 
 const bit = (on: boolean): string => (on ? '1' : '0')
@@ -47,7 +48,7 @@ function applyBenchmarkConfig(env: NodeJS.ProcessEnv): void {
   applyConfigLabels(env)
   // The harness flags any config label whose value never appears in the agent's output.
   // Flags print under their label keys and 0/1 values, so a label set in the UI and a baked ENABLE_* value both show up here.
-  console.log(`Benchmark settings: model=${config.anthropic.model} effort=${config.review.effort || 'default'} judge_model=${config.judge.model || 'off'} judge_effort=${config.judge.effort || 'default'} nits=${bit(config.review.enableNitpicks)} j_minor=${bit(config.judge.policy.keepMinor)} j_unver=${bit(config.judge.policy.keepUnverified)} j_ctx=${bit(config.judge.fileContext)}`)
+  console.log(`Benchmark settings: model=${config.anthropic.model} effort=${config.review.effort || 'default'} judge_model=${config.judge.model || 'off'} judge_effort=${config.judge.effort || 'default'} nits=${bit(config.review.enableNitpicks)} j_minor=${bit(config.judge.policy.keepMinor)} j_unver=${bit(config.judge.policy.keepUnverified)} j_ctx=${bit(config.judge.fileContext)} lnum=${bit(config.review.lineNumbers)}`)
   // Nitpicks emit but the default policy drops minor, so without keepMinor nothing new posts.
   if (config.review.enableNitpicks && !config.judge.policy.keepMinor) {
     console.warn('  NITS=1 but J_MINOR=0 — nitpicks are logged for offline scoring only; set J_MINOR=1 to post them.')
@@ -70,10 +71,13 @@ export async function runBenchmark(env: NodeJS.ProcessEnv = process.env): Promis
     if (outcome) {
       const changedPaths = (await adapter.getChangedFiles(prNumber)).map(f => f.path)
       if (outcome.judgedFindings) {
-        findings = keptToReportFindings(outcome.judgedFindings, rb.agent, changedPaths)
-        console.log(`Benchmark findings: reviewer ${outcome.review.findings.length}, judge kept ${outcome.judgedFindings.length}, line-anchored ${findings.length}`)
+        const placed = anchorToFile(outcome.judgedFindings, firstAddedLines(await adapter.getDiff(prNumber)), changedPaths)
+        findings = keptToReportFindings(placed, rb.agent, changedPaths)
+        const fileLevel = placed.filter(k => k.anchorSource === 'file')
+        console.log(`Benchmark findings: reviewer ${outcome.review.findings.length}, judge kept ${outcome.judgedFindings.length}, line-anchored ${findings.length} (${fileLevel.length} placed on the file's first changed line)`)
+        if (fileLevel.length > 0) console.log(`  File-level findings: ${fileLevel.map(k => `${k.file}:${k.lines} ${k.title}`).join(' | ')}`)
         // A kept finding without a usable file:line scores zero, so surface it instead of losing it silently.
-        const unanchored = outcome.judgedFindings.filter(k => !isAnchored(k))
+        const unanchored = placed.filter(k => !isAnchored(k))
         if (unanchored.length > 0) console.warn(`  Parse check: ${unanchored.length} kept finding(s) with no usable file:line, dropped from findings.json: ${unanchored.map(k => k.title).join(' | ')}`)
       } else if (outcome.judged) {
         // Bundled review re-parses each bundle's judged markdown, so it alone still needs the prose merge.

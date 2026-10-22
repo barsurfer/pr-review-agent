@@ -1253,7 +1253,7 @@ describe('token-budget degradation', () => {
     const record = await review(adapter, '100', true)
 
     expect(record!.action).toBe('RE_REVIEW')               // reviewed, not skipped
-    expect(mockRunReview.mock.calls[0].at(-1)).toBe('')    // merge-inflated delta dropped before the model call
+    expect(mockRunReview.mock.calls[0][11]).toBe('')    // merge-inflated delta dropped before the model call
   })
 })
 

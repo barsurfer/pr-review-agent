@@ -132,6 +132,13 @@ describe('getBaseTemplate / ENABLE_NITPICKS transform', () => {
     expect(out).toContain('dead code')
   })
 
+  it('on: adds the non-code files rule as its own bullet; off: it is absent', () => {
+    config.review.enableNitpicks = true
+    expect(getBaseTemplate()).toMatch(/\n- Non-code files in the diff .*reviewed like code\./)
+    config.review.enableNitpicks = false
+    expect(getBaseTemplate()).not.toContain('Non-code files in the diff')
+  })
+
   it('on: leaves the FORBIDDEN style/nitpick lines untouched', () => {
     config.review.enableNitpicks = true
     const out = getBaseTemplate()

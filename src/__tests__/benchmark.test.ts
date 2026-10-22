@@ -245,7 +245,15 @@ describe('benchmark mode end-to-end (model + judge mocked)', () => {
     expect(cfg.review.enableNitpicks).toBe(true)
     expect(cfg.judge.policy).toEqual({ keepMinor: true, keepUnverified: true })
     expect(cfg.judge.fileContext).toBe(false)
-    expect(logSpy.mock.calls.map(c => c.join(' ')).join('\n')).toContain('nits=1 j_minor=1 j_unver=1 j_ctx=0')
+    expect(logSpy.mock.calls.map(c => c.join(' ')).join('\n')).toContain('nits=1 j_minor=1 j_unver=1 j_ctx=0 lnum=0')
+  })
+
+  it('LNUM=1 numbers the diff the reviewer sees and is echoed', async () => {
+    await runBenchmark({ ...fixture(), RB_CONFIG_LNUM: '1' })
+
+    expect(cfg.review.lineNumbers).toBe(true)
+    expect(completeStructured.mock.calls[0][1]).toContain('    2 +  conns: Conn[] = []')
+    expect(logSpy.mock.calls.map(c => c.join(' ')).join('\n')).toContain('lnum=1')
   })
 
   it('ignores a flag label that is not 0 or 1, and warns', async () => {
@@ -290,6 +298,17 @@ describe('benchmark anchors: reviewer first, judge fallback, otherwise dropped a
     ])
   })
 
+  it('places a kept file-level finding (file, no line) on the file’s first changed line', async () => {
+    const fileLevel: ReviewObject = { ...REVIEW, findings: [REVIEW.findings[0], { ...REVIEW.findings[1], file: 'src/pool.ts' }, ...REVIEW.findings.slice(2)] }
+    mockModel(fileLevel)
+    const env = fixture()
+
+    await runBenchmark(env)
+
+    expect(readOut(env).findings[1]).toEqual({ file: 'src/pool.ts', start_line: 2, end_line: 2, message: 'PR-level concern: No tests for the pool.', producer: 'my-agent' })
+    expect(logSpy.mock.calls.map(c => c.join(' ')).join('\n')).toContain('1 placed on the file\'s first changed line')
+  })
+
   it('drops a judge anchor that points at an unchanged context line', async () => {
     const warnSpy = vi.spyOn(console, 'warn')
     // Line 5 (` }`) is context, not an added line — the judge channel is diff-validated, so it falls through.
@@ -315,7 +334,7 @@ describe('benchmark anchors: reviewer first, judge fallback, otherwise dropped a
     warnSpy.mockRestore()
   })
 
-  it('does not anchor a symbol that merely contains a digit, and the judge pair replaces it', async () => {
+  it('never reads a digit inside a symbol as a line: file-level fallback instead, and the judge pair replaces it', async () => {
     const symbolic: ReviewObject = { ...REVIEW, findings: [{ ...REVIEW.findings[0], lines: 'Phase 4 idiomisation block' }] }
     const warnSpy = vi.spyOn(console, 'warn')
     mockModel(symbolic, { ...JUDGED, decisions: [JUDGED.decisions[0]] })
@@ -323,8 +342,11 @@ describe('benchmark anchors: reviewer first, judge fallback, otherwise dropped a
 
     await runBenchmark(unanchoredEnv)
 
-    expect(readOut(unanchoredEnv).findings).toEqual([])
-    expect(warnings(warnSpy)).toContain('Parse check: 1 kept finding(s)')
+    // Line 2 is the file's first changed line, not the "4" from "Phase 4".
+    expect(readOut(unanchoredEnv).findings).toEqual([
+      { file: 'src/pool.ts', start_line: 2, end_line: 2, message: 'Race on conns: get/put mutate conns without a lock.', producer: 'my-agent' },
+    ])
+    expect(warnings(warnSpy)).not.toContain('Parse check')
 
     mockModel(symbolic, { ...JUDGED, decisions: [{ ...JUDGED.decisions[0], anchor_file: 'src/pool.ts', anchor_lines: '3' }] })
     const rescuedEnv = fixture()

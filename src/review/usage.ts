@@ -8,7 +8,7 @@ import { createHash } from 'crypto'
 import { dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { config } from '../config.js'
-import { parseVerdictScore, parseFindings } from './parsers.js'
+import { parseVerdictScore, parseFindings, countDiffLines } from './parsers.js'
 import { countFindings, normalizeIssueType } from './formatter.js'
 import type { FindingScore, ReviewFinding, IssueType } from './formatter.js'
 import { isAnchored, parseLineRange, normalizeFindingPath } from './findings-output.js'
@@ -39,6 +39,15 @@ export interface UsageRecord {
   target_branch: string
   changed_files: number
   changed_lines: number
+  // PR size for slicing results: raw diff, and the reviewable part after DIFF_EXCLUDE_PATTERNS.
+  diff_size: {
+    files: { added: number; modified: number; deleted: number; renamed: number }
+    lines_added: number
+    lines_removed: number
+    reviewable_files: number
+    reviewable_lines_added: number
+    reviewable_lines_removed: number
+  } | null
   context_files_fetched: number
   degraded: boolean
   review_number: number
@@ -207,6 +216,17 @@ export function buildUsageRecord(
     target_branch: ctx.prInfo?.targetBranch ?? 'unknown',
     changed_files: ctx.changedFiles?.length ?? 0,
     changed_lines: ctx.lineCount ?? 0,
+    diff_size: ctx.diff !== undefined ? (() => {
+      const raw = countDiffLines(ctx.diff)
+      const reviewable = countDiffLines(ctx.filteredDiff ?? '')
+      const files = { added: 0, modified: 0, deleted: 0, renamed: 0 }
+      for (const f of ctx.changedFiles ?? []) files[f.status]++
+      return {
+        files, lines_added: raw.added, lines_removed: raw.removed,
+        reviewable_files: ctx.reviewableFileCount ?? 0,
+        reviewable_lines_added: reviewable.added, reviewable_lines_removed: reviewable.removed,
+      }
+    })() : null,
     context_files_fetched: ctx.fileContexts?.length ?? 0,
     degraded: ctx.degraded ?? false,
     review_number: ctx.reviewNumber,

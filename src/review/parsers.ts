@@ -59,16 +59,42 @@ export function parseChangedFiles(diff: string): ChangedFile[] {
   return files
 }
 
+/** Count added and removed lines in a unified diff (excludes --- and +++ headers). */
+export function countDiffLines(diff: string): { added: number; removed: number } {
+  let added = 0, removed = 0
+  for (const line of diff.split('\n')) {
+    if (line.startsWith('+') && !line.startsWith('+++')) added++
+    else if (line.startsWith('-') && !line.startsWith('---')) removed++
+  }
+  return { added, removed }
+}
+
 /** Count added/removed lines in a unified diff (excludes --- and +++ headers). */
 export function countChangedLines(diff: string): number {
-  let count = 0
-  for (const line of diff.split('\n')) {
-    if ((line.startsWith('+') && !line.startsWith('+++')) ||
-        (line.startsWith('-') && !line.startsWith('---'))) {
-      count++
-    }
-  }
-  return count
+  const { added, removed } = countDiffLines(diff)
+  return added + removed
+}
+
+const GUTTER = 5
+
+// Models can't reliably count lines from @@ headers, so ~40% of findings came back with no line; show the new-file number on every added/context line.
+export function numberDiffLines(diff: string): string {
+  let newLine = 0
+  let inHunk = false
+  return diff.split('\n').map(raw => {
+    if (raw.startsWith('diff --git')) { inHunk = false; return raw }
+    const hunk = raw.match(/^@@ -\d+(?:,\d+)? \+(\d+)/)
+    if (hunk) { newLine = parseInt(hunk[1], 10); inHunk = true; return raw }
+    if (!inHunk || raw === '' || raw.startsWith('\\')) return raw
+    if (raw.startsWith('-')) return `${''.padStart(GUTTER)} ${raw}`
+    return `${String(newLine++).padStart(GUTTER)} ${raw}`
+  }).join('\n')
+}
+
+export function numberFileLines(content: string): string {
+  const lines = content.split('\n')
+  if (lines.at(-1) === '') lines.pop()
+  return lines.map((l, i) => `${String(i + 1).padStart(GUTTER)} ${l}`).join('\n')
 }
 
 /** Extract merge confidence / verdict percentage from review text. Returns null if not found. */

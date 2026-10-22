@@ -84,6 +84,7 @@ export async function runBundledReview(ctx: ReviewContext, maxInputTokens: numbe
           return await runReview(
             config.anthropic.apiKey, config.anthropic.model, config.anthropic.maxRetries, config.anthropic.maxTokens, config.review.effort,
             prInfo, diff, bundleContexts, { ...ctx.prompt!, content }, ctx.previousReviews ?? [], ctx.replies ?? [], delta,
+            config.review.lineNumbers,
           )
         } catch (err: unknown) {
           if (!isContextLengthError(err)) throw err
@@ -118,7 +119,7 @@ export async function runBundledReview(ctx: ReviewContext, maxInputTokens: numbe
       try {
         const verdict = await runJudge(
           config.anthropic.apiKey, config.judge.model, config.judge.maxRetries, config.anthropic.maxTokens, config.judge.effort,
-          diff, result.review, config.judge.fileContext ? bundleContexts : [], config.judge.policy,
+          diff, result.review, config.judge.fileContext ? bundleContexts : [], config.judge.policy, config.review.lineNumbers,
         )
         addUsage(ctx, verdict.usage)
         judgeUsage.input_tokens += verdict.usage.input_tokens

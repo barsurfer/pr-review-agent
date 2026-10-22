@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { mkdtempSync, readFileSync, existsSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { parseLineRange, normalizeFindingPath, findingsFromJudgedMarkdown, mapFindings, resolveKeptFindings, keptToReportFindings, mergeJudgedFindings, mergeJudgedFindingsWithStats, buildFindingsReport, writeFindingsReport, countFindingBullets } from '../findings-output.js'
+import { parseLineRange, normalizeFindingPath, findingsFromJudgedMarkdown, mapFindings, resolveKeptFindings, keptToReportFindings, mergeJudgedFindings, mergeJudgedFindingsWithStats, buildFindingsReport, writeFindingsReport, countFindingBullets, firstAddedLines, anchorToFile, type KeptFinding } from '../findings-output.js'
 import { renderReview, type ReviewFinding, type ReviewObject, type FindingScore } from '../formatter.js'
 
 const finding = (over: Partial<ReviewFinding> = {}): ReviewFinding =>
@@ -507,5 +507,32 @@ describe('writeFindingsReport', () => {
     const path = join(mkdtempSync(join(tmpdir(), 'rb-out-')), 'findings.json')
     writeFindingsReport(path, buildFindingsReport(PR, 'a', []))
     expect(JSON.parse(readFileSync(path, 'utf-8'))).toMatchObject({ pr: { pr_number: 1938, head: PR.head }, findings: [] })
+  })
+})
+
+describe('file-level fallback anchor', () => {
+  const DIFF = [
+    'diff --git a/docs/a.md b/docs/a.md', '--- a/docs/a.md', '+++ b/docs/a.md',
+    '@@ -3,2 +3,3 @@', ' keep', '+added at 4', ' keep',
+    'diff --git a/gone.ts b/gone.ts', '--- a/gone.ts', '+++ b/gone.ts', '@@ -1,1 +1,0 @@', '-removed',
+  ].join('\n')
+  const kept = (over: Partial<KeptFinding>): KeptFinding => ({ severity: 'LOW', title: 'Stale doc', body: 'b', score: 7, anchorSource: 'none', ...over })
+
+  it('maps each changed file to its first added line, skipping deletion-only files', () => {
+    expect([...firstAddedLines(DIFF)]).toEqual([['docs/a.md', 4]])
+  })
+
+  it('places an unanchored kept finding on its file’s first changed line, so it reaches the report', () => {
+    const [placed] = anchorToFile([kept({ file: 'a.md', lines: undefined })], firstAddedLines(DIFF), ['docs/a.md', 'gone.ts'])
+    expect(placed).toMatchObject({ file: 'docs/a.md', lines: '4', anchorSource: 'file' })
+    expect(keptToReportFindings([placed], 'p')).toEqual([{ file: 'docs/a.md', start_line: 4, end_line: 4, message: 'Stale doc: b', producer: 'p' }])
+  })
+
+  it('leaves anchored, locationless and deletion-only-file findings alone', () => {
+    const anchored = kept({ file: 'docs/a.md', lines: '9', anchorSource: 'reviewer' })
+    const out = anchorToFile([anchored, kept({}), kept({ file: 'gone.ts' })], firstAddedLines(DIFF))
+    expect(out[0]).toBe(anchored)
+    expect(out[1].anchorSource).toBe('none')
+    expect(out[2].anchorSource).toBe('none')
   })
 })

@@ -6,7 +6,7 @@ Runs pr-review-agent as a [ReviewBench](https://github.com/review-bench/ReviewBe
 
 - `entrypoint.mjs` runs `pr-review-agent.cjs --benchmark`.
 - `--benchmark` reads the PR from the contract mounts (`RB_DIFF`, `RB_PR_JSON`, `RB_REPO`, default `/work/repo`) through `src/vcs/reviewbench.ts`. It runs the normal pipeline as a first review: same prompt, structured reviewer output, and judge. Then it writes `{ pr, agent, findings[] }` to `RB_OUT` instead of posting.
-- A finding is kept only if the judge kept it and it has a `file` plus a parseable `lines` range. `message` is `"<title>: <body>"`, and `agent`/`producer` are `RB_AGENT`.
+- A finding is kept only if the judge kept it and it has a `file` plus a parseable `lines` range. A kept finding with a changed `file` but no usable line is placed on that file's first added line (`anchorSource: 'file'`, logged as "placed on the file's first changed line"), because ReviewBench matches findings by meaning within a file and line ranges are only a hint. `message` is `"<title>: <body>"`, and `agent`/`producer` are `RB_AGENT`.
 - Benchmark mode turns off the branch-skip patterns and the default `MAX_CHANGED_FILES`/`MAX_CHANGED_LINES` caps, because a skipped PR scores zero. Explicit env values still apply.
 
 ### Fail-safe
@@ -26,10 +26,11 @@ If ReviewBench grants a longer time limit, raise `BENCHMARK_DEADLINE_SECONDS` to
 | `RB_MODEL_BASE_URL` | Anthropic SDK `baseURL`. Register `https://api.anthropic.com`; a trailing `/v1` is stripped. |
 | `RB_CONFIG_MODEL` / `RB_CONFIG_EFFORT` | Reviewer model / effort |
 | `RB_CONFIG_JUDGE_MODEL` / `RB_CONFIG_JUDGE_EFFORT` | Judge model / effort |
-| `RB_CONFIG_NITS` / `RB_CONFIG_J_MINOR` / `RB_CONFIG_J_UNVER` / `RB_CONFIG_J_CTX` | `0` or `1`. Overrides `ENABLE_NITPICKS` / `ENABLE_JUDGE_KEEP_MINOR` / `ENABLE_JUDGE_KEEP_UNVERIFIED` / `ENABLE_JUDGE_FILE_CONTEXT`; any other value is ignored with a warning. Keys are short because the manifest allows at most 6 configuration entries (key ≤ 32 chars, value ≤ 64); the flags default off, so set only the ones you turn on. |
+| `RB_CONFIG_NITS` / `RB_CONFIG_J_MINOR` / `RB_CONFIG_J_UNVER` / `RB_CONFIG_J_CTX` / `RB_CONFIG_LNUM` | `0` or `1`. Overrides `ENABLE_NITPICKS` / `ENABLE_JUDGE_KEEP_MINOR` / `ENABLE_JUDGE_KEEP_UNVERIFIED` / `ENABLE_JUDGE_FILE_CONTEXT` / `ENABLE_LINE_NUMBERS`; any other value is ignored with a warning. Keys are short because the manifest allows at most 6 configuration entries (key ≤ 32 chars, value ≤ 64); the flags default off, so set only the ones you turn on. |
 | Image `ENV` defaults | `CLAUDE_MODEL=claude-haiku-5-5`, `JUDGING_MODEL=claude-sonnet-5`, `MAX_OUTPUT_TOKENS=64000`, `ENABLE_BUNDLED_REVIEW=true`, `MAX_BUNDLES=3` |
 | Build args `JUDGE_KEEP_MINOR` / `JUDGE_KEEP_UNVERIFIED` / `JUDGE_FILE_CONTEXT` | Default `false`. Baked into `ENABLE_JUDGE_*` (see `docs/reference/env-vars.md`). An experiment image passes `--build-arg …=true`; the release workflow passes none. The `RB_CONFIG_*` flag labels override them per run. The values in effect are echoed in the `Benchmark settings:` line as `nits= j_minor= j_unver= j_ctx=` (0/1). |
 | Build arg `NITPICKS` | Default `false`. Baked into `ENABLE_NITPICKS` (see `docs/reference/env-vars.md`); same experiment-vs-release handling as the three above. |
+| Build arg `LINE_NUMBERS` | Default `false`. Baked into `ENABLE_LINE_NUMBERS`; same handling. |
 
 Applied settings are printed as `Benchmark settings: model=… effort=…`, because the run flags any label whose value never appears in the output. Unsupported `RB_CONFIG_*` labels are logged as ignored, and their values are not echoed. All other agent env vars still work (see `docs/reference/env-vars.md`), for example `DIFF_EXCLUDE_PATTERNS`, `MAX_FINDINGS` and `MAX_CONTEXT_FILES`.
 

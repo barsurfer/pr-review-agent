@@ -102,6 +102,8 @@ For a realistic (Jenkins-parity or fuller) run, override inline rather than edit
 ...
 ```
 
+With `ENABLE_LINE_NUMBERS` (label `LNUM`), the diff, delta and file-context blocks are shown numbered: every added/context diff line gets its new-file line number in a 5-char gutter (removed lines get a blank gutter), file content is numbered from 1, and the Diff heading tells the reviewer to cite those numbers in `lines`. The judge gets the same numbered view. **Why:** models can't reliably count lines from `@@` headers; ~40% of reviewer findings across runs 306/308/309 came back with no `lines`, which left them to downstream anchoring. Only the prompt text is numbered; the raw diff used for anchoring and metrics is unchanged.
+
 **Only the most recent review** is included (not the full history). Developer discussion includes all replies across all reviews so the model sees what it already conceded as false positives.
 
 On re-reviews, a **"Changes Since Your Last Review"** section carries the delta diff since the last-reviewed commit — the same diff computed for the skip-gate ([review/skip-logic.md](../review/skip-logic.md)), retained instead of discarded. The full PR diff is the whole PR vs target and does **not** mark which lines are new since the last review, so this delta lets the model ground "resolved vs new" in concrete changed lines rather than the previous review's prose.

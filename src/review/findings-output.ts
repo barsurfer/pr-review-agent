@@ -5,6 +5,7 @@
 import { mkdirSync, renameSync, writeFileSync } from 'fs'
 import { dirname } from 'path'
 import type { ReviewFinding, FindingScore, IssueType } from './formatter.js'
+import { addedLines } from './parsers.js'
 
 export interface ReportFinding {
   file: string
@@ -25,7 +26,7 @@ export interface KeptFinding {
   lines?: string
   score?: number
   type?: IssueType   // carried from the reviewer finding; analytics only
-  anchorSource?: 'reviewer' | 'judge' | 'diff' | 'none'   // where file/lines came from, so a consumer can trust only what it wants
+  anchorSource?: 'reviewer' | 'judge' | 'diff' | 'file' | 'none'   // where file/lines came from, so a consumer can trust only what it wants
 }
 
 export interface FindingsReport {
@@ -225,6 +226,26 @@ export function resolveKeptFindings(reviewerFindings: readonly ReviewFinding[], 
 
 // The one definition of 'has a usable anchor', shared by the report mapper and the benchmark's dropped-finding warning.
 export const isAnchored = (k: KeptFinding): k is KeptFinding & { file: string } => !!k.file && k.anchorSource !== 'none' && !!parseLineRange(k.lines)
+
+// First added line per changed file (new-side numbering); deletion-only files have none.
+export function firstAddedLines(diff: string): Map<string, number> {
+  const first = new Map<string, number>()
+  for (const { file, line } of addedLines(diff)) {
+    const key = normalizeFindingPath(file)
+    if (!first.has(key)) first.set(key, line)
+  }
+  return first
+}
+
+// ReviewBench matches by meaning within a file (line ranges are only hints), so a file-level finding scores once it carries any line of a changed file.
+export function anchorToFile(kept: readonly KeptFinding[], firstAdded: ReadonlyMap<string, number>, changedPaths: readonly string[] = []): KeptFinding[] {
+  return kept.map(k => {
+    if (isAnchored(k) || !k.file) return k
+    const file = normalizeFindingPath(k.file, changedPaths)
+    const line = firstAdded.get(file)
+    return line ? { ...k, file, lines: String(line), anchorSource: 'file' } : k
+  })
+}
 
 // Kept findings → the line-anchored report shape. Findings with no usable file/line are dropped
 // (the schema requires both), same as the reviewer/markdown mappers.

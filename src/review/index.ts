@@ -361,7 +361,8 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         reviewPrompt,
         ctx.previousReviews ?? [],
         ctx.replies ?? [],
-        ctx.deltaDiff ?? ''
+        ctx.deltaDiff ?? '',
+        config.review.lineNumbers
       )
       // Backstop for an under-counted estimate: on a context-length rejection, drop file contexts
       // and retry diff-only; if the diff alone won't fit, skip rather than let the API error.
@@ -470,6 +471,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
           ctx.reviewObject!,
           config.judge.fileContext ? ctx.fileContexts ?? [] : [],
           config.judge.policy,
+          config.review.lineNumbers,
         )
         ctx.reviewText = result.text
         ctx.judgeScores = result.scores

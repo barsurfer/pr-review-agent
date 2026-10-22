@@ -17,10 +17,13 @@ export const NITPICK_SENTINELS = [LOW_SEVERITY_CERTAINTY_RULE, FORBIDDEN_FORMATT
 // Keeps the anti-speculation bar for uncertain correctness, but permits concrete real-but-minor findings.
 const LOW_SEVERITY_CERTAINTY_RULE_RELAXED = '- For lower-severity concerns, keep the anti-speculation bar for uncertain correctness: if you cannot explain a suspected bug with a concrete failing scenario, do not flag it — prefer not reporting over guessing. But DO surface real, concrete, low-impact issues that are plainly visible in the diff — stale or misleading docs, comments, or names; dead code; duplicated logic; tests that cannot fail or miss the case they claim to cover — tagging each with its `type` and a concrete reason it is wrong. These are findings, not the style, naming, or formatting preferences forbidden below.'
 
+// The default priorities are runtime-only, so without this a docs/templates/scripts PR gets almost no findings.
+const NON_CODE_FILES_RULE = '- Non-code files in the diff — agent or tool instructions, templates, markdown docs, config, CI and shell scripts — are reviewed like code. Flag concrete defects in them: a reference to a file, path, command, flag, or setting that does not exist or no longer matches the change; instructions or docs that contradict each other or the implementation; syntax or conventions that only work for one tool, platform, or OS used where others consume the file; scripts that depend on unavailable commands, skip cleanup, or mishandle errors. Cite the file and the line, and state the concrete consequence.'
+
 // Off: bytes untouched (byte-identical by construction); on: exact-string replace the low-severity certainty rule so the reviewer also emits real-but-minor findings. One gate for both load paths.
 export function applyNitpickTransform(template: string): string {
   if (!config.review.enableNitpicks) return template
-  return template.replace(LOW_SEVERITY_CERTAINTY_RULE, LOW_SEVERITY_CERTAINTY_RULE_RELAXED)
+  return template.replace(LOW_SEVERITY_CERTAINTY_RULE, `${LOW_SEVERITY_CERTAINTY_RULE_RELAXED}\n${NON_CODE_FILES_RULE}`)
 }
 
 export function getBaseTemplate(): string {

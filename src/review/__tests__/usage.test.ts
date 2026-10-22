@@ -41,6 +41,19 @@ describe('buildUsageRecord provenance fields', () => {
     ...over,
   } as unknown as ReviewContext)
 
+  it('records PR size: files by status and raw vs reviewable added/removed lines; null before the diff is fetched', () => {
+    const diff = 'diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1,2 +1,2 @@\n-x\n+y\n+z\ndiff --git a/l.json b/l.json\n--- a/l.json\n+++ b/l.json\n@@ -1 +1 @@\n-1\n+2'
+    const r = buildUsageRecord(baseCtx({
+      diff, filteredDiff: diff.split('diff --git a/l.json')[0], reviewableFileCount: 1,
+      changedFiles: [{ path: 'a.ts', status: 'modified' }, { path: 'l.json', status: 'added' }],
+    }), 1, null)
+    expect(r.diff_size).toEqual({
+      files: { added: 1, modified: 1, deleted: 0, renamed: 0 },
+      lines_added: 3, lines_removed: 2, reviewable_files: 1, reviewable_lines_added: 2, reviewable_lines_removed: 1,
+    })
+    expect(buildUsageRecord(baseCtx(), 1, null).diff_size).toBeNull()
+  })
+
   it('stamps agent_commit + a 12-hex prompt_hash and passes judge_prompt_hash from ctx', () => {
     const r = buildUsageRecord(baseCtx({ prompt: { content: 'SYS', source: 'repo' } as never, judgePromptHash: 'abc123def456' }), 100, null)
     expect(r.agent_commit).toBeTruthy()

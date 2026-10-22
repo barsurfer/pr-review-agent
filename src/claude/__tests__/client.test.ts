@@ -57,6 +57,40 @@ describe('runReview (structured output)', () => {
 })
 
 // The FSM passes discussion + delta in; if they don't reach the model, a dev's "Fixed in <sha>" goes unseen.
+describe('ENABLE_LINE_NUMBERS: numbered views in the model input', () => {
+  beforeEach(() => { complete.mockReset(); completeStructured.mockReset() })
+  const DIFF = 'diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1,1 +1,2 @@\n keep\n+added'
+  const object: ReviewObject = { summary: 's', findings: [], behavioral_diff: [], production_risk: [], unresolved_questions: [] }
+
+  it('off: the reviewer message carries the raw diff and file content byte-for-byte', async () => {
+    completeStructured.mockResolvedValue({ object, usage })
+    await runReview('key', 'model', 3, 16000, '', prInfo, DIFF, [{ path: 'a.ts', content: 'keep\nadded' }], prompt, [])
+    const msg = completeStructured.mock.calls[0][1] as string
+    expect(msg).toContain(`## Diff:\n\`\`\`diff\n${DIFF}\n\`\`\``)
+    expect(msg).toContain('## Full file context:\n\n### a.ts\n```\nkeep\nadded\n```')
+  })
+
+  it('on: the reviewer sees numbered diff and file lines with an instruction to cite them', async () => {
+    completeStructured.mockResolvedValue({ object, usage })
+    await runReview('key', 'model', 3, 16000, '', prInfo, DIFF, [{ path: 'a.ts', content: 'keep\nadded' }], prompt, [], [], '', true)
+    const msg = completeStructured.mock.calls[0][1] as string
+    expect(msg).toContain('cite those numbers in `lines`')
+    expect(msg).toContain('    1  keep\n    2 +added')
+    expect(msg).toContain('    2 added')
+  })
+
+  it('on: the judge sees the numbered diff, while anchoring still parses the raw one', async () => {
+    const review: ReviewObject = { ...object, findings: [{ severity: 'MEDIUM', title: 'X', file: 'a.ts', body: 'b' }] }
+    completeStructured.mockResolvedValue({
+      object: { decisions: [{ candidate_id: 'c0', reason_category: 'validated', evidence: 'a.ts:2', note: 'n', score: 8, anchor_file: 'a.ts', anchor_lines: '2' }], summary: 's', behavioral_diff: [], production_risk: [], unresolved_questions: [], merge_confidence: 80 },
+      usage,
+    })
+    const res = await runJudge('key', 'model', 3, 16000, '', DIFF, review, [], undefined, true)
+    expect(completeStructured.mock.calls[0][1]).toContain('    2 +added')
+    expect(res.kept?.[0]).toMatchObject({ file: 'a.ts', lines: '2', anchorSource: 'judge' })
+  })
+})
+
 describe('runReview user message (re-review context)', () => {
   beforeEach(() => { complete.mockReset(); completeStructured.mockReset() })
 

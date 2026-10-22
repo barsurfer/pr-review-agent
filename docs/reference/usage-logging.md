@@ -91,6 +91,7 @@ The record is also printed to stdout at the end of every run regardless of the f
 | `target_branch` | `string` | e.g. `main`, `develop` |
 | `changed_files` | `number` | Number of files changed in the PR |
 | `changed_lines` | `number` | Total lines changed (additions + deletions) |
+| `diff_size` | `object \| null` | PR size for slicing results: `{ files: {added, modified, deleted, renamed}, lines_added, lines_removed, reviewable_files, reviewable_lines_added, reviewable_lines_removed }` — raw diff vs the part left after `DIFF_EXCLUDE_PATTERNS`; null when the run stopped before the diff was fetched |
 | `context_files_fetched` | `number` | Number of files fetched for full context (0 if dropped by degradation) |
 | `degraded` | `boolean` | `true` if file contexts were dropped to fit `MAX_INPUT_TOKENS` — the review ran diff-only instead of being skipped |
 | `review_number` | `number` | 1 = initial review, 2+ = re-review |

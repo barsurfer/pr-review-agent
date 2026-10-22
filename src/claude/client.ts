@@ -9,6 +9,7 @@ import {
   REASON_CATEGORIES, DEFAULT_JUDGE_POLICY, applyJudgeDecisions, renderCandidatesForJudge, summarizeDecisions,
   type JudgeOutput, type JudgePolicy, type AppliedDecision, type JudgeAnomalies,
 } from '../review/judge-decisions.js'
+import { numberDiffLines, numberFileLines } from '../review/parsers.js'
 import type { PRInfo, ReviewComment, CommentReply } from '../vcs/adapter.js'
 import type { FileContext } from '../context/fetcher.js'
 import type { LoadedPrompt } from '../prompt/loader.js'
@@ -133,9 +134,10 @@ export async function runReview(
   prompt: LoadedPrompt,
   previousReviews: ReviewComment[],
   developerReplies: CommentReply[] = [],
-  changesSinceLastReview = ''
+  changesSinceLastReview = '',
+  lineNumbers = false,
 ): Promise<ClaudeResult> {
-  const userMessage = buildUserMessage(prInfo, diff, fileContexts, previousReviews, developerReplies, changesSinceLastReview)
+  const userMessage = buildUserMessage(prInfo, diff, fileContexts, previousReviews, developerReplies, changesSinceLastReview, lineNumbers)
 
   console.log(`Sending request to Claude (${model}, maxRetries: ${maxRetries})...`)
   const { object, usage } = await createProvider(apiKey).completeStructured<ReviewObject>(
@@ -154,7 +156,8 @@ function buildUserMessage(
   fileContexts: FileContext[],
   previousReviews: ReviewComment[],
   developerReplies: CommentReply[],
-  changesSinceLastReview = ''
+  changesSinceLastReview = '',
+  lineNumbers = false,
 ): string {
   const parts: string[] = []
 
@@ -180,22 +183,28 @@ function buildUserMessage(
     }
   }
 
-  parts.push(`## Diff:\n\`\`\`diff\n${diff}\n\`\`\``)
+  parts.push(renderDiff(diff, lineNumbers))
 
   // The full diff above is the whole PR vs target — it doesn't mark which lines are new since the
   // last review, so on re-reviews scope the actual changes so fixes are visible without inferring
   // them from the previous review's prose.
   if (changesSinceLastReview && previousReviews.length > 0) {
-    parts.push(`## Changes Since Your Last Review:\nThe diff below is ONLY the lines changed since your previous review above — use it to see exactly what was added or fixed. Credit findings these changes resolve, and assess anything new. The complete PR diff is above for full context.\n\`\`\`diff\n${changesSinceLastReview}\n\`\`\``)
+    parts.push(`## Changes Since Your Last Review:\nThe diff below is ONLY the lines changed since your previous review above — use it to see exactly what was added or fixed. Credit findings these changes resolve, and assess anything new. The complete PR diff is above for full context.\n\`\`\`diff\n${lineNumbers ? numberDiffLines(changesSinceLastReview) : changesSinceLastReview}\n\`\`\``)
   }
 
-  if (fileContexts.length > 0) parts.push(renderFileContexts(fileContexts))
+  if (fileContexts.length > 0) parts.push(renderFileContexts(fileContexts, lineNumbers))
 
   return parts.join('\n\n')
 }
 
-function renderFileContexts(fileContexts: FileContext[]): string {
-  return ['## Full file context:', ...fileContexts.map(f => `### ${f.path}\n\`\`\`\n${f.content}\n\`\`\``)].join('\n\n')
+function renderDiff(diff: string, lineNumbers: boolean): string {
+  if (!lineNumbers) return `## Diff:\n\`\`\`diff\n${diff}\n\`\`\``
+  return `## Diff (each added or unchanged line starts with its line number in the new file — cite those numbers in \`lines\`):\n\`\`\`diff\n${numberDiffLines(diff)}\n\`\`\``
+}
+
+function renderFileContexts(fileContexts: FileContext[], lineNumbers = false): string {
+  const heading = lineNumbers ? '## Full file context (each line starts with its line number):' : '## Full file context:'
+  return [heading, ...fileContexts.map(f => `### ${f.path}\n\`\`\`\n${lineNumbers ? numberFileLines(f.content) : f.content}\n\`\`\``)].join('\n\n')
 }
 
 function getJudgePrompt(): string {
@@ -219,10 +228,11 @@ export async function runJudge(
   review: ReviewObject,
   fileContexts: FileContext[] = [],
   policy: JudgePolicy = DEFAULT_JUDGE_POLICY,
+  lineNumbers = false,
 ): Promise<JudgeResult> {
   const parts: string[] = []
-  parts.push(`## Diff:\n\`\`\`diff\n${diff}\n\`\`\``)
-  if (fileContexts.length > 0) parts.push(renderFileContexts(fileContexts))
+  parts.push(renderDiff(diff, lineNumbers))
+  if (fileContexts.length > 0) parts.push(renderFileContexts(fileContexts, lineNumbers))
   parts.push(`## Review to Validate:\n${renderCandidatesForJudge(review)}`)
   const userMessage = parts.join('\n\n')
 
