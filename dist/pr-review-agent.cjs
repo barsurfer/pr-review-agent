@@ -36230,6 +36230,12 @@ function required(name) {
 function optional(name, defaultValue) {
   return process.env[name] ?? defaultValue;
 }
+function finiteOr(value, fallback) {
+  return Number.isFinite(value) ? value : fallback;
+}
+function positiveOr(value, fallback) {
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
 var MODEL_CONTEXT_WINDOWS = [
   ["claude-haiku-4-5", 2e5],
   ["claude-sonnet-4-5", 2e5],
@@ -36302,6 +36308,15 @@ var config = {
     },
     // Off by default: sending the reviewer's file context roughly doubles judge input tokens.
     fileContext: optional("ENABLE_JUDGE_FILE_CONTEXT", "false") === "true"
+  },
+  // Off by default: a second reviewer-sized call. The model is resolved at run time (empty → the judge model) so benchmark labels apply.
+  breadth: {
+    enabled: optional("ENABLE_BREADTH_REVIEW", "false") === "true",
+    model: optional("BREADTH_MODEL", ""),
+    effort: optional("BREADTH_EFFORT", ""),
+    minFiles: finiteOr(parseInt(optional("BREADTH_MIN_FILES", "5"), 10), 5),
+    minUntouched: finiteOr(parseInt(optional("BREADTH_MIN_UNTOUCHED", "3"), 10), 3),
+    benchmarkDeadlineSeconds: positiveOr(Number(optional("BENCHMARK_DEADLINE_SECONDS", "840")), 840)
   },
   agentIdentity: process.env.AGENT_IDENTITY || process.env.BITBUCKET_USERNAME || "Claude",
   reply: {
@@ -44415,8 +44430,9 @@ function quoteMatches(idx, file, quote) {
   const pool = file ? idx.byFile.get(file) ?? [] : [...idx.byFile.values()].flat();
   return pool.filter((a) => a.text.trim().includes(q));
 }
-function resolveAnchor(candidate, d, idx) {
-  if (candidate.file && isNumericLines(candidate.lines)) return { file: candidate.file, lines: candidate.lines, source: "reviewer" };
+function resolveAnchor(candidate, d, idx, breadthOrigin = false) {
+  const gated = breadthOrigin && !!candidate.file && isNumericLines(candidate.lines) && !(idx.present && onChangedLine(idx, candidate.file, candidate.lines));
+  if (candidate.file && isNumericLines(candidate.lines) && !gated) return { file: candidate.file, lines: candidate.lines, source: "reviewer" };
   const judgeFile = normalizeFindingPath(String(d.anchor_file ?? "")) || candidate.file;
   const judgeLines = String(d.anchor_lines ?? "").trim();
   if (judgeFile && isNumericLines(judgeLines) && idx.present && onChangedLine(idx, judgeFile, judgeLines)) {
@@ -44427,11 +44443,11 @@ function resolveAnchor(candidate, d, idx) {
     const hits = quoteMatches(idx, quoteFile(candidate, d, idx), quote);
     if (hits.length === 1) return { file: hits[0].file, lines: String(hits[0].line), source: "diff" };
   }
-  return { file: candidate.file ?? quoteFile(candidate, d, idx), lines: isNumericLines(candidate.lines) ? candidate.lines : void 0, source: "none" };
+  return { file: candidate.file ?? quoteFile(candidate, d, idx), lines: isNumericLines(candidate.lines) && !gated ? candidate.lines : void 0, source: "none" };
 }
 var normalizeId = (id) => String(id).trim().replace(/^\[|\]$/g, "").toLowerCase();
 var clampScore = (n) => Math.max(0, Math.min(10, Math.round(Number(n) || 0)));
-function resolve2(d, candidate, policy, idx) {
+function resolve2(d, candidate, policy, idx, breadthOrigin) {
   let reason = REASON_CATEGORIES.includes(d.reason_category) ? d.reason_category : "unverifiable";
   let reclassified_from = null;
   const evidence = String(d.evidence ?? "").trim();
@@ -44445,7 +44461,7 @@ function resolve2(d, candidate, policy, idx) {
   const score = kept && unproven ? Math.min(clampScore(d.score), UNVERIFIED_SCORE_CAP) : clampScore(d.score);
   const rewrite = String(d.rewritten_body ?? "").trim();
   const rewritten = kept && rewrite.length > 0 && rewrite.length <= REWRITE_CAP;
-  const anchor = resolveAnchor(candidate, d, idx);
+  const anchor = resolveAnchor(candidate, d, idx, breadthOrigin);
   return {
     candidate_id: "",
     reason_category: reason,
@@ -44465,7 +44481,7 @@ function resolve2(d, candidate, policy, idx) {
     anchor
   };
 }
-function applyJudgeDecisions(candidates, output, policy = DEFAULT_JUDGE_POLICY, canBeSplit = [], diff = "") {
+function applyJudgeDecisions(candidates, output, policy = DEFAULT_JUDGE_POLICY, canBeSplit = [], diff = "", breadthFrom = Infinity) {
   const idx = buildDiffIndex(diff);
   const anomalies = { unknown_ids: 0, undecided: 0, duplicate_ids: 0, drop_without_evidence: 0 };
   const index = new Map(candidates.map((_, i) => [candidateId(i), i]));
@@ -44504,7 +44520,7 @@ function applyJudgeDecisions(candidates, output, policy = DEFAULT_JUDGE_POLICY, 
       return;
     }
     if (given.length > 1) anomalies.duplicate_ids++;
-    const resolved = given.map((d) => resolve2(d, candidate, policy, idx));
+    const resolved = given.map((d) => resolve2(d, candidate, policy, idx, i >= breadthFrom));
     const chosen = resolved.find((r) => r.action === "drop") ?? resolved[0];
     if (chosen.reclassified_from) anomalies.drop_without_evidence++;
     const { question, body, anchor, ...applied } = chosen;
@@ -44648,6 +44664,26 @@ async function runReview(apiKey, model, maxRetries, maxTokens, effort, prInfo, d
   console.log(`Review received (${usage.input_tokens} in / ${usage.output_tokens} out tokens, ${object.no_change ? "NO_CHANGE" : `${object.findings.length} findings`})`);
   return { text, usage, review: object };
 }
+var BREADTH_OUTPUT_SCHEMA = {
+  type: "object",
+  properties: { findings: REVIEW_OUTPUT_SCHEMA.properties.findings },
+  required: ["findings"],
+  additionalProperties: false
+};
+async function runBreadth(apiKey, model, maxRetries, maxTokens, effort, prInfo, diff, fileContexts, systemPrompt, briefing, lineNumbers = false) {
+  const userMessage = `${buildUserMessage(prInfo, diff, fileContexts, [], [], "", lineNumbers)}
+
+${briefing}`;
+  console.log(`Sending to breadth reviewer (${model}, maxRetries: ${maxRetries})...`);
+  const { object, usage } = await createProvider(apiKey).completeStructured(
+    systemPrompt,
+    userMessage,
+    BREADTH_OUTPUT_SCHEMA,
+    { model, maxTokens, maxRetries, effort: effort || void 0 }
+  );
+  console.log(`Breadth received (${usage.input_tokens} in / ${usage.output_tokens} out tokens, ${object.findings?.length ?? 0} findings)`);
+  return { findings: object.findings ?? [], usage, promptHash: (0, import_crypto2.createHash)("sha256").update(systemPrompt).digest("hex").slice(0, 12) };
+}
 function buildUserMessage(prInfo, diff, fileContexts, previousReviews, developerReplies, changesSinceLastReview = "", lineNumbers = false) {
   const parts = [];
   parts.push(`## Pull Request: ${prInfo.title}`);
@@ -44708,7 +44744,7 @@ function getJudgePrompt() {
     throw new Error("Cannot load judge prompt: file not found and no embedded copy");
   }
 }
-async function runJudge(apiKey, model, maxRetries, maxTokens, effort, diff, review2, fileContexts = [], policy = DEFAULT_JUDGE_POLICY, lineNumbers = false) {
+async function runJudge(apiKey, model, maxRetries, maxTokens, effort, diff, review2, fileContexts = [], policy = DEFAULT_JUDGE_POLICY, lineNumbers = false, breadthFrom) {
   const parts = [];
   parts.push(renderDiff(diff, lineNumbers));
   if (fileContexts.length > 0) parts.push(renderFileContexts(fileContexts, lineNumbers));
@@ -44724,7 +44760,7 @@ ${renderCandidatesForJudge(review2)}`);
     { model, maxTokens, maxRetries, effort: effort || void 0 }
   );
   console.log(`Judge received (${usage.input_tokens} in / ${usage.output_tokens} out tokens)`);
-  const judged = applyJudgeDecisions(review2.findings, object, policy, review2.can_be_split, diff);
+  const judged = applyJudgeDecisions(review2.findings, object, policy, review2.can_be_split, diff, breadthFrom);
   const promptHash = (0, import_crypto2.createHash)("sha256").update(judgePrompt).digest("hex").slice(0, 12);
   return {
     text: judged.markdown,
@@ -44766,7 +44802,7 @@ ${diff}
   return { text, usage };
 }
 
-// src/review/bundled.ts
+// src/review/breadth.ts
 init_define_STACK_PROMPTS();
 
 // src/review/bundler.ts
@@ -44836,6 +44872,66 @@ function planBundles(units, budget) {
     oversized
   };
 }
+
+// src/review/breadth.ts
+var GENERATED_OR_LOCK = [
+  /(^|\/)(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|go\.sum)$/,
+  /\.lock$/,
+  /-generated\./,
+  /\.min\.(js|css)$/,
+  /\.snap$/,
+  /\.map$/,
+  /\.pb\.go$/,
+  /_pb2(_grpc)?\.py$/
+];
+var isGeneratedOrLock = (path4) => GENERATED_OR_LOCK.some((re) => re.test(path4));
+var MAX_UNTOUCHED_LISTED = 40;
+function fileCoverage(filteredDiff, findings) {
+  const sections2 = splitDiffByFile(filteredDiff);
+  const reviewable = [...new Set(parseChangedFiles(filteredDiff).filter((f) => f.status !== "deleted" && !isGeneratedOrLock(f.path)).map((f) => f.path))].filter((path4) => {
+    const { added, removed } = countDiffLines(sections2.get(path4) ?? "");
+    return added + removed > 0;
+  });
+  const covered = /* @__PURE__ */ new Set();
+  for (const f of findings) {
+    if (!f.file) continue;
+    const path4 = normalizeFindingPath(f.file, reviewable);
+    if (reviewable.includes(path4)) covered.add(path4);
+    else for (const p of reviewable) if (p.endsWith("/" + path4)) covered.add(p);
+  }
+  return { reviewable, untouched: reviewable.filter((p) => !covered.has(p)) };
+}
+var BREADTH_LENS = `## BREADTH LENS
+A first review pass already ran; its findings are listed in the message. Your job is to find what it missed \u2014 not to re-review what it reported. Work through, in order:
+1. Every file listed under "Files with no finding yet": review its added or modified lines as carefully as a first pass would.
+2. The same defect at another place: for each first-pass finding, look for the same pattern on other added or modified lines. Each other place is its own finding.
+3. Things that should have changed together: an inconsistency this change introduces between changed code and other code visible in the diff or file context \u2014 a caller not updated for a new parameter, an interface missing what its implementation adds, a sibling copy left behind. Anchor the finding on the added or modified line, and report it only when both sides are visible in what you were shown.
+4. Incomplete changes on added or modified lines: stubs, placeholder returns, options parsed but ignored, a capability added at one layer but never wired up. A diff segment that ends at an opening brace or \`if\` is a hunk boundary, not an incomplete change.
+Do not repeat a first-pass finding (same root cause at the same place). Every finding needs a concrete failing scenario, a file, and a numeric line on an added or modified line. Return an empty list if you find nothing.`;
+function breadthSystemPrompt(reviewerPrompt, limit2) {
+  const limitSection = limit2 > 0 ? `
+
+## FINDINGS LIMIT
+Report at most ${limit2} findings, prioritized by severity and impact. If more exist, include only the most important and omit the rest.` : "";
+  return `${reviewerPrompt}${limitSection}
+
+${BREADTH_LENS}`;
+}
+function breadthBriefing(firstPass, untouched) {
+  const located = (f) => f.file ? `${f.file}${f.lines ? `:${f.lines}` : ""}` : "(no file)";
+  const findings = firstPass.length ? firstPass.map((f) => `- ${located(f)} \u2014 ${f.title}`).join("\n") : "None.";
+  const shown = untouched.slice(0, MAX_UNTOUCHED_LISTED);
+  const more = untouched.length > shown.length ? `
+- \u2026and ${untouched.length - shown.length} more` : "";
+  return `## First-pass findings (already reported \u2014 do not repeat):
+${findings}
+
+## Files with no finding yet:
+${shown.map((p) => `- ${p}`).join("\n")}${more}`;
+}
+
+// src/review/bundled.ts
+init_define_STACK_PROMPTS();
 
 // src/review/aggregate.ts
 init_define_STACK_PROMPTS();
@@ -45178,7 +45274,7 @@ function getAgentVersion() {
     const pkg = JSON.parse((0, import_fs4.readFileSync)(pkgPath, "utf-8"));
     return pkg.version;
   } catch {
-    if (true) return "0.0.29";
+    if (true) return "0.0.30";
     return "unknown";
   }
 }
@@ -45190,7 +45286,7 @@ function getBuildCommit() {
     const dirty = (0, import_child_process.execSync)("git status --porcelain", opts2).toString().trim() ? "-dirty" : "";
     return hash + dirty;
   } catch {
-    if (true) return "2ded060";
+    if (true) return "d3650b0";
     return "unknown";
   }
 }
@@ -45216,6 +45312,9 @@ function buildUsageRecord(ctx, durationMs, error) {
   const judgeTokensRaw = ctx.judgeUsage ?? null;
   const judgeTokens = judgeTokensRaw ? { input: judgeTokensRaw.input_tokens, output: judgeTokensRaw.output_tokens } : null;
   const judgeCost = judgeTokens && judgeModel ? estimateCost(judgeTokens, judgeModel) : null;
+  const breadthTokens = ctx.breadthUsage ? { input: ctx.breadthUsage.input_tokens, output: ctx.breadthUsage.output_tokens } : null;
+  const breadthCost = breadthTokens && ctx.breadthModel ? estimateCost(breadthTokens, ctx.breadthModel) : null;
+  const breadthStatus = ctx.breadthStatus ?? (ctx.bundleCount ? config.breadth.enabled ? "skipped_bundled" : "disabled" : null);
   return {
     run_id: `${config.vcsProvider}-${ctx.repoSlug}-${ctx.prId}-${commitShort}`,
     timestamp: (/* @__PURE__ */ new Date()).toISOString(),
@@ -45259,9 +45358,9 @@ function buildUsageRecord(ctx, durationMs, error) {
       estimated_input: ctx.estimatedInputTokens
     },
     cost_usd: estimateCost({
-      input: ctx.usage.input_tokens - (judgeTokens?.input ?? 0),
-      output: ctx.usage.output_tokens - (judgeTokens?.output ?? 0)
-    }, config.anthropic.model) + (judgeCost ?? 0),
+      input: ctx.usage.input_tokens - (judgeTokens?.input ?? 0) - (breadthTokens?.input ?? 0),
+      output: ctx.usage.output_tokens - (judgeTokens?.output ?? 0) - (breadthTokens?.output ?? 0)
+    }, config.anthropic.model) + (judgeCost ?? 0) + (breadthCost ?? 0),
     judge_model: judgeModel,
     judge_effort: config.judge.effort || null,
     judge_tokens: judgeTokens,
@@ -45290,10 +45389,16 @@ function buildUsageRecord(ctx, durationMs, error) {
         description: firstSentence(k.body)
       };
     }) : null,
-    review_candidates: ctx.judgeDecisions && ctx.reviewObject ? ctx.reviewObject.findings.map((f, i) => ({ id: candidateId(i), severity: f.severity, title: f.title, file: f.file ?? null, lines: f.lines ?? null, body: f.body })) : null,
+    review_candidates: ctx.judgeDecisions && ctx.reviewObject ? (ctx.judgeCandidates ?? ctx.reviewObject.findings.map((f) => ({ ...f, origin: "review" }))).map((f, i) => ({ id: candidateId(i), origin: f.origin, severity: f.severity, title: f.title, file: f.file ?? null, lines: f.lines ?? null, body: f.body })) : null,
     judge_decisions: ctx.judgeDecisions ?? null,
     judge_anomalies: ctx.judgeAnomalies ?? null,
     judge_policy: judgeModel && judgeTokens ? { keep_minor: config.judge.policy.keepMinor, keep_unverified: config.judge.policy.keepUnverified, file_context: config.judge.fileContext } : null,
+    breadth_status: breadthStatus,
+    breadth_model: ctx.breadthModel ?? null,
+    breadth_prompt_hash: ctx.breadthPromptHash ?? null,
+    breadth_tokens: breadthTokens,
+    breadth_cost_usd: breadthCost,
+    untouched_files: ctx.untouchedFiles ? { count: ctx.untouchedFiles.length, paths: ctx.untouchedFiles.slice(0, MAX_UNTOUCHED_LISTED), cut: Math.max(0, ctx.untouchedFiles.length - MAX_UNTOUCHED_LISTED) } : null,
     touch_rate: ctx.reviewNumber > 1 && deltaStats ? (() => {
       const total = deltaStats.resolved + deltaStats.still_open;
       return total > 0 ? Math.round(deltaStats.resolved / total * 100) : null;
@@ -45337,12 +45442,12 @@ async function transition(state, ctx) {
       if (config.skipSourceBranches.length > 0 && matchesPattern(src, config.skipSourceBranches)) {
         ctx.action = "SKIP";
         ctx.skipReason = `source branch "${src}" matches SKIP_SOURCE_BRANCHES`;
-        return 15 /* SKIP */;
+        return 16 /* SKIP */;
       }
       if (config.skipTargetBranches.length > 0 && matchesPattern(tgt, config.skipTargetBranches)) {
         ctx.action = "SKIP";
         ctx.skipReason = `target branch "${tgt}" matches SKIP_TARGET_BRANCHES`;
-        return 15 /* SKIP */;
+        return 16 /* SKIP */;
       }
       return 2 /* FETCH_DIFF */;
     }
@@ -45354,7 +45459,7 @@ async function transition(state, ctx) {
         if (err instanceof PrTooLargeError) {
           ctx.action = "SKIP";
           ctx.skipReason = err.message;
-          return 15 /* SKIP */;
+          return 16 /* SKIP */;
         }
         throw err;
       }
@@ -45373,7 +45478,7 @@ async function transition(state, ctx) {
       if (ctx.reviewableLineCount === 0) {
         ctx.action = "SKIP";
         ctx.skipReason = "no reviewable changes after exclusions";
-        return 15 /* SKIP */;
+        return 16 /* SKIP */;
       }
       return 3 /* CHECK_THRESHOLDS */;
     }
@@ -45384,23 +45489,23 @@ async function transition(state, ctx) {
       if (minChangedFiles > 0 && fileCount < minChangedFiles) {
         ctx.action = "SKIP";
         ctx.skipReason = `PR has ${fileCount} reviewable file(s), minimum is ${minChangedFiles}`;
-        return 15 /* SKIP */;
+        return 16 /* SKIP */;
       }
       const bundling = config.review.bundledReview;
       if (!bundling && maxChangedFiles > 0 && fileCount > maxChangedFiles) {
         ctx.action = "SKIP";
         ctx.skipReason = `PR has ${fileCount} reviewable file(s), maximum is ${maxChangedFiles}`;
-        return 15 /* SKIP */;
+        return 16 /* SKIP */;
       }
       if (minChangedLines > 0 && lineCount < minChangedLines) {
         ctx.action = "SKIP";
         ctx.skipReason = `PR has ${lineCount} reviewable line(s), minimum is ${minChangedLines}`;
-        return 15 /* SKIP */;
+        return 16 /* SKIP */;
       }
       if (!bundling && maxChangedLines > 0 && lineCount > maxChangedLines) {
         ctx.action = "SKIP";
         ctx.skipReason = `PR has ${lineCount} reviewable line(s), maximum is ${maxChangedLines}`;
-        return 15 /* SKIP */;
+        return 16 /* SKIP */;
       }
       return 4 /* CHECK_PREVIOUS_REVIEWS */;
     }
@@ -45468,7 +45573,7 @@ async function transition(state, ctx) {
           console.log(`  Found ${ctx.replies.length} unanswered reply(s), but agent already posted ${agentReplyCount}/${config.reply.maxComments} replies \u2014 skipping`);
           ctx.action = "DEDUP_SKIP";
           ctx.skipReason = `reply limit reached (${agentReplyCount}/${config.reply.maxComments})`;
-          return 15 /* SKIP */;
+          return 16 /* SKIP */;
         }
         console.log(`  Found ${ctx.replies.length} unanswered reply(s) \u2014 responding... (${agentReplyCount}/${config.reply.maxComments || "\u221E"} replies used)`);
         return 6 /* RESPOND_TO_REPLIES */;
@@ -45477,7 +45582,7 @@ async function transition(state, ctx) {
         ctx.action = "DEDUP_SKIP";
         ctx.skipReason = "no new commits and no unanswered questions";
       }
-      return 15 /* SKIP */;
+      return 16 /* SKIP */;
     }
     case 6 /* RESPOND_TO_REPLIES */: {
       const lastReview = ctx.previousReviews[ctx.previousReviews.length - 1];
@@ -45505,7 +45610,7 @@ async function transition(state, ctx) {
       }
       ctx.action = "REPLY";
       ctx.skipReason = void 0;
-      return 16 /* DONE */;
+      return 17 /* DONE */;
     }
     case 7 /* LOAD_PROMPT */: {
       console.log("Loading prompt...");
@@ -45574,12 +45679,12 @@ async function transition(state, ctx) {
       if (max > 0 && s.total > max && config.review.bundledReview) {
         console.log("  Still over budget \u2014 switching to bundled review");
         ctx.inputBudget = max;
-        return 13 /* BUNDLED_REVIEW */;
+        return 14 /* BUNDLED_REVIEW */;
       }
       if (max > 0 && s.total > max) {
         ctx.action = "SKIP";
         ctx.skipReason = `Estimated input ~${s.total.toLocaleString()} tokens exceeds the input budget (${max.toLocaleString()}; min of MAX_INPUT_TOKENS and model context) even without file context \u2014 ${fmt(s)}`;
-        return 15 /* SKIP */;
+        return 16 /* SKIP */;
       }
       return 10 /* CALL_CLAUDE */;
     }
@@ -45629,7 +45734,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
       if (!result) {
         ctx.action = "SKIP";
         ctx.skipReason = "Diff exceeds the model context window";
-        return 15 /* SKIP */;
+        return 16 /* SKIP */;
       }
       ctx.reviewText = result.text;
       ctx.reviewObject = result.review;
@@ -45649,9 +45754,89 @@ If this PR spans multiple independent themes that could each be a separate, inde
         ctx.skipReason = "No changes since last review";
         return 5 /* CHECK_REPLIES */;
       }
-      return 12 /* JUDGE_REVIEW */;
+      return 12 /* BREADTH_REVIEW */;
     }
-    case 12 /* JUDGE_REVIEW */: {
+    case 12 /* BREADTH_REVIEW */: {
+      if (!config.breadth.enabled) {
+        ctx.breadthStatus = "disabled";
+        return 13 /* JUDGE_REVIEW */;
+      }
+      if (!config.judge.model) {
+        ctx.breadthStatus = "skipped_no_judge";
+        return 13 /* JUDGE_REVIEW */;
+      }
+      if (ctx.reviewNumber > 1) {
+        ctx.breadthStatus = "skipped_rereview";
+        return 13 /* JUDGE_REVIEW */;
+      }
+      const firstPass = ctx.reviewObject?.findings ?? [];
+      const coverage = fileCoverage(ctx.filteredDiff, firstPass);
+      ctx.untouchedFiles = coverage.untouched;
+      if (coverage.reviewable.length < config.breadth.minFiles) {
+        ctx.breadthStatus = "skipped_small";
+        return 13 /* JUDGE_REVIEW */;
+      }
+      if (coverage.untouched.length < config.breadth.minUntouched) {
+        ctx.breadthStatus = "skipped_few_untouched";
+        return 13 /* JUDGE_REVIEW */;
+      }
+      const remaining = config.review.maxFindings > 0 ? config.review.maxFindings - firstPass.length : 0;
+      if (config.review.maxFindings > 0 && remaining <= 0) {
+        ctx.breadthStatus = "skipped_limit";
+        return 13 /* JUDGE_REVIEW */;
+      }
+      const model = config.breadth.model || config.judge.model;
+      const effort = config.breadth.effort || (config.breadth.model ? "" : config.judge.effort);
+      const system = breadthSystemPrompt(ctx.prompt.content, remaining);
+      const briefing = breadthBriefing(firstPass, coverage.untouched);
+      const estimate = ctx.estimatedInputTokens + Math.ceil((system.length - ctx.prompt.content.length + briefing.length) / 4);
+      const limits = [config.anthropic.maxInputTokens, modelContextWindow(model) - config.anthropic.maxTokens].filter((n) => n > 0);
+      const budget = limits.length ? Math.min(...limits) : Infinity;
+      if (estimate > budget) {
+        ctx.breadthStatus = "skipped_budget";
+        console.log(`  Breadth review skipped: ~${estimate.toLocaleString()} tokens exceeds the ${model} budget (${budget.toLocaleString()})`);
+        return 13 /* JUDGE_REVIEW */;
+      }
+      const elapsedSeconds = (Date.now() - ctx.startTime) / 1e3;
+      if (ctx.outcomeSink && elapsedSeconds > config.breadth.benchmarkDeadlineSeconds / 2) {
+        ctx.breadthStatus = "skipped_time";
+        console.log(`  Breadth review skipped: ${Math.round(elapsedSeconds)}s elapsed, over half the ${config.breadth.benchmarkDeadlineSeconds}s benchmark deadline`);
+        return 13 /* JUDGE_REVIEW */;
+      }
+      ctx.breadthModel = model;
+      console.log(`  Breadth review: ${coverage.untouched.length} untouched of ${coverage.reviewable.length} reviewable file(s)`);
+      try {
+        const result = await runBreadth(
+          config.anthropic.apiKey,
+          model,
+          config.judge.maxRetries,
+          config.anthropic.maxTokens,
+          effort,
+          ctx.prInfo,
+          ctx.filteredDiff,
+          ctx.fileContexts ?? [],
+          system,
+          briefing,
+          config.review.lineNumbers
+        );
+        ctx.breadthFindings = result.findings;
+        ctx.breadthPromptHash = result.promptHash;
+        ctx.breadthUsage = { input_tokens: result.usage.input_tokens, output_tokens: result.usage.output_tokens };
+        addUsage(ctx, result.usage);
+        ctx.breadthStatus = "succeeded";
+        console.log(`  Breadth review: ${coverage.untouched.length} untouched file(s) \u2192 ${result.findings.length} finding(s)`);
+      } catch (err) {
+        const e = err;
+        if (e.usage) {
+          ctx.breadthUsage = { input_tokens: e.usage.input_tokens, output_tokens: e.usage.output_tokens };
+          addUsage(ctx, e.usage);
+        }
+        ctx.breadthStatus = "failed";
+        console.warn(`  Breadth review FAILED (${isContextLengthError(err) ? "context length" : e.message}) \u2014 continuing with first-pass findings only`);
+      }
+      return 13 /* JUDGE_REVIEW */;
+    }
+    case 13 /* JUDGE_REVIEW */: {
       const reviewFindings = ctx.reviewObject ? countFindings(ctx.reviewObject) : { high: 0, medium: 0, low: 0 };
       console.log(`  Reviewer findings: ${reviewFindings.high}H / ${reviewFindings.medium}M / ${reviewFindings.low}L`);
       const noFindings = reviewFindings.high === 0 && reviewFindings.medium === 0 && reviewFindings.low === 0;
@@ -45666,7 +45851,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
             console.log(`  Unanswered dev reply, but reply limit reached (${agentReplies}/${config.reply.maxComments}) \u2014 skipping`);
             ctx.action = "DEDUP_SKIP";
             ctx.skipReason = `reply limit reached (${agentReplies}/${config.reply.maxComments})`;
-            return 15 /* SKIP */;
+            return 16 /* SKIP */;
           }
           ctx.replies = unanswered;
           console.log("  Re-review found nothing new, but a developer reply is unanswered \u2014 answering it in-thread");
@@ -45678,19 +45863,26 @@ If this PR spans multiple independent themes that could each be a separate, inde
           console.log("  Re-review: no findings, prior clean, nothing open, no discussion \u2014 nothing to post, skipping");
           ctx.action = "NO_NEW_FINDINGS";
           ctx.skipReason = "Re-review found no new findings (prior review already clean)";
-          return 15 /* SKIP */;
+          return 16 /* SKIP */;
         }
         console.log(`  Re-review with no new findings \u2014 posting (${stillOpen ? "findings still open" : "prior review had findings"})`);
       }
       if (!config.judge.model) {
         ctx.judgeStatus = "disabled";
-        return 14 /* POST_REVIEW */;
+        return 15 /* POST_REVIEW */;
       }
-      if (noFindings) {
+      const breadth = ctx.breadthFindings ?? [];
+      if (noFindings && breadth.length === 0) {
         ctx.judgeStatus = "skipped_no_findings";
         console.log("  Skipping judge \u2014 no findings to validate");
-        return 14 /* POST_REVIEW */;
+        return 15 /* POST_REVIEW */;
       }
+      const firstPass = ctx.reviewObject?.findings ?? [];
+      ctx.judgeCandidates = [
+        ...firstPass.map((f) => ({ ...f, origin: "review" })),
+        ...breadth.map((f) => ({ ...f, origin: "breadth" }))
+      ];
+      const judgeInput = breadth.length ? { ...ctx.reviewObject, findings: [...firstPass, ...breadth] } : ctx.reviewObject;
       ctx.reviewTextBeforeJudge = ctx.reviewText;
       try {
         const result = await runJudge(
@@ -45700,10 +45892,11 @@ If this PR spans multiple independent themes that could each be a separate, inde
           config.anthropic.maxTokens,
           config.judge.effort,
           ctx.filteredDiff,
-          ctx.reviewObject,
+          judgeInput,
           config.judge.fileContext ? ctx.fileContexts ?? [] : [],
           config.judge.policy,
-          config.review.lineNumbers
+          config.review.lineNumbers,
+          breadth.length ? firstPass.length : void 0
         );
         ctx.reviewText = result.text;
         ctx.judgeScores = result.scores;
@@ -45729,17 +45922,17 @@ If this PR spans multiple independent themes that could each be a separate, inde
         ctx.judgeStatus = "succeeded";
       } catch (err) {
         ctx.judgeStatus = "failed";
-        if (!ctx.outcomeSink) throw err;
+        if (!ctx.outcomeSink && !noFindings) throw err;
         console.warn(`  Judge failed (${err.message}) \u2014 proceeding with unjudged reviewer findings`);
       }
-      return 14 /* POST_REVIEW */;
+      return 15 /* POST_REVIEW */;
     }
-    case 13 /* BUNDLED_REVIEW */: {
+    case 14 /* BUNDLED_REVIEW */: {
       const outcome = await runBundledReview(ctx, ctx.inputBudget);
       if (!outcome.ok) {
         ctx.action = "SKIP";
         ctx.skipReason = `Bundled review not possible: ${outcome.reason}`;
-        return 15 /* SKIP */;
+        return 16 /* SKIP */;
       }
       if (isNoChange(ctx.reviewText)) return 11 /* CHECK_NO_CHANGE */;
       const merged = ctx.reviewObject;
@@ -45749,16 +45942,16 @@ If this PR spans multiple independent themes that could each be a separate, inde
         if (!priorHadFindings && (merged.delta_stats?.still_open ?? 0) === 0) {
           ctx.action = "NO_NEW_FINDINGS";
           ctx.skipReason = "Re-review found no new findings (prior review already clean)";
-          return 15 /* SKIP */;
+          return 16 /* SKIP */;
         }
       }
-      return 14 /* POST_REVIEW */;
+      return 15 /* POST_REVIEW */;
     }
-    case 14 /* POST_REVIEW */: {
+    case 15 /* POST_REVIEW */: {
       if (ctx.outcomeSink) {
-        await ctx.outcomeSink({ review: ctx.reviewObject, reviewText: ctx.reviewText, judged: ctx.judgeUsage !== void 0, judgeScores: ctx.judgeScores, judgedFindings: ctx.judgedFindings });
+        await ctx.outcomeSink({ review: ctx.reviewObject, reviewText: ctx.reviewText, judged: ctx.judgeUsage !== void 0, judgeScores: ctx.judgeScores, judgedFindings: ctx.judgedFindings, breadthFindings: ctx.breadthFindings });
         ctx.action = "REVIEW";
-        return 16 /* DONE */;
+        return 17 /* DONE */;
       }
       const judgeNotes = ctx.reviewText.match(/<!--\s*JUDGE_NOTES:([\s\S]*?)-->/);
       if (judgeNotes) {
@@ -45784,7 +45977,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
         console.log("  Review text empty or NO_CHANGE after cleanup \u2014 skipping post");
         ctx.action = "NO_CHANGE";
         ctx.skipReason = "Review text empty or NO_CHANGE after cleanup";
-        return 15 /* SKIP */;
+        return 16 /* SKIP */;
       }
       const judged = ctx.judgeUsage !== void 0;
       const tailOk = judged ? parseVerdictScore(cleaned) !== null : /^#{1,4}\s*Unresolved Questions\b/im.test(cleaned);
@@ -45812,7 +46005,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
             console.log(`  Commit ${commitShort} already reviewed by another run \u2014 skipping post`);
             ctx.action = "DEDUP_SKIP";
             ctx.skipReason = "Another agent run already reviewed this commit (race condition avoided)";
-            return 15 /* SKIP */;
+            return 16 /* SKIP */;
           }
         }
         console.log("Posting review comment...");
@@ -45820,15 +46013,15 @@ If this PR spans multiple independent themes that could each be a separate, inde
         console.log("Done. Review posted to PR.\n");
       }
       ctx.action = ctx.reviewNumber > 1 ? "RE_REVIEW" : "REVIEW";
-      return 16 /* DONE */;
+      return 17 /* DONE */;
     }
-    case 15 /* SKIP */: {
+    case 16 /* SKIP */: {
       console.log(`
 Skipping: ${ctx.skipReason}`);
-      return 16 /* DONE */;
+      return 17 /* DONE */;
     }
     default:
-      return 16 /* DONE */;
+      return 17 /* DONE */;
   }
 }
 async function review(adapter2, prId, dryRun = false, promptPath, force = "off", logUsage = false, repoSlug = "", outcomeSink) {
@@ -45844,6 +46037,7 @@ Starting review for PR #${prId}`);
     logUsage,
     repoSlug,
     outcomeSink,
+    startTime,
     usage: { input_tokens: 0, output_tokens: 0, cache_read: 0, cache_write: 0 },
     estimatedInputTokens: 0,
     action: "ERROR",
@@ -45852,7 +46046,7 @@ Starting review for PR #${prId}`);
   let error = null;
   try {
     let state = 0 /* FETCH_PR_INFO */;
-    while (state !== 16 /* DONE */) {
+    while (state !== 17 /* DONE */) {
       state = await transition(state, ctx);
     }
   } catch (err) {
@@ -46005,6 +46199,9 @@ var CONFIG_LABELS = {
   }),
   LNUM: flag((on) => {
     config.review.lineNumbers = on;
+  }),
+  BREADTH: flag((on) => {
+    config.breadth.enabled = on;
   })
 };
 var bit = (on) => on ? "1" : "0";
@@ -46025,7 +46222,7 @@ function applyBenchmarkConfig(env) {
   if (!env.MAX_CHANGED_LINES) config.thresholds.maxChangedLines = 0;
   config.review.splitCheck = false;
   applyConfigLabels(env);
-  console.log(`Benchmark settings: model=${config.anthropic.model} effort=${config.review.effort || "default"} judge_model=${config.judge.model || "off"} judge_effort=${config.judge.effort || "default"} nits=${bit(config.review.enableNitpicks)} j_minor=${bit(config.judge.policy.keepMinor)} j_unver=${bit(config.judge.policy.keepUnverified)} j_ctx=${bit(config.judge.fileContext)} lnum=${bit(config.review.lineNumbers)}`);
+  console.log(`Benchmark settings: model=${config.anthropic.model} effort=${config.review.effort || "default"} judge_model=${config.judge.model || "off"} judge_effort=${config.judge.effort || "default"} nits=${bit(config.review.enableNitpicks)} j_minor=${bit(config.judge.policy.keepMinor)} j_unver=${bit(config.judge.policy.keepUnverified)} j_ctx=${bit(config.judge.fileContext)} lnum=${bit(config.review.lineNumbers)} breadth=${bit(config.breadth.enabled)}`);
   if (config.review.enableNitpicks && !config.judge.policy.keepMinor) {
     console.warn("  NITS=1 but J_MINOR=0 \u2014 nitpicks are logged for offline scoring only; set J_MINOR=1 to post them.");
   }
@@ -46050,7 +46247,7 @@ async function runBenchmark(env = process.env) {
         const placed = anchorToFile(outcome.judgedFindings, firstAddedLines(await adapter2.getDiff(prNumber)), changedFiles);
         findings = keptToReportFindings(placed, rb.agent, changedPaths);
         const fileLevel = placed.filter((k) => k.anchorSource === "file");
-        console.log(`Benchmark findings: reviewer ${outcome.review.findings.length}, judge kept ${outcome.judgedFindings.length}, line-anchored ${findings.length} (${fileLevel.length} placed on the file's first changed line)`);
+        console.log(`Benchmark findings: reviewer ${outcome.review.findings.length}, breadth ${outcome.breadthFindings?.length ?? 0}, judge kept ${outcome.judgedFindings.length}, line-anchored ${findings.length} (${fileLevel.length} placed on the file's first changed line)`);
         if (fileLevel.length > 0) console.log(`  File-level findings: ${fileLevel.map((k) => `${k.file}:${k.lines} ${k.title}`).join(" | ")}`);
         const unanchored = placed.filter((k) => !isAnchored(k));
         if (unanchored.length > 0) console.warn(`  Parse check: ${unanchored.length} kept finding(s) with no usable file:line, dropped from findings.json: ${unanchored.map((k) => k.title).join(" | ")}`);
