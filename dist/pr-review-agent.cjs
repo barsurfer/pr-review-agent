@@ -23019,15 +23019,15 @@ function betaEditTool(ctx) {
           throw e;
         throw new ToolError(`edit: ${fsErrorMessage(e, file_path)}`);
       }
-      const count = data.split(old_string).length - 1;
-      if (count === 0)
+      const count2 = data.split(old_string).length - 1;
+      if (count2 === 0)
         throw new ToolError(`edit: old_string not found in ${file_path}`);
       let updated;
       if (replace_all) {
         updated = data.split(old_string).join(new_string);
       } else {
-        if (count > 1)
-          throw new ToolError(`edit: old_string appears ${count} times in ${file_path} (must be unique)`);
+        if (count2 > 1)
+          throw new ToolError(`edit: old_string appears ${count2} times in ${file_path} (must be unique)`);
         updated = data.replace(old_string, () => new_string);
       }
       try {
@@ -23035,7 +23035,7 @@ function betaEditTool(ctx) {
       } catch (e) {
         throw new ToolError(`edit: write: ${fsErrorMessage(e, file_path)}`);
       }
-      return `edited ${file_path} (${replace_all ? count : 1} replacement(s))`;
+      return `edited ${file_path} (${replace_all ? count2 : 1} replacement(s))`;
     }
   });
 }
@@ -44927,7 +44927,7 @@ function breadthBriefing(firstPass, untouched) {
 ${findings}
 
 ## Files with no finding yet:
-${shown.map((p) => `- ${p}`).join("\n")}${more}`;
+${shown.length ? shown.map((p) => `- ${p}`).join("\n") : "None."}${more}`;
 }
 
 // src/review/bundled.ts
@@ -45274,7 +45274,7 @@ function getAgentVersion() {
     const pkg = JSON.parse((0, import_fs4.readFileSync)(pkgPath, "utf-8"));
     return pkg.version;
   } catch {
-    if (true) return "0.0.30";
+    if (true) return "0.0.31";
     return "unknown";
   }
 }
@@ -45286,7 +45286,7 @@ function getBuildCommit() {
     const dirty = (0, import_child_process.execSync)("git status --porcelain", opts2).toString().trim() ? "-dirty" : "";
     return hash + dirty;
   } catch {
-    if (true) return "d3650b0";
+    if (true) return "b3c3cbe";
     return "unknown";
   }
 }
@@ -46172,6 +46172,10 @@ var flag = (set) => (v, name) => {
   if (v === "0" || v === "1") set(v === "1");
   else console.warn(`  Ignoring config label ${name}=${v}: expected 0 or 1`);
 };
+var count = (set) => (v, name) => {
+  if (/^\d+$/.test(v)) set(Number(v));
+  else console.warn(`  Ignoring config label ${name}=${v}: expected a non-negative integer`);
+};
 var CONFIG_LABELS = {
   MODEL: (v) => {
     config.anthropic.model = v;
@@ -46202,6 +46206,12 @@ var CONFIG_LABELS = {
   }),
   BREADTH: flag((on) => {
     config.breadth.enabled = on;
+  }),
+  B_FILES: count((n) => {
+    config.breadth.minFiles = n;
+  }),
+  B_UNTCH: count((n) => {
+    config.breadth.minUntouched = n;
   })
 };
 var bit = (on) => on ? "1" : "0";
@@ -46222,7 +46232,7 @@ function applyBenchmarkConfig(env) {
   if (!env.MAX_CHANGED_LINES) config.thresholds.maxChangedLines = 0;
   config.review.splitCheck = false;
   applyConfigLabels(env);
-  console.log(`Benchmark settings: model=${config.anthropic.model} effort=${config.review.effort || "default"} judge_model=${config.judge.model || "off"} judge_effort=${config.judge.effort || "default"} nits=${bit(config.review.enableNitpicks)} j_minor=${bit(config.judge.policy.keepMinor)} j_unver=${bit(config.judge.policy.keepUnverified)} j_ctx=${bit(config.judge.fileContext)} lnum=${bit(config.review.lineNumbers)} breadth=${bit(config.breadth.enabled)}`);
+  console.log(`Benchmark settings: model=${config.anthropic.model} effort=${config.review.effort || "default"} judge_model=${config.judge.model || "off"} judge_effort=${config.judge.effort || "default"} nits=${bit(config.review.enableNitpicks)} j_minor=${bit(config.judge.policy.keepMinor)} j_unver=${bit(config.judge.policy.keepUnverified)} j_ctx=${bit(config.judge.fileContext)} lnum=${bit(config.review.lineNumbers)} breadth=${bit(config.breadth.enabled)} b_files=${config.breadth.minFiles} b_untch=${config.breadth.minUntouched}`);
   if (config.review.enableNitpicks && !config.judge.policy.keepMinor) {
     console.warn("  NITS=1 but J_MINOR=0 \u2014 nitpicks are logged for offline scoring only; set J_MINOR=1 to post them.");
   }
