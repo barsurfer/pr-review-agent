@@ -12,7 +12,7 @@ const flag = (set: (on: boolean) => void) => (v: string, name: string) => {
   else console.warn(`  Ignoring config label ${name}=${v}: expected 0 or 1`)
 }
 
-// Short keys because the manifest allows only 6 configuration entries; flags default off, so set only the ones turned on.
+// Short keys because the manifest allows only 6 configuration entries; set only labels that change a default (flags default off, LNUM on).
 const CONFIG_LABELS: Record<string, (value: string, name: string) => void> = {
   MODEL: v => { config.anthropic.model = v },
   EFFORT: v => { config.review.effort = v },

@@ -34,7 +34,7 @@ A filtered copy of the diff (lockfiles, generated files stripped) is used for al
 
 ## Generator-Verifier Pattern
 
-The judge runs by default (`JUDGING_MODEL=claude-sonnet-5`; set it empty to disable): the reviewer generates candidate findings and the judge validates each MEDIUM/HIGH finding against the actual diff. Invalid findings are dropped. Use a cheap model for generation (Haiku), a stronger model for validation (Sonnet). The judge is skipped automatically when the reviewer produces zero findings. The judge also emits a per-finding 0–10 confidence (`finding_scores`), logged to `results.jsonl`.
+The judge runs by default (`JUDGING_MODEL=claude-sonnet-5`; set it empty to disable): the reviewer generates candidate findings and the judge validates each MEDIUM/HIGH finding against the actual diff. Invalid findings are dropped. The judge never adds findings, so the reviewer sets the recall ceiling; choose each model per repo and budget. The judge is skipped automatically when the reviewer (and the breadth pass, if it ran) produces zero findings. The judge also emits a per-finding 0–10 confidence (`finding_scores`), logged to `results.jsonl`.
 
 See [prompt/judge.md](prompt/judge.md).
 

@@ -16,7 +16,7 @@ COPY --from=build /src/dist/pr-review-agent.cjs ./pr-review-agent.cjs
 COPY reviewbench/entrypoint.mjs ./entrypoint.mjs
 
 # Defaults only: the RB_CONFIG_MODEL / RB_CONFIG_EFFORT labels override per run. 64k output covers xhigh/max effort thinking.
-# haiku-5-5 reviewer (1M context → big PRs review in one pass) with a stronger sonnet-5 judge.
+# haiku-5-5 reviewer (1M context → big PRs review in one pass) with a sonnet-5 judge.
 # Bundling salvages PRs still over budget, capped at 3 bundles so one giant PR can't run away on cost.
 ENV CLAUDE_MODEL=claude-haiku-5-5 \
     JUDGING_MODEL=claude-sonnet-5 \

@@ -104,7 +104,7 @@ The record is also printed to stdout at the end of every run regardless of the f
 | `tokens.estimated_input` | `number` | Pre-call estimate (`chars / 4`) — compare with `tokens.input` for accuracy |
 | `tokens.cache_read` | `number` | Cache read tokens (reserved for prompt caching) |
 | `tokens.cache_write` | `number` | Cache write tokens (reserved for prompt caching) |
-| `cost_usd` | `number` | Total estimated cost (review + judge) from hardcoded per-model pricing table |
+| `cost_usd` | `number` | Total estimated cost (review + breadth + judge) from hardcoded per-model pricing table |
 | `judge_model` | `string \| null` | Judge model ID, or null if no judge pass |
 | `judge_effort` | `string \| null` | Judge thinking effort (`JUDGE_EFFORT`); null = model default |
 | `judge_tokens` | `object \| null` | `{ input, output }`, or null if no judge pass |
@@ -123,7 +123,7 @@ The record is also printed to stdout at the end of every run regardless of the f
 | `findings` | `object \| null` | `{ high, medium, low }` — final findings (from judge if used, from reviewer otherwise) |
 | `finding_scores` | `array \| null` | Judge per-finding `{ title, severity, score, file?, lines? }`; null if no judge |
 | `min_finding_score` | `number \| null` | Lowest kept finding score |
-| `review_candidates` | `array \| null` | Judge candidates stored once with ids (`c0…`): `{ id, origin, severity, title, file, lines, body }`, `origin` = `review` | `breadth`; judge-run only |
+| `review_candidates` | `array \| null` | Judge candidates stored once with ids (`c0…`): `{ id, origin, severity, title, file, lines, body }`, `origin` = `review` \| `breadth`; judge-run only |
 | `judge_decisions` | `array \| null` | One per candidate: `{ candidate_id, reason_category, reclassified_from, action, original_severity, final_severity, score, evidence, note, rewritten, anchor_source, anchor_file, anchor_lines }`; the resolved anchor is logged for **every decided candidate** (kept or dropped) so an offline re-score can place a finding a different policy would keep; judge-run only |
 | `judge_anomalies` | `object \| null` | `{ unknown_ids, undecided, duplicate_ids, drop_without_evidence }`; judge-run only |
 | `judge_policy` | `object \| null` | `{ keep_minor, keep_unverified, file_context }` flags in effect; only when the judge ran |
@@ -185,7 +185,7 @@ jq -s 'group_by(.pr_author) | map({author: .[0].pr_author, reviews: length}) | s
 jq -s '[.[] | select(.review_findings != null and .findings != null and .judge_model != null) | {pr: .pr_id, raw: .review_findings, validated: .findings, judge: .judge_model}]' results.jsonl
 
 # Judge cost breakdown
-jq -s '[.[] | select(.judge_cost_usd != null) | {pr: .pr_id, review_cost: (.cost_usd - .judge_cost_usd), judge_cost: .judge_cost_usd, total: .cost_usd}]' results.jsonl
+jq -s '[.[] | select(.judge_cost_usd != null) | {pr: .pr_id, review_cost: (.cost_usd - .judge_cost_usd - (.breadth_cost_usd // 0)), breadth_cost: .breadth_cost_usd, judge_cost: .judge_cost_usd, total: .cost_usd}]' results.jsonl
 
 # High-severity findings
 jq -s '[.[] | select(.findings.high > 0) | {repo: .repo_slug, pr: .pr_id, high: .findings.high}]' results.jsonl

@@ -177,8 +177,9 @@ posting. The judge model receives the diff + review text and validates each MEDI
 finding against the actual code. Invalid or fabricated findings are dropped. The judge
 produces a clean final comment with only validated findings and a verdict score.
 
-This enables a cost-effective **generator-verifier** pattern: use a cheap model (Haiku) to
-generate candidate findings, then a stronger model (Sonnet) to validate them.
+This is the **generator-verifier** pattern: the reviewer proposes candidate findings and the
+judge filters them. The judge never adds findings, so the reviewer model sets the recall
+ceiling; choose each model per repo and budget (see [docs/context/prompt/judge.md](docs/context/prompt/judge.md)).
 
 ### Re-reviews and Delta Logic
 

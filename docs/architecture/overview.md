@@ -119,16 +119,18 @@ FETCH_PR_INFO → CHECK_BRANCHES
                                        └─ LOAD_PROMPT → FETCH_CONTEXT → CALL_CLAUDE
                                             → CHECK_NO_CHANGE
                                                ├─ [NO_CHANGE] → CHECK_REPLIES (reply if one is pending, else SKIP) → DONE
-                                               └─ JUDGE_REVIEW
+                                               └─ BREADTH_REVIEW (no-op unless enabled + enough untouched files) → JUDGE_REVIEW
                                                     ├─ [JUDGING_MODEL set] → validate → POST_REVIEW → DONE
                                                     └─ [no judge] → POST_REVIEW → DONE
 ```
 
-**17 states**, **10 possible outcomes**: skip (branch exclusion), skip (no reviewable changes),
+**18 states**, **10 possible outcomes**: skip (branch exclusion), skip (no reviewable changes),
 skip (threshold), skip (same commit, no replies), skip (delta diff empty, no replies),
 skip (reply limit reached), skip (no new findings), reply to developer, skip (NO_CHANGE), or post review. The optional `JUDGE_REVIEW` state sends the review output and diff to a
 separate judge model (`JUDGING_MODEL`) that validates each finding against the actual code
-before posting. When no judge is configured, this state is a no-op passthrough.
+before posting. When no judge is configured, this state is a no-op passthrough. The optional
+`BREADTH_REVIEW` state (`ENABLE_BREADTH_REVIEW`) runs a second reviewer pass focused on files
+the first pass left without findings and appends its findings to the judge's candidates.
 
 ### POST_REVIEW Safety Guards
 

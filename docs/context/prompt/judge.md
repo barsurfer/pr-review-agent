@@ -13,7 +13,7 @@ The optional second-pass validation model (`JUDGING_MODEL`). Related: [prompt/co
 
 Implements the **generator-verifier** pattern: the reviewer model generates candidate findings; the judge model classifies each one against the actual code, and the app applies a policy table to decide what posts. Invalid or fabricated findings are dropped.
 
-**Why:** Cheap reviewer models (Haiku) produce many candidate findings with variable accuracy. A stronger judge (Sonnet) filters noise cheaply compared to using a strong model for generation. The combination improves precision without proportionally increasing cost.
+**Why:** the judge only keeps or drops candidates and never adds one, so the reviewer sets the recall ceiling and its model quality matters most; a cheaper judge can still hold precision. Choose each model per repo and budget — neither role has to be the heavier one. One ReviewBench round (25 PRs, grounded F1) illustrates this but is not a law: Haiku 5.5 reviewer + Sonnet 5 judge 35.0 ($6.49); Sonnet 5.5 + Sonnet 5 40.2 ($10.10); Sonnet 5.5 + Haiku 5.5 38.4 ($5.47), and 40.5 ($5.82) on v0.0.29.
 
 ---
 
@@ -38,10 +38,10 @@ Implements the **generator-verifier** pattern: the reviewer model generates cand
 {the reviewer's file contexts}
 
 ## Review to Validate:
-{reviewer output, each finding tagged [c0], [c1], …}
+{reviewer output, breadth findings appended, each finding tagged [c0], [c1], …}
 ```
 
-By default the judge sees only the diff, while the reviewer also saw full files. That means it can't confirm a claim that rests on unchanged code; such candidates land in `unverifiable`.
+By default the judge sees only the diff, while the reviewer also saw full files. That means it can't confirm a claim that rests on unchanged code; such candidates land in `unverifiable`. With `ENABLE_LINE_NUMBERS` (default on) the diff and file context carry the same line-number gutter the reviewer sees (see [fetching/strategy.md](../fetching/strategy.md)).
 
 When `ENABLE_NITPICKS` is on (see [composition.md](composition.md)), the reviewer emits more real-but-low-impact candidates (dead code, stale docs/comments, misleading names, duplication, vacuous tests); these classify as `minor`, so they post only under `ENABLE_JUDGE_KEEP_MINOR`.
 
@@ -75,7 +75,7 @@ The judge returns one decision per candidate id, each with a `reason_category`. 
 - A category outside the enum → treated as `unverifiable`.
 - `incorrect` / `already_handled` with empty `evidence` → reclassified `unverifiable` (still dropped by default) and counted (`drop_without_evidence`).
 - `rewritten_body` over 600 chars → the reviewer's body is used (even when it is empty).
-- Anchors (`locateInDiff`, first that resolves wins): (1) the reviewer's `file:line` when `lines` is strictly numeric (`42`, `26-31`, `L10-L12`; a symbol that merely contains a digit like `Phase 4` is not a line) — **ungated / `anchor_source: reviewer`**, never diff-validated, since the reviewer sees full files and may cite context/out-of-diff lines; (2) else the judge's `anchor_file`/`anchor_lines` (numeric), accepted only when the line is a changed line in the diff → `anchor_source: judge`; (3) else a single verbatim `anchor_quote` (≥12 chars) located in the diff → `anchor_source: diff`. With none, the finding still posts but has no usable location, so the benchmark drops it from `findings.json` with a `Parse check` warning. Only the judge/quote channels are proven against the diff; the reviewer anchor is additive-only so nothing that anchors today is lost.
+- Anchors (`locateInDiff`, first that resolves wins): (1) the reviewer's `file:line` when `lines` is strictly numeric (`42`, `26-31`, `L10-L12`; a symbol that merely contains a digit like `Phase 4` is not a line) — **ungated / `anchor_source: reviewer`**, never diff-validated, since the reviewer sees full files and may cite context/out-of-diff lines (a breadth candidate's line counts only on a changed line, else it falls through); (2) else the judge's `anchor_file`/`anchor_lines` (numeric), accepted only when the line is a changed line in the diff → `anchor_source: judge`; (3) else a single verbatim `anchor_quote` (≥12 chars, after stripping a copied line-number gutter or leading `+`) located in the diff → `anchor_source: diff`. With none, the finding still posts without a usable line but keeps its file (the reviewer's, else a changed file the judge named); the single-pass benchmark places it on that file's first added line (see [vcs/adapter.md](../vcs/adapter.md)) and drops it from `findings.json` with a `Parse check` warning only when the file is missing, deleted, or not in the diff. Only the judge/quote channels are proven against the diff; the reviewer anchor is additive-only so nothing that anchors today is lost.
 
 ---
 
@@ -84,7 +84,7 @@ The judge returns one decision per candidate id, each with a `reason_category`. 
 - **Structured output:** `decisions[{candidate_id, reason_category, evidence, note, score, rewritten_body?, question?, anchor_file?, anchor_lines?, anchor_quote?}]`, plus `summary`, `behavioral_diff[]`, `production_risk[]`, `unresolved_questions[]`, `merge_confidence`. `anchor_quote` is a verbatim diff line for deterministic anchoring. Schema: [llm/structured-output.md](../llm/structured-output.md).
 - **The app renders the posted comment** (`renderJudgedReview`): kept findings with the reviewer's `file:line` (the judge's anchor when the reviewer's is not numeric) and `rewritten_body ?? reviewer body`, then the reviewer's `Can Be Split` section when present (carried through so `ENABLE_SPLIT_CHECK` works with the judge on; the judge never rules on it), then `### Merge Confidence: X%` and the disclaimer line, byte-compatible with what the judge used to write. Validation reasoning lives only in `note` and `evidence`, so nothing leaks into the post; `stripPreamble()`/`stripJudgeNotes()` stay as defense-in-depth.
 - **Logged to `results.jsonl`, never posted:**
-  - `review_candidates[]` (stored once, with ids) and `judge_decisions[]` (joined by `candidate_id`; effective category, `reclassified_from`, action, original and final severity, score, evidence, note, and the resolved `anchor_source`/`anchor_file`/`anchor_lines` on **every decided candidate** — dropped included — so an offline re-score under a different policy can place what it would keep);
+  - `review_candidates[]` (stored once, with ids and `origin` `review`/`breadth`) and `judge_decisions[]` (joined by `candidate_id`; effective category, `reclassified_from`, action, original and final severity, score, evidence, note, and the resolved `anchor_source`/`anchor_file`/`anchor_lines` on **every decided candidate** — dropped included — so an offline re-score under a different policy can place what it would keep);
   - `judge_anomalies`, and `judge_policy` (only when the judge ran);
   - `finding_scores` / `min_finding_score`, now a projection of kept decisions;
   - `anchored_findings[]` — one compact `{anchor, severity, type, description}` row per kept finding that resolved to a real line.

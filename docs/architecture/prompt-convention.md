@@ -164,7 +164,7 @@ The judge also applies calibration rules cherry-picked from the reviewer's FORBI
 - Findings requiring 3+ chained hypotheticals → downgraded to LOW
 - Framework/library uncertainty → moved to Unresolved Questions
 
-The judge is skipped automatically if the reviewer produces zero findings (nothing to validate).
+The judge is skipped automatically if the reviewer and the breadth pass both produce zero findings (nothing to validate).
 
 When no judge is configured, the review model's output is posted as-is (without a
 Merge Confidence section).
