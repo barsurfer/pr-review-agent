@@ -10,6 +10,7 @@ vi.mock('../../config.js', () => ({
   config: {
     anthropic: { apiKey: 'test-key', model: 'claude-haiku-4-5-20251001', maxRetries: 1, maxInputTokens: 150000, maxTokens: 32000 },
     judge: { model: '', maxRetries: 1, effort: '', policy: { keepMinor: false, keepUnverified: false }, fileContext: false },
+    breadth: { enabled: false, model: '', effort: '', minFiles: 5, minUntouched: 3 },
     agentIdentity: 'test-bot',
     reply: { maxComments: 3 },
     review: { maxFindings: 0, splitCheck: false, todoScan: true, effort: '', enableNitpicks: false },
@@ -28,6 +29,7 @@ vi.mock('../../claude/client.js', () => ({
   runReview: vi.fn(),
   runCommentResponse: vi.fn(),
   runJudge: vi.fn(),
+  runBreadth: vi.fn(),
 }))
 
 vi.mock('../../prompt/loader.js', () => ({
@@ -46,7 +48,7 @@ vi.mock('../usage.js', async (importOriginal) => {
 // Import after mocks
 import { review } from '../index.js'
 import { config, modelContextWindow } from '../../config.js'
-import { runReview, runCommentResponse, runJudge } from '../../claude/client.js'
+import { runReview, runCommentResponse, runJudge, runBreadth } from '../../claude/client.js'
 import { loadPrompt } from '../../prompt/loader.js'
 import { fetchContext } from '../../context/fetcher.js'
 import { logUsageRecord } from '../usage.js'
@@ -715,6 +717,22 @@ describe('gate and judge interaction', () => {
     expect(record!.action).toBe('RE_REVIEW')
     expect(mockRunJudge).not.toHaveBeenCalled()
     expect(adapter.postComment).toHaveBeenCalledTimes(1)
+  })
+
+  it('never runs the breadth pass on a re-review, even when enabled', async () => {
+    cfg.judge.model = 'judge-model'
+    cfg.breadth.enabled = true
+    try {
+      const adapter = reReviewAdapter(FLAGGED_PRIOR)
+      mockReviewer(reviewWith([], { delta_stats: { resolved: 1, still_open: 0, new_findings: 0 } }))
+
+      const record = await review(adapter, '100', false)
+
+      expect(vi.mocked(runBreadth)).not.toHaveBeenCalled()
+      expect(record!.breadth_status).toBe('skipped_rereview')
+    } finally {
+      cfg.breadth.enabled = false
+    }
   })
 
   it('suppresses a noise re-review without calling the judge', async () => {

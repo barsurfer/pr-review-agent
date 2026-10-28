@@ -13,6 +13,7 @@ import { countFindings, normalizeIssueType } from './formatter.js'
 import type { FindingScore, ReviewFinding, IssueType } from './formatter.js'
 import { isAnchored, parseLineRange, normalizeFindingPath } from './findings-output.js'
 import { candidateId, type AppliedDecision, type JudgeAnomalies } from './judge-decisions.js'
+import { MAX_UNTOUCHED_LISTED, type BreadthStatus, type CandidateOrigin } from './breadth.js'
 import type { ReviewContext } from './types.js'
 
 // 12 hex chars of sha256 — enough to tell prompt/code versions apart across runs without bloating the record.
@@ -78,10 +79,16 @@ export interface UsageRecord {
   // One compact read-only row per anchored kept finding; null when the structured judge didn't run.
   anchored_findings: Array<{ anchor: string; severity: ReviewFinding['severity']; type: IssueType; description: string }> | null
   // Candidates are stored once; judge_decisions join to them by candidate_id.
-  review_candidates: Array<{ id: string; severity: ReviewFinding['severity']; title: string; file: string | null; lines: string | null; body: string }> | null
+  review_candidates: Array<{ id: string; origin: CandidateOrigin; severity: ReviewFinding['severity']; title: string; file: string | null; lines: string | null; body: string }> | null
   judge_decisions: AppliedDecision[] | null
   judge_anomalies: JudgeAnomalies | null
   judge_policy: { keep_minor: boolean; keep_unverified: boolean; file_context: boolean } | null
+  breadth_status: BreadthStatus | null
+  breadth_model: string | null
+  breadth_prompt_hash: string | null
+  breadth_tokens: { input: number; output: number } | null
+  breadth_cost_usd: number | null
+  untouched_files: { count: number; paths: string[]; cut: number } | null
   touch_rate: number | null
   delta: { developer_replies: number; resolved: number; still_open: number; new_findings: number } | null
   jenkins: { job: string; build: string; url: string } | null
@@ -201,6 +208,10 @@ export function buildUsageRecord(
   const judgeTokensRaw = ctx.judgeUsage ?? null
   const judgeTokens = judgeTokensRaw ? { input: judgeTokensRaw.input_tokens, output: judgeTokensRaw.output_tokens } : null
   const judgeCost = judgeTokens && judgeModel ? estimateCost(judgeTokens, judgeModel) : null
+  const breadthTokens = ctx.breadthUsage ? { input: ctx.breadthUsage.input_tokens, output: ctx.breadthUsage.output_tokens } : null
+  const breadthCost = breadthTokens && ctx.breadthModel ? estimateCost(breadthTokens, ctx.breadthModel) : null
+  // The bundled path never enters BREADTH_REVIEW, so its status is inferred here.
+  const breadthStatus = ctx.breadthStatus ?? (ctx.bundleCount ? (config.breadth.enabled ? 'skipped_bundled' : 'disabled') : null)
 
   return {
     run_id: `${config.vcsProvider}-${ctx.repoSlug}-${ctx.prId}-${commitShort}`,
@@ -242,9 +253,9 @@ export function buildUsageRecord(
       estimated_input: ctx.estimatedInputTokens,
     },
     cost_usd: estimateCost({
-      input: ctx.usage.input_tokens - (judgeTokens?.input ?? 0),
-      output: ctx.usage.output_tokens - (judgeTokens?.output ?? 0),
-    }, config.anthropic.model) + (judgeCost ?? 0),
+      input: ctx.usage.input_tokens - (judgeTokens?.input ?? 0) - (breadthTokens?.input ?? 0),
+      output: ctx.usage.output_tokens - (judgeTokens?.output ?? 0) - (breadthTokens?.output ?? 0),
+    }, config.anthropic.model) + (judgeCost ?? 0) + (breadthCost ?? 0),
     judge_model: judgeModel,
     judge_effort: config.judge.effort || null,
     judge_tokens: judgeTokens,
@@ -274,12 +285,21 @@ export function buildUsageRecord(
         })
       : null,
     review_candidates: ctx.judgeDecisions && ctx.reviewObject
-      ? ctx.reviewObject.findings.map((f, i) => ({ id: candidateId(i), severity: f.severity, title: f.title, file: f.file ?? null, lines: f.lines ?? null, body: f.body }))
+      ? (ctx.judgeCandidates ?? ctx.reviewObject.findings.map(f => ({ ...f, origin: 'review' as const })))
+          .map((f, i) => ({ id: candidateId(i), origin: f.origin, severity: f.severity, title: f.title, file: f.file ?? null, lines: f.lines ?? null, body: f.body }))
       : null,
     judge_decisions: ctx.judgeDecisions ?? null,
     judge_anomalies: ctx.judgeAnomalies ?? null,
     judge_policy: judgeModel && judgeTokens
       ? { keep_minor: config.judge.policy.keepMinor, keep_unverified: config.judge.policy.keepUnverified, file_context: config.judge.fileContext }
+      : null,
+    breadth_status: breadthStatus,
+    breadth_model: ctx.breadthModel ?? null,
+    breadth_prompt_hash: ctx.breadthPromptHash ?? null,
+    breadth_tokens: breadthTokens,
+    breadth_cost_usd: breadthCost,
+    untouched_files: ctx.untouchedFiles
+      ? { count: ctx.untouchedFiles.length, paths: ctx.untouchedFiles.slice(0, MAX_UNTOUCHED_LISTED), cut: Math.max(0, ctx.untouchedFiles.length - MAX_UNTOUCHED_LISTED) }
       : null,
     touch_rate: ctx.reviewNumber > 1 && deltaStats ? (() => {
       const total = deltaStats.resolved + deltaStats.still_open

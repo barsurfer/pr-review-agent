@@ -116,8 +116,8 @@ describe('buildUsageRecord judge decision fields', () => {
     const r = buildUsageRecord(judged(), 1, null)
 
     expect(r.review_candidates).toEqual([
-      { id: 'c0', severity: 'HIGH', title: 'Race', file: 'a.ts', lines: '3-4', body: 'racy' },
-      { id: 'c1', severity: 'LOW', title: 'Naming', file: null, lines: null, body: 'rename' },
+      { id: 'c0', origin: 'review', severity: 'HIGH', title: 'Race', file: 'a.ts', lines: '3-4', body: 'racy' },
+      { id: 'c1', origin: 'review', severity: 'LOW', title: 'Naming', file: null, lines: null, body: 'rename' },
     ])
     expect(r.judge_decisions).toEqual(judgeDecisions)
     expect(r.judge_anomalies).toEqual(judgeAnomalies)
@@ -167,5 +167,41 @@ describe('buildUsageRecord anchored_findings', () => {
 
   it('is null when the structured judge produced no kept findings (bundled or no judge)', () => {
     expect(buildUsageRecord(baseCtx(), 1, null).anchored_findings).toBeNull()
+  })
+})
+
+describe('buildUsageRecord breadth fields', () => {
+  const baseCtx = (over: Partial<ReviewContext> = {}): ReviewContext => ({
+    adapter: {}, prId: '7', dryRun: false, force: 'off', logUsage: false, repoSlug: 'repo',
+    usage: { input_tokens: 3_000, output_tokens: 1_000, cache_read: 0, cache_write: 0 },
+    estimatedInputTokens: 10, action: 'REVIEW', reviewNumber: 1,
+    ...over,
+  } as unknown as ReviewContext)
+  let cfg: { anthropic: { model: string }; judge: { model: string }; breadth: { enabled: boolean } }
+  let saved: { model: string; judge: string; enabled: boolean }
+  beforeAll(async () => { cfg = (await import('../../config.js')).config as unknown as typeof cfg })
+  beforeEach(() => {
+    saved = { model: cfg.anthropic.model, judge: cfg.judge.model, enabled: cfg.breadth.enabled }
+    cfg.anthropic.model = 'claude-sonnet-5-5'; cfg.judge.model = 'claude-haiku-5-5'
+  })
+  afterEach(() => { cfg.anthropic.model = saved.model; cfg.judge.model = saved.judge; cfg.breadth.enabled = saved.enabled })
+
+  it('prices breadth tokens at the breadth model and keeps them out of the reviewer bucket', () => {
+    const r = buildUsageRecord(baseCtx({
+      judgeUsage: { input_tokens: 1_000, output_tokens: 200 },
+      breadthUsage: { input_tokens: 1_000, output_tokens: 300 }, breadthModel: 'claude-haiku-5-5', breadthStatus: 'succeeded',
+    }), 1, null)
+    const reviewer = estimateCost({ input: 1_000, output: 500 }, 'claude-sonnet-5-5')
+    expect(r.breadth_cost_usd).toBe(estimateCost({ input: 1_000, output: 300 }, 'claude-haiku-5-5'))
+    expect(r.cost_usd).toBeCloseTo(reviewer + r.judge_cost_usd! + r.breadth_cost_usd!, 4)
+    expect(r.breadth_tokens).toEqual({ input: 1_000, output: 300 })
+  })
+
+  it('infers skipped_bundled / disabled for a bundled run, and is null when the stage was never reached', () => {
+    cfg.breadth.enabled = true
+    expect(buildUsageRecord(baseCtx({ bundleCount: 2 }), 1, null).breadth_status).toBe('skipped_bundled')
+    cfg.breadth.enabled = false
+    expect(buildUsageRecord(baseCtx({ bundleCount: 2 }), 1, null).breadth_status).toBe('disabled')
+    expect(buildUsageRecord(baseCtx(), 1, null).breadth_status).toBeNull()
   })
 })

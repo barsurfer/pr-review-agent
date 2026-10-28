@@ -5,9 +5,10 @@
 import type { VCSAdapter, PRInfo, ChangedFile, ReviewComment, CommentReply } from '../vcs/adapter.js'
 import type { LoadedPrompt } from '../prompt/loader.js'
 import type { FileContext } from '../context/fetcher.js'
-import type { ReviewObject, FindingScore } from './formatter.js'
+import type { ReviewObject, ReviewFinding, FindingScore } from './formatter.js'
 import type { KeptFinding } from './findings-output.js'
 import type { AppliedDecision, JudgeAnomalies } from './judge-decisions.js'
+import type { BreadthStatus, CandidateOrigin } from './breadth.js'
 
 /** Every node in the review flow. */
 export enum State {
@@ -23,6 +24,7 @@ export enum State {
   ESTIMATE_TOKENS,
   CALL_CLAUDE,
   CHECK_NO_CHANGE,
+  BREADTH_REVIEW,
   JUDGE_REVIEW,
   BUNDLED_REVIEW,
   POST_REVIEW,
@@ -37,6 +39,7 @@ export interface ReviewOutcome {
   judged: boolean
   judgeScores?: FindingScore[]
   judgedFindings?: KeptFinding[]   // set only by the single-pass structured judge; bundled review leaves it unset
+  breadthFindings?: ReviewFinding[]
 }
 
 export type OutcomeSink = (outcome: ReviewOutcome) => void | Promise<void>
@@ -78,6 +81,14 @@ export interface ReviewContext {
   judgeDecisions?: AppliedDecision[]
   judgeAnomalies?: JudgeAnomalies
   judgedFindings?: KeptFinding[]
+  // Kept apart from reviewObject so reviewer metrics and the judge-failure fallback stay reviewer-only.
+  breadthFindings?: ReviewFinding[]
+  breadthStatus?: BreadthStatus
+  breadthModel?: string
+  breadthPromptHash?: string
+  breadthUsage?: { input_tokens: number; output_tokens: number }
+  untouchedFiles?: string[]
+  judgeCandidates?: Array<ReviewFinding & { origin: CandidateOrigin }>
   estimatedInputTokens: number
 
   // Tracking

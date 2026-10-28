@@ -11,6 +11,7 @@ vi.mock('../config.js', () => ({
     vcsProvider: 'bitbucket',
     anthropic: { apiKey: 'test-key', model: 'claude-haiku-4-5-20251001', baseUrl: '', maxRetries: 1, maxInputTokens: 250000, maxTokens: 32000 },
     judge: { model: 'claude-sonnet-5', maxRetries: 1, effort: '', policy: { keepMinor: false, keepUnverified: false }, fileContext: false },
+    breadth: { enabled: false, model: '', effort: '', minFiles: 5, minUntouched: 3 },
     agentIdentity: 'test-bot',
     reply: { maxComments: 5 },
     review: { maxFindings: 0, splitCheck: true, todoScan: true, effort: '', enableNitpicks: false },
@@ -32,7 +33,7 @@ vi.mock('../llm/provider.js', () => ({
 
 import { runBenchmark } from '../benchmark.js'
 import { config } from '../config.js'
-import { REVIEW_OUTPUT_SCHEMA } from '../claude/client.js'
+import { REVIEW_OUTPUT_SCHEMA, BREADTH_OUTPUT_SCHEMA } from '../claude/client.js'
 import type { ReviewObject } from '../review/formatter.js'
 import type { JudgeOutput } from '../review/judge-decisions.js'
 
@@ -133,6 +134,7 @@ beforeEach(() => {
   cfg.anthropic.maxInputTokens = 250000
   cfg.judge ={ model: 'claude-sonnet-5', maxRetries: 1, effort: '', policy: { keepMinor: false, keepUnverified: false }, fileContext: false }
   cfg.review = { maxFindings: 0, splitCheck: true, todoScan: true, effort: '' }
+  cfg.breadth = { enabled: false, model: '', effort: '', minFiles: 5, minUntouched: 3 }
   cfg.skipSourceBranches = ['main', 'master', 'release/*', 'hotfix/*']
   cfg.skipTargetBranches = ['main', 'master']
   cfg.thresholds = { minChangedFiles: 0, maxChangedFiles: 200, minChangedLines: 0, maxChangedLines: 3000 }
@@ -399,6 +401,182 @@ describe('benchmark bundled review (prose merge path)', () => {
       'src/pool.ts:2-3 Race on conns',
       'src/pool.ts:4-4 Cited by basename',
     ])
+  })
+})
+
+describe('breadth review (end-to-end)', () => {
+  const FILES = ['a', 'b', 'c', 'd', 'e']
+  const multiDiff = FILES.map(n => `diff --git a/src/${n}.ts b/src/${n}.ts\nnew file mode 100644\n--- /dev/null\n+++ b/src/${n}.ts\n@@ -0,0 +1,2 @@\n+export const ${n} = 1\n+export const ${n}2 = 2\n`).join('')
+  const firstPass: ReviewObject = { summary: 's', findings: [{ severity: 'MEDIUM', title: 'A bug', file: 'src/a.ts', lines: '1', body: 'a is wrong.' }], behavioral_diff: [], production_risk: [], unresolved_questions: [] }
+  const breadthOut = { findings: [{ severity: 'MEDIUM', title: 'Same bug in b', file: 'src/b.ts', lines: '1', body: 'b repeats a.' }] }
+  const keepAll = (n: number): JudgeOutput => ({
+    decisions: Array.from({ length: n }, (_, i) => ({ candidate_id: `c${i}`, reason_category: 'validated', evidence: 'src/x.ts:1', note: 'n', score: 8 })),
+    summary: 's', behavioral_diff: [], production_risk: [], unresolved_questions: [], merge_confidence: 80,
+  })
+  const multiFixture = () => {
+    const env = fixture({ diff: multiDiff })
+    for (const n of FILES) writeFileSync(join(env.RB_REPO, 'src', `${n}.ts`), `export const ${n} = 1\nexport const ${n}2 = 2\n`)
+    return env
+  }
+  const respond = (review: ReviewObject, breadth: unknown, judged: JudgeOutput) =>
+    completeStructured.mockImplementation(async (_s: string, _u: string, schema: unknown) => {
+      if (schema === REVIEW_OUTPUT_SCHEMA) return { object: review, usage }
+      if (schema === BREADTH_OUTPUT_SCHEMA) {
+        if (breadth instanceof Error) throw breadth
+        return { object: breadth, usage }
+      }
+      return { object: judged, usage }
+    })
+  const usageRecord = () => {
+    const out = logSpy.mock.calls.map(c => c.join(' ')).find(l => l.startsWith('\n=== Usage ==='))!
+    return JSON.parse(out.slice(out.indexOf('{')))
+  }
+
+  it('runs on untouched files, judges reviewer + breadth candidates together, and writes both', async () => {
+    cfg.breadth.enabled = true
+    respond(firstPass, breadthOut, keepAll(2))
+    const env = multiFixture()
+
+    await runBenchmark(env)
+
+    expect(completeStructured).toHaveBeenCalledTimes(3)
+    const [breadthSystem, breadthUser, breadthSchema] = completeStructured.mock.calls[1]
+    expect(breadthSchema).toBe(BREADTH_OUTPUT_SCHEMA)
+    expect(breadthSystem).toContain('## BREADTH LENS')
+    expect(breadthUser).toContain('- src/a.ts:1 — A bug')
+    expect(breadthUser).toContain('## Files with no finding yet:\n- src/b.ts\n- src/c.ts\n- src/d.ts\n- src/e.ts')
+    const judgeUser = completeStructured.mock.calls[2][1] as string
+    expect(judgeUser).toContain('[c1] **MEDIUM – Same bug in b**')
+    expect(judgeUser).not.toContain('origin')
+    expect(readOut(env).findings.map((f: any) => `${f.file}:${f.start_line}`)).toEqual(['src/a.ts:1', 'src/b.ts:1'])
+
+    const r = usageRecord()
+    expect(r.breadth_status).toBe('succeeded')
+    expect(r.breadth_model).toBe('claude-sonnet-5')
+    expect(r.review_candidates.map((c: any) => c.origin)).toEqual(['review', 'breadth'])
+    expect(r.review_findings).toEqual({ high: 0, medium: 1, low: 0 })
+    expect(r.untouched_files).toEqual({ count: 4, paths: ['src/b.ts', 'src/c.ts', 'src/d.ts', 'src/e.ts'], cut: 0 })
+    expect(r.breadth_tokens).toEqual({ input: 100, output: 50 })
+    expect(logSpy.mock.calls.map(c => c.join(' ')).join('\n')).toContain('reviewer 1, breadth 1, judge kept 2')
+  })
+
+  it('runs the judge when the reviewer found nothing but breadth did', async () => {
+    cfg.breadth.enabled = true
+    respond({ ...firstPass, findings: [] }, breadthOut, keepAll(1))
+    const env = multiFixture()
+
+    await runBenchmark(env)
+
+    expect(completeStructured).toHaveBeenCalledTimes(3)
+    expect(readOut(env).findings.map((f: any) => f.file)).toEqual(['src/b.ts'])
+  })
+
+  it('a failed breadth call never fails the run: reviewer findings still get judged and written', async () => {
+    cfg.breadth.enabled = true
+    respond(firstPass, new Error('529 overloaded'), keepAll(1))
+    const warnSpy = vi.spyOn(console, 'warn')
+    const env = multiFixture()
+
+    await runBenchmark(env)
+
+    expect(readOut(env).findings.map((f: any) => f.file)).toEqual(['src/a.ts'])
+    expect(usageRecord().breadth_status).toBe('failed')
+    expect(warnSpy.mock.calls.map(c => c.join(' ')).join('\n')).toContain('Breadth review FAILED')
+    warnSpy.mockRestore()
+  })
+
+  it.each([
+    ['skipped_small', () => fixture(), {}],
+    ['skipped_few_untouched', multiFixture, { minUntouched: 5 }],
+    ['skipped_no_judge', multiFixture, {}],
+  ] as const)('records %s and makes no breadth call', async (status, make, over) => {
+    cfg.breadth = { ...cfg.breadth, enabled: true, ...over }
+    if (status === 'skipped_no_judge') cfg.judge.model = ''
+    respond(firstPass, breadthOut, keepAll(1))
+
+    await runBenchmark(make())
+
+    expect(completeStructured.mock.calls.some(c => c[2] === BREADTH_OUTPUT_SCHEMA)).toBe(false)
+    expect(usageRecord().breadth_status).toBe(status)
+  })
+
+  it('skips when the breadth input would exceed the budget the reviewer fit into', async () => {
+    cfg.breadth.enabled = true
+    respond(firstPass, breadthOut, keepAll(1))
+    await runBenchmark(multiFixture())
+    const estimate = Number(logSpy.mock.calls.map(c => c.join(' ')).join('\n').match(/Estimated input: ~([\d,]+) tokens/)![1].replace(/,/g, ''))
+
+    logSpy.mockClear(); completeStructured.mockClear()
+    cfg.anthropic.maxInputTokens = estimate + 5
+    await runBenchmark(multiFixture())
+
+    expect(completeStructured.mock.calls.some(c => c[2] === BREADTH_OUTPUT_SCHEMA)).toBe(false)
+    expect(usageRecord().breadth_status).toBe('skipped_budget')
+  })
+
+  it('folds a truncated breadth response into usage, so the failed call is still costed', async () => {
+    cfg.breadth.enabled = true
+    respond(firstPass, Object.assign(new Error('max_tokens cut-off'), { usage: { input_tokens: 70, output_tokens: 30 } }), keepAll(1))
+
+    await runBenchmark(multiFixture())
+
+    const r = usageRecord()
+    expect(r.breadth_status).toBe('failed')
+    expect(r.breadth_tokens).toEqual({ input: 70, output: 30 })
+  })
+
+  it('resolves the breadth model at run time, so a JUDGE_MODEL label also moves breadth', async () => {
+    cfg.breadth.enabled = true
+    respond(firstPass, breadthOut, keepAll(2))
+
+    await runBenchmark({ ...multiFixture(), RB_CONFIG_JUDGE_MODEL: 'claude-haiku-5-5' })
+
+    const breadthCall = completeStructured.mock.calls.find(c => c[2] === BREADTH_OUTPUT_SCHEMA)!
+    expect(breadthCall[3]).toMatchObject({ model: 'claude-haiku-5-5' })
+    expect(usageRecord().breadth_model).toBe('claude-haiku-5-5')
+  })
+
+  it('runs at exactly BREADTH_MIN_UNTOUCHED untouched files', async () => {
+    cfg.breadth = { ...cfg.breadth, enabled: true, minUntouched: 4 }
+    respond(firstPass, breadthOut, keepAll(2))
+
+    await runBenchmark(multiFixture())
+
+    expect(usageRecord().breadth_status).toBe('succeeded')
+  })
+
+  it('MAX_FINDINGS caps both passes together: breadth gets what is left, or is skipped', async () => {
+    cfg.breadth.enabled = true
+    cfg.review.maxFindings = 3
+    respond(firstPass, breadthOut, keepAll(2))
+    await runBenchmark(multiFixture())
+    expect(completeStructured.mock.calls.find(c => c[2] === BREADTH_OUTPUT_SCHEMA)![0]).toContain('Report at most 2 findings')
+
+    logSpy.mockClear(); completeStructured.mockClear()
+    cfg.review.maxFindings = 1
+    await runBenchmark(multiFixture())
+    expect(usageRecord().breadth_status).toBe('skipped_limit')
+  })
+
+  it('BREADTH=1 enables it from the run config, and is echoed', async () => {
+    respond(firstPass, breadthOut, keepAll(2))
+    await runBenchmark({ ...multiFixture(), RB_CONFIG_BREADTH: '1' })
+
+    expect(cfg.breadth.enabled).toBe(true)
+    expect(logSpy.mock.calls.map(c => c.join(' ')).join('\n')).toContain('breadth=1')
+  })
+})
+
+// Pins the default path: a snapshot diff here means the breadth feature leaked into flag-off runs.
+describe('flag-off regression pin', () => {
+  it('judge system prompt, judge input and findings.json are unchanged', async () => {
+    const env = fixture()
+    await runBenchmark(env)
+
+    expect(completeStructured).toHaveBeenCalledTimes(2)
+    expect(completeStructured.mock.calls[1][0]).toMatchSnapshot('judge system prompt')
+    expect(completeStructured.mock.calls[1][1]).toMatchSnapshot('judge user message')
+    expect(readOut(env).findings).toMatchSnapshot('findings.json')
   })
 })
 

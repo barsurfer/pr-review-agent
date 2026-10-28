@@ -31,14 +31,15 @@ FETCH_PR_INFO
                       └─ LOAD_PROMPT → FETCH_CONTEXT → CALL_CLAUDE
                            └─ CHECK_NO_CHANGE
                                 ├─ [NO_CHANGE] → CHECK_REPLIES (answer a dev reply even with no code change; else SKIP, label kept NO_CHANGE)
-                                └─ JUDGE_REVIEW
-                                     ├─ [JUDGING_MODEL set] → validate → POST_REVIEW → DONE
-                                     └─ [no judge] → POST_REVIEW → DONE
+                                └─ BREADTH_REVIEW (passthrough unless ENABLE_BREADTH_REVIEW + triggered)
+                                     └─ JUDGE_REVIEW
+                                          ├─ [JUDGING_MODEL set] → validate reviewer + breadth candidates → POST_REVIEW → DONE
+                                          └─ [no judge] → POST_REVIEW → DONE
 ```
 
 **Bundled path (`ENABLE_BUNDLED_REVIEW=true`, default off):** after `FETCH_CONTEXT`, `ESTIMATE_TOKENS` drops file contexts if over `MAX_INPUT_TOKENS`; if the diff alone is still over budget it routes to `BUNDLED_REVIEW` instead of SKIP, then `POST_REVIEW`. In-budget PRs never enter it.
 
-**17 states. 10 possible outcomes:**
+**18 states. 10 possible outcomes:**
 1. Skip — branch exclusion
 2. Skip — no reviewable changes after exclusions
 3. Skip — threshold (too few/many reviewable files or lines)
@@ -67,7 +68,8 @@ FETCH_PR_INFO
 | `ESTIMATE_TOKENS` | Estimates input (~chars/4); over the input budget (min of `MAX_INPUT_TOKENS` and the context window — the smaller of the reviewer's and judge's, derived from the model id or `MODEL_CONTEXT_TOKENS` — minus the output reserve) → drops file contexts (diff-only); still over → `BUNDLED_REVIEW` when enabled, else SKIP |
 | `CALL_CLAUDE` | Assembles payload (PR info, prior review, developer discussion, diff, file context); calls reviewer model. The reviewer returns a typed object (`ctx.reviewObject`); `renderReview` builds `reviewText`. See [llm/structured-output.md](../llm/structured-output.md) |
 | `CHECK_NO_CHANGE` | Inspects `reviewText` for the `NO_CHANGE` sentinel (rendered when the reviewer sets `no_change`) before any further processing |
-| `JUDGE_REVIEW` | If `JUDGING_MODEL` set: sends diff + review to judge for finding validation; stores per-finding scores (`ctx.judgeScores`). Otherwise passthrough |
+| `BREADTH_REVIEW` | Off unless `ENABLE_BREADTH_REVIEW`. On a first, single-pass review with a judge configured, ≥`BREADTH_MIN_FILES` (5) reviewable changed files and ≥`BREADTH_MIN_UNTOUCHED` (3) of them without any reviewer finding, runs a second reviewer-sized call (`runBreadth`) on `BREADTH_MODEL` (unset → judge model, resolved here so benchmark labels apply). Same system prompt + a `## BREADTH LENS` block (untouched files, same defect elsewhere, changed-together, incomplete changes — all on added/modified lines), same diff/contexts + first-pass findings (`file:lines — title`) + the untouched list. Findings go to `ctx.breadthFindings` (never into `reviewObject`, so reviewer metrics and the judge-failure fallback stay reviewer-only). Every skip and failure is recorded in `breadth_status`; a failure never fails the review. **Why:** run 312 left 32% of golden issues in files with no finding at all |
+| `JUDGE_REVIEW` | If `JUDGING_MODEL` set: sends diff + review to judge for finding validation; stores per-finding scores (`ctx.judgeScores`). With breadth findings, the judge gets reviewer + breadth candidates in one call (ids in that order, `origin` logged in `review_candidates`, never shown to the judge). Skipped only when both lists are empty. Otherwise passthrough |
 | `BUNDLED_REVIEW` | Big-PR map-reduce (`bundled.ts`): `planBundles` groups per-file diffs by directory into bundles of ≤85% of the input budget (min of `MAX_INPUT_TOKENS` and model context) minus fixed overhead (prompt, history); per bundle runs the normal `runReview` + `runJudge` sequentially with that bundle's diff/delta/file contexts; `aggregate.ts` parses each result's markdown, dedupes findings (same file + overlapping lines + similar title), merges sections, Merge Confidence = min across bundles. Files bigger than a whole bundle are listed under Unresolved Questions as unreviewed. Skips if bundles > `MAX_BUNDLES` (default 8) or fixed overhead leaves no room. While enabled, `MAX_CHANGED_FILES/LINES` don't skip. Not handled: unanswered-reply routing on 0-finding re-reviews |
 | `POST_REVIEW` | Applies safety guards (empty/NO_CHANGE guard, pre-post dedup), then posts comment via VCS API. With an outcome sink (`--benchmark`), it passes the structured review + judge result to the sink instead and skips cleanup, guards and posting |
 | `RESPOND_TO_REPLIES` | Bundles unanswered developer questions; calls Claude with reply prompt; posts threaded reply |

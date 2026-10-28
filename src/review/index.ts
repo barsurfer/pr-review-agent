@@ -5,10 +5,11 @@
 import { config, modelContextWindow } from '../config.js'
 import { loadPrompt } from '../prompt/loader.js'
 import { fetchContext } from '../context/fetcher.js'
-import { runReview, runCommentResponse, runJudge } from '../claude/client.js'
+import { runReview, runCommentResponse, runJudge, runBreadth } from '../claude/client.js'
+import { fileCoverage, breadthSystemPrompt, breadthBriefing } from './breadth.js'
 import { filterDiff, countChangedLines, parseVerdictScore, isPathExcluded, scanTodos, isContextLengthError, shownLength } from './parsers.js'
 import { buildReviewFooter, buildReplyFooter, stripPreviousFooter, stripDeltaStats, stripJudgeNotes, stripJenkinsMeta, stripPreamble, isNoChange, extractCommitHash, countFindings, markdownHasFindings, hasReplyFooter } from './formatter.js'
-import { runBundledReview } from './bundled.js'
+import { runBundledReview, addUsage } from './bundled.js'
 import { buildUsageRecord, logUsageRecord, getBuildCommit, getJobUrl } from './usage.js'
 import { State } from './types.js'
 
@@ -407,6 +408,61 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         // rather than skip, so a reply on a PR with only trivial new commits isn't dropped.
         return State.CHECK_REPLIES
       }
+      return State.BREADTH_REVIEW
+    }
+
+    case State.BREADTH_REVIEW: {
+      // Breadth findings are only ever posted after judging, so without a judge the call would be paid for and lost.
+      if (!config.breadth.enabled) { ctx.breadthStatus = 'disabled'; return State.JUDGE_REVIEW }
+      if (!config.judge.model) { ctx.breadthStatus = 'skipped_no_judge'; return State.JUDGE_REVIEW }
+      if (ctx.reviewNumber > 1) { ctx.breadthStatus = 'skipped_rereview'; return State.JUDGE_REVIEW }
+
+      const firstPass = ctx.reviewObject?.findings ?? []
+      const coverage = fileCoverage(ctx.filteredDiff!, firstPass)
+      ctx.untouchedFiles = coverage.untouched
+      if (coverage.reviewable.length < config.breadth.minFiles) { ctx.breadthStatus = 'skipped_small'; return State.JUDGE_REVIEW }
+      if (coverage.untouched.length < config.breadth.minUntouched) { ctx.breadthStatus = 'skipped_few_untouched'; return State.JUDGE_REVIEW }
+      const remaining = config.review.maxFindings > 0 ? config.review.maxFindings - firstPass.length : 0
+      if (config.review.maxFindings > 0 && remaining <= 0) { ctx.breadthStatus = 'skipped_limit'; return State.JUDGE_REVIEW }
+
+      // Resolved here, after benchmark labels were applied, so RB_CONFIG_JUDGE_MODEL also picks the breadth model.
+      const model = config.breadth.model || config.judge.model
+      const effort = config.breadth.effort || (config.breadth.model ? '' : config.judge.effort)
+      const system = breadthSystemPrompt(ctx.prompt!.content, remaining)
+      const briefing = breadthBriefing(firstPass, coverage.untouched)
+      const estimate = ctx.estimatedInputTokens + Math.ceil((system.length - ctx.prompt!.content.length + briefing.length) / 4)
+      // A 0 limit means "disabled", as in ESTIMATE_TOKENS; without this filter MAX_INPUT_TOKENS=0 would skip every breadth pass.
+      const limits = [config.anthropic.maxInputTokens, modelContextWindow(model) - config.anthropic.maxTokens].filter(n => n > 0)
+      const budget = limits.length ? Math.min(...limits) : Infinity
+      if (estimate > budget) {
+        ctx.breadthStatus = 'skipped_budget'
+        console.log(`  Breadth review skipped: ~${estimate.toLocaleString()} tokens exceeds the ${model} budget (${budget.toLocaleString()})`)
+        return State.JUDGE_REVIEW
+      }
+
+      ctx.breadthModel = model
+      console.log(`  Breadth review: ${coverage.untouched.length} untouched of ${coverage.reviewable.length} reviewable file(s)`)
+      try {
+        const result = await runBreadth(
+          config.anthropic.apiKey, model, config.judge.maxRetries, config.anthropic.maxTokens, effort,
+          ctx.prInfo!, ctx.filteredDiff!, ctx.fileContexts ?? [], system, briefing, config.review.lineNumbers,
+        )
+        ctx.breadthFindings = result.findings
+        ctx.breadthPromptHash = result.promptHash
+        ctx.breadthUsage = { input_tokens: result.usage.input_tokens, output_tokens: result.usage.output_tokens }
+        addUsage(ctx, result.usage)
+        ctx.breadthStatus = 'succeeded'
+        console.log(`  Breadth review: ${coverage.untouched.length} untouched file(s) → ${result.findings.length} finding(s)`)
+      } catch (err: unknown) {
+        // A truncated response carries its usage; count it so the record shows what the failed call cost.
+        const e = err as Error & { usage?: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } }
+        if (e.usage) {
+          ctx.breadthUsage = { input_tokens: e.usage.input_tokens, output_tokens: e.usage.output_tokens }
+          addUsage(ctx, e.usage)
+        }
+        ctx.breadthStatus = 'failed'
+        console.warn(`  Breadth review FAILED (${isContextLengthError(err) ? 'context length' : e.message}) — continuing with first-pass findings only`)
+      }
       return State.JUDGE_REVIEW
     }
 
@@ -454,11 +510,20 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         return State.POST_REVIEW
       }
 
-      if (noFindings) {
+      // The re-review gate above stays on reviewer findings; the judge runs whenever there is anything to validate.
+      const breadth = ctx.breadthFindings ?? []
+      if (noFindings && breadth.length === 0) {
         ctx.judgeStatus = 'skipped_no_findings'
         console.log('  Skipping judge — no findings to validate')
         return State.POST_REVIEW
       }
+
+      const firstPass = ctx.reviewObject?.findings ?? []
+      ctx.judgeCandidates = [
+        ...firstPass.map(f => ({ ...f, origin: 'review' as const })),
+        ...breadth.map(f => ({ ...f, origin: 'breadth' as const })),
+      ]
+      const judgeInput = breadth.length ? { ...ctx.reviewObject!, findings: [...firstPass, ...breadth] } : ctx.reviewObject!
 
       ctx.reviewTextBeforeJudge = ctx.reviewText
       try {
@@ -469,7 +534,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
           config.anthropic.maxTokens,
           config.judge.effort,
           ctx.filteredDiff!,
-          ctx.reviewObject!,
+          judgeInput,
           config.judge.fileContext ? ctx.fileContexts ?? [] : [],
           config.judge.policy,
           config.review.lineNumbers,
@@ -532,7 +597,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
     case State.POST_REVIEW: {
       // The sink takes the structured review instead of a posted comment, so cleanup, cut guard and footer don't apply.
       if (ctx.outcomeSink) {
-        await ctx.outcomeSink({ review: ctx.reviewObject!, reviewText: ctx.reviewText!, judged: ctx.judgeUsage !== undefined, judgeScores: ctx.judgeScores, judgedFindings: ctx.judgedFindings })
+        await ctx.outcomeSink({ review: ctx.reviewObject!, reviewText: ctx.reviewText!, judged: ctx.judgeUsage !== undefined, judgeScores: ctx.judgeScores, judgedFindings: ctx.judgedFindings, breadthFindings: ctx.breadthFindings })
         ctx.action = 'REVIEW'
         return State.DONE
       }

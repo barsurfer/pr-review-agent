@@ -3,7 +3,7 @@ import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { createHash } from 'crypto'
 import { createProvider } from '../llm/provider.js'
-import { renderReview, ISSUE_TYPES, type ReviewObject, type FindingScore } from '../review/formatter.js'
+import { renderReview, ISSUE_TYPES, type ReviewObject, type ReviewFinding, type FindingScore } from '../review/formatter.js'
 import type { KeptFinding } from '../review/findings-output.js'
 import {
   REASON_CATEGORIES, DEFAULT_JUDGE_POLICY, applyJudgeDecisions, renderCandidatesForJudge, summarizeDecisions,
@@ -148,6 +148,36 @@ export async function runReview(
   console.log(`Review received (${usage.input_tokens} in / ${usage.output_tokens} out tokens, ${object.no_change ? 'NO_CHANGE' : `${object.findings.length} findings`})`)
 
   return { text, usage, review: object }
+}
+
+// Findings only, with the reviewer's item schema so the two can't drift; a distinct object because callers and tests dispatch on schema identity.
+export const BREADTH_OUTPUT_SCHEMA = {
+  type: 'object',
+  properties: { findings: REVIEW_OUTPUT_SCHEMA.properties.findings },
+  required: ['findings'],
+  additionalProperties: false,
+} as const
+
+export async function runBreadth(
+  apiKey: string,
+  model: string,
+  maxRetries: number,
+  maxTokens: number,
+  effort: string,
+  prInfo: PRInfo,
+  diff: string,
+  fileContexts: FileContext[],
+  systemPrompt: string,
+  briefing: string,
+  lineNumbers = false,
+): Promise<{ findings: ReviewFinding[]; usage: ClaudeUsage; promptHash: string }> {
+  const userMessage = `${buildUserMessage(prInfo, diff, fileContexts, [], [], '', lineNumbers)}\n\n${briefing}`
+  console.log(`Sending to breadth reviewer (${model}, maxRetries: ${maxRetries})...`)
+  const { object, usage } = await createProvider(apiKey).completeStructured<{ findings: ReviewFinding[] }>(
+    systemPrompt, userMessage, BREADTH_OUTPUT_SCHEMA, { model, maxTokens, maxRetries, effort: effort || undefined },
+  )
+  console.log(`Breadth received (${usage.input_tokens} in / ${usage.output_tokens} out tokens, ${object.findings?.length ?? 0} findings)`)
+  return { findings: object.findings ?? [], usage, promptHash: createHash('sha256').update(systemPrompt).digest('hex').slice(0, 12) }
 }
 
 function buildUserMessage(

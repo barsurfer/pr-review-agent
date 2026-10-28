@@ -23,6 +23,7 @@ const CONFIG_LABELS: Record<string, (value: string, name: string) => void> = {
   J_UNVER: flag(on => { config.judge.policy.keepUnverified = on }),
   J_CTX: flag(on => { config.judge.fileContext = on }),
   LNUM: flag(on => { config.review.lineNumbers = on }),
+  BREADTH: flag(on => { config.breadth.enabled = on }),
 }
 
 const bit = (on: boolean): string => (on ? '1' : '0')
@@ -48,7 +49,7 @@ function applyBenchmarkConfig(env: NodeJS.ProcessEnv): void {
   applyConfigLabels(env)
   // The harness flags any config label whose value never appears in the agent's output.
   // Flags print under their label keys and 0/1 values, so a label set in the UI and a baked ENABLE_* value both show up here.
-  console.log(`Benchmark settings: model=${config.anthropic.model} effort=${config.review.effort || 'default'} judge_model=${config.judge.model || 'off'} judge_effort=${config.judge.effort || 'default'} nits=${bit(config.review.enableNitpicks)} j_minor=${bit(config.judge.policy.keepMinor)} j_unver=${bit(config.judge.policy.keepUnverified)} j_ctx=${bit(config.judge.fileContext)} lnum=${bit(config.review.lineNumbers)}`)
+  console.log(`Benchmark settings: model=${config.anthropic.model} effort=${config.review.effort || 'default'} judge_model=${config.judge.model || 'off'} judge_effort=${config.judge.effort || 'default'} nits=${bit(config.review.enableNitpicks)} j_minor=${bit(config.judge.policy.keepMinor)} j_unver=${bit(config.judge.policy.keepUnverified)} j_ctx=${bit(config.judge.fileContext)} lnum=${bit(config.review.lineNumbers)} breadth=${bit(config.breadth.enabled)}`)
   // Nitpicks emit but the default policy drops minor, so without keepMinor nothing new posts.
   if (config.review.enableNitpicks && !config.judge.policy.keepMinor) {
     console.warn('  NITS=1 but J_MINOR=0 — nitpicks are logged for offline scoring only; set J_MINOR=1 to post them.')
@@ -75,7 +76,7 @@ export async function runBenchmark(env: NodeJS.ProcessEnv = process.env): Promis
         const placed = anchorToFile(outcome.judgedFindings, firstAddedLines(await adapter.getDiff(prNumber)), changedFiles)
         findings = keptToReportFindings(placed, rb.agent, changedPaths)
         const fileLevel = placed.filter(k => k.anchorSource === 'file')
-        console.log(`Benchmark findings: reviewer ${outcome.review.findings.length}, judge kept ${outcome.judgedFindings.length}, line-anchored ${findings.length} (${fileLevel.length} placed on the file's first changed line)`)
+        console.log(`Benchmark findings: reviewer ${outcome.review.findings.length}, breadth ${outcome.breadthFindings?.length ?? 0}, judge kept ${outcome.judgedFindings.length}, line-anchored ${findings.length} (${fileLevel.length} placed on the file's first changed line)`)
         if (fileLevel.length > 0) console.log(`  File-level findings: ${fileLevel.map(k => `${k.file}:${k.lines} ${k.title}`).join(' | ')}`)
         // A kept finding without a usable file:line scores zero, so surface it instead of losing it silently.
         const unanchored = placed.filter(k => !isAnchored(k))

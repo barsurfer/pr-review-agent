@@ -20,7 +20,7 @@ Implements the **generator-verifier** pattern: the reviewer model generates cand
 ## When the Judge Runs
 
 - `JUDGING_MODEL` is set (defaults to `claude-sonnet-5`; empty disables the judge)
-- The reviewer model produced at least one finding (judge is auto-skipped on zero findings)
+- The reviewer or the breadth pass produced at least one finding (judge is auto-skipped when both are empty); breadth candidates are judged together with the reviewer's in one call
 - `JUDGE_REVIEW` state in the FSM (see [review/fsm.md](../review/fsm.md))
 
 ---

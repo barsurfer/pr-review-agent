@@ -5,6 +5,7 @@ vi.mock('../../config.js', () => ({
   config: {
     anthropic: { apiKey: 'k', model: 'claude-haiku-4-5-20251001', maxRetries: 1, maxInputTokens: 2000, maxTokens: 32000 },
     judge: { model: 'judge-model', maxRetries: 1, effort: '', policy: { keepMinor: false, keepUnverified: false }, fileContext: false },
+    breadth: { enabled: false, model: '', effort: '', minFiles: 5, minUntouched: 3 },
     agentIdentity: 'test-bot',
     reply: { maxComments: 3 },
     review: { maxFindings: 0, splitCheck: false, todoScan: false, effort: '', bundledReview: true, maxBundles: 8, enableNitpicks: false },
