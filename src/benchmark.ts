@@ -12,7 +12,12 @@ const flag = (set: (on: boolean) => void) => (v: string, name: string) => {
   else console.warn(`  Ignoring config label ${name}=${v}: expected 0 or 1`)
 }
 
-// Short keys because the manifest allows only 6 configuration entries; set only labels that change a default (flags default off, LNUM on).
+const count = (set: (n: number) => void) => (v: string, name: string) => {
+  if (/^\d+$/.test(v)) set(Number(v))
+  else console.warn(`  Ignoring config label ${name}=${v}: expected a non-negative integer`)
+}
+
+// Short keys because the manifest allows only 6 configuration entries; set only labels that change the image's baked defaults (reviewbench/Dockerfile).
 const CONFIG_LABELS: Record<string, (value: string, name: string) => void> = {
   MODEL: v => { config.anthropic.model = v },
   EFFORT: v => { config.review.effort = v },
@@ -24,6 +29,8 @@ const CONFIG_LABELS: Record<string, (value: string, name: string) => void> = {
   J_CTX: flag(on => { config.judge.fileContext = on }),
   LNUM: flag(on => { config.review.lineNumbers = on }),
   BREADTH: flag(on => { config.breadth.enabled = on }),
+  B_FILES: count(n => { config.breadth.minFiles = n }),
+  B_UNTCH: count(n => { config.breadth.minUntouched = n }),
 }
 
 const bit = (on: boolean): string => (on ? '1' : '0')
@@ -49,7 +56,7 @@ function applyBenchmarkConfig(env: NodeJS.ProcessEnv): void {
   applyConfigLabels(env)
   // The harness flags any config label whose value never appears in the agent's output.
   // Flags print under their label keys and 0/1 values, so a label set in the UI and a baked ENABLE_* value both show up here.
-  console.log(`Benchmark settings: model=${config.anthropic.model} effort=${config.review.effort || 'default'} judge_model=${config.judge.model || 'off'} judge_effort=${config.judge.effort || 'default'} nits=${bit(config.review.enableNitpicks)} j_minor=${bit(config.judge.policy.keepMinor)} j_unver=${bit(config.judge.policy.keepUnverified)} j_ctx=${bit(config.judge.fileContext)} lnum=${bit(config.review.lineNumbers)} breadth=${bit(config.breadth.enabled)}`)
+  console.log(`Benchmark settings: model=${config.anthropic.model} effort=${config.review.effort || 'default'} judge_model=${config.judge.model || 'off'} judge_effort=${config.judge.effort || 'default'} nits=${bit(config.review.enableNitpicks)} j_minor=${bit(config.judge.policy.keepMinor)} j_unver=${bit(config.judge.policy.keepUnverified)} j_ctx=${bit(config.judge.fileContext)} lnum=${bit(config.review.lineNumbers)} breadth=${bit(config.breadth.enabled)} b_files=${config.breadth.minFiles} b_untch=${config.breadth.minUntouched}`)
   // Nitpicks emit but the default policy drops minor, so without keepMinor nothing new posts.
   if (config.review.enableNitpicks && !config.judge.policy.keepMinor) {
     console.warn('  NITS=1 but J_MINOR=0 — nitpicks are logged for offline scoring only; set J_MINOR=1 to post them.')

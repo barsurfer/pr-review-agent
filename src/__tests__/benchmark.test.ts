@@ -271,6 +271,18 @@ describe('benchmark mode end-to-end (model + judge mocked)', () => {
     warnSpy.mockRestore()
   })
 
+  it('sets the breadth thresholds from integer labels, echoes them, and ignores a non-integer', async () => {
+    const warnSpy = vi.spyOn(console, 'warn')
+
+    await runBenchmark({ ...fixture(), RB_CONFIG_B_FILES: '2', RB_CONFIG_B_UNTCH: 'two' })
+
+    expect(cfg.breadth.minFiles).toBe(2)
+    expect(cfg.breadth.minUntouched).toBe(3)
+    expect(logSpy.mock.calls.map(c => c.join(' ')).join('\n')).toContain('b_files=2 b_untch=3')
+    expect(warnSpy.mock.calls.map(c => c.join(' ')).join('\n')).toContain('RB_CONFIG_B_UNTCH=two: expected a non-negative integer')
+    warnSpy.mockRestore()
+  })
+
   it('gives the judge id-tagged candidates, and the file context only with ENABLE_JUDGE_FILE_CONTEXT', async () => {
     await runBenchmark(fixture())
     const judgeUser = completeStructured.mock.calls[1][1] as string

@@ -45,6 +45,10 @@ describe('breadthBriefing', () => {
     expect(out).not.toContain(`- f${MAX_UNTOUCHED_LISTED}.ts`)
     expect(out).toContain('- …and 3 more')
   })
+
+  it('says None. when every file already has a finding', () => {
+    expect(breadthBriefing([finding()], [])).toContain('## Files with no finding yet:\nNone.')
+  })
 })
 
 describe('breadthSystemPrompt', () => {

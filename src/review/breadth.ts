@@ -69,5 +69,5 @@ export function breadthBriefing(firstPass: readonly ReviewFinding[], untouched: 
   const findings = firstPass.length ? firstPass.map(f => `- ${located(f)} — ${f.title}`).join('\n') : 'None.'
   const shown = untouched.slice(0, MAX_UNTOUCHED_LISTED)
   const more = untouched.length > shown.length ? `\n- …and ${untouched.length - shown.length} more` : ''
-  return `## First-pass findings (already reported — do not repeat):\n${findings}\n\n## Files with no finding yet:\n${shown.map(p => `- ${p}`).join('\n')}${more}`
+  return `## First-pass findings (already reported — do not repeat):\n${findings}\n\n## Files with no finding yet:\n${shown.length ? shown.map(p => `- ${p}`).join('\n') : 'None.'}${more}`
 }
