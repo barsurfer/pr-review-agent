@@ -150,7 +150,7 @@ export async function runReview(
   return { text, usage, review: object }
 }
 
-// Findings only, with the reviewer's item schema so the two can't drift; a distinct object because callers and tests dispatch on schema identity.
+// Findings only, with the reviewer's item schema so the two can't drift; a distinct object because tests dispatch their mocks on schema identity.
 export const BREADTH_OUTPUT_SCHEMA = {
   type: 'object',
   properties: { findings: REVIEW_OUTPUT_SCHEMA.properties.findings },
@@ -259,6 +259,7 @@ export async function runJudge(
   fileContexts: FileContext[] = [],
   policy: JudgePolicy = DEFAULT_JUDGE_POLICY,
   lineNumbers = false,
+  breadthFrom?: number,
 ): Promise<JudgeResult> {
   const parts: string[] = []
   parts.push(renderDiff(diff, lineNumbers))
@@ -274,7 +275,7 @@ export async function runJudge(
 
   console.log(`Judge received (${usage.input_tokens} in / ${usage.output_tokens} out tokens)`)
 
-  const judged = applyJudgeDecisions(review.findings, object, policy, review.can_be_split, diff)
+  const judged = applyJudgeDecisions(review.findings, object, policy, review.can_be_split, diff, breadthFrom)
   const promptHash = createHash('sha256').update(judgePrompt).digest('hex').slice(0, 12)
   return {
     text: judged.markdown, usage, notes: summarizeDecisions(judged.decisions), scores: judged.scores, promptHash,

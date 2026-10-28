@@ -10,6 +10,16 @@ function optional(name: string, defaultValue: string): string {
   return process.env[name] ?? defaultValue
 }
 
+// CI passes unset parameters as empty strings, and parseInt('') is NaN, which would silently disable a threshold compared against it.
+function finiteOr(value: number, fallback: number): number {
+  return Number.isFinite(value) ? value : fallback
+}
+
+// Same fallback as reviewbench/entrypoint.mjs, so the breadth time guard and the kill agree on the deadline.
+function positiveOr(value: number, fallback: number): number {
+  return Number.isFinite(value) && value > 0 ? value : fallback
+}
+
 // Context windows (max_input_tokens, from the Models API): 4.5-gen = 200K, 4.6+/5.x = 1M; matched by id prefix, unknown models fall back to 200K.
 const MODEL_CONTEXT_WINDOWS: readonly [string, number][] = [
   ['claude-haiku-4-5', 200_000],
@@ -95,8 +105,9 @@ export const config = {
     enabled: optional('ENABLE_BREADTH_REVIEW', 'false') === 'true',
     model: optional('BREADTH_MODEL', ''),
     effort: optional('BREADTH_EFFORT', ''),
-    minFiles: parseInt(optional('BREADTH_MIN_FILES', '5'), 10),
-    minUntouched: parseInt(optional('BREADTH_MIN_UNTOUCHED', '3'), 10),
+    minFiles: finiteOr(parseInt(optional('BREADTH_MIN_FILES', '5'), 10), 5),
+    minUntouched: finiteOr(parseInt(optional('BREADTH_MIN_UNTOUCHED', '3'), 10), 3),
+    benchmarkDeadlineSeconds: positiveOr(Number(optional('BENCHMARK_DEADLINE_SECONDS', '840')), 840),
   },
 
   agentIdentity: process.env.AGENT_IDENTITY || process.env.BITBUCKET_USERNAME || 'Claude',

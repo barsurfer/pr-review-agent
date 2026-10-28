@@ -11,7 +11,7 @@ vi.mock('../config.js', () => ({
     vcsProvider: 'bitbucket',
     anthropic: { apiKey: 'test-key', model: 'claude-haiku-4-5-20251001', baseUrl: '', maxRetries: 1, maxInputTokens: 250000, maxTokens: 32000 },
     judge: { model: 'claude-sonnet-5', maxRetries: 1, effort: '', policy: { keepMinor: false, keepUnverified: false }, fileContext: false },
-    breadth: { enabled: false, model: '', effort: '', minFiles: 5, minUntouched: 3 },
+    breadth: { enabled: false, model: '', effort: '', minFiles: 5, minUntouched: 3, benchmarkDeadlineSeconds: 840 },
     agentIdentity: 'test-bot',
     reply: { maxComments: 5 },
     review: { maxFindings: 0, splitCheck: true, todoScan: true, effort: '', enableNitpicks: false },
@@ -34,6 +34,7 @@ vi.mock('../llm/provider.js', () => ({
 import { runBenchmark } from '../benchmark.js'
 import { config } from '../config.js'
 import { REVIEW_OUTPUT_SCHEMA, BREADTH_OUTPUT_SCHEMA } from '../claude/client.js'
+import { estimateCost } from '../review/usage.js'
 import type { ReviewObject } from '../review/formatter.js'
 import type { JudgeOutput } from '../review/judge-decisions.js'
 
@@ -134,7 +135,7 @@ beforeEach(() => {
   cfg.anthropic.maxInputTokens = 250000
   cfg.judge ={ model: 'claude-sonnet-5', maxRetries: 1, effort: '', policy: { keepMinor: false, keepUnverified: false }, fileContext: false }
   cfg.review = { maxFindings: 0, splitCheck: true, todoScan: true, effort: '' }
-  cfg.breadth = { enabled: false, model: '', effort: '', minFiles: 5, minUntouched: 3 }
+  cfg.breadth = { enabled: false, model: '', effort: '', minFiles: 5, minUntouched: 3, benchmarkDeadlineSeconds: 840 }
   cfg.skipSourceBranches = ['main', 'master', 'release/*', 'hotfix/*']
   cfg.skipTargetBranches = ['main', 'master']
   cfg.thresholds = { minChangedFiles: 0, maxChangedFiles: 200, minChangedLines: 0, maxChangedLines: 3000 }
@@ -418,13 +419,14 @@ describe('breadth review (end-to-end)', () => {
     for (const n of FILES) writeFileSync(join(env.RB_REPO, 'src', `${n}.ts`), `export const ${n} = 1\nexport const ${n}2 = 2\n`)
     return env
   }
-  const respond = (review: ReviewObject, breadth: unknown, judged: JudgeOutput) =>
+  const respond = (review: ReviewObject, breadth: unknown, judged: JudgeOutput | Error) =>
     completeStructured.mockImplementation(async (_s: string, _u: string, schema: unknown) => {
       if (schema === REVIEW_OUTPUT_SCHEMA) return { object: review, usage }
       if (schema === BREADTH_OUTPUT_SCHEMA) {
         if (breadth instanceof Error) throw breadth
         return { object: breadth, usage }
       }
+      if (judged instanceof Error) throw judged
       return { object: judged, usage }
     })
   const usageRecord = () => {
@@ -458,6 +460,29 @@ describe('breadth review (end-to-end)', () => {
     expect(r.untouched_files).toEqual({ count: 4, paths: ['src/b.ts', 'src/c.ts', 'src/d.ts', 'src/e.ts'], cut: 0 })
     expect(r.breadth_tokens).toEqual({ input: 100, output: 50 })
     expect(logSpy.mock.calls.map(c => c.join(' ')).join('\n')).toContain('reviewer 1, breadth 1, judge kept 2')
+  })
+
+  it('holds a breadth finding to changed lines: cited off the diff it lands on the first changed line, while the reviewer citation stands', async () => {
+    cfg.breadth.enabled = true
+    const offDiff = { findings: [{ ...breadthOut.findings[0], lines: '99' }] }
+    respond({ ...firstPass, findings: [{ ...firstPass.findings[0], lines: '99' }] }, offDiff, keepAll(2))
+    const env = multiFixture()
+
+    await runBenchmark(env)
+
+    expect(readOut(env).findings.map((f: any) => `${f.file}:${f.start_line}`)).toEqual(['src/a.ts:99', 'src/b.ts:1'])
+  })
+
+  it('flag off: a PR big enough to trigger breadth makes no breadth call and records disabled', async () => {
+    respond(firstPass, breadthOut, keepAll(1))
+    const env = multiFixture()
+
+    await runBenchmark(env)
+
+    expect(completeStructured).toHaveBeenCalledTimes(2)
+    expect(completeStructured.mock.calls.some(c => c[2] === BREADTH_OUTPUT_SCHEMA)).toBe(false)
+    expect(usageRecord().breadth_status).toBe('disabled')
+    expect(readOut(env).findings.map((f: any) => f.file)).toEqual(['src/a.ts'])
   })
 
   it('runs the judge when the reviewer found nothing but breadth did', async () => {
@@ -516,13 +541,65 @@ describe('breadth review (end-to-end)', () => {
 
   it('folds a truncated breadth response into usage, so the failed call is still costed', async () => {
     cfg.breadth.enabled = true
-    respond(firstPass, Object.assign(new Error('max_tokens cut-off'), { usage: { input_tokens: 70, output_tokens: 30 } }), keepAll(1))
+    respond(firstPass, Object.assign(new Error('max_tokens cut-off'), { usage: { input_tokens: 70_000, output_tokens: 30_000 } }), keepAll(1))
 
     await runBenchmark(multiFixture())
 
     const r = usageRecord()
     expect(r.breadth_status).toBe('failed')
-    expect(r.breadth_tokens).toEqual({ input: 70, output: 30 })
+    expect(r.breadth_tokens).toEqual({ input: 70_000, output: 30_000 })
+    expect(r.tokens).toMatchObject({ input: 100 + 70_000 + 100, output: 50 + 30_000 + 50 })
+    expect(r.cost_usd).toBeCloseTo(
+      estimateCost({ input: 100, output: 50 }, 'claude-haiku-4-5-20251001') + estimateCost({ input: 100, output: 50 }, 'claude-sonnet-5') + estimateCost({ input: 70_000, output: 30_000 }, 'claude-sonnet-5'), 4)
+  })
+
+  it('a judge failure after breadth falls back to the reviewer findings only', async () => {
+    cfg.breadth.enabled = true
+    respond(firstPass, breadthOut, new Error('529 overloaded'))
+    const env = multiFixture()
+
+    await runBenchmark(env)
+
+    expect(readOut(env).findings.map((f: any) => f.file)).toEqual(['src/a.ts'])
+    const r = usageRecord()
+    expect(r.breadth_status).toBe('succeeded')
+    expect(r.judge_status).toBe('failed')
+  })
+
+  describe('time guard (benchmark deadline)', () => {
+    // Only Date is faked, so the file and mock I/O keep their real timers.
+    afterEach(() => { vi.useRealTimers() })
+
+    const slowReviewer = (seconds: number) => {
+      vi.useFakeTimers({ toFake: ['Date'] })
+      completeStructured.mockImplementation(async (_s: string, _u: string, schema: unknown) => {
+        if (schema === REVIEW_OUTPUT_SCHEMA) { vi.advanceTimersByTime(seconds * 1000); return { object: firstPass, usage } }
+        if (schema === BREADTH_OUTPUT_SCHEMA) return { object: breadthOut, usage }
+        return { object: keepAll(2), usage }
+      })
+    }
+
+    it('skips breadth once more than half of BENCHMARK_DEADLINE_SECONDS has elapsed, and still judges the reviewer findings', async () => {
+      cfg.breadth = { ...cfg.breadth, enabled: true, benchmarkDeadlineSeconds: 100 }
+      slowReviewer(51)
+      const env = multiFixture()
+
+      await runBenchmark(env)
+
+      expect(completeStructured.mock.calls.some(c => c[2] === BREADTH_OUTPUT_SCHEMA)).toBe(false)
+      expect(completeStructured).toHaveBeenCalledTimes(2)
+      expect(usageRecord().breadth_status).toBe('skipped_time')
+      expect(readOut(env).findings.map((f: any) => f.file)).toEqual(['src/a.ts'])
+    })
+
+    it('still runs breadth at exactly half the deadline', async () => {
+      cfg.breadth = { ...cfg.breadth, enabled: true, benchmarkDeadlineSeconds: 100 }
+      slowReviewer(50)
+
+      await runBenchmark(multiFixture())
+
+      expect(usageRecord().breadth_status).toBe('succeeded')
+    })
   })
 
   it('resolves the breadth model at run time, so a JUDGE_MODEL label also moves breadth', async () => {

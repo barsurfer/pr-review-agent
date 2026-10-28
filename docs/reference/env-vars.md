@@ -58,7 +58,8 @@ credentials in source code or commit them to version control.**
 | `BREADTH_MODEL` | *(unset → `JUDGING_MODEL`)* | Model for the breadth pass. |
 | `BREADTH_EFFORT` | *(unset → `JUDGE_EFFORT` when falling back to the judge model)* | Effort for the breadth pass. |
 | `BREADTH_MIN_FILES` | `5` | Skip breadth below this many reviewable changed files. |
-| `BREADTH_MIN_UNTOUCHED` | `3` | Skip breadth when fewer reviewable files than this have no reviewer finding. |
+| `BREADTH_MIN_UNTOUCHED` | `3` | Skip breadth when fewer reviewable files than this have no reviewer finding. An empty or non-numeric `BREADTH_MIN_FILES` / `BREADTH_MIN_UNTOUCHED` falls back to the default. |
+| `BENCHMARK_DEADLINE_SECONDS` | `840` | ReviewBench only: the entrypoint kills the agent at this many seconds; breadth is skipped (`skipped_time`) once more than half has elapsed. Malformed or non-positive values fall back to `840`. See [reviewbench/README.md](../../reviewbench/README.md). |
 | `AGENT_IDENTITY` | *(BITBUCKET_USERNAME)* | Name shown in review/reply footers. Falls back to `BITBUCKET_USERNAME`, then `'Claude'` |
 
 > Threshold variables can also be set via CLI flags (`--min-changed-files`, etc.)

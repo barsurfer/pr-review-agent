@@ -161,9 +161,11 @@ export function locateInDiff(candidate: ReviewFinding, d: JudgeDecision, diff: s
   return resolveAnchor(candidate, d, buildDiffIndex(diff))
 }
 
-function resolveAnchor(candidate: ReviewFinding, d: JudgeDecision, idx: DiffIndex): Anchor {
+function resolveAnchor(candidate: ReviewFinding, d: JudgeDecision, idx: DiffIndex, breadthOrigin = false): Anchor {
+  // A breadth line is held to the judge-channel rule below: off the diff it would post a ghost anchor.
+  const gated = breadthOrigin && !!candidate.file && isNumericLines(candidate.lines) && !(idx.present && onChangedLine(idx, candidate.file, candidate.lines!))
   // Ungated: the reviewer saw full files and may cite context/deletion/out-of-diff lines that must keep anchoring.
-  if (candidate.file && isNumericLines(candidate.lines)) return { file: candidate.file, lines: candidate.lines, source: 'reviewer' }
+  if (candidate.file && isNumericLines(candidate.lines) && !gated) return { file: candidate.file, lines: candidate.lines, source: 'reviewer' }
 
   // The judge is the untrusted channel, so its numeric anchor is honored only on a changed line of a present diff — a model-typed line with no diff to validate it against would post a ghost anchor.
   const judgeFile = normalizeFindingPath(String(d.anchor_file ?? '')) || candidate.file
@@ -180,13 +182,13 @@ function resolveAnchor(candidate: ReviewFinding, d: JudgeDecision, idx: DiffInde
   }
 
   // Non-numeric `lines` is dropped (the bundled path re-parses any digit and mis-anchors); a judge-named changed file is kept for file-level placement.
-  return { file: candidate.file ?? quoteFile(candidate, d, idx), lines: isNumericLines(candidate.lines) ? candidate.lines : undefined, source: 'none' }
+  return { file: candidate.file ?? quoteFile(candidate, d, idx), lines: isNumericLines(candidate.lines) && !gated ? candidate.lines : undefined, source: 'none' }
 }
 
 const normalizeId = (id: string): string => String(id).trim().replace(/^\[|\]$/g, '').toLowerCase()
 const clampScore = (n: number): number => Math.max(0, Math.min(10, Math.round(Number(n) || 0)))
 
-function resolve(d: JudgeDecision, candidate: ReviewFinding, policy: JudgePolicy, idx: DiffIndex): AppliedDecision & { question?: string; body: string; anchor: Anchor } {
+function resolve(d: JudgeDecision, candidate: ReviewFinding, policy: JudgePolicy, idx: DiffIndex, breadthOrigin: boolean): AppliedDecision & { question?: string; body: string; anchor: Anchor } {
   // A provider that doesn't enforce the enum can hand back anything; treat it as unproven.
   let reason: ReasonCategory = (REASON_CATEGORIES as readonly string[]).includes(d.reason_category) ? d.reason_category : 'unverifiable'
   let reclassified_from: AppliedDecision['reclassified_from'] = null
@@ -202,7 +204,7 @@ function resolve(d: JudgeDecision, candidate: ReviewFinding, policy: JudgePolicy
   const score = kept && unproven ? Math.min(clampScore(d.score), UNVERIFIED_SCORE_CAP) : clampScore(d.score)
   const rewrite = String(d.rewritten_body ?? '').trim()
   const rewritten = kept && rewrite.length > 0 && rewrite.length <= REWRITE_CAP
-  const anchor = resolveAnchor(candidate, d, idx)
+  const anchor = resolveAnchor(candidate, d, idx, breadthOrigin)
   return {
     candidate_id: '', reason_category: reason, reclassified_from, action,
     original_severity: candidate.severity, final_severity: severity, score,
@@ -214,7 +216,7 @@ function resolve(d: JudgeDecision, candidate: ReviewFinding, policy: JudgePolicy
   }
 }
 
-export function applyJudgeDecisions(candidates: readonly ReviewFinding[], output: JudgeOutput, policy: JudgePolicy = DEFAULT_JUDGE_POLICY, canBeSplit: readonly string[] = [], diff = ''): JudgedReview {
+export function applyJudgeDecisions(candidates: readonly ReviewFinding[], output: JudgeOutput, policy: JudgePolicy = DEFAULT_JUDGE_POLICY, canBeSplit: readonly string[] = [], diff = '', breadthFrom = Infinity): JudgedReview {
   const idx = buildDiffIndex(diff)
   const anomalies: JudgeAnomalies = { unknown_ids: 0, undecided: 0, duplicate_ids: 0, drop_without_evidence: 0 }
   const index = new Map(candidates.map((_, i) => [candidateId(i), i]))
@@ -241,7 +243,7 @@ export function applyJudgeDecisions(candidates: readonly ReviewFinding[], output
       return
     }
     if (given.length > 1) anomalies.duplicate_ids++
-    const resolved = given.map(d => resolve(d, candidate, policy, idx))
+    const resolved = given.map(d => resolve(d, candidate, policy, idx, i >= breadthFrom))
     const chosen = resolved.find(r => r.action === 'drop') ?? resolved[0]
     if (chosen.reclassified_from) anomalies.drop_without_evidence++
     const { question, body, anchor, ...applied } = chosen

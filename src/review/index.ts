@@ -439,6 +439,13 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         console.log(`  Breadth review skipped: ~${estimate.toLocaleString()} tokens exceeds the ${model} budget (${budget.toLocaleString()})`)
         return State.JUDGE_REVIEW
       }
+      // The benchmark entrypoint kills the agent at the deadline and a killed run scores nothing, so breadth must leave the judge the second half.
+      const elapsedSeconds = (Date.now() - ctx.startTime) / 1000
+      if (ctx.outcomeSink && elapsedSeconds > config.breadth.benchmarkDeadlineSeconds / 2) {
+        ctx.breadthStatus = 'skipped_time'
+        console.log(`  Breadth review skipped: ${Math.round(elapsedSeconds)}s elapsed, over half the ${config.breadth.benchmarkDeadlineSeconds}s benchmark deadline`)
+        return State.JUDGE_REVIEW
+      }
 
       ctx.breadthModel = model
       console.log(`  Breadth review: ${coverage.untouched.length} untouched of ${coverage.reviewable.length} reviewable file(s)`)
@@ -538,6 +545,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
           config.judge.fileContext ? ctx.fileContexts ?? [] : [],
           config.judge.policy,
           config.review.lineNumbers,
+          breadth.length ? firstPass.length : undefined,
         )
         ctx.reviewText = result.text
         ctx.judgeScores = result.scores
@@ -563,8 +571,8 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         ctx.judgeStatus = 'succeeded'
       } catch (err: unknown) {
         ctx.judgeStatus = 'failed'
-        // Benchmark: a judge failure falls back to the unjudged reviewer findings (judged stays false) rather than erroring; normal mode still throws so CI retries.
-        if (!ctx.outcomeSink) throw err
+        // Benchmark keeps the unjudged reviewer findings; normal mode throws so CI retries, unless the reviewer was clean and the judge ran only for breadth — then the clean review posts as it would without breadth.
+        if (!ctx.outcomeSink && !noFindings) throw err
         console.warn(`  Judge failed (${(err as Error).message}) — proceeding with unjudged reviewer findings`)
       }
 
@@ -699,7 +707,7 @@ export async function review(adapter: VCSAdapter, prId: string, dryRun = false, 
 
   const startTime = Date.now()
   const ctx: ReviewContext = {
-    adapter, prId, dryRun, promptPath, force, logUsage, repoSlug, outcomeSink,
+    adapter, prId, dryRun, promptPath, force, logUsage, repoSlug, outcomeSink, startTime,
     usage: { input_tokens: 0, output_tokens: 0, cache_read: 0, cache_write: 0 },
     estimatedInputTokens: 0,
     action: 'ERROR',

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll } from 'vitest'
+import { describe, it, expect, beforeAll, afterEach, vi } from 'vitest'
 
 // config.ts calls required('ANTHROPIC_API_KEY') at import, so set it before the dynamic import.
 let modelContextWindow: (model: string) => number
@@ -25,5 +25,31 @@ describe('modelContextWindow', () => {
 
   it('falls back to a conservative 200K for an unmapped model', () => {
     expect(modelContextWindow('claude-something-7')).toBe(200_000)
+  })
+})
+
+describe('breadth settings', () => {
+  afterEach(() => { vi.unstubAllEnvs() })
+
+  const load = async (env: Record<string, string>) => {
+    for (const [name, value] of Object.entries(env)) vi.stubEnv(name, value)
+    vi.resetModules()
+    return (await import('../config.js')).config.breadth
+  }
+
+  it('falls back to the default thresholds when the parameter is empty or not a number', async () => {
+    expect(await load({ BREADTH_MIN_FILES: '', BREADTH_MIN_UNTOUCHED: '' })).toMatchObject({ minFiles: 5, minUntouched: 3 })
+    expect(await load({ BREADTH_MIN_FILES: 'many', BREADTH_MIN_UNTOUCHED: 'few' })).toMatchObject({ minFiles: 5, minUntouched: 3 })
+  })
+
+  it('honors explicit thresholds, including 0', async () => {
+    expect(await load({ BREADTH_MIN_FILES: '8', BREADTH_MIN_UNTOUCHED: '0' })).toMatchObject({ minFiles: 8, minUntouched: 0 })
+  })
+
+  it('reads the benchmark deadline with the entrypoint fallback for empty, malformed or non-positive values', async () => {
+    expect((await load({ BENCHMARK_DEADLINE_SECONDS: '600' })).benchmarkDeadlineSeconds).toBe(600)
+    for (const bad of ['', '15m', '0', '-5']) {
+      expect((await load({ BENCHMARK_DEADLINE_SECONDS: bad })).benchmarkDeadlineSeconds).toBe(840)
+    }
   })
 })

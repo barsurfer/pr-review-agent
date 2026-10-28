@@ -281,6 +281,58 @@ describe('locateInDiff — deterministic anchor resolver (correct line or null, 
   })
 })
 
+describe('breadth-origin candidates: numeric anchors honored only on changed lines', () => {
+  const DIFF = [
+    'diff --git a/src/pool.ts b/src/pool.ts',
+    '--- a/src/pool.ts',
+    '+++ b/src/pool.ts',
+    '@@ -1,3 +1,6 @@',
+    ' export class Pool {',
+    '+  conns: Conn[] = []',
+    '+  get() { return this.conns.pop() }',
+    '+  put(c: Conn) { this.conns.push(c) }',
+    ' }',
+  ].join('\n')
+  const applyAt = (lines: string, d: JudgeDecision, breadthFrom?: number, diff = DIFF) =>
+    applyJudgeDecisions([finding({ lines })], output([d]), DEFAULT_JUDGE_POLICY, [], diff, breadthFrom)
+
+  it('keeps the numeric anchor of a breadth candidate on an added line', () => {
+    const r = applyAt('3', decision(), 0)
+    expect(r.kept[0]).toMatchObject({ file: 'src/pool.ts', lines: '3', anchorSource: 'reviewer' })
+    expect(r.decisions[0]).toMatchObject({ anchor_source: 'reviewer', anchor_lines: '3' })
+  })
+
+  it.each([['a context line', '5'], ['a line outside the diff', '99']])('drops the numeric anchor of a breadth candidate on %s, keeping the file', (_name, lines) => {
+    const r = applyAt(lines, decision(), 0)
+    expect(r.kept[0]).toMatchObject({ file: 'src/pool.ts', lines: undefined, anchorSource: 'none' })
+    expect(r.decisions[0]).toMatchObject({ anchor_source: 'none', anchor_file: 'src/pool.ts', anchor_lines: null })
+  })
+
+  it('falls through to the judge anchor, then the verbatim quote, when the breadth line is off the diff', () => {
+    expect(applyAt('99', decision({ anchor_file: 'src/pool.ts', anchor_lines: '4' }), 0).kept[0])
+      .toMatchObject({ file: 'src/pool.ts', lines: '4', anchorSource: 'judge' })
+    expect(applyAt('99', decision({ evidence: '', anchor_quote: 'get() { return this.conns.pop() }' }), 0).kept[0])
+      .toMatchObject({ file: 'src/pool.ts', lines: '3', anchorSource: 'diff' })
+  })
+
+  it('does not trust a breadth line when there is no diff to validate it against', () => {
+    expect(applyAt('3', decision(), 0, '').kept[0]).toMatchObject({ lines: undefined, anchorSource: 'none' })
+  })
+
+  it.each([['a context line', '5'], ['a line outside the diff', '99']])('leaves the same %s ungated for a reviewer candidate', (_name, lines) => {
+    expect(applyAt(lines, decision()).kept[0]).toMatchObject({ file: 'src/pool.ts', lines, anchorSource: 'reviewer' })
+    expect(applyAt(lines, decision(), 1).kept[0]).toMatchObject({ file: 'src/pool.ts', lines, anchorSource: 'reviewer' })
+  })
+
+  it('gates only the candidates from breadthFrom on', () => {
+    const r = applyJudgeDecisions(
+      [finding({ lines: '99' }), finding({ title: 'Breadth', lines: '99' })],
+      output([decision(), decision({ candidate_id: 'c1' })]), DEFAULT_JUDGE_POLICY, [], DIFF, 1,
+    )
+    expect(r.kept.map(k => [k.lines, k.anchorSource])).toEqual([['99', 'reviewer'], [undefined, 'none']])
+  })
+})
+
 describe('reviewer issue-type carry-through', () => {
   it('carries the reviewer type onto the kept finding and leaves it undefined when omitted', () => {
     expect(applyJudgeDecisions([finding({ type: 'performance' })], output([decision()])).kept[0].type).toBe('performance')

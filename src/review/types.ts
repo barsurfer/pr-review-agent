@@ -55,6 +55,7 @@ export interface ReviewContext {
   readonly logUsage: boolean
   readonly repoSlug: string
   readonly outcomeSink?: OutcomeSink
+  readonly startTime: number
 
   // Populated progressively
   prInfo?: PRInfo

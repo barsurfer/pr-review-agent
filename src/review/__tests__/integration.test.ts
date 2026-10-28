@@ -10,7 +10,7 @@ vi.mock('../../config.js', () => ({
   config: {
     anthropic: { apiKey: 'test-key', model: 'claude-haiku-4-5-20251001', maxRetries: 1, maxInputTokens: 150000, maxTokens: 32000 },
     judge: { model: '', maxRetries: 1, effort: '', policy: { keepMinor: false, keepUnverified: false }, fileContext: false },
-    breadth: { enabled: false, model: '', effort: '', minFiles: 5, minUntouched: 3 },
+    breadth: { enabled: false, model: '', effort: '', minFiles: 5, minUntouched: 3, benchmarkDeadlineSeconds: 840 },
     agentIdentity: 'test-bot',
     reply: { maxComments: 3 },
     review: { maxFindings: 0, splitCheck: false, todoScan: true, effort: '', enableNitpicks: false },
@@ -52,6 +52,7 @@ import { runReview, runCommentResponse, runJudge, runBreadth } from '../../claud
 import { loadPrompt } from '../../prompt/loader.js'
 import { fetchContext } from '../../context/fetcher.js'
 import { logUsageRecord } from '../usage.js'
+import { applyJudgeDecisions } from '../judge-decisions.js'
 import { renderReview, buildReplyFooter, hasReplyFooter, extractCommitHash, markdownHasFindings, type ReviewObject } from '../formatter.js'
 
 const mockRunReview = vi.mocked(runReview)
@@ -1216,6 +1217,114 @@ describe('normal mode: judge failure surfaces as ERROR (not swallowed)', () => {
 
     await expect(review(adapter, '100', false)).rejects.toThrow(/judge boom/)
     expect(adapter.postComment).not.toHaveBeenCalled()
+  })
+})
+
+describe('breadth review and the judge in normal mode', () => {
+  const NAMES = ['a', 'b', 'c', 'd', 'e']
+  const MULTI_DIFF = NAMES.map(n => `diff --git a/src/${n}.ts b/src/${n}.ts\nnew file mode 100644\n--- /dev/null\n+++ b/src/${n}.ts\n@@ -0,0 +1,2 @@\n+export const ${n} = 1\n+export const ${n}2 = 2\n`).join('')
+  const bigAdapter = () => makeAdapter({
+    getDiff: vi.fn().mockResolvedValue(MULTI_DIFF),
+    getChangedFiles: vi.fn().mockResolvedValue(NAMES.map(n => ({ path: `src/${n}.ts`, status: 'added' }))),
+  })
+  const A_BUG: ReviewObject['findings'][number] = { severity: 'MEDIUM', title: 'A bug', file: 'src/a.ts', lines: '1', body: 'a is wrong.' }
+  const B_BUG: ReviewObject['findings'][number] = { severity: 'MEDIUM', title: 'Same bug in b', file: 'src/b.ts', lines: '1', body: 'b repeats a.' }
+  const posted = (adapter: VCSAdapter) => vi.mocked(adapter.postComment).mock.calls[0][1] as string
+
+  const mockBreadth = (...findings: ReviewObject['findings']) =>
+    vi.mocked(runBreadth).mockResolvedValue({ findings, usage: { input_tokens: 300, output_tokens: 100 }, promptHash: 'abc123' })
+
+  // Real decision application, so what the judge "keeps" is rendered and anchored exactly as production does.
+  const mockJudgeKeepsAll = () => mockRunJudge.mockImplementation(async (_k, _m, _r, _t, _e, diff, judgeInput, _f, policy, _l, breadthFrom) => {
+    const judged = applyJudgeDecisions(judgeInput.findings, {
+      decisions: judgeInput.findings.map((_, i) => ({ candidate_id: `c${i}`, reason_category: 'validated' as const, evidence: 'src/a.ts:1', note: 'n', score: 8 })),
+      summary: 'ok', behavioral_diff: [], production_risk: [], unresolved_questions: [], merge_confidence: 80,
+    }, policy, judgeInput.can_be_split, diff, breadthFrom)
+    return { text: judged.markdown, usage: { input_tokens: 800, output_tokens: 300 }, scores: judged.scores, promptHash: 'judgehash', decisions: judged.decisions, anomalies: judged.anomalies, kept: judged.kept }
+  })
+
+  beforeEach(() => {
+    cfg.judge.model = 'judge-model'
+    cfg.breadth.enabled = true
+  })
+  afterEach(() => {
+    cfg.breadth.enabled = false
+    vi.useRealTimers()
+  })
+
+  it('posts the reviewer clean review when the judge fails on breadth-only candidates, as main would without a judge', async () => {
+    const adapter = bigAdapter()
+    const clean = reviewWith([])
+    mockReviewer(clean)
+    mockBreadth(B_BUG)
+    mockRunJudge.mockRejectedValue(new Error('judge boom'))
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const record = await review(adapter, '100', false)
+
+    expect(mockRunJudge).toHaveBeenCalledTimes(1)
+    expect(record).toMatchObject({ action: 'REVIEW', judge_status: 'failed', breadth_status: 'succeeded' })
+    expect(adapter.postComment).toHaveBeenCalledTimes(1)
+    const body = posted(adapter)
+    expect(body).toContain(renderReview(clean))
+    expect(body).not.toContain('Same bug in b')
+    expect(body).not.toContain('Merge Confidence')
+    expect(warnSpy.mock.calls.map(c => c.join(' ')).join('\n')).toContain('Judge failed (judge boom)')
+    warnSpy.mockRestore()
+  })
+
+  it('still throws on a judge failure when the reviewer had findings, so CI retries', async () => {
+    const adapter = bigAdapter()
+    mockReviewer(reviewWith([A_BUG]))
+    mockBreadth(B_BUG)
+    mockRunJudge.mockRejectedValue(new Error('judge boom'))
+
+    await expect(review(adapter, '100', false)).rejects.toThrow(/judge boom/)
+    expect(adapter.postComment).not.toHaveBeenCalled()
+  })
+
+  it('posts a breadth finding the judge keeps, judged together with the reviewer findings', async () => {
+    const adapter = bigAdapter()
+    mockReviewer(reviewWith([A_BUG]))
+    mockBreadth(B_BUG)
+    mockJudgeKeepsAll()
+
+    const record = await review(adapter, '100', false)
+
+    const [judgeInput, breadthFrom] = [mockRunJudge.mock.calls[0][6], mockRunJudge.mock.calls[0][10]]
+    expect(judgeInput.findings.map(f => f.title)).toEqual(['A bug', 'Same bug in b'])
+    expect(breadthFrom).toBe(1)
+    const body = posted(adapter)
+    expect(body).toContain('**MEDIUM – A bug** (`src/a.ts:1`)')
+    expect(body).toContain('**MEDIUM – Same bug in b** (`src/b.ts:1`)')
+    expect(body).toContain('### Merge Confidence: 80%')
+    expect(record!.review_candidates!.map(c => c.origin)).toEqual(['review', 'breadth'])
+  })
+
+  it('gates a breadth anchor on changed lines in the posted comment, but not the reviewer one', async () => {
+    const adapter = bigAdapter()
+    mockReviewer(reviewWith([{ ...A_BUG, lines: '99' }]))
+    mockBreadth({ ...B_BUG, lines: '99' })
+    mockJudgeKeepsAll()
+
+    await review(adapter, '100', false)
+
+    const body = posted(adapter)
+    expect(body).toContain('**MEDIUM – A bug** (`src/a.ts:99`)')
+    expect(body).toContain('**MEDIUM – Same bug in b** (`src/b.ts`)')
+  })
+
+  it('has no time guard outside benchmark mode: a slow first pass still gets breadth', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    const clean = reviewWith([])
+    mockReviewer(clean)
+    mockRunReview.mockImplementation(async () => { vi.advanceTimersByTime(10_000_000); return { text: renderReview(clean), usage: { input_tokens: 1000, output_tokens: 200 }, review: clean } })
+    mockBreadth(B_BUG)
+    mockJudgeKeepsAll()
+
+    const record = await review(bigAdapter(), '100', true)
+
+    expect(record!.breadth_status).toBe('succeeded')
   })
 })
 

@@ -14,7 +14,7 @@ const isGeneratedOrLock = (path: string): boolean => GENERATED_OR_LOCK.some(re =
 
 export type BreadthStatus =
   | 'disabled' | 'skipped_no_judge' | 'skipped_rereview' | 'skipped_bundled'
-  | 'skipped_small' | 'skipped_few_untouched' | 'skipped_limit' | 'skipped_budget' | 'succeeded' | 'failed'
+  | 'skipped_small' | 'skipped_few_untouched' | 'skipped_limit' | 'skipped_budget' | 'skipped_time' | 'succeeded' | 'failed'
 
 export type CandidateOrigin = 'review' | 'breadth'
 
@@ -55,7 +55,7 @@ A first review pass already ran; its findings are listed in the message. Your jo
 4. Incomplete changes on added or modified lines: stubs, placeholder returns, options parsed but ignored, a capability added at one layer but never wired up. A diff segment that ends at an opening brace or \`if\` is a hunk boundary, not an incomplete change.
 Do not repeat a first-pass finding (same root cause at the same place). Every finding needs a concrete failing scenario, a file, and a numeric line on an added or modified line. Return an empty list if you find nothing.`
 
-// `limit` is what MAX_FINDINGS leaves after the first pass, so both passes together stay within the configured cap.
+// `limit` is what MAX_FINDINGS leaves after the first pass; the breadth pass is only told this remaining budget, as the reviewer is told the cap.
 export function breadthSystemPrompt(reviewerPrompt: string, limit: number): string {
   const limitSection = limit > 0
     ? `\n\n## FINDINGS LIMIT\nReport at most ${limit} findings, prioritized by severity and impact. If more exist, include only the most important and omit the rest.`
