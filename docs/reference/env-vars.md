@@ -27,7 +27,7 @@ credentials in source code or commit them to version control.**
 | `CLAUDE_MODEL` | `claude-haiku-4-5-20251001` | Claude model ID for reviews: proposes the candidate findings that `JUDGING_MODEL` filters (generator-verifier pattern). With `LLM_PROVIDER=openrouter` this takes an OpenRouter slug (e.g. `anthropic/claude-sonnet-5`, `openai/gpt-…`) |
 | `RB_MODEL_BASE_URL` | `https://api.anthropic.com` | Anthropic SDK base URL (set by ReviewBench; a trailing `/v1` is stripped). Unset keeps the SDK default (`ANTHROPIC_BASE_URL` or api.anthropic.com). The other `RB_*` vars only apply under `--benchmark`; see [reviewbench/README.md](../../reviewbench/README.md). |
 | `LLM_PROVIDER` | `anthropic` | Model backend behind the reviewer/judge: `anthropic` (native SDK) or `openrouter` (OpenAI-compatible gateway via axios). Selected through the `LLMProvider` seam (`src/llm/provider.ts`). Default: `anthropic` |
-| `OPENROUTER_API_KEY` | *(unset)* | OpenRouter key. Required when `LLM_PROVIDER=openrouter` (then `ANTHROPIC_API_KEY` is not required); ignored otherwise |
+| `OPENROUTER_API_KEY` | *(unset)* | OpenRouter key, used when `LLM_PROVIDER=openrouter`; if unset it falls back to the `ANTHROPIC_API_KEY` slot (warned), so a bench/CI slot that only exposes that name works; ignored otherwise |
 | `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | OpenRouter API base URL (`/chat/completions` is appended) |
 | `OPENROUTER_REFERER` | *(unset)* | Sent as `HTTP-Referer` for OpenRouter attribution, only when set |
 | `OPENROUTER_TITLE` | *(unset)* | Sent as `X-Title` for OpenRouter attribution, only when set |
@@ -192,7 +192,7 @@ BITBUCKET_TOKEN=
 ANTHROPIC_API_KEY=
 CLAUDE_MODEL=claude-haiku-4-5-20251001
 # LLM_PROVIDER=anthropic   # 'anthropic' | 'openrouter'
-# OPENROUTER_API_KEY=      # required when LLM_PROVIDER=openrouter
+# OPENROUTER_API_KEY=      # used when LLM_PROVIDER=openrouter; falls back to the ANTHROPIC_API_KEY slot if unset
 # OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
 # OPENROUTER_REFERER=
 # OPENROUTER_TITLE=

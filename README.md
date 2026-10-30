@@ -183,7 +183,7 @@ ceiling; choose each model per repo and budget (see [docs/context/prompt/judge.m
 
 ### OpenRouter (optional model backend)
 
-Off by default. Set `LLM_PROVIDER=openrouter` and `OPENROUTER_API_KEY` (then `ANTHROPIC_API_KEY` is not required) to route the reviewer and judge through
+Off by default. Set `LLM_PROVIDER=openrouter` and `OPENROUTER_API_KEY` (or reuse the `ANTHROPIC_API_KEY` slot — it's used as a fallback, with a warning) to route the reviewer and judge through
 [OpenRouter](https://openrouter.ai), e.g. to use cheaper non-Anthropic models on small repos. `CLAUDE_MODEL` and `JUDGING_MODEL` then take OpenRouter slugs
 (`anthropic/claude-sonnet-5`, `openai/gpt-…`), and reviewer and judge can be different vendors.
 
@@ -361,7 +361,7 @@ All credentials and settings are provided via environment variables.
 | `VCS_PROVIDER` | `bitbucket` | Which VCS adapter to use — `bitbucket` (production), `azure`/`github` (experimental), `gitlab` (stub) |
 | `BITBUCKET_BASE_URL` | `https://api.bitbucket.org/2.0` | Bitbucket Cloud API base URL (Server/DC is not supported — different v1 API) |
 | `LLM_PROVIDER` | `anthropic` | Model backend: `anthropic` or `openrouter` (see [OpenRouter](#openrouter-optional-model-backend)) |
-| `OPENROUTER_API_KEY` | — | Required instead of `ANTHROPIC_API_KEY` when `LLM_PROVIDER=openrouter` |
+| `OPENROUTER_API_KEY` | — | Used when `LLM_PROVIDER=openrouter`; falls back to the `ANTHROPIC_API_KEY` slot if unset |
 | `OPENROUTER_BASE_URL` / `OPENROUTER_REFERER` / `OPENROUTER_TITLE` | `https://openrouter.ai/api/v1` / unset / unset | OpenRouter endpoint and optional attribution headers |
 | `CLAUDE_MODEL` | `claude-haiku-4-5-20251001` | Reviewer model ID (an OpenRouter slug when `LLM_PROVIDER=openrouter`) |
 | `MAX_RETRIES` | `3` | Max retries on 429/5xx errors (exponential backoff) |

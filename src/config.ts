@@ -44,14 +44,26 @@ export function modelContextWindow(model: string): number {
 // a new impl, not a re-plumb. Anthropic is the native SDK; OpenRouter is the OpenAI-compatible gateway.
 const llmProvider = optional('LLM_PROVIDER', 'anthropic') as 'anthropic' | 'openrouter'
 
+// OpenRouter prefers OPENROUTER_API_KEY, else reuses a non-empty ANTHROPIC_API_KEY slot (warned) so a
+// run can use a registered bench/CI secret slot that only exposes that name. Anthropic keeps the exact
+// ANTHROPIC_API_KEY throw that the entrypoint test and ReviewBench fail-safe rely on.
+function resolveLlmApiKey(provider: 'anthropic' | 'openrouter'): string {
+  if (provider !== 'openrouter') return required('ANTHROPIC_API_KEY')
+  const key = optional('OPENROUTER_API_KEY', '')
+  if (key) return key
+  const fallback = optional('ANTHROPIC_API_KEY', '')
+  if (fallback) {
+    console.warn('OPENROUTER_API_KEY not set — using the ANTHROPIC_API_KEY slot as the OpenRouter key')
+    return fallback
+  }
+  throw new Error('Missing required environment variable: OPENROUTER_API_KEY (or ANTHROPIC_API_KEY as a fallback)')
+}
+
 export const config = {
   vcsProvider: optional('VCS_PROVIDER', 'bitbucket') as 'bitbucket' | 'github' | 'gitlab' | 'azure' | 'reviewbench',
 
   llmProvider,
-  // Key for the active backend, required per provider: an OpenRouter-only run must not demand an
-  // Anthropic key, and the anthropic branch must keep the exact ANTHROPIC_API_KEY throw that the
-  // entrypoint test and the ReviewBench fail-safe rely on.
-  llmApiKey: llmProvider === 'openrouter' ? required('OPENROUTER_API_KEY') : required('ANTHROPIC_API_KEY'),
+  llmApiKey: resolveLlmApiKey(llmProvider),
 
   bitbucket: {
     baseUrl: optional('BITBUCKET_BASE_URL', 'https://api.bitbucket.org/2.0'),
