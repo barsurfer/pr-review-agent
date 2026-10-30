@@ -2,7 +2,7 @@ import { readFileSync } from 'fs'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { createHash } from 'crypto'
-import { createProvider } from '../llm/provider.js'
+import { createProvider, type LLMUsage } from '../llm/provider.js'
 import { renderReview, ISSUE_TYPES, type ReviewObject, type ReviewFinding, type FindingScore } from '../review/formatter.js'
 import type { KeptFinding } from '../review/findings-output.js'
 import {
@@ -16,16 +16,9 @@ import type { LoadedPrompt } from '../prompt/loader.js'
 
 const REPLY_MAX_TOKENS = 4096
 
-export interface ClaudeUsage {
-  input_tokens: number
-  output_tokens: number
-  cache_read_input_tokens?: number
-  cache_creation_input_tokens?: number
-}
-
 export interface ClaudeResult {
   text: string
-  usage: ClaudeUsage
+  usage: LLMUsage
   /** Reviewer's structured output — typed source for findings/delta metrics. Review runs only. */
   review?: ReviewObject
 }
@@ -170,7 +163,7 @@ export async function runBreadth(
   systemPrompt: string,
   briefing: string,
   lineNumbers = false,
-): Promise<{ findings: ReviewFinding[]; usage: ClaudeUsage; promptHash: string }> {
+): Promise<{ findings: ReviewFinding[]; usage: LLMUsage; promptHash: string }> {
   const userMessage = `${buildUserMessage(prInfo, diff, fileContexts, [], [], '', lineNumbers)}\n\n${briefing}`
   console.log(`Sending to breadth reviewer (${model}, maxRetries: ${maxRetries})...`)
   const { object, usage } = await createProvider(apiKey).completeStructured<{ findings: ReviewFinding[] }>(

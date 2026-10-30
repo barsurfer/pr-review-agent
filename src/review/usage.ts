@@ -207,9 +207,9 @@ export function buildUsageRecord(
   const judgeModel = config.judge.model || null
   const judgeTokensRaw = ctx.judgeUsage ?? null
   const judgeTokens = judgeTokensRaw ? { input: judgeTokensRaw.input_tokens, output: judgeTokensRaw.output_tokens } : null
-  const judgeCost = judgeTokens && judgeModel ? estimateCost(judgeTokens, judgeModel) : null
+  const judgeCost = ctx.judgeUsage?.cost_usd ?? (judgeTokens && judgeModel ? estimateCost(judgeTokens, judgeModel) : null)
   const breadthTokens = ctx.breadthUsage ? { input: ctx.breadthUsage.input_tokens, output: ctx.breadthUsage.output_tokens } : null
-  const breadthCost = breadthTokens && ctx.breadthModel ? estimateCost(breadthTokens, ctx.breadthModel) : null
+  const breadthCost = ctx.breadthUsage?.cost_usd ?? (breadthTokens && ctx.breadthModel ? estimateCost(breadthTokens, ctx.breadthModel) : null)
   // The bundled path never enters BREADTH_REVIEW, so its status is inferred here.
   const breadthStatus = ctx.breadthStatus ?? (ctx.bundleCount ? (config.breadth.enabled ? 'skipped_bundled' : 'disabled') : null)
 
@@ -252,10 +252,12 @@ export function buildUsageRecord(
       cache_write: ctx.usage.cache_write,
       estimated_input: ctx.estimatedInputTokens,
     },
-    cost_usd: estimateCost({
+    // Provider-reported total (OpenRouter) when present — it already sums reviewer + judge + breadth;
+    // otherwise estimate the reviewer portion from the pricing table and add the judge/breadth costs.
+    cost_usd: ctx.usage.cost_usd ?? (estimateCost({
       input: ctx.usage.input_tokens - (judgeTokens?.input ?? 0) - (breadthTokens?.input ?? 0),
       output: ctx.usage.output_tokens - (judgeTokens?.output ?? 0) - (breadthTokens?.output ?? 0),
-    }, config.anthropic.model) + (judgeCost ?? 0) + (breadthCost ?? 0),
+    }, config.anthropic.model) + (judgeCost ?? 0) + (breadthCost ?? 0)),
     judge_model: judgeModel,
     judge_effort: config.judge.effort || null,
     judge_tokens: judgeTokens,

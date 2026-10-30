@@ -46,7 +46,7 @@ export async function runBundledReview(ctx: ReviewContext, maxInputTokens: numbe
   const unreviewed = plan.oversized.map(u => u.path)
   let anyOverflow = false
   const judgeScores: NonNullable<ReviewContext['judgeScores']> = []
-  const judgeUsage = { input_tokens: 0, output_tokens: 0 }
+  const judgeUsage: { input_tokens: number; output_tokens: number; cost_usd?: number } = { input_tokens: 0, output_tokens: 0 }
   let judged = false
   const deltaStats = { resolved: 0, still_open: 0, new_findings: 0 }
   let sawDelta = false
@@ -83,7 +83,7 @@ export async function runBundledReview(ctx: ReviewContext, maxInputTokens: numbe
       for (;;) {
         try {
           return await runReview(
-            config.anthropic.apiKey, config.anthropic.model, config.anthropic.maxRetries, config.anthropic.maxTokens, config.review.effort,
+            config.llmApiKey, config.anthropic.model, config.anthropic.maxRetries, config.anthropic.maxTokens, config.review.effort,
             prInfo, diff, bundleContexts, { ...ctx.prompt!, content }, ctx.previousReviews ?? [], ctx.replies ?? [], delta,
             config.review.lineNumbers,
           )
@@ -119,12 +119,13 @@ export async function runBundledReview(ctx: ReviewContext, maxInputTokens: numbe
     if (config.judge.model && result.review && found.high + found.medium + found.low > 0) {
       try {
         const verdict = await runJudge(
-          config.anthropic.apiKey, config.judge.model, config.judge.maxRetries, config.anthropic.maxTokens, config.judge.effort,
+          config.llmApiKey, config.judge.model, config.judge.maxRetries, config.anthropic.maxTokens, config.judge.effort,
           diff, result.review, config.judge.fileContext ? bundleContexts : [], config.judge.policy, config.review.lineNumbers,
         )
         addUsage(ctx, verdict.usage)
         judgeUsage.input_tokens += verdict.usage.input_tokens
         judgeUsage.output_tokens += verdict.usage.output_tokens
+        if (verdict.usage.cost_usd !== undefined) judgeUsage.cost_usd = (judgeUsage.cost_usd ?? 0) + verdict.usage.cost_usd
         judgeScores.push(...(verdict.scores ?? []))
         text = verdict.text
         judged = true
@@ -159,9 +160,10 @@ export async function runBundledReview(ctx: ReviewContext, maxInputTokens: numbe
   return { ok: true }
 }
 
-export function addUsage(ctx: ReviewContext, u: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number }): void {
+export function addUsage(ctx: ReviewContext, u: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number; cost_usd?: number }): void {
   ctx.usage.input_tokens += u.input_tokens
   ctx.usage.output_tokens += u.output_tokens
   ctx.usage.cache_read += u.cache_read_input_tokens ?? 0
   ctx.usage.cache_write += u.cache_creation_input_tokens ?? 0
+  if (u.cost_usd !== undefined) ctx.usage.cost_usd = (ctx.usage.cost_usd ?? 0) + u.cost_usd
 }

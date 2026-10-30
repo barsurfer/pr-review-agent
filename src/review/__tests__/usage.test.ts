@@ -76,6 +76,26 @@ describe('buildUsageRecord provenance fields', () => {
     expect(buildUsageRecord(baseCtx({ judgeStatus: 'succeeded' }), 1, null).judge_status).toBe('succeeded')
     expect(buildUsageRecord(baseCtx(), 1, null).judge_status).toBeNull()
   })
+
+  it('uses provider-reported cost_usd when present and the pricing estimate when absent (anthropic inert)', () => {
+    const bigUsage = { input_tokens: 1_000_000, output_tokens: 0, cache_read: 0, cache_write: 0 }
+    const actual = buildUsageRecord(baseCtx({ usage: { ...bigUsage, cost_usd: 0.42 } }), 1, null).cost_usd
+    const estimate = buildUsageRecord(baseCtx({ usage: bigUsage }), 1, null).cost_usd
+    expect(actual).toBe(0.42)
+    expect(estimate).not.toBe(0.42)
+    expect(estimate).toBeGreaterThan(0)
+  })
+
+  it('prefers judge/breadth actual cost_usd for their breakdown fields', () => {
+    const r = buildUsageRecord(baseCtx({
+      usage: { input_tokens: 100, output_tokens: 50, cache_read: 0, cache_write: 0, cost_usd: 1.5 },
+      judgeUsage: { input_tokens: 10, output_tokens: 5, cost_usd: 0.3 },
+      breadthModel: 'openai/gpt-x', breadthUsage: { input_tokens: 20, output_tokens: 10, cost_usd: 0.2 },
+    }), 1, null)
+    expect(r.cost_usd).toBe(1.5)
+    expect(r.judge_cost_usd).toBe(0.3)
+    expect(r.breadth_cost_usd).toBe(0.2)
+  })
 })
 
 describe('buildUsageRecord judge decision fields', () => {
