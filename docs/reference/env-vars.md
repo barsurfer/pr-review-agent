@@ -24,13 +24,17 @@ credentials in source code or commit them to version control.**
 | `BITBUCKET_TOKEN` | `ATATT3x...` | Atlassian API token with Bitbucket scopes (replaces deprecated app passwords) |
 | `ANTHROPIC_API_KEY` | `sk-ant-...` | Anthropic API key (billed separately from Claude.ai subscriptions) |
 | `ANTHROPIC_WORKSPACE_ID` | *(unset)* | Sent as the `anthropic-workspace-id` header. Required when the key isn't workspace-scoped — a user-scoped key (`sk-ant-usr-…`) 400s without it (*"not scoped to a workspace"*). Leave unset for a workspace-scoped key. |
-| `CLAUDE_MODEL` | `claude-haiku-4-5-20251001` | Claude model ID for reviews: proposes the candidate findings that `JUDGING_MODEL` filters (generator-verifier pattern) |
+| `CLAUDE_MODEL` | `claude-haiku-4-5-20251001` | Claude model ID for reviews: proposes the candidate findings that `JUDGING_MODEL` filters (generator-verifier pattern). With `LLM_PROVIDER=openrouter` this takes an OpenRouter slug (e.g. `anthropic/claude-sonnet-5`, `openai/gpt-…`) |
 | `RB_MODEL_BASE_URL` | `https://api.anthropic.com` | Anthropic SDK base URL (set by ReviewBench; a trailing `/v1` is stripped). Unset keeps the SDK default (`ANTHROPIC_BASE_URL` or api.anthropic.com). The other `RB_*` vars only apply under `--benchmark`; see [reviewbench/README.md](../../reviewbench/README.md). |
-| `LLM_PROVIDER` | `anthropic` | Model backend behind the reviewer/judge. Only `anthropic` is implemented; the `LLMProvider` seam (`src/llm/provider.ts`) exists so a second provider is a new impl, not a re-plumb. Default: `anthropic` |
+| `LLM_PROVIDER` | `anthropic` | Model backend behind the reviewer/judge: `anthropic` (native SDK) or `openrouter` (OpenAI-compatible gateway via axios). Selected through the `LLMProvider` seam (`src/llm/provider.ts`). Default: `anthropic` |
+| `OPENROUTER_API_KEY` | *(unset)* | OpenRouter key, used when `LLM_PROVIDER=openrouter`; if unset it falls back to the `ANTHROPIC_API_KEY` slot (warned), so a bench/CI slot that only exposes that name works; ignored otherwise |
+| `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | OpenRouter API base URL (`/chat/completions` is appended) |
+| `OPENROUTER_REFERER` | *(unset)* | Sent as `HTTP-Referer` for OpenRouter attribution, only when set |
+| `OPENROUTER_TITLE` | *(unset)* | Sent as `X-Title` for OpenRouter attribution, only when set |
 | `MAX_RETRIES` | `3` | Max retries on 429/5xx errors (SDK built-in exponential backoff). Default: `3` |
 | `MAX_INPUT_TOKENS` | `250000` | If estimated input exceeds this, first drop file contexts and review diff-only; skip only if the diff alone still exceeds it (0 = disabled). `ESTIMATE_TOKENS` logs a per-section breakdown (prompt / diff / delta / file-contexts / prev-reviews / replies) so you can see what drove the size |
 | `MAX_OUTPUT_TOKENS` | `32000` | Output-token cap for reviewer + judge (raised from 16k because the Claude 5 family thinks by default and thinking counts against this). Requests stream, so large caps don't hit the HTTP timeout. **Effort coupling:** thinking counts against this cap, so `REVIEW_EFFORT`/`JUDGE_EFFORT` at `xhigh`/`max` can exceed 32k on a non-trivial PR and truncate the response (the run errors rather than posting a cut-off review) — raise to ~`64000` when using high effort. Default/`high` effort fits 32k. |
-| `MODEL_CONTEXT_TOKENS` | *(derived)* | Override the reviewer's context window. The input budget is `min(MAX_INPUT_TOKENS, window − MAX_OUTPUT_TOKENS)`. Unset (`0`) derives the window from the model id — 200K for 4.5-generation (Haiku 4.5), 1M for 4.6+/5.x (incl. Haiku 5.5) — so a 1M reviewer isn't throttled to a 200K default. Set it only for a model the agent doesn't yet map. The window is the smaller of the reviewer's and the judge's (both see the diff). |
+| `MODEL_CONTEXT_TOKENS` | *(derived)* | Override the reviewer's context window. The input budget is `min(MAX_INPUT_TOKENS, window − MAX_OUTPUT_TOKENS)`. Unset (`0`) derives the window from the model id — 200K for 4.5-generation (Haiku 4.5), 1M for 4.6+/5.x (incl. Haiku 5.5) — so a 1M reviewer isn't throttled to a 200K default. Set it only for a model the agent doesn't yet map — notably any non-Claude OpenRouter slug, which otherwise falls back to 200K. The window is the smaller of the reviewer's and the judge's (both see the diff). |
 | `ENABLE_BUNDLED_REVIEW` | `false` | When a PR is still over the input budget after dropping file contexts, split it into per-directory bundles (≤85% of budget each), review each with the normal reviewer + judge, then merge and dedupe — instead of skipping. Off by default; every bundle is a reviewer + judge call, so a huge PR is real spend |
 | `MAX_BUNDLES` | `8` | Cap on bundles one over-budget PR may split into (0 = unlimited); the review skips if the plan needs more |
 | `MAX_CONTEXT_FILES` | `20` | Max number of files to fetch full content for |
@@ -42,7 +46,7 @@ credentials in source code or commit them to version control.**
 | `SKIP_SOURCE_BRANCHES` | `main,master,release/*` | Comma-separated branch patterns. Skip review if PR source branch matches. Default: `main,master,release/*,hotfix/*` |
 | `SKIP_TARGET_BRANCHES` | `main,master` | Comma-separated branch patterns. Skip review if PR target branch matches. Default: `main,master` |
 | `DIFF_EXCLUDE_PATTERNS` | `*.lock,*.json,*.spec.ts` | Comma-separated file patterns to strip from diff before sending to Claude. Default: `*.lock,package-lock.json,yarn.lock,pnpm-lock.yaml,*.json,*.spec.ts` |
-| `JUDGING_MODEL` | `claude-sonnet-5` | Judge model for finding validation — **on by default**. Set empty to disable the judge pass. |
+| `JUDGING_MODEL` | `claude-sonnet-5` | Judge model for finding validation — **on by default**. Set empty to disable the judge pass. With `LLM_PROVIDER=openrouter` this takes an OpenRouter slug and may be a different vendor than the reviewer. |
 | `REVIEW_EFFORT` | *(unset)* | Reviewer thinking effort: `low`\|`medium`\|`high`\|`xhigh`\|`max`. Unset = model default (a strong model like Opus 4.8 at its adaptive default needs no effort flag). Only the 5-family / Opus-4.6+ / Sonnet-5 support it; models that don't (e.g. Haiku 4.5) are retried without it. `xhigh`/`max` need a larger `MAX_OUTPUT_TOKENS` (~64k) — thinking counts against the output cap and otherwise truncates the review. |
 | `JUDGE_EFFORT` | *(unset)* | Judge thinking effort — same scale and fallback behavior as `REVIEW_EFFORT`. |
 | `ENABLE_JUDGE_KEEP_MINOR` | `false` | Post candidates the judge classifies `minor` (real problem, no runtime impact: stale docs/comments, misleading names, duplication, weak tests in the diff) as LOW instead of dropping them. More LOW comments. See [prompt/judge.md](../context/prompt/judge.md). |
@@ -187,7 +191,11 @@ BITBUCKET_TOKEN=
 # Claude
 ANTHROPIC_API_KEY=
 CLAUDE_MODEL=claude-haiku-4-5-20251001
-# LLM_PROVIDER=anthropic   # model backend; only 'anthropic' implemented
+# LLM_PROVIDER=anthropic   # 'anthropic' | 'openrouter'
+# OPENROUTER_API_KEY=      # used when LLM_PROVIDER=openrouter; falls back to the ANTHROPIC_API_KEY slot if unset
+# OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+# OPENROUTER_REFERER=
+# OPENROUTER_TITLE=
 MAX_RETRIES=3
 # MAX_INPUT_TOKENS=250000
 

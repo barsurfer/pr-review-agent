@@ -224,7 +224,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
     case State.RESPOND_TO_REPLIES: {
       const lastReview = ctx.previousReviews![ctx.previousReviews!.length - 1]
       const result = await runCommentResponse(
-        config.anthropic.apiKey,
+        config.llmApiKey,
         config.anthropic.model,
         config.anthropic.maxRetries,
         ctx.filteredDiff!,
@@ -235,6 +235,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       ctx.usage.output_tokens += result.usage.output_tokens
       ctx.usage.cache_read += result.usage.cache_read_input_tokens ?? 0
       ctx.usage.cache_write += result.usage.cache_creation_input_tokens ?? 0
+      if (result.usage.cost_usd !== undefined) ctx.usage.cost_usd = (ctx.usage.cost_usd ?? 0) + result.usage.cost_usd
 
       const replyBody = result.text.trimEnd() + buildReplyFooter(config.agentIdentity, config.anthropic.model, getJobUrl())
 
@@ -352,7 +353,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       const reviewPrompt = { ...ctx.prompt!, content }
 
       const call = () => runReview(
-        config.anthropic.apiKey,
+        config.llmApiKey,
         config.anthropic.model,
         config.anthropic.maxRetries,
         config.anthropic.maxTokens,
@@ -391,6 +392,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       ctx.usage.output_tokens += result.usage.output_tokens
       ctx.usage.cache_read += result.usage.cache_read_input_tokens ?? 0
       ctx.usage.cache_write += result.usage.cache_creation_input_tokens ?? 0
+      if (result.usage.cost_usd !== undefined) ctx.usage.cost_usd = (ctx.usage.cost_usd ?? 0) + result.usage.cost_usd
       return State.CHECK_NO_CHANGE
     }
 
@@ -451,20 +453,20 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       console.log(`  Breadth review: ${coverage.untouched.length} untouched of ${coverage.reviewable.length} reviewable file(s)`)
       try {
         const result = await runBreadth(
-          config.anthropic.apiKey, model, config.judge.maxRetries, config.anthropic.maxTokens, effort,
+          config.llmApiKey, model, config.judge.maxRetries, config.anthropic.maxTokens, effort,
           ctx.prInfo!, ctx.filteredDiff!, ctx.fileContexts ?? [], system, briefing, config.review.lineNumbers,
         )
         ctx.breadthFindings = result.findings
         ctx.breadthPromptHash = result.promptHash
-        ctx.breadthUsage = { input_tokens: result.usage.input_tokens, output_tokens: result.usage.output_tokens }
+        ctx.breadthUsage = { input_tokens: result.usage.input_tokens, output_tokens: result.usage.output_tokens, cost_usd: result.usage.cost_usd }
         addUsage(ctx, result.usage)
         ctx.breadthStatus = 'succeeded'
         console.log(`  Breadth review: ${coverage.untouched.length} untouched file(s) → ${result.findings.length} finding(s)`)
       } catch (err: unknown) {
         // A truncated response carries its usage; count it so the record shows what the failed call cost.
-        const e = err as Error & { usage?: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } }
+        const e = err as Error & { usage?: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number; cost_usd?: number } }
         if (e.usage) {
-          ctx.breadthUsage = { input_tokens: e.usage.input_tokens, output_tokens: e.usage.output_tokens }
+          ctx.breadthUsage = { input_tokens: e.usage.input_tokens, output_tokens: e.usage.output_tokens, cost_usd: e.usage.cost_usd }
           addUsage(ctx, e.usage)
         }
         ctx.breadthStatus = 'failed'
@@ -535,7 +537,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       ctx.reviewTextBeforeJudge = ctx.reviewText
       try {
         const result = await runJudge(
-          config.anthropic.apiKey,
+          config.llmApiKey,
           config.judge.model,
           config.judge.maxRetries,
           config.anthropic.maxTokens,
@@ -563,11 +565,12 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         if (result.scores?.length) {
           console.log(`  Judge finding scores: ${result.scores.map(s => `${s.severity} ${s.score}/10`).join(', ')}`)
         }
-        ctx.judgeUsage = { input_tokens: result.usage.input_tokens, output_tokens: result.usage.output_tokens }
+        ctx.judgeUsage = { input_tokens: result.usage.input_tokens, output_tokens: result.usage.output_tokens, cost_usd: result.usage.cost_usd }
         ctx.usage.input_tokens += result.usage.input_tokens
         ctx.usage.output_tokens += result.usage.output_tokens
         ctx.usage.cache_read += result.usage.cache_read_input_tokens ?? 0
         ctx.usage.cache_write += result.usage.cache_creation_input_tokens ?? 0
+        if (result.usage.cost_usd !== undefined) ctx.usage.cost_usd = (ctx.usage.cost_usd ?? 0) + result.usage.cost_usd
         ctx.judgeStatus = 'succeeded'
       } catch (err: unknown) {
         ctx.judgeStatus = 'failed'
@@ -723,7 +726,7 @@ export async function review(adapter: VCSAdapter, prId: string, dryRun = false, 
     }
   } catch (err: unknown) {
     ctx.action = 'ERROR'
-    const e = err as Error & { status?: number; usage?: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } }
+    const e = err as Error & { status?: number; usage?: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number; cost_usd?: number } }
     // A truncated response carries its usage — fold it in so the record shows the real token spend
     // (often large: that is why it truncated) instead of zeros.
     if (e.usage) {
@@ -731,6 +734,7 @@ export async function review(adapter: VCSAdapter, prId: string, dryRun = false, 
       ctx.usage.output_tokens += e.usage.output_tokens
       ctx.usage.cache_read += e.usage.cache_read_input_tokens ?? 0
       ctx.usage.cache_write += e.usage.cache_creation_input_tokens ?? 0
+      if (e.usage.cost_usd !== undefined) ctx.usage.cost_usd = (ctx.usage.cost_usd ?? 0) + e.usage.cost_usd
     }
     error = {
       type: e.constructor.name,

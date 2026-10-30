@@ -74,8 +74,8 @@ export interface ReviewContext {
   reviewTextBeforeJudge?: string
   reviewObject?: ReviewObject   // reviewer's structured output — typed source for findings/delta metrics
   skipReason?: string
-  usage: { input_tokens: number; output_tokens: number; cache_read: number; cache_write: number }
-  judgeUsage?: { input_tokens: number; output_tokens: number }
+  usage: { input_tokens: number; output_tokens: number; cache_read: number; cache_write: number; cost_usd?: number }
+  judgeUsage?: { input_tokens: number; output_tokens: number; cost_usd?: number }
   judgeScores?: FindingScore[]   // judge's per-finding 0–10 confidence — logged, never posted
   judgeStatus?: 'disabled' | 'skipped_no_findings' | 'succeeded' | 'failed'   // what the judge did this run; unset when the judge stage wasn't reached
   judgePromptHash?: string   // sha256-12 of the judge prompt, set only when the judge actually ran
@@ -87,7 +87,7 @@ export interface ReviewContext {
   breadthStatus?: BreadthStatus
   breadthModel?: string
   breadthPromptHash?: string
-  breadthUsage?: { input_tokens: number; output_tokens: number }
+  breadthUsage?: { input_tokens: number; output_tokens: number; cost_usd?: number }
   untouchedFiles?: string[]
   judgeCandidates?: Array<ReviewFinding & { origin: CandidateOrigin }>
   estimatedInputTokens: number

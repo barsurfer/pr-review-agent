@@ -53,3 +53,34 @@ describe('breadth settings', () => {
     }
   })
 })
+
+describe('llmApiKey — conditional required key per provider', () => {
+  afterEach(() => { vi.unstubAllEnvs() })
+
+  it('keeps the exact ANTHROPIC_API_KEY throw for the default anthropic provider', async () => {
+    vi.stubEnv('LLM_PROVIDER', 'anthropic'); vi.stubEnv('ANTHROPIC_API_KEY', ''); vi.stubEnv('OPENROUTER_API_KEY', 'or-key')
+    vi.resetModules()
+    await expect(import('../config.js')).rejects.toThrow('Missing required environment variable: ANTHROPIC_API_KEY')
+  })
+
+  it('requires only OPENROUTER_API_KEY when LLM_PROVIDER=openrouter', async () => {
+    vi.stubEnv('LLM_PROVIDER', 'openrouter'); vi.stubEnv('ANTHROPIC_API_KEY', ''); vi.stubEnv('OPENROUTER_API_KEY', 'or-key')
+    vi.resetModules()
+    const { config } = await import('../config.js')
+    expect(config.llmProvider).toBe('openrouter')
+    expect(config.llmApiKey).toBe('or-key')
+  })
+
+  it('falls back to the ANTHROPIC_API_KEY slot for openrouter when OPENROUTER_API_KEY is unset', async () => {
+    vi.stubEnv('LLM_PROVIDER', 'openrouter'); vi.stubEnv('ANTHROPIC_API_KEY', 'anth-key'); vi.stubEnv('OPENROUTER_API_KEY', '')
+    vi.resetModules()
+    const { config } = await import('../config.js')
+    expect(config.llmApiKey).toBe('anth-key')
+  })
+
+  it('throws for openrouter when neither key is set', async () => {
+    vi.stubEnv('LLM_PROVIDER', 'openrouter'); vi.stubEnv('ANTHROPIC_API_KEY', ''); vi.stubEnv('OPENROUTER_API_KEY', '')
+    vi.resetModules()
+    await expect(import('../config.js')).rejects.toThrow(/OPENROUTER_API_KEY/)
+  })
+})

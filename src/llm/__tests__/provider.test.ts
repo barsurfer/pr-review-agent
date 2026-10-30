@@ -61,4 +61,10 @@ describe('missingRequired', () => {
   it('returns [] when the schema has no required list', () => {
     expect(missingRequired({}, {})).toEqual([])
   })
+
+  it('with deep, flags dropped array-item required keys; default stays root-only', () => {
+    const s = { required: ['findings'], properties: { findings: { items: { required: ['severity', 'body'] } } } } as Record<string, unknown>
+    expect(missingRequired({ findings: [{ severity: 'LOW', body: 'x' }, { severity: 'LOW' }] }, s, true)).toEqual(['findings[1].body'])
+    expect(missingRequired({ findings: [{ severity: 'LOW' }] }, s)).toEqual([])
+  })
 })

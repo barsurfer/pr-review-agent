@@ -40,12 +40,30 @@ export function modelContextWindow(model: string): number {
   return MODEL_CONTEXT_WINDOWS.find(([prefix]) => model.startsWith(prefix))?.[1] ?? 200_000
 }
 
+// Which LLM backend the reviewer/judge use; the seam (src/llm/provider.ts) makes a second provider
+// a new impl, not a re-plumb. Anthropic is the native SDK; OpenRouter is the OpenAI-compatible gateway.
+const llmProvider = optional('LLM_PROVIDER', 'anthropic') as 'anthropic' | 'openrouter'
+
+// OpenRouter prefers OPENROUTER_API_KEY, else reuses a non-empty ANTHROPIC_API_KEY slot (warned) so a
+// run can use a registered bench/CI secret slot that only exposes that name. Anthropic keeps the exact
+// ANTHROPIC_API_KEY throw that the entrypoint test and ReviewBench fail-safe rely on.
+function resolveLlmApiKey(provider: 'anthropic' | 'openrouter'): string {
+  if (provider !== 'openrouter') return required('ANTHROPIC_API_KEY')
+  const key = optional('OPENROUTER_API_KEY', '')
+  if (key) return key
+  const fallback = optional('ANTHROPIC_API_KEY', '')
+  if (fallback) {
+    console.warn('OPENROUTER_API_KEY not set — using the ANTHROPIC_API_KEY slot as the OpenRouter key')
+    return fallback
+  }
+  throw new Error('Missing required environment variable: OPENROUTER_API_KEY (or ANTHROPIC_API_KEY as a fallback)')
+}
+
 export const config = {
   vcsProvider: optional('VCS_PROVIDER', 'bitbucket') as 'bitbucket' | 'github' | 'gitlab' | 'azure' | 'reviewbench',
 
-  // Which LLM backend the reviewer/judge use. Only 'anthropic' is implemented; the seam
-  // (src/llm/provider.ts) exists so a second provider is a new impl, not a re-plumb.
-  llmProvider: optional('LLM_PROVIDER', 'anthropic') as 'anthropic',
+  llmProvider,
+  llmApiKey: resolveLlmApiKey(llmProvider),
 
   bitbucket: {
     baseUrl: optional('BITBUCKET_BASE_URL', 'https://api.bitbucket.org/2.0'),
@@ -71,8 +89,15 @@ export const config = {
     token: optional('GITHUB_TOKEN', ''),
   },
 
+  // OpenRouter (OpenAI-compatible gateway, when LLM_PROVIDER=openrouter). The key rides llmApiKey;
+  // model slugs come from CLAUDE_MODEL/JUDGING_MODEL (e.g. anthropic/claude-sonnet-5, openai/gpt-...).
+  openrouter: {
+    baseUrl: optional('OPENROUTER_BASE_URL', 'https://openrouter.ai/api/v1'),
+    referer: optional('OPENROUTER_REFERER', ''),   // optional attribution headers (OpenRouter rankings)
+    title: optional('OPENROUTER_TITLE', ''),
+  },
+
   anthropic: {
-    apiKey: required('ANTHROPIC_API_KEY'),
     // Sent as the anthropic-workspace-id header; a user-scoped key (sk-ant-usr-…) 400s without it.
     workspaceId: optional('ANTHROPIC_WORKSPACE_ID', ''),
     model: optional('CLAUDE_MODEL', 'claude-haiku-4-5-20251001'),
