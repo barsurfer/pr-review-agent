@@ -97,7 +97,7 @@ class OpenRouterProvider implements LLMProvider {
     } catch {
       throw new Error('Model returned invalid JSON despite structured output')
     }
-    const missing = missingRequired(object, schema)
+    const missing = missingRequired(object, schema, true)
     if (missing.length) throw new Error(`Structured output missing required field(s): ${missing.join(', ')}`)
     return { object, usage: mapOpenRouterUsage(data.usage) }
   }
@@ -275,11 +275,24 @@ export function anthropicClientOptions(apiKey: string): { apiKey: string; baseUR
   }
 }
 
-/** Top-level required keys the parsed object is missing — a schema-honoring provider returns []. */
-export function missingRequired(object: unknown, schema: Record<string, unknown>): string[] {
+// Required root keys the object is missing ([] from a schema-honoring provider). `deep` also flags
+// dropped array-item required keys (findings[].severity) a strict:false provider can omit while
+// satisfying the root — countFindings/applyJudgeDecisions assume those exist.
+export function missingRequired(object: unknown, schema: Record<string, unknown>, deep = false): string[] {
   const required = (schema.required as string[] | undefined) ?? []
   const obj = (object ?? {}) as Record<string, unknown>
-  return required.filter(k => obj[k] === undefined)
+  const missing = required.filter(k => obj[k] === undefined)
+  if (!deep) return missing
+  const props = (schema.properties ?? {}) as Record<string, { items?: { required?: string[] } }>
+  for (const [key, prop] of Object.entries(props)) {
+    const itemRequired = prop?.items?.required
+    if (!itemRequired || !Array.isArray(obj[key])) continue
+    ;(obj[key] as unknown[]).forEach((el, i) => {
+      const elObj = (el ?? {}) as Record<string, unknown>
+      for (const rk of itemRequired) if (elObj[rk] === undefined) missing.push(`${key}[${i}].${rk}`)
+    })
+  }
+  return missing
 }
 
 export function createProvider(apiKey: string): LLMProvider {
