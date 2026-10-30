@@ -181,6 +181,19 @@ This is the **generator-verifier** pattern: the reviewer proposes candidate find
 judge filters them. The judge never adds findings, so the reviewer model sets the recall
 ceiling; choose each model per repo and budget (see [docs/context/prompt/judge.md](docs/context/prompt/judge.md)).
 
+### OpenRouter (optional model backend)
+
+Off by default. Set `LLM_PROVIDER=openrouter` and `OPENROUTER_API_KEY` (then `ANTHROPIC_API_KEY` is not required) to route the reviewer and judge through
+[OpenRouter](https://openrouter.ai), e.g. to use cheaper non-Anthropic models on small repos. `CLAUDE_MODEL` and `JUDGING_MODEL` then take OpenRouter slugs
+(`anthropic/claude-sonnet-5`, `openai/gpt-…`), and reviewer and judge can be different vendors.
+
+- Prompts stay Claude-tuned; structured-output reliability varies per routed model, so pick models that list `response_format`/`structured_outputs` in OpenRouter's `supported_parameters`.
+- Real per-call USD cost is taken from OpenRouter and logged.
+- Set `MODEL_CONTEXT_TOKENS` to the routed model's real window — non-Claude slugs otherwise fall back to a 200K assumption.
+- ReviewBench defaults to Anthropic and is unchanged unless you set these env vars.
+
+Details: [docs/context/llm/structured-output.md](docs/context/llm/structured-output.md), vars in [docs/reference/env-vars.md](docs/reference/env-vars.md).
+
 ### Re-reviews and Delta Logic
 
 On re-reviews (PR updated after a previous review), the agent sends its **most recent**
@@ -347,7 +360,10 @@ All credentials and settings are provided via environment variables.
 |----------|---------|-------------|
 | `VCS_PROVIDER` | `bitbucket` | Which VCS adapter to use — `bitbucket` (production), `azure`/`github` (experimental), `gitlab` (stub) |
 | `BITBUCKET_BASE_URL` | `https://api.bitbucket.org/2.0` | Bitbucket Cloud API base URL (Server/DC is not supported — different v1 API) |
-| `CLAUDE_MODEL` | `claude-haiku-4-5-20251001` | Reviewer model ID |
+| `LLM_PROVIDER` | `anthropic` | Model backend: `anthropic` or `openrouter` (see [OpenRouter](#openrouter-optional-model-backend)) |
+| `OPENROUTER_API_KEY` | — | Required instead of `ANTHROPIC_API_KEY` when `LLM_PROVIDER=openrouter` |
+| `OPENROUTER_BASE_URL` / `OPENROUTER_REFERER` / `OPENROUTER_TITLE` | `https://openrouter.ai/api/v1` / unset / unset | OpenRouter endpoint and optional attribution headers |
+| `CLAUDE_MODEL` | `claude-haiku-4-5-20251001` | Reviewer model ID (an OpenRouter slug when `LLM_PROVIDER=openrouter`) |
 | `MAX_RETRIES` | `3` | Max retries on 429/5xx errors (exponential backoff) |
 | `MAX_INPUT_TOKENS` | `250000` | Over budget → drop file contexts and review diff-only; skip only if the diff alone still exceeds it (0 = disabled) |
 | `ENABLE_BUNDLED_REVIEW` | `false` | Over-budget PR is split into directory bundles, each reviewed + judged, then merged/deduped, instead of skipped (2 calls per bundle) |

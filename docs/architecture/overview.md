@@ -36,7 +36,7 @@ pr-review-agent/
 │   ├── claude/
 │   │   └── client.ts             # Review/judge/reply calls + REVIEW/JUDGE output schemas
 │   ├── llm/
-│   │   └── provider.ts           # LLMProvider seam over the Anthropic SDK (complete/completeStructured)
+│   │   └── provider.ts           # LLMProvider seam: Anthropic SDK + OpenRouter via axios (complete/completeStructured)
 │   ├── vcs/
 │   │   ├── adapter.ts            # VCSAdapter interface + provider selection
 │   │   ├── bitbucket.ts          # Bitbucket Cloud implementation
@@ -85,7 +85,7 @@ pr-review-agent/
 |---------|--------|
 | Language | TypeScript |
 | Runtime | Node.js 22+ (single-file esbuild bundle; `tsx` for dev) |
-| Claude API | `@anthropic-ai/sdk` |
+| Model SDK | `@anthropic-ai/sdk` (default); OpenRouter via `axios` (`LLM_PROVIDER=openrouter`) |
 | HTTP client | `axios` |
 | CLI args | `commander` |
 | Model | reviewer `claude-haiku-4-5-20251001` (`CLAUDE_MODEL`), judge `claude-sonnet-5` (`JUDGING_MODEL`, on by default) |

@@ -15,9 +15,28 @@ All model calls go through `LLMProvider` (`src/llm/provider.ts`), never the SDK 
 - `complete(system, user, opts)` → `{ text, usage }`
 - `completeStructured<T>(system, user, schema, opts)` → `{ object: T, usage }` (JSON-schema-constrained)
 
-`createProvider(apiKey)` selects the impl by `LLM_PROVIDER` (default and only value: `anthropic`). The Anthropic SDK lives in exactly one file, so a second provider is a new class — not a re-plumb across the codebase. Both `complete` and `completeStructured` throw a `TruncatedResponseError` on a `max_tokens` cut-off — it carries the response usage, so the record keeps real token counts (not zeros); `completeStructured` also throws on invalid JSON or missing required keys, so a truncated or malformed object is never returned. Effort rides `output_config.effort` with a one-shot retry without it on a 400.
+`createProvider(apiKey)` selects the impl by `LLM_PROVIDER` (`anthropic` default, or `openrouter`; anything else throws). Both impls live in `provider.ts`, so provider code stays in one file and a new backend is a new class — not a re-plumb across the codebase. Both `complete` and `completeStructured` throw a `TruncatedResponseError` on a cut-off (`max_tokens` / `finish_reason: length`) — it carries the response usage, so the record keeps real token counts (not zeros); `completeStructured` also throws on invalid JSON or missing required keys, so a truncated or malformed object is never returned.
 
-**Why:** keep the SDK in one place and make structured output (and a future non-Anthropic backend) an implementation detail. Prompts stay Claude-tuned — provider portability is a separate per-model effort.
+Usage currency is `LLMUsage` (defined in `provider.ts`, formerly `ClaudeUsage`): token counts plus an optional `cost_usd`. `cost_usd` is set only by OpenRouter; when absent (Anthropic) the usage record falls back to the static pricing-table estimate, so the Anthropic record is unchanged.
+
+| Impl | Selected by | Transport | Notes |
+|------|-------------|-----------|-------|
+| `AnthropicProvider` | `LLM_PROVIDER=anthropic` (default) | `@anthropic-ai/sdk`, streamed | Structured output via `output_config.format`; effort rides `output_config.effort` with a one-shot retry without it on a 400 |
+| `OpenRouterProvider` | `LLM_PROVIDER=openrouter` | axios → OpenAI-compatible `POST {OPENROUTER_BASE_URL}/chat/completions`, non-streaming | See below |
+
+**Why:** keep provider code in one place and make structured output and the backend an implementation detail. Prompts stay Claude-tuned — portability to other models is a separate per-model effort.
+
+### OpenRouter specifics
+
+- **Structured output:** `response_format` json_schema with `strict: false` (our reviewer/judge schemas don't meet OpenAI strict mode's all-keys-required rule), guarded by `JSON.parse` + `missingRequired`. `missingRequired` checks top-level keys only, so nested finding fields (e.g. `severity`) are best-effort and a weak model can silently skew `review_findings`/`computed_score`.
+- **Per-model reliability:** structured-output fidelity depends on the routed model, not the transport. OpenRouter forwards `response_format` only to models that support it; others ignore it and the parse guard fails loud. Gate model choice on OpenRouter's `supported_parameters`.
+- **Errors:** normalized inside the provider to the Anthropic-recognized `{status, message}` shape (including an HTTP 200 body carrying an `error`). A 400 context overflow is surfaced with a message the existing `isContextLengthError` regex matches, so the degrade-to-diff-only backstop works with no shared-code change.
+- **Retries:** hand-rolled — 429/5xx and connection/timeout errors, honoring `Retry-After`, with backoff.
+- **Cost:** requests send `usage: { include: true }`; the returned USD cost lands in `cost_usd` and is logged instead of a wrong-model pricing-table estimate. A BYOK key reports `usage.cost` as 0, so the real `cost_details.upstream_inference_cost` is used instead.
+- **Dropped:** `effort` is ignored (no portable equivalent).
+- **Context window:** the window table is keyed by Claude model ids, so a non-Claude slug falls back to 200K; set `MODEL_CONTEXT_TOKENS` to the routed model's real window.
+- **Models:** `CLAUDE_MODEL` / `JUDGING_MODEL` take OpenRouter slugs (`anthropic/claude-sonnet-5`, `openai/gpt-…`). Reviewer and judge pass their own slug to the same provider, so one run can mix vendors (e.g. Claude reviewer, OpenAI judge). Selection is global per run: native Anthropic and OpenRouter can't be mixed — route both through OpenRouter.
+- **ReviewBench** defaults to Anthropic; there is no benchmark-mode guard, so an OpenRouter run stays reachable by env.
 
 ---
 
