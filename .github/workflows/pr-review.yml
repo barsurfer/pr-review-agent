@@ -37,7 +37,12 @@ jobs:
             --repo-slug "${{ github.event.repository.name }}" \
             --pr-id "${{ github.event.pull_request.number || github.event.issue.number }}"
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          LLM_PROVIDER: openrouter
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          CLAUDE_MODEL: anthropic/claude-sonnet-5.5
+          JUDGING_MODEL: anthropic/claude-haiku-5.5
+          # non-Claude-prefixed slug → window table falls back to 200K, so pin the real window
+          MODEL_CONTEXT_TOKENS: "1000000"
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           AGENT_IDENTITY: github-actions[bot]
           # GitHub flow targets main directly; the default main,master would skip every PR
