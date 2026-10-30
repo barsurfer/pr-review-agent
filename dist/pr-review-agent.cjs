@@ -36253,11 +36253,22 @@ var MODEL_CONTEXT_WINDOWS = [
 function modelContextWindow(model) {
   return MODEL_CONTEXT_WINDOWS.find(([prefix]) => model.startsWith(prefix))?.[1] ?? 2e5;
 }
+var llmProvider = optional("LLM_PROVIDER", "anthropic");
+function resolveLlmApiKey(provider) {
+  if (provider !== "openrouter") return required("ANTHROPIC_API_KEY");
+  const key = optional("OPENROUTER_API_KEY", "");
+  if (key) return key;
+  const fallback = optional("ANTHROPIC_API_KEY", "");
+  if (fallback) {
+    console.warn("OPENROUTER_API_KEY not set \u2014 using the ANTHROPIC_API_KEY slot as the OpenRouter key");
+    return fallback;
+  }
+  throw new Error("Missing required environment variable: OPENROUTER_API_KEY (or ANTHROPIC_API_KEY as a fallback)");
+}
 var config = {
   vcsProvider: optional("VCS_PROVIDER", "bitbucket"),
-  // Which LLM backend the reviewer/judge use. Only 'anthropic' is implemented; the seam
-  // (src/llm/provider.ts) exists so a second provider is a new impl, not a re-plumb.
-  llmProvider: optional("LLM_PROVIDER", "anthropic"),
+  llmProvider,
+  llmApiKey: resolveLlmApiKey(llmProvider),
   bitbucket: {
     baseUrl: optional("BITBUCKET_BASE_URL", "https://api.bitbucket.org/2.0"),
     workspace: optional("BITBUCKET_WORKSPACE", ""),
@@ -36280,8 +36291,15 @@ var config = {
     owner: optional("GITHUB_OWNER", ""),
     token: optional("GITHUB_TOKEN", "")
   },
+  // OpenRouter (OpenAI-compatible gateway, when LLM_PROVIDER=openrouter). The key rides llmApiKey;
+  // model slugs come from CLAUDE_MODEL/JUDGING_MODEL (e.g. anthropic/claude-sonnet-5, openai/gpt-...).
+  openrouter: {
+    baseUrl: optional("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
+    referer: optional("OPENROUTER_REFERER", ""),
+    // optional attribution headers (OpenRouter rankings)
+    title: optional("OPENROUTER_TITLE", "")
+  },
   anthropic: {
-    apiKey: required("ANTHROPIC_API_KEY"),
     // Sent as the anthropic-workspace-id header; a user-scoped key (sk-ant-usr-…) 400s without it.
     workspaceId: optional("ANTHROPIC_WORKSPACE_ID", ""),
     model: optional("CLAUDE_MODEL", "claude-haiku-4-5-20251001"),
@@ -43894,6 +43912,60 @@ var AnthropicProvider = class {
     });
   }
 };
+var OpenRouterProvider = class {
+  constructor(apiKey) {
+    this.apiKey = apiKey;
+  }
+  apiKey;
+  async complete(system, user, opts2) {
+    const data = await this.request({ model: opts2.model, max_tokens: opts2.maxTokens, messages: openRouterMessages(system, user) }, opts2);
+    const choice = firstChoice(data, opts2.maxTokens);
+    return { text: contentOf(choice), usage: mapOpenRouterUsage(data.usage) };
+  }
+  async completeStructured(system, user, schema, opts2) {
+    const response_format = { type: "json_schema", json_schema: { name: "result", schema, strict: false } };
+    const data = await this.request({ model: opts2.model, max_tokens: opts2.maxTokens, response_format, messages: openRouterMessages(system, user) }, opts2);
+    const choice = firstChoice(data, opts2.maxTokens);
+    const text = contentOf(choice);
+    let object;
+    try {
+      object = JSON.parse(text);
+    } catch {
+      throw new Error("Model returned invalid JSON despite structured output");
+    }
+    const missing = missingRequired(object, schema, true);
+    if (missing.length) throw new Error(`Structured output missing required field(s): ${missing.join(", ")}`);
+    return { object, usage: mapOpenRouterUsage(data.usage) };
+  }
+  async request(payload, opts2) {
+    const url2 = `${config.openrouter.baseUrl.replace(/\/+$/, "")}/chat/completions`;
+    const headers = {
+      Authorization: `Bearer ${this.apiKey}`,
+      "Content-Type": "application/json",
+      ...config.openrouter.referer ? { "HTTP-Referer": config.openrouter.referer } : {},
+      ...config.openrouter.title ? { "X-Title": config.openrouter.title } : {}
+    };
+    const body = { ...payload, usage: { include: true } };
+    let lastErr;
+    for (let attempt = 0; attempt <= opts2.maxRetries; attempt++) {
+      try {
+        const resp = await axios_default.post(url2, body, { headers, timeout: OPENROUTER_TIMEOUT_MS });
+        const data = resp.data;
+        if (data?.error) throw openRouterError(typeof data.error.code === "number" ? data.error.code : void 0, data.error.message ?? "OpenRouter returned an error", data.error.code);
+        return data;
+      } catch (err) {
+        if (isOpenRouterError(err)) throw err;
+        lastErr = err;
+        if (attempt < opts2.maxRetries && isRetryable(err)) {
+          await delay(retryDelayMs(attempt, err));
+          continue;
+        }
+        throw axiosToError(err);
+      }
+    }
+    throw axiosToError(lastErr);
+  }
+};
 var TruncatedResponseError = class extends Error {
   constructor(message, usage) {
     super(message);
@@ -43918,6 +43990,67 @@ function mapUsage(u) {
     cache_creation_input_tokens: u.cache_creation_input_tokens ?? 0
   };
 }
+var OPENROUTER_TIMEOUT_MS = 6e5;
+function openRouterMessages(system, user) {
+  return [{ role: "system", content: system }, { role: "user", content: user }];
+}
+function firstChoice(data, maxTokens) {
+  const choice = data.choices?.[0];
+  if (!choice) throw new Error("OpenRouter returned no choices");
+  if (choice.finish_reason === "length") {
+    throw new TruncatedResponseError(`Model response truncated at ${maxTokens} output tokens \u2014 refusing to post a cut-off response`, mapOpenRouterUsage(data.usage));
+  }
+  return choice;
+}
+function contentOf(choice) {
+  const content = choice.message?.content;
+  if (typeof content !== "string") throw new Error("OpenRouter returned no text content (refusal or non-text finish)");
+  return content;
+}
+function mapOpenRouterUsage(u) {
+  const cost = typeof u?.cost === "number" && u.cost > 0 ? u.cost : u?.cost_details?.upstream_inference_cost;
+  return {
+    input_tokens: u?.prompt_tokens ?? 0,
+    output_tokens: u?.completion_tokens ?? 0,
+    cache_read_input_tokens: u?.prompt_tokens_details?.cached_tokens ?? 0,
+    cache_creation_input_tokens: 0,
+    ...typeof cost === "number" ? { cost_usd: cost } : {}
+  };
+}
+function openRouterError(status, rawMessage, code) {
+  const hay = `${rawMessage} ${typeof code === "string" ? code : ""}`;
+  const overflow = /context[ _]length|maximum context|reduce the length|context_length_exceeded|too many tokens|input is too long|input token count/i.test(hay);
+  const e = new Error(overflow ? `prompt is too long: ${rawMessage}` : rawMessage);
+  const resolved = overflow ? 400 : status;
+  if (typeof resolved === "number") e.status = resolved;
+  e.__openrouter = true;
+  return e;
+}
+function isOpenRouterError(err) {
+  return !!err?.__openrouter;
+}
+function axiosToError(err) {
+  const ax = err;
+  const status = ax.response?.status;
+  const errBody = ax.response?.data?.error;
+  const message = errBody?.message ?? ax.message ?? "OpenRouter request failed";
+  return openRouterError(status, message, errBody?.code);
+}
+function isRetryable(err) {
+  const ax = err;
+  if (ax.code === "ECONNABORTED" || ax.code === "ETIMEDOUT") return false;
+  if (!ax.response) return true;
+  const s = ax.response.status ?? 0;
+  return s === 429 || s >= 500;
+}
+function retryDelayMs(attempt, err) {
+  const retryAfter = Number(err.response?.headers?.["retry-after"]);
+  if (Number.isFinite(retryAfter) && retryAfter > 0) return retryAfter * 1e3;
+  return Math.min(500 * 2 ** attempt, 8e3);
+}
+function delay(ms) {
+  return new Promise((resolve4) => setTimeout(resolve4, ms));
+}
 function anthropicBaseUrl(url2) {
   return url2.trim().replace(/\/+$/, "").replace(/\/v1$/, "") || void 0;
 }
@@ -43930,17 +44063,30 @@ function anthropicClientOptions(apiKey) {
     ...workspaceId ? { defaultHeaders: { "anthropic-workspace-id": workspaceId } } : {}
   };
 }
-function missingRequired(object, schema) {
+function missingRequired(object, schema, deep = false) {
   const required2 = schema.required ?? [];
   const obj = object ?? {};
-  return required2.filter((k) => obj[k] === void 0);
+  const missing = required2.filter((k) => obj[k] === void 0);
+  if (!deep) return missing;
+  const props = schema.properties ?? {};
+  for (const [key, prop] of Object.entries(props)) {
+    const itemRequired = prop?.items?.required;
+    if (!itemRequired || !Array.isArray(obj[key])) continue;
+    obj[key].forEach((el, i) => {
+      const elObj = el ?? {};
+      for (const rk of itemRequired) if (elObj[rk] === void 0) missing.push(`${key}[${i}].${rk}`);
+    });
+  }
+  return missing;
 }
 function createProvider(apiKey) {
   switch (config.llmProvider) {
     case "anthropic":
       return new AnthropicProvider(apiKey);
+    case "openrouter":
+      return new OpenRouterProvider(apiKey);
     default:
-      throw new Error(`Unknown LLM_PROVIDER "${config.llmProvider}" (supported: anthropic)`);
+      throw new Error(`Unknown LLM_PROVIDER "${config.llmProvider}" (supported: anthropic, openrouter)`);
   }
 }
 
@@ -45127,7 +45273,7 @@ This PR is too large for one pass. You are reviewing bundle ${i + 1} of ${plan.b
       for (; ; ) {
         try {
           return await runReview(
-            config.anthropic.apiKey,
+            config.llmApiKey,
             config.anthropic.model,
             config.anthropic.maxRetries,
             config.anthropic.maxTokens,
@@ -45172,7 +45318,7 @@ This PR is too large for one pass. You are reviewing bundle ${i + 1} of ${plan.b
     if (config.judge.model && result.review && found.high + found.medium + found.low > 0) {
       try {
         const verdict = await runJudge(
-          config.anthropic.apiKey,
+          config.llmApiKey,
           config.judge.model,
           config.judge.maxRetries,
           config.anthropic.maxTokens,
@@ -45186,6 +45332,7 @@ This PR is too large for one pass. You are reviewing bundle ${i + 1} of ${plan.b
         addUsage(ctx, verdict.usage);
         judgeUsage.input_tokens += verdict.usage.input_tokens;
         judgeUsage.output_tokens += verdict.usage.output_tokens;
+        if (verdict.usage.cost_usd !== void 0) judgeUsage.cost_usd = (judgeUsage.cost_usd ?? 0) + verdict.usage.cost_usd;
         judgeScores.push(...verdict.scores ?? []);
         text = verdict.text;
         judged = true;
@@ -45221,6 +45368,7 @@ function addUsage(ctx, u) {
   ctx.usage.output_tokens += u.output_tokens;
   ctx.usage.cache_read += u.cache_read_input_tokens ?? 0;
   ctx.usage.cache_write += u.cache_creation_input_tokens ?? 0;
+  if (u.cost_usd !== void 0) ctx.usage.cost_usd = (ctx.usage.cost_usd ?? 0) + u.cost_usd;
 }
 
 // src/review/usage.ts
@@ -45274,7 +45422,7 @@ function getAgentVersion() {
     const pkg = JSON.parse((0, import_fs4.readFileSync)(pkgPath, "utf-8"));
     return pkg.version;
   } catch {
-    if (true) return "0.0.31";
+    if (true) return "0.0.32";
     return "unknown";
   }
 }
@@ -45286,7 +45434,7 @@ function getBuildCommit() {
     const dirty = (0, import_child_process.execSync)("git status --porcelain", opts2).toString().trim() ? "-dirty" : "";
     return hash + dirty;
   } catch {
-    if (true) return "b3c3cbe";
+    if (true) return "f035df8";
     return "unknown";
   }
 }
@@ -45311,9 +45459,13 @@ function buildUsageRecord(ctx, durationMs, error) {
   const judgeModel = config.judge.model || null;
   const judgeTokensRaw = ctx.judgeUsage ?? null;
   const judgeTokens = judgeTokensRaw ? { input: judgeTokensRaw.input_tokens, output: judgeTokensRaw.output_tokens } : null;
-  const judgeCost = judgeTokens && judgeModel ? estimateCost(judgeTokens, judgeModel) : null;
+  const judgeCost = ctx.judgeUsage?.cost_usd ?? (judgeTokens && judgeModel ? estimateCost(judgeTokens, judgeModel) : null);
   const breadthTokens = ctx.breadthUsage ? { input: ctx.breadthUsage.input_tokens, output: ctx.breadthUsage.output_tokens } : null;
-  const breadthCost = breadthTokens && ctx.breadthModel ? estimateCost(breadthTokens, ctx.breadthModel) : null;
+  const breadthCost = ctx.breadthUsage?.cost_usd ?? (breadthTokens && ctx.breadthModel ? estimateCost(breadthTokens, ctx.breadthModel) : null);
+  const reviewerCost = ctx.usage.cost_usd !== void 0 ? ctx.usage.cost_usd - (ctx.judgeUsage?.cost_usd ?? 0) - (ctx.breadthUsage?.cost_usd ?? 0) : estimateCost({
+    input: ctx.usage.input_tokens - (judgeTokens?.input ?? 0) - (breadthTokens?.input ?? 0),
+    output: ctx.usage.output_tokens - (judgeTokens?.output ?? 0) - (breadthTokens?.output ?? 0)
+  }, config.anthropic.model);
   const breadthStatus = ctx.breadthStatus ?? (ctx.bundleCount ? config.breadth.enabled ? "skipped_bundled" : "disabled" : null);
   return {
     run_id: `${config.vcsProvider}-${ctx.repoSlug}-${ctx.prId}-${commitShort}`,
@@ -45357,10 +45509,7 @@ function buildUsageRecord(ctx, durationMs, error) {
       cache_write: ctx.usage.cache_write,
       estimated_input: ctx.estimatedInputTokens
     },
-    cost_usd: estimateCost({
-      input: ctx.usage.input_tokens - (judgeTokens?.input ?? 0) - (breadthTokens?.input ?? 0),
-      output: ctx.usage.output_tokens - (judgeTokens?.output ?? 0) - (breadthTokens?.output ?? 0)
-    }, config.anthropic.model) + (judgeCost ?? 0) + (breadthCost ?? 0),
+    cost_usd: reviewerCost + (judgeCost ?? 0) + (breadthCost ?? 0),
     judge_model: judgeModel,
     judge_effort: config.judge.effort || null,
     judge_tokens: judgeTokens,
@@ -45587,7 +45736,7 @@ async function transition(state, ctx) {
     case 6 /* RESPOND_TO_REPLIES */: {
       const lastReview = ctx.previousReviews[ctx.previousReviews.length - 1];
       const result = await runCommentResponse(
-        config.anthropic.apiKey,
+        config.llmApiKey,
         config.anthropic.model,
         config.anthropic.maxRetries,
         ctx.filteredDiff,
@@ -45598,6 +45747,7 @@ async function transition(state, ctx) {
       ctx.usage.output_tokens += result.usage.output_tokens;
       ctx.usage.cache_read += result.usage.cache_read_input_tokens ?? 0;
       ctx.usage.cache_write += result.usage.cache_creation_input_tokens ?? 0;
+      if (result.usage.cost_usd !== void 0) ctx.usage.cost_usd = (ctx.usage.cost_usd ?? 0) + result.usage.cost_usd;
       const replyBody = result.text.trimEnd() + buildReplyFooter(config.agentIdentity, config.anthropic.model, getJobUrl());
       if (ctx.dryRun) {
         console.log("\n=== DRY RUN \u2014 Reply output (not posted) ===\n");
@@ -45704,7 +45854,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
       }
       const reviewPrompt = { ...ctx.prompt, content };
       const call = () => runReview(
-        config.anthropic.apiKey,
+        config.llmApiKey,
         config.anthropic.model,
         config.anthropic.maxRetries,
         config.anthropic.maxTokens,
@@ -45742,6 +45892,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
       ctx.usage.output_tokens += result.usage.output_tokens;
       ctx.usage.cache_read += result.usage.cache_read_input_tokens ?? 0;
       ctx.usage.cache_write += result.usage.cache_creation_input_tokens ?? 0;
+      if (result.usage.cost_usd !== void 0) ctx.usage.cost_usd = (ctx.usage.cost_usd ?? 0) + result.usage.cost_usd;
       return 11 /* CHECK_NO_CHANGE */;
     }
     case 11 /* CHECK_NO_CHANGE */: {
@@ -45807,7 +45958,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
       console.log(`  Breadth review: ${coverage.untouched.length} untouched of ${coverage.reviewable.length} reviewable file(s)`);
       try {
         const result = await runBreadth(
-          config.anthropic.apiKey,
+          config.llmApiKey,
           model,
           config.judge.maxRetries,
           config.anthropic.maxTokens,
@@ -45821,14 +45972,14 @@ If this PR spans multiple independent themes that could each be a separate, inde
         );
         ctx.breadthFindings = result.findings;
         ctx.breadthPromptHash = result.promptHash;
-        ctx.breadthUsage = { input_tokens: result.usage.input_tokens, output_tokens: result.usage.output_tokens };
+        ctx.breadthUsage = { input_tokens: result.usage.input_tokens, output_tokens: result.usage.output_tokens, cost_usd: result.usage.cost_usd };
         addUsage(ctx, result.usage);
         ctx.breadthStatus = "succeeded";
         console.log(`  Breadth review: ${coverage.untouched.length} untouched file(s) \u2192 ${result.findings.length} finding(s)`);
       } catch (err) {
         const e = err;
         if (e.usage) {
-          ctx.breadthUsage = { input_tokens: e.usage.input_tokens, output_tokens: e.usage.output_tokens };
+          ctx.breadthUsage = { input_tokens: e.usage.input_tokens, output_tokens: e.usage.output_tokens, cost_usd: e.usage.cost_usd };
           addUsage(ctx, e.usage);
         }
         ctx.breadthStatus = "failed";
@@ -45886,7 +46037,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
       ctx.reviewTextBeforeJudge = ctx.reviewText;
       try {
         const result = await runJudge(
-          config.anthropic.apiKey,
+          config.llmApiKey,
           config.judge.model,
           config.judge.maxRetries,
           config.anthropic.maxTokens,
@@ -45914,11 +46065,12 @@ If this PR spans multiple independent themes that could each be a separate, inde
         if (result.scores?.length) {
           console.log(`  Judge finding scores: ${result.scores.map((s) => `${s.severity} ${s.score}/10`).join(", ")}`);
         }
-        ctx.judgeUsage = { input_tokens: result.usage.input_tokens, output_tokens: result.usage.output_tokens };
+        ctx.judgeUsage = { input_tokens: result.usage.input_tokens, output_tokens: result.usage.output_tokens, cost_usd: result.usage.cost_usd };
         ctx.usage.input_tokens += result.usage.input_tokens;
         ctx.usage.output_tokens += result.usage.output_tokens;
         ctx.usage.cache_read += result.usage.cache_read_input_tokens ?? 0;
         ctx.usage.cache_write += result.usage.cache_creation_input_tokens ?? 0;
+        if (result.usage.cost_usd !== void 0) ctx.usage.cost_usd = (ctx.usage.cost_usd ?? 0) + result.usage.cost_usd;
         ctx.judgeStatus = "succeeded";
       } catch (err) {
         ctx.judgeStatus = "failed";
@@ -46057,6 +46209,7 @@ Starting review for PR #${prId}`);
       ctx.usage.output_tokens += e.usage.output_tokens;
       ctx.usage.cache_read += e.usage.cache_read_input_tokens ?? 0;
       ctx.usage.cache_write += e.usage.cache_creation_input_tokens ?? 0;
+      if (e.usage.cost_usd !== void 0) ctx.usage.cost_usd = (ctx.usage.cost_usd ?? 0) + e.usage.cost_usd;
     }
     error = {
       type: e.constructor.name,
