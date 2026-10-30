@@ -120,10 +120,10 @@ class OpenRouterProvider implements LLMProvider {
         const resp = await axios.post<OpenRouterResponse>(url, body, { headers, timeout: OPENROUTER_TIMEOUT_MS })
         const data = resp.data
         // OpenRouter can return HTTP 200 with an error object instead of choices.
-        if (data?.error) throw openRouterError(typeof data.error.code === 'number' ? data.error.code : undefined, data.error.message ?? 'OpenRouter returned an error')
+        if (data?.error) throw openRouterError(typeof data.error.code === 'number' ? data.error.code : undefined, data.error.message ?? 'OpenRouter returned an error', data.error.code)
         return data
       } catch (err: unknown) {
-        if (err instanceof TruncatedResponseError || isOpenRouterError(err)) throw err
+        if (isOpenRouterError(err)) throw err
         lastErr = err
         if (attempt < opts.maxRetries && isRetryable(err)) {
           await delay(retryDelayMs(attempt, err))
@@ -168,7 +168,7 @@ function mapUsage(u: Anthropic.Message['usage']): LLMUsage {
 interface OpenRouterResponse {
   choices?: Array<{ message?: { content?: string | null }; finish_reason?: string }>
   usage?: { prompt_tokens?: number; completion_tokens?: number; cost?: number; cost_details?: { upstream_inference_cost?: number }; prompt_tokens_details?: { cached_tokens?: number } }
-  error?: { message?: string; code?: number }
+  error?: { message?: string; code?: number | string }
 }
 
 const OPENROUTER_TIMEOUT_MS = 600_000
@@ -210,10 +210,16 @@ type StatusError = Error & { status?: number; __openrouter?: true }
 // Normalize to the Anthropic-recognized { status, message } shape so the shared degrade/retry/record
 // code works unchanged. On a context overflow, surface a message the diff-only backstop's regex
 // (isContextLengthError) already matches, covering the context_length_exceeded code form too.
-function openRouterError(status: number | undefined, rawMessage: string): StatusError {
-  const overflow = status === 400 && /context[ _]length|maximum context|reduce the length|context_length_exceeded|too many tokens/i.test(rawMessage)
+function openRouterError(status: number | undefined, rawMessage: string, code?: number | string): StatusError {
+  // Detect a context overflow by wording OR error code, independent of the reported status — an
+  // HTTP-200 body error may carry a string code (context_length_exceeded) and no numeric status.
+  // When it is an overflow, force status 400 + a phrase isContextLengthError matches so the
+  // diff-only degrade backstop fires. Covers OpenAI/Anthropic/Gemini/Cohere phrasings.
+  const hay = `${rawMessage} ${typeof code === 'string' ? code : ''}`
+  const overflow = /context[ _]length|maximum context|reduce the length|context_length_exceeded|too many tokens|input is too long|input token count/i.test(hay)
   const e = new Error(overflow ? `prompt is too long: ${rawMessage}` : rawMessage) as StatusError
-  if (typeof status === 'number') e.status = status
+  const resolved = overflow ? 400 : status
+  if (typeof resolved === 'number') e.status = resolved
   e.__openrouter = true
   return e
 }
@@ -223,7 +229,7 @@ function isOpenRouterError(err: unknown): err is StatusError {
 }
 
 interface AxiosLikeError {
-  response?: { status?: number; headers?: Record<string, string>; data?: { error?: { message?: string } } }
+  response?: { status?: number; headers?: Record<string, string>; data?: { error?: { message?: string; code?: number | string } } }
   code?: string
   message?: string
 }
@@ -232,13 +238,17 @@ function axiosToError(err: unknown): StatusError {
   if (isOpenRouterError(err)) return err
   const ax = err as AxiosLikeError
   const status = ax.response?.status
-  const message = ax.response?.data?.error?.message ?? ax.message ?? 'OpenRouter request failed'
-  return openRouterError(status, message)
+  const errBody = ax.response?.data?.error
+  const message = errBody?.message ?? ax.message ?? 'OpenRouter request failed'
+  return openRouterError(status, message, errBody?.code)
 }
 
 function isRetryable(err: unknown): boolean {
   const ax = err as AxiosLikeError
-  if (!ax.response) return true   // network / timeout — no HTTP response
+  // A non-streaming timeout may have already consumed (and billed) upstream generation, so retrying
+  // re-bills with no partial output — don't. A connection error never reached the server, so retry it.
+  if (ax.code === 'ECONNABORTED' || ax.code === 'ETIMEDOUT') return false
+  if (!ax.response) return true
   const s = ax.response.status ?? 0
   return s === 429 || s >= 500
 }

@@ -210,6 +210,15 @@ export function buildUsageRecord(
   const judgeCost = ctx.judgeUsage?.cost_usd ?? (judgeTokens && judgeModel ? estimateCost(judgeTokens, judgeModel) : null)
   const breadthTokens = ctx.breadthUsage ? { input: ctx.breadthUsage.input_tokens, output: ctx.breadthUsage.output_tokens } : null
   const breadthCost = ctx.breadthUsage?.cost_usd ?? (breadthTokens && ctx.breadthModel ? estimateCost(breadthTokens, ctx.breadthModel) : null)
+  // Reviewer-only cost: subtract the per-stage actuals from the all-calls actual aggregate when present,
+  // else estimate from the reviewer's own tokens. Summing the three stages keeps the total consistent
+  // with the per-stage columns even when only some calls reported an actual cost (mixed-vendor runs).
+  const reviewerCost = ctx.usage.cost_usd !== undefined
+    ? ctx.usage.cost_usd - (ctx.judgeUsage?.cost_usd ?? 0) - (ctx.breadthUsage?.cost_usd ?? 0)
+    : estimateCost({
+        input: ctx.usage.input_tokens - (judgeTokens?.input ?? 0) - (breadthTokens?.input ?? 0),
+        output: ctx.usage.output_tokens - (judgeTokens?.output ?? 0) - (breadthTokens?.output ?? 0),
+      }, config.anthropic.model)
   // The bundled path never enters BREADTH_REVIEW, so its status is inferred here.
   const breadthStatus = ctx.breadthStatus ?? (ctx.bundleCount ? (config.breadth.enabled ? 'skipped_bundled' : 'disabled') : null)
 
@@ -252,12 +261,7 @@ export function buildUsageRecord(
       cache_write: ctx.usage.cache_write,
       estimated_input: ctx.estimatedInputTokens,
     },
-    // Provider-reported total (OpenRouter) when present — it already sums reviewer + judge + breadth;
-    // otherwise estimate the reviewer portion from the pricing table and add the judge/breadth costs.
-    cost_usd: ctx.usage.cost_usd ?? (estimateCost({
-      input: ctx.usage.input_tokens - (judgeTokens?.input ?? 0) - (breadthTokens?.input ?? 0),
-      output: ctx.usage.output_tokens - (judgeTokens?.output ?? 0) - (breadthTokens?.output ?? 0),
-    }, config.anthropic.model) + (judgeCost ?? 0) + (breadthCost ?? 0)),
+    cost_usd: reviewerCost + (judgeCost ?? 0) + (breadthCost ?? 0),
     judge_model: judgeModel,
     judge_effort: config.judge.effort || null,
     judge_tokens: judgeTokens,

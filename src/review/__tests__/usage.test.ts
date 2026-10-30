@@ -86,6 +86,18 @@ describe('buildUsageRecord provenance fields', () => {
     expect(estimate).toBeGreaterThan(0)
   })
 
+  it('keeps top-level cost consistent with per-stage columns under mixed cost reporting (S3)', () => {
+    // Reviewer reported an actual cost; judge did not → judge falls to the estimate, which must still
+    // be included in the total so cost_usd stays consistent with judge_cost_usd.
+    const r = buildUsageRecord(baseCtx({
+      usage: { input_tokens: 100, output_tokens: 50, cache_read: 0, cache_write: 0, cost_usd: 1.0 },
+      judgeUsage: { input_tokens: 1000, output_tokens: 500 },
+      judgeStatus: 'succeeded',
+    }), 1, null)
+    expect(r.judge_cost_usd).toBeGreaterThan(0)
+    expect(r.cost_usd).toBeCloseTo(1.0 + (r.judge_cost_usd ?? 0), 6)
+  })
+
   it('prefers judge/breadth actual cost_usd for their breakdown fields', () => {
     const r = buildUsageRecord(baseCtx({
       usage: { input_tokens: 100, output_tokens: 50, cache_read: 0, cache_write: 0, cost_usd: 1.5 },
