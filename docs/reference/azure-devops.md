@@ -13,6 +13,12 @@ org: a PR push queues build validation, the agent authenticates with the zero-PA
 new commit (delta reviews). The **reply-to-comments** flow is also validated live (WIP — see
 below). Still WIP: on-prem **Server**.
 
+## Runner choice: native vs Jenkins-triggered
+
+The adapter is **runner-agnostic** — it does all Azure REST work (fetch diff, post comments) through the API regardless of where the agent process runs, so this is a trigger/host choice, not a VCS one.
+- **Native Azure Pipelines (default):** what this doc wires — zero-PAT (`System.AccessToken`), fewest hops, validated on cloud.
+- **Azure → Jenkins job:** only when CI is standardized on Jenkins. Azure Service Hooks (PR create/update for reviews, commented for replies) trigger a Jenkins job running the same `--vcs azure --repo-slug … --pr-id …`, with `AZURE_ACCESS_TOKEN`/`AZURE_PAT` in Jenkins credentials (you lose the zero-PAT OAuth). No agent change — migrating later is just re-pointing the trigger.
+
 ## CI integration (Azure Pipelines)
 
 Wire [`azure/azure-pipelines.yml`](../../azure/azure-pipelines.yml) as a **Branch Policy → Build
