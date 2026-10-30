@@ -74,8 +74,7 @@ class AnthropicProvider implements LLMProvider {
 }
 
 // OpenRouter's OpenAI-compatible gateway. Non-streaming: OpenAI semantics don't force streaming
-// above a token threshold (unlike the Anthropic SDK), so a plain POST is fine for v1. Prompts stay
-// Claude-tuned; structured-output fidelity depends on the routed model, not this transport.
+// above a token threshold (unlike the Anthropic SDK), so a plain POST suffices.
 class OpenRouterProvider implements LLMProvider {
   constructor(private readonly apiKey: string) {}
 
@@ -86,10 +85,9 @@ class OpenRouterProvider implements LLMProvider {
   }
 
   async completeStructured<T>(system: string, user: string, schema: Record<string, unknown>, opts: LLMOptions): Promise<{ object: T; usage: LLMUsage }> {
-    const name = typeof schema.title === 'string' && /^[A-Za-z0-9_-]+$/.test(schema.title) ? schema.title : 'result'
     // strict:false — our REVIEW/JUDGE schemas don't meet OpenAI strict's all-keys-required rule;
     // JSON.parse + missingRequired below is the fidelity guard instead. Gate models on supported_parameters.
-    const response_format = { type: 'json_schema', json_schema: { name, schema, strict: false } }
+    const response_format = { type: 'json_schema', json_schema: { name: 'result', schema, strict: false } }
     const data = await this.request({ model: opts.model, max_tokens: opts.maxTokens, response_format, messages: openRouterMessages(system, user) }, opts)
     const choice = firstChoice(data, opts.maxTokens)
     const text = contentOf(choice)
@@ -207,9 +205,7 @@ function mapOpenRouterUsage(u: OpenRouterResponse['usage']): LLMUsage {
 
 type StatusError = Error & { status?: number; __openrouter?: true }
 
-// Normalize to the Anthropic-recognized { status, message } shape so the shared degrade/retry/record
-// code works unchanged. On a context overflow, surface a message the diff-only backstop's regex
-// (isContextLengthError) already matches, covering the context_length_exceeded code form too.
+// Normalize to the Anthropic-recognized { status, message } shape so the shared degrade/retry/record code works unchanged.
 function openRouterError(status: number | undefined, rawMessage: string, code?: number | string): StatusError {
   // Detect a context overflow by wording OR error code, independent of the reported status — an
   // HTTP-200 body error may carry a string code (context_length_exceeded) and no numeric status.
@@ -235,7 +231,6 @@ interface AxiosLikeError {
 }
 
 function axiosToError(err: unknown): StatusError {
-  if (isOpenRouterError(err)) return err
   const ax = err as AxiosLikeError
   const status = ax.response?.status
   const errBody = ax.response?.data?.error

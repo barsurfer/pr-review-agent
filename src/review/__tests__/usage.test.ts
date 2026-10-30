@@ -86,7 +86,7 @@ describe('buildUsageRecord provenance fields', () => {
     expect(estimate).toBeGreaterThan(0)
   })
 
-  it('keeps top-level cost consistent with per-stage columns under mixed cost reporting (S3)', () => {
+  it('keeps top-level cost consistent with per-stage columns under mixed cost reporting', () => {
     // Reviewer reported an actual cost; judge did not → judge falls to the estimate, which must still
     // be included in the total so cost_usd stays consistent with judge_cost_usd.
     const r = buildUsageRecord(baseCtx({

@@ -63,14 +63,14 @@ describe('OpenRouterProvider.complete', () => {
 })
 
 describe('OpenRouterProvider.completeStructured', () => {
-  const schema = { required: ['verdict'], title: 'review' } as Record<string, unknown>
+  const schema = { required: ['verdict'] } as Record<string, unknown>
 
   it('parses the object and sends response_format json_schema (strict:false)', async () => {
     post.mockResolvedValue(okText(JSON.stringify({ verdict: 'ok' }), { prompt_tokens: 1, completion_tokens: 1 }))
     const r = await createProvider('k').completeStructured('s', 'u', schema, opts)
     expect(r.object).toEqual({ verdict: 'ok' })
     const body = post.mock.calls[0][1] as Record<string, unknown>
-    expect(body.response_format).toEqual({ type: 'json_schema', json_schema: { name: 'review', schema, strict: false } })
+    expect(body.response_format).toEqual({ type: 'json_schema', json_schema: { name: 'result', schema, strict: false } })
   })
 
   it('throws on invalid JSON', async () => {
@@ -84,7 +84,7 @@ describe('OpenRouterProvider.completeStructured', () => {
   })
 })
 
-describe('OpenRouterProvider error normalization (B2 — no parsers edit)', () => {
+describe('OpenRouterProvider error normalization', () => {
   it('surfaces a context-overflow 400 as an error isContextLengthError recognizes', async () => {
     post.mockRejectedValue({ response: { status: 400, data: { error: { message: "This model's maximum context length is 8192 tokens" } } } })
     const err = await createProvider('k').complete('s', 'u', { ...opts, maxRetries: 0 }).catch(e => e)
@@ -92,7 +92,7 @@ describe('OpenRouterProvider error normalization (B2 — no parsers edit)', () =
     expect(isContextLengthError(err)).toBe(true)
   })
 
-  it('does not retry a 400 but retries a 503', async () => {
+  it('retries a 503', async () => {
     vi.useFakeTimers()
     post.mockRejectedValueOnce({ response: { status: 503 } }).mockResolvedValueOnce(okText('ok', {}))
     const p = createProvider('k').complete('s', 'u', opts)
@@ -102,21 +102,21 @@ describe('OpenRouterProvider error normalization (B2 — no parsers edit)', () =
     vi.useRealTimers()
   })
 
-  it('detects overflow from a string error.code even when the message is generic (S1)', async () => {
+  it('detects overflow from a string error.code even when the message is generic', async () => {
     post.mockResolvedValue(resp({ error: { message: 'Request failed', code: 'context_length_exceeded' } }))
     const err = await createProvider('k').complete('s', 'u', { ...opts, maxRetries: 0 }).catch(e => e)
     expect(err.status).toBe(400)
     expect(isContextLengthError(err)).toBe(true)
   })
 
-  it('matches non-OpenAI overflow phrasings so the degrade backstop fires (S2)', async () => {
+  it('matches non-OpenAI overflow phrasings so the degrade backstop fires', async () => {
     post.mockRejectedValue({ response: { status: 400, data: { error: { message: 'The input token count 2000000 exceeds the maximum number of tokens allowed' } } } })
     const err = await createProvider('k').complete('s', 'u', { ...opts, maxRetries: 0 }).catch(e => e)
     expect(err.status).toBe(400)
     expect(isContextLengthError(err)).toBe(true)
   })
 
-  it('does not retry a timeout — it may have already billed upstream (S4)', async () => {
+  it('does not retry a timeout — it may have already billed upstream', async () => {
     post.mockRejectedValue({ code: 'ECONNABORTED', message: 'timeout of 600000ms exceeded' })
     await expect(createProvider('k').complete('s', 'u', opts)).rejects.toThrow()
     expect(post).toHaveBeenCalledTimes(1)
