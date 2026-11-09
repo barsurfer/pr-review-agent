@@ -222,6 +222,26 @@ describe('same commit + new reply → REPLY', () => {
     expect(mockRunCommentResponse).toHaveBeenCalledTimes(1)
     expect(mockRunReview).not.toHaveBeenCalled()
   })
+
+  it('routes the reply through REPLY_MODEL when set, else the reviewer model', async () => {
+    const adapter = makeAdapter({
+      getPreviousReviewComments: vi.fn().mockResolvedValue([
+        { id: '200', body: '### Review' + footer(1, COMMIT_A), createdOn: '2026-03-10T10:00:00Z' },
+      ]),
+      getRepliesToReviewComments: vi.fn().mockResolvedValue({
+        replies: [{ id: '300', parentId: '200', author: 'Vadim', body: 'Why HIGH?', createdOn: '2026-03-10T14:00:00Z' }],
+        agentReplyCount: 0,
+      }),
+    })
+    setupClaudeMocks()
+    cfg.reply.model = 'claude-haiku-5-5'
+    try {
+      await review(adapter, '100', true)
+      expect(mockRunCommentResponse.mock.calls[0][1]).toBe('claude-haiku-5-5')
+    } finally {
+      cfg.reply.model = ''
+    }
+  })
 })
 
 // ===========================================================================

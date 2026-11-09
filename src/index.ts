@@ -31,6 +31,7 @@ program
   .option('--validate-prompt', 'Validate prompt and exit (local via --prompt, or repo via --pr-id)')
   .option('--model <id>', 'Claude model ID (overrides CLAUDE_MODEL)')
   .option('--judge-model <id>', 'Judge model ID (overrides JUDGING_MODEL)')
+  .option('--reply-model <id>', 'Model ID for developer replies (overrides REPLY_MODEL; empty = reviewer model)')
   .option('--min-changed-files <n>', 'Skip review if fewer files changed (overrides MIN_CHANGED_FILES)')
   .option('--max-changed-files <n>', 'Skip review if more files changed (overrides MAX_CHANGED_FILES)')
   .option('--min-changed-lines <n>', 'Skip review if fewer lines changed (overrides MIN_CHANGED_LINES)')
@@ -50,6 +51,7 @@ const opts = program.opts<{
   vcs?: string
   model?: string
   judgeModel?: string
+  replyModel?: string
   dryRun?: boolean
   force?: string | boolean
   logUsage?: boolean
@@ -168,6 +170,7 @@ async function main(): Promise<void> {
   // CLI flags override env var models
   if (opts.model) config.anthropic.model = opts.model
   if (opts.judgeModel) config.judge.model = opts.judgeModel
+  if (opts.replyModel) config.reply.model = opts.replyModel
 
   // CLI flags override env var thresholds
   if (opts.minChangedFiles) config.thresholds.minChangedFiles = parseInt(opts.minChangedFiles, 10)

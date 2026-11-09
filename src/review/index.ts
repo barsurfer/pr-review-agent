@@ -241,9 +241,10 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
 
     case State.RESPOND_TO_REPLIES: {
       const lastReview = ctx.previousReviews![ctx.previousReviews!.length - 1]
+      const replyModel = config.reply.model || config.anthropic.model
       const result = await runCommentResponse(
         config.llmApiKey,
-        config.anthropic.model,
+        replyModel,
         config.anthropic.maxRetries,
         ctx.filteredDiff!,
         lastReview.body,
@@ -255,7 +256,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       ctx.usage.cache_write += result.usage.cache_creation_input_tokens ?? 0
       if (result.usage.cost_usd !== undefined) ctx.usage.cost_usd = (ctx.usage.cost_usd ?? 0) + result.usage.cost_usd
 
-      const replyBody = result.text.trimEnd() + buildReplyFooter(config.agentIdentity, config.anthropic.model, getJobUrl())
+      const replyBody = result.text.trimEnd() + buildReplyFooter(config.agentIdentity, replyModel, getJobUrl())
 
       if (ctx.dryRun) {
         console.log('\n=== DRY RUN — Reply output (not posted) ===\n')

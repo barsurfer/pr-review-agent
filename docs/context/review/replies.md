@@ -28,7 +28,7 @@ This recursive parent tracking finds developer questions at any nesting depth.
 
 ## Bundled Response
 
-All pending unanswered questions are sent in a **single Claude API call** using `src/prompt/reply-prompt.txt` as the system prompt. One reply per trigger — never one per question.
+All pending unanswered questions are sent in a **single Claude API call** using `src/prompt/reply-prompt.txt` as the system prompt. One reply per trigger — never one per question. The call uses `REPLY_MODEL` when set (else `CLAUDE_MODEL`) — a reply needs less depth than a review, so a cheaper model cuts cost; a reply-only usage record logs + costs at that model.
 
 **Why:** Keeps token cost predictable and the conversation thread readable. A separate reply per question would produce a noisy, hard-to-read thread.
 

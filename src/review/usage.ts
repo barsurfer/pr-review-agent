@@ -210,6 +210,8 @@ export function buildUsageRecord(
   const judgeCost = ctx.judgeUsage?.cost_usd ?? (judgeTokens && judgeModel ? estimateCost(judgeTokens, judgeModel) : null)
   const breadthTokens = ctx.breadthUsage ? { input: ctx.breadthUsage.input_tokens, output: ctx.breadthUsage.output_tokens } : null
   const breadthCost = ctx.breadthUsage?.cost_usd ?? (breadthTokens && ctx.breadthModel ? estimateCost(breadthTokens, ctx.breadthModel) : null)
+  // A reply-only run uses the reply model (REPLY_MODEL), so log + cost it at that model, not the reviewer's.
+  const recordModel = ctx.action === 'REPLY' && config.reply.model ? config.reply.model : config.anthropic.model
   // Reviewer-only cost: subtract the per-stage actuals from the all-calls actual aggregate when present,
   // else estimate from the reviewer's own tokens. Summing the three stages keeps the total consistent
   // with the per-stage columns even when only some calls reported an actual cost (mixed-vendor runs).
@@ -218,7 +220,7 @@ export function buildUsageRecord(
     : estimateCost({
         input: ctx.usage.input_tokens - (judgeTokens?.input ?? 0) - (breadthTokens?.input ?? 0),
         output: ctx.usage.output_tokens - (judgeTokens?.output ?? 0) - (breadthTokens?.output ?? 0),
-      }, config.anthropic.model)
+      }, recordModel)
   // The bundled path never enters BREADTH_REVIEW, so its status is inferred here.
   const breadthStatus = ctx.breadthStatus ?? (ctx.bundleCount ? (config.breadth.enabled ? 'skipped_bundled' : 'disabled') : null)
 
@@ -252,7 +254,7 @@ export function buildUsageRecord(
     review_number: ctx.reviewNumber,
     action: ctx.action,
     skip_reason: ctx.skipReason ?? null,
-    model: config.anthropic.model,
+    model: recordModel,
     effort: config.review.effort || null,
     tokens: {
       input: ctx.usage.input_tokens,

@@ -142,6 +142,8 @@ export const config = {
 
   reply: {
     maxComments: parseInt(optional('MAX_REPLY_COMMENTS', '5'), 10),
+    // Answering a dev question needs less than reviewer-grade depth; route replies to a cheaper model. Empty = reviewer model.
+    model: optional('REPLY_MODEL', ''),
     // Off by default (Bitbucket only): skip replying to a dev comment @-directed solely at someone else.
     skipDirectedElsewhere: optional('SKIP_DIRECTED_REPLIES', 'false') === 'true',
   },

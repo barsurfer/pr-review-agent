@@ -5,9 +5,11 @@ import type { KeptFinding } from '../findings-output.js'
 // usage.ts pulls in config (required ANTHROPIC_API_KEY) at import — set it before the dynamic import.
 let estimateCost: (tokens: { input: number; output: number }, model: string) => number
 let buildUsageRecord: (typeof import('../usage.js'))['buildUsageRecord']
+let config: (typeof import('../../config.js'))['config']
 beforeAll(async () => {
   process.env.ANTHROPIC_API_KEY = 'test-key'
   ;({ estimateCost, buildUsageRecord } = await import('../usage.js'))
+  ;({ config } = await import('../../config.js'))
 })
 
 describe('estimateCost', () => {
@@ -107,6 +109,17 @@ describe('buildUsageRecord provenance fields', () => {
     expect(r.cost_usd).toBe(1.5)
     expect(r.judge_cost_usd).toBe(0.3)
     expect(r.breadth_cost_usd).toBe(0.2)
+  })
+
+  it('logs and costs a REPLY run at the reply model (REPLY_MODEL), not the reviewer model', () => {
+    config.reply.model = 'claude-haiku-5-5'
+    try {
+      const r = buildUsageRecord(baseCtx({ action: 'REPLY', usage: { input_tokens: 1000, output_tokens: 500, cache_read: 0, cache_write: 0 } }), 1, null)
+      expect(r.model).toBe('claude-haiku-5-5')
+      expect(r.cost_usd).toBe(estimateCost({ input: 1000, output: 500 }, 'claude-haiku-5-5'))
+    } finally {
+      config.reply.model = ''
+    }
   })
 })
 
