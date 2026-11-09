@@ -1,10 +1,11 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('../../config.js', () => ({
   config: {
     llmProvider: 'openrouter',
     openrouter: { baseUrl: 'https://openrouter.ai/api/v1', referer: '', title: '' },
     anthropic: { baseUrl: '', workspaceId: '' },
+    repoSlug: '',
   },
 }))
 
@@ -13,12 +14,48 @@ vi.mock('axios', () => ({ default: { post } }))
 
 import { createProvider, TruncatedResponseError } from '../provider.js'
 import { isContextLengthError } from '../../review/parsers.js'
+import { config } from '../../config.js'
 
 const opts = { model: 'openai/gpt-x', maxTokens: 1000, maxRetries: 2 }
 const resp = (data: unknown) => ({ data })
 const okText = (content: unknown, usage: unknown) => resp({ choices: [{ message: { content }, finish_reason: 'stop' }], usage })
 
 beforeEach(() => { post.mockReset() })
+
+describe('OpenRouterProvider attribution headers', () => {
+  const or = (config as unknown as { openrouter: { referer: string; title: string } }).openrouter
+  afterEach(() => { or.referer = ''; or.title = '' })
+  const headersOf = () => (post.mock.calls[0][2] as { headers: Record<string, string> }).headers
+
+  it('sends HTTP-Referer and the current X-OpenRouter-Title header when set', async () => {
+    or.referer = 'https://app.example'; or.title = 'my-app'
+    post.mockResolvedValue(okText('hi', {}))
+    await createProvider('k').complete('s', 'u', opts)
+    expect(headersOf()['HTTP-Referer']).toBe('https://app.example')
+    expect(headersOf()['X-OpenRouter-Title']).toBe('my-app')
+    expect(headersOf()['X-Title']).toBeUndefined()
+  })
+
+  it('omits attribution headers when unset (opt-out)', async () => {
+    post.mockResolvedValue(okText('hi', {}))
+    await createProvider('k').complete('s', 'u', opts)
+    expect(headersOf()['HTTP-Referer']).toBeUndefined()
+    expect(headersOf()['X-OpenRouter-Title']).toBeUndefined()
+  })
+
+  it('sends the repo slug as the `user` body field when set, omits it otherwise', async () => {
+    const cfg = config as unknown as { repoSlug: string }
+    post.mockResolvedValue(okText('hi', {}))
+    await createProvider('k').complete('s', 'u', opts)
+    expect((post.mock.calls[0][1] as { user?: string }).user).toBeUndefined()
+    post.mockReset()
+    cfg.repoSlug = 'alice-platform'
+    post.mockResolvedValue(okText('hi', {}))
+    await createProvider('k').complete('s', 'u', opts)
+    expect((post.mock.calls[0][1] as { user?: string }).user).toBe('alice-platform')
+    cfg.repoSlug = ''
+  })
+})
 
 describe('OpenRouterProvider.complete', () => {
   it('returns text, maps usage incl. cost_usd, and requests usage.include + system/user roles', async () => {

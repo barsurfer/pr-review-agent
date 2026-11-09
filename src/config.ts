@@ -93,8 +93,9 @@ export const config = {
   // model slugs come from CLAUDE_MODEL/JUDGING_MODEL (e.g. anthropic/claude-sonnet-5, openai/gpt-...).
   openrouter: {
     baseUrl: optional('OPENROUTER_BASE_URL', 'https://openrouter.ai/api/v1'),
-    referer: optional('OPENROUTER_REFERER', ''),   // optional attribution headers (OpenRouter rankings)
-    title: optional('OPENROUTER_TITLE', ''),
+    // Attribution: HTTP-Referer must be non-empty or usage never appears in the OpenRouter dashboard/rankings.
+    referer: optional('OPENROUTER_REFERER', 'https://github.com/barsurfer/pr-review-agent'),
+    title: optional('OPENROUTER_TITLE', 'pr-review-agent'),
   },
 
   anthropic: {
@@ -136,6 +137,8 @@ export const config = {
   },
 
   agentIdentity: process.env.AGENT_IDENTITY || process.env.BITBUCKET_USERNAME || 'Claude',
+  // Reviewed repo slug — set from --repo-slug at runtime; sent as OpenRouter's `user` for segmentation.
+  repoSlug: optional('REPO_SLUG', ''),
 
   reply: {
     maxComments: parseInt(optional('MAX_REPLY_COMMENTS', '5'), 10),

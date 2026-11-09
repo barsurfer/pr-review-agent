@@ -362,7 +362,7 @@ All credentials and settings are provided via environment variables.
 | `BITBUCKET_BASE_URL` | `https://api.bitbucket.org/2.0` | Bitbucket Cloud API base URL (Server/DC is not supported — different v1 API) |
 | `LLM_PROVIDER` | `anthropic` | Model backend: `anthropic` or `openrouter` (see [OpenRouter](#openrouter-optional-model-backend)) |
 | `OPENROUTER_API_KEY` | — | Used when `LLM_PROVIDER=openrouter`; falls back to the `ANTHROPIC_API_KEY` slot if unset |
-| `OPENROUTER_BASE_URL` / `OPENROUTER_REFERER` / `OPENROUTER_TITLE` | `https://openrouter.ai/api/v1` / unset / unset | OpenRouter endpoint and optional attribution headers |
+| `OPENROUTER_BASE_URL` / `OPENROUTER_REFERER` / `OPENROUTER_TITLE` | `https://openrouter.ai/api/v1` / repo URL / `pr-review-agent` | OpenRouter endpoint and attribution headers (`HTTP-Referer` / `X-OpenRouter-Title`); referer must be non-empty to appear in the dashboard |
 | `CLAUDE_MODEL` | `claude-haiku-4-5-20251001` | Reviewer model ID (an OpenRouter slug when `LLM_PROVIDER=openrouter`) |
 | `MAX_RETRIES` | `3` | Max retries on 429/5xx errors (exponential backoff) |
 | `MAX_INPUT_TOKENS` | `250000` | Over budget → drop file contexts and review diff-only; skip only if the diff alone still exceeds it (0 = disabled) |
