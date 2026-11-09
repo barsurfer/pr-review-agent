@@ -36340,7 +36340,11 @@ var config = {
   // Reviewed repo slug — set from --repo-slug at runtime; sent as OpenRouter's `user` for segmentation.
   repoSlug: optional("REPO_SLUG", ""),
   reply: {
-    maxComments: parseInt(optional("MAX_REPLY_COMMENTS", "5"), 10)
+    maxComments: parseInt(optional("MAX_REPLY_COMMENTS", "5"), 10),
+    // Answering a dev question needs less than reviewer-grade depth; route replies to a cheaper model. Empty = reviewer model.
+    model: optional("REPLY_MODEL", ""),
+    // Off by default (Bitbucket only): skip replying to a dev comment @-directed solely at someone else.
+    skipDirectedElsewhere: optional("SKIP_DIRECTED_REPLIES", "false") === "true"
   },
   review: {
     maxFindings: parseInt(optional("MAX_FINDINGS", "0"), 10),
@@ -42221,6 +42225,31 @@ function markdownHasFindings(body) {
   return /^[ \t]*-\s*\*\*(HIGH|MEDIUM|LOW)\b/im.test(body);
 }
 
+// src/vcs/mention-filter.ts
+init_define_STACK_PROMPTS();
+var MENTION_TOKEN = /@\{+([^{}]+)\}+/g;
+var LEADING_MENTION = /^@\{+([^{}]+)\}+/;
+var ID_SHAPES = [/^[0-9a-f]{24}$/, /^\d+:[0-9a-f-]{36}$/, /^[0-9a-f-]{36}$/];
+function isIdShaped(token) {
+  return ID_SHAPES.some((re) => re.test(token));
+}
+function stripCode(body) {
+  return body.replace(/```[\s\S]*?```/g, " ").replace(/`[^`]*`/g, " ");
+}
+function decideDirectedElsewhere(body, agentIds, agentNames) {
+  if (agentIds.size === 0) return { drop: false };
+  const lead = stripCode(body).trim().match(LEADING_MENTION);
+  if (!lead || !isIdShaped(lead[1])) return { drop: false };
+  for (const m of body.matchAll(MENTION_TOKEN)) {
+    if (isIdShaped(m[1]) && agentIds.has(m[1])) return { drop: false };
+  }
+  const lower = body.toLowerCase();
+  for (const name of agentNames) {
+    if (name && lower.includes("@" + name)) return { drop: false };
+  }
+  return { drop: true, matchedToken: lead[1] };
+}
+
 // src/vcs/bitbucket.ts
 var REQUEST_TIMEOUT_MS = 3e4;
 var BitbucketAdapter = class {
@@ -42342,65 +42371,74 @@ var BitbucketAdapter = class {
       { content: { raw: body } }
     );
   }
-  async getPreviousReviewComments(prId) {
+  // All PR comments, paginated, with deleted tombstones dropped so no flow treats them as real.
+  async fetchComments(prId) {
     const repoSlug = this.getRepoSlug();
-    const comments = [];
+    const out = [];
     let url2 = `/repositories/${this.workspace}/${repoSlug}/pullrequests/${prId}/comments`;
     while (url2) {
       const { data } = await this.client.get(url2);
-      for (const c of data.values) {
-        const body = c.content?.raw ?? "";
-        if (hasReviewFooter(body)) {
-          comments.push({
-            id: String(c.id),
-            body,
-            createdOn: c.created_on,
-            resolved: c.resolution != null
-            // a human marked this review thread resolved
-          });
-        }
-      }
+      for (const c of data.values) if (!c.deleted) out.push(c);
       url2 = data.next ?? null;
+    }
+    return out;
+  }
+  async getPreviousReviewComments(prId) {
+    const comments = [];
+    for (const c of await this.fetchComments(prId)) {
+      const body = c.content?.raw ?? "";
+      if (hasReviewFooter(body)) {
+        comments.push({
+          id: String(c.id),
+          body,
+          createdOn: c.created_on,
+          resolved: c.resolution != null
+          // a human marked this review thread resolved
+        });
+      }
     }
     return comments;
   }
   async getRepliesToReviewComments(prId, reviewCommentIds, includeAnswered = false) {
-    const repoSlug = this.getRepoSlug();
     const parentIds = new Set(reviewCommentIds);
+    const reviewIdSet = new Set(reviewCommentIds);
+    this.agentIds = /* @__PURE__ */ new Set();
+    this.agentNames = /* @__PURE__ */ new Set();
     const humanReplies = [];
     let agentReplyCount = 0;
     let latestAgentReply = "";
-    let url2 = `/repositories/${this.workspace}/${repoSlug}/pullrequests/${prId}/comments`;
-    while (url2) {
-      const { data } = await this.client.get(url2);
-      for (const c of data.values) {
-        const parentId = c.parent?.id ? String(c.parent.id) : null;
-        if (!parentId || !parentIds.has(parentId)) continue;
-        const body = c.content?.raw ?? "";
-        if (hasReplyFooter(body)) {
-          agentReplyCount++;
-          parentIds.add(String(c.id));
-          if (c.created_on > latestAgentReply) latestAgentReply = c.created_on;
-          if (includeAnswered) {
-            humanReplies.push({
-              id: String(c.id),
-              parentId,
-              author: "Agent (prior reply)",
-              body,
-              createdOn: c.created_on
-            });
-          }
-          continue;
-        }
-        humanReplies.push({
-          id: String(c.id),
-          parentId,
-          author: c.user?.display_name ?? "Unknown",
-          body,
-          createdOn: c.created_on
-        });
+    for (const c of await this.fetchComments(prId)) {
+      const body = c.content?.raw ?? "";
+      if (c.user && (reviewIdSet.has(String(c.id)) || hasReplyFooter(body))) {
+        if (c.user.account_id) this.agentIds.add(String(c.user.account_id));
+        if (c.user.uuid) this.agentIds.add(String(c.user.uuid).replace(/[{}]/g, ""));
+        if (c.user.display_name) this.agentNames.add(String(c.user.display_name).toLowerCase());
+        if (c.user.nickname) this.agentNames.add(String(c.user.nickname).toLowerCase());
       }
-      url2 = data.next ?? null;
+      const parentId = c.parent?.id ? String(c.parent.id) : null;
+      if (!parentId || !parentIds.has(parentId)) continue;
+      if (hasReplyFooter(body)) {
+        agentReplyCount++;
+        parentIds.add(String(c.id));
+        if (c.created_on > latestAgentReply) latestAgentReply = c.created_on;
+        if (includeAnswered) {
+          humanReplies.push({
+            id: String(c.id),
+            parentId,
+            author: "Agent (prior reply)",
+            body,
+            createdOn: c.created_on
+          });
+        }
+        continue;
+      }
+      humanReplies.push({
+        id: String(c.id),
+        parentId,
+        author: c.user?.display_name ?? "Unknown",
+        body,
+        createdOn: c.created_on
+      });
     }
     if (includeAnswered) return { replies: humanReplies, agentReplyCount };
     if (!latestAgentReply) return { replies: humanReplies, agentReplyCount };
@@ -42412,6 +42450,27 @@ var BitbucketAdapter = class {
       `/repositories/${this.workspace}/${repoSlug}/pullrequests/${prId}/comments`,
       { parent: { id: Number(parentId) }, content: { raw: body } }
     );
+  }
+  // Agent id-set/names derived from comment authors during the last getRepliesToReviewComments; the
+  // caller can only add to the set. Empty set (no identity resolved) fails safe: keep everything + warn.
+  agentIds = /* @__PURE__ */ new Set();
+  agentNames = /* @__PURE__ */ new Set();
+  async filterAddressedToAgent(replies, agentIds) {
+    const ids = /* @__PURE__ */ new Set([...agentIds, ...this.agentIds]);
+    if (ids.size === 0) {
+      console.warn("  Could not derive the agent id-set \u2014 keeping all replies (skip-directed-replies inert this run)");
+      return replies;
+    }
+    const kept = [];
+    for (const r of replies) {
+      const decision = decideDirectedElsewhere(r.body, ids, this.agentNames);
+      if (decision.drop) {
+        console.log(`  Dropping reply ${r.id} by ${r.author} \u2014 @-directed elsewhere (matched @{${decision.matchedToken}})`);
+        continue;
+      }
+      kept.push(r);
+    }
+    return kept;
   }
   async getCommitDiff(fromCommit, toCommit) {
     const repoSlug = this.getRepoSlug();
@@ -42995,7 +43054,9 @@ var AzureDevOpsAdapter = class {
   async fetchThreads(prId) {
     const repo = this.getRepoSlug();
     const { data } = await this.client.get(`/repositories/${encodeURIComponent(repo)}/pullRequests/${prId}/threads`);
-    return data.value ?? [];
+    const threads = data.value ?? [];
+    for (const t of threads) if (t.comments) t.comments = t.comments.filter((c) => !c.isDeleted);
+    return threads;
   }
   /** GET diffs/commits and normalize to blob-only changes (folders/trees dropped). */
   async fetchCommitDiff(baseVersion, targetVersion, diffCommonCommit) {
@@ -45424,7 +45485,7 @@ function getAgentVersion() {
     const pkg = JSON.parse((0, import_fs4.readFileSync)(pkgPath, "utf-8"));
     return pkg.version;
   } catch {
-    if (true) return "0.0.33";
+    if (true) return "0.0.34";
     return "unknown";
   }
 }
@@ -45436,7 +45497,7 @@ function getBuildCommit() {
     const dirty = (0, import_child_process.execSync)("git status --porcelain", opts2).toString().trim() ? "-dirty" : "";
     return hash + dirty;
   } catch {
-    if (true) return "9df6af5";
+    if (true) return "47a9a4a";
     return "unknown";
   }
 }
@@ -45464,10 +45525,11 @@ function buildUsageRecord(ctx, durationMs, error) {
   const judgeCost = ctx.judgeUsage?.cost_usd ?? (judgeTokens && judgeModel ? estimateCost(judgeTokens, judgeModel) : null);
   const breadthTokens = ctx.breadthUsage ? { input: ctx.breadthUsage.input_tokens, output: ctx.breadthUsage.output_tokens } : null;
   const breadthCost = ctx.breadthUsage?.cost_usd ?? (breadthTokens && ctx.breadthModel ? estimateCost(breadthTokens, ctx.breadthModel) : null);
+  const recordModel = ctx.action === "REPLY" && config.reply.model ? config.reply.model : config.anthropic.model;
   const reviewerCost = ctx.usage.cost_usd !== void 0 ? ctx.usage.cost_usd - (ctx.judgeUsage?.cost_usd ?? 0) - (ctx.breadthUsage?.cost_usd ?? 0) : estimateCost({
     input: ctx.usage.input_tokens - (judgeTokens?.input ?? 0) - (breadthTokens?.input ?? 0),
     output: ctx.usage.output_tokens - (judgeTokens?.output ?? 0) - (breadthTokens?.output ?? 0)
-  }, config.anthropic.model);
+  }, recordModel);
   const breadthStatus = ctx.breadthStatus ?? (ctx.bundleCount ? config.breadth.enabled ? "skipped_bundled" : "disabled" : null);
   return {
     run_id: `${config.vcsProvider}-${ctx.repoSlug}-${ctx.prId}-${commitShort}`,
@@ -45502,7 +45564,7 @@ function buildUsageRecord(ctx, durationMs, error) {
     review_number: ctx.reviewNumber,
     action: ctx.action,
     skip_reason: ctx.skipReason ?? null,
-    model: config.anthropic.model,
+    model: recordModel,
     effort: config.review.effort || null,
     tokens: {
       input: ctx.usage.input_tokens,
@@ -45577,6 +45639,18 @@ function supersedeBoundary(reviews) {
   const unresolved = reviews.filter((r) => !r.resolved);
   const pool = unresolved.length > 0 ? unresolved : reviews;
   return pool[pool.length - 1];
+}
+async function dropRepliesDirectedElsewhere(ctx, replies) {
+  if (!config.reply.skipDirectedElsewhere || !ctx.adapter.filterAddressedToAgent || replies.length === 0) return replies;
+  try {
+    const kept = await ctx.adapter.filterAddressedToAgent(replies, /* @__PURE__ */ new Set());
+    const dropped = replies.length - kept.length;
+    if (dropped > 0) console.log(`  Skipped ${dropped} reply(s) @-directed at someone else`);
+    return kept;
+  } catch (err) {
+    console.warn(`  Directed-reply filter failed (${err.message}) \u2014 keeping all replies`);
+    return replies;
+  }
 }
 async function transition(state, ctx) {
   switch (state) {
@@ -45719,6 +45793,7 @@ async function transition(state, ctx) {
       if (ctx.replies.length < replies.length) {
         console.log(`  Filtered ${replies.length - ctx.replies.length} reply(s) older than latest review (${latestReviewDate})`);
       }
+      ctx.replies = await dropRepliesDirectedElsewhere(ctx, ctx.replies);
       if (ctx.replies.length > 0) {
         if (config.reply.maxComments > 0 && agentReplyCount >= config.reply.maxComments) {
           console.log(`  Found ${ctx.replies.length} unanswered reply(s), but agent already posted ${agentReplyCount}/${config.reply.maxComments} replies \u2014 skipping`);
@@ -45737,9 +45812,10 @@ async function transition(state, ctx) {
     }
     case 6 /* RESPOND_TO_REPLIES */: {
       const lastReview = ctx.previousReviews[ctx.previousReviews.length - 1];
+      const replyModel = config.reply.model || config.anthropic.model;
       const result = await runCommentResponse(
         config.llmApiKey,
-        config.anthropic.model,
+        replyModel,
         config.anthropic.maxRetries,
         ctx.filteredDiff,
         lastReview.body,
@@ -45750,7 +45826,7 @@ async function transition(state, ctx) {
       ctx.usage.cache_read += result.usage.cache_read_input_tokens ?? 0;
       ctx.usage.cache_write += result.usage.cache_creation_input_tokens ?? 0;
       if (result.usage.cost_usd !== void 0) ctx.usage.cost_usd = (ctx.usage.cost_usd ?? 0) + result.usage.cost_usd;
-      const replyBody = result.text.trimEnd() + buildReplyFooter(config.agentIdentity, config.anthropic.model, getJobUrl());
+      const replyBody = result.text.trimEnd() + buildReplyFooter(config.agentIdentity, replyModel, getJobUrl());
       if (ctx.dryRun) {
         console.log("\n=== DRY RUN \u2014 Reply output (not posted) ===\n");
         console.log(replyBody);
@@ -45997,7 +46073,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
         const lastReview = supersedeBoundary(ctx.previousReviews ?? []);
         const replies = ctx.replies ?? [];
         const lastAgentReplyAt = replies.filter((r) => hasReplyFooter(r.body)).reduce((max, r) => r.createdOn > max ? r.createdOn : max, "");
-        const unanswered = replies.filter((r) => !hasReplyFooter(r.body) && !!lastReview && r.createdOn > lastReview.createdOn && r.createdOn > lastAgentReplyAt);
+        const unanswered = await dropRepliesDirectedElsewhere(ctx, replies.filter((r) => !hasReplyFooter(r.body) && !!lastReview && r.createdOn > lastReview.createdOn && r.createdOn > lastAgentReplyAt));
         if (unanswered.length > 0) {
           const agentReplies = replies.filter((r) => hasReplyFooter(r.body)).length;
           if (config.reply.maxComments > 0 && agentReplies >= config.reply.maxComments) {
@@ -46458,7 +46534,7 @@ if (major < 22) {
   process.exit(1);
 }
 var program2 = new Command();
-program2.name("pr-review-agent").description("Automated PR code review powered by Claude").option("--pr-id <id>", "Pull request ID").option("--workspace <workspace>", "VCS workspace / org (overrides BITBUCKET_WORKSPACE)").option("--repo-slug <slug>", "Repository slug").option("--vcs <provider>", "VCS provider: bitbucket | azure (WIP) | github | gitlab (overrides VCS_PROVIDER)").option("--dry-run", "Print the review to stdout without posting to the PR").option("--force [mode]", 'Force review: "clean" (no prior context) or "re-review" (keep context, bypass dedup)').option("--log-usage [bool]", "Log usage data to results.jsonl (default: true)", (v) => v !== "false", true).option("--prompt <path>", "Path to a local prompt file (overrides repo .agent-review-instructions.md)").option("--validate-prompt", "Validate prompt and exit (local via --prompt, or repo via --pr-id)").option("--model <id>", "Claude model ID (overrides CLAUDE_MODEL)").option("--judge-model <id>", "Judge model ID (overrides JUDGING_MODEL)").option("--min-changed-files <n>", "Skip review if fewer files changed (overrides MIN_CHANGED_FILES)").option("--max-changed-files <n>", "Skip review if more files changed (overrides MAX_CHANGED_FILES)").option("--min-changed-lines <n>", "Skip review if fewer lines changed (overrides MIN_CHANGED_LINES)").option("--max-changed-lines <n>", "Skip review if more lines changed (overrides MAX_CHANGED_LINES)").option("--max-input-tokens <n>", "Max estimated input tokens before degrade/skip (overrides MAX_INPUT_TOKENS)").option("--max-output-tokens <n>", "Max output tokens for reviewer + judge (overrides MAX_OUTPUT_TOKENS)").option("--effort <level>", "Reviewer thinking effort: low|medium|high|xhigh|max (overrides REVIEW_EFFORT; ignored by models without effort)").option("--judge-effort <level>", "Judge thinking effort (overrides JUDGE_EFFORT)").option("--benchmark", "ReviewBench mode: read the PR from RB_* env + mounted files, write findings JSON to RB_OUT instead of posting; always exits 0").parse(process.argv);
+program2.name("pr-review-agent").description("Automated PR code review powered by Claude").option("--pr-id <id>", "Pull request ID").option("--workspace <workspace>", "VCS workspace / org (overrides BITBUCKET_WORKSPACE)").option("--repo-slug <slug>", "Repository slug").option("--vcs <provider>", "VCS provider: bitbucket | azure (WIP) | github | gitlab (overrides VCS_PROVIDER)").option("--dry-run", "Print the review to stdout without posting to the PR").option("--force [mode]", 'Force review: "clean" (no prior context) or "re-review" (keep context, bypass dedup)').option("--log-usage [bool]", "Log usage data to results.jsonl (default: true)", (v) => v !== "false", true).option("--prompt <path>", "Path to a local prompt file (overrides repo .agent-review-instructions.md)").option("--validate-prompt", "Validate prompt and exit (local via --prompt, or repo via --pr-id)").option("--model <id>", "Claude model ID (overrides CLAUDE_MODEL)").option("--judge-model <id>", "Judge model ID (overrides JUDGING_MODEL)").option("--reply-model <id>", "Model ID for developer replies (overrides REPLY_MODEL; empty = reviewer model)").option("--min-changed-files <n>", "Skip review if fewer files changed (overrides MIN_CHANGED_FILES)").option("--max-changed-files <n>", "Skip review if more files changed (overrides MAX_CHANGED_FILES)").option("--min-changed-lines <n>", "Skip review if fewer lines changed (overrides MIN_CHANGED_LINES)").option("--max-changed-lines <n>", "Skip review if more lines changed (overrides MAX_CHANGED_LINES)").option("--max-input-tokens <n>", "Max estimated input tokens before degrade/skip (overrides MAX_INPUT_TOKENS)").option("--max-output-tokens <n>", "Max output tokens for reviewer + judge (overrides MAX_OUTPUT_TOKENS)").option("--effort <level>", "Reviewer thinking effort: low|medium|high|xhigh|max (overrides REVIEW_EFFORT; ignored by models without effort)").option("--judge-effort <level>", "Judge thinking effort (overrides JUDGE_EFFORT)").option("--skip-directed-replies", "Skip replying to dev comments @-directed at someone else (Bitbucket only; overrides SKIP_DIRECTED_REPLIES)").option("--benchmark", "ReviewBench mode: read the PR from RB_* env + mounted files, write findings JSON to RB_OUT instead of posting; always exits 0").parse(process.argv);
 var opts = program2.opts();
 async function main() {
   if (opts.benchmark) {
@@ -46540,6 +46616,7 @@ Filled prompt length: ${result.content.length} chars (~${Math.ceil(result.conten
   }
   if (opts.model) config.anthropic.model = opts.model;
   if (opts.judgeModel) config.judge.model = opts.judgeModel;
+  if (opts.replyModel) config.reply.model = opts.replyModel;
   if (opts.minChangedFiles) config.thresholds.minChangedFiles = parseInt(opts.minChangedFiles, 10);
   if (opts.maxChangedFiles) config.thresholds.maxChangedFiles = parseInt(opts.maxChangedFiles, 10);
   if (opts.minChangedLines) config.thresholds.minChangedLines = parseInt(opts.minChangedLines, 10);
@@ -46548,6 +46625,7 @@ Filled prompt length: ${result.content.length} chars (~${Math.ceil(result.conten
   if (opts.maxOutputTokens) config.anthropic.maxTokens = parseInt(opts.maxOutputTokens, 10);
   if (opts.effort) config.review.effort = opts.effort;
   if (opts.judgeEffort) config.judge.effort = opts.judgeEffort;
+  if (opts.skipDirectedReplies) config.reply.skipDirectedElsewhere = true;
   if (opts.repoSlug) config.repoSlug = opts.repoSlug;
   const forceMode = opts.force === true ? "re-review" : typeof opts.force === "string" ? opts.force : "off";
   await review(adapter2, opts.prId, opts.dryRun ?? false, opts.prompt, forceMode, opts.logUsage ?? true, opts.repoSlug ?? "");
