@@ -36295,9 +36295,9 @@ var config = {
   // model slugs come from CLAUDE_MODEL/JUDGING_MODEL (e.g. anthropic/claude-sonnet-5, openai/gpt-...).
   openrouter: {
     baseUrl: optional("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
-    referer: optional("OPENROUTER_REFERER", ""),
-    // optional attribution headers (OpenRouter rankings)
-    title: optional("OPENROUTER_TITLE", "")
+    // Attribution: HTTP-Referer must be non-empty or usage never appears in the OpenRouter dashboard/rankings.
+    referer: optional("OPENROUTER_REFERER", "https://github.com/barsurfer/pr-review-agent"),
+    title: optional("OPENROUTER_TITLE", "pr-review-agent")
   },
   anthropic: {
     // Sent as the anthropic-workspace-id header; a user-scoped key (sk-ant-usr-…) 400s without it.
@@ -36337,6 +36337,8 @@ var config = {
     benchmarkDeadlineSeconds: positiveOr(Number(optional("BENCHMARK_DEADLINE_SECONDS", "840")), 840)
   },
   agentIdentity: process.env.AGENT_IDENTITY || process.env.BITBUCKET_USERNAME || "Claude",
+  // Reviewed repo slug — set from --repo-slug at runtime; sent as OpenRouter's `user` for segmentation.
+  repoSlug: optional("REPO_SLUG", ""),
   reply: {
     maxComments: parseInt(optional("MAX_REPLY_COMMENTS", "5"), 10)
   },
@@ -43943,9 +43945,9 @@ var OpenRouterProvider = class {
       Authorization: `Bearer ${this.apiKey}`,
       "Content-Type": "application/json",
       ...config.openrouter.referer ? { "HTTP-Referer": config.openrouter.referer } : {},
-      ...config.openrouter.title ? { "X-Title": config.openrouter.title } : {}
+      ...config.openrouter.title ? { "X-OpenRouter-Title": config.openrouter.title } : {}
     };
-    const body = { ...payload, usage: { include: true } };
+    const body = { ...payload, usage: { include: true }, ...config.repoSlug ? { user: config.repoSlug } : {} };
     let lastErr;
     for (let attempt = 0; attempt <= opts2.maxRetries; attempt++) {
       try {
@@ -45422,7 +45424,7 @@ function getAgentVersion() {
     const pkg = JSON.parse((0, import_fs4.readFileSync)(pkgPath, "utf-8"));
     return pkg.version;
   } catch {
-    if (true) return "0.0.32";
+    if (true) return "0.0.33";
     return "unknown";
   }
 }
@@ -45434,7 +45436,7 @@ function getBuildCommit() {
     const dirty = (0, import_child_process.execSync)("git status --porcelain", opts2).toString().trim() ? "-dirty" : "";
     return hash + dirty;
   } catch {
-    if (true) return "f035df8";
+    if (true) return "9df6af5";
     return "unknown";
   }
 }
@@ -46546,6 +46548,7 @@ Filled prompt length: ${result.content.length} chars (~${Math.ceil(result.conten
   if (opts.maxOutputTokens) config.anthropic.maxTokens = parseInt(opts.maxOutputTokens, 10);
   if (opts.effort) config.review.effort = opts.effort;
   if (opts.judgeEffort) config.judge.effort = opts.judgeEffort;
+  if (opts.repoSlug) config.repoSlug = opts.repoSlug;
   const forceMode = opts.force === true ? "re-review" : typeof opts.force === "string" ? opts.force : "off";
   await review(adapter2, opts.prId, opts.dryRun ?? false, opts.prompt, forceMode, opts.logUsage ?? true, opts.repoSlug ?? "");
 }
