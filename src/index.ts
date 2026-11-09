@@ -180,6 +180,7 @@ async function main(): Promise<void> {
   // CLI flags override env var effort
   if (opts.effort) config.review.effort = opts.effort
   if (opts.judgeEffort) config.judge.effort = opts.judgeEffort
+  if (opts.repoSlug) config.repoSlug = opts.repoSlug
 
   // --force with no value defaults to 're-review'; --force clean or --force re-review explicit
   const forceMode = opts.force === true ? 're-review' : typeof opts.force === 'string' ? opts.force as 'clean' | 're-review' : 'off'

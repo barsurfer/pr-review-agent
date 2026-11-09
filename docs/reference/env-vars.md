@@ -29,8 +29,8 @@ credentials in source code or commit them to version control.**
 | `LLM_PROVIDER` | `anthropic` | Model backend behind the reviewer/judge: `anthropic` (native SDK) or `openrouter` (OpenAI-compatible gateway via axios). Selected through the `LLMProvider` seam (`src/llm/provider.ts`). Default: `anthropic` |
 | `OPENROUTER_API_KEY` | *(unset)* | OpenRouter key, used when `LLM_PROVIDER=openrouter`; if unset it falls back to the `ANTHROPIC_API_KEY` slot (warned), so a bench/CI slot that only exposes that name works; ignored otherwise |
 | `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | OpenRouter API base URL (`/chat/completions` is appended) |
-| `OPENROUTER_REFERER` | *(unset)* | Sent as `HTTP-Referer` for OpenRouter attribution, only when set |
-| `OPENROUTER_TITLE` | *(unset)* | Sent as `X-Title` for OpenRouter attribution, only when set |
+| `OPENROUTER_REFERER` | `https://github.com/barsurfer/pr-review-agent` | Sent as `HTTP-Referer` — **required** for the run to appear in the OpenRouter dashboard/rankings; set empty to opt out of attribution |
+| `OPENROUTER_TITLE` | `pr-review-agent` | Sent as `X-OpenRouter-Title` — the app's display name in OpenRouter analytics; set empty to omit |
 | `MAX_RETRIES` | `3` | Max retries on 429/5xx errors (SDK built-in exponential backoff). Default: `3` |
 | `MAX_INPUT_TOKENS` | `250000` | If estimated input exceeds this, first drop file contexts and review diff-only; skip only if the diff alone still exceeds it (0 = disabled). `ESTIMATE_TOKENS` logs a per-section breakdown (prompt / diff / delta / file-contexts / prev-reviews / replies) so you can see what drove the size |
 | `MAX_OUTPUT_TOKENS` | `32000` | Output-token cap for reviewer + judge (raised from 16k because the Claude 5 family thinks by default and thinking counts against this). Requests stream, so large caps don't hit the HTTP timeout. **Effort coupling:** thinking counts against this cap, so `REVIEW_EFFORT`/`JUDGE_EFFORT` at `xhigh`/`max` can exceed 32k on a non-trivial PR and truncate the response (the run errors rather than posting a cut-off review) — raise to ~`64000` when using high effort. Default/`high` effort fits 32k. |
@@ -194,8 +194,8 @@ CLAUDE_MODEL=claude-haiku-4-5-20251001
 # LLM_PROVIDER=anthropic   # 'anthropic' | 'openrouter'
 # OPENROUTER_API_KEY=      # used when LLM_PROVIDER=openrouter; falls back to the ANTHROPIC_API_KEY slot if unset
 # OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
-# OPENROUTER_REFERER=
-# OPENROUTER_TITLE=
+# OPENROUTER_REFERER=      # HTTP-Referer; defaults to the repo URL (needed for dashboard attribution)
+# OPENROUTER_TITLE=        # X-OpenRouter-Title; defaults to pr-review-agent
 MAX_RETRIES=3
 # MAX_INPUT_TOKENS=250000
 

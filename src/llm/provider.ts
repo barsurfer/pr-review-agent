@@ -108,10 +108,11 @@ class OpenRouterProvider implements LLMProvider {
       Authorization: `Bearer ${this.apiKey}`,
       'Content-Type': 'application/json',
       ...(config.openrouter.referer ? { 'HTTP-Referer': config.openrouter.referer } : {}),
-      ...(config.openrouter.title ? { 'X-Title': config.openrouter.title } : {}),
+      ...(config.openrouter.title ? { 'X-OpenRouter-Title': config.openrouter.title } : {}),
     }
-    // usage.include returns the real USD cost so the record logs it instead of a wrong-model estimate.
-    const body = { ...payload, usage: { include: true } }
+    // usage.include returns the real USD cost so the record logs it instead of a wrong-model estimate;
+    // user tags the request with the reviewed repo for OpenRouter-side segmentation.
+    const body = { ...payload, usage: { include: true }, ...(config.repoSlug ? { user: config.repoSlug } : {}) }
     let lastErr: unknown
     for (let attempt = 0; attempt <= opts.maxRetries; attempt++) {
       try {
