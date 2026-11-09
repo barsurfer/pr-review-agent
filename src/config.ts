@@ -142,6 +142,8 @@ export const config = {
 
   reply: {
     maxComments: parseInt(optional('MAX_REPLY_COMMENTS', '5'), 10),
+    // Off by default (Bitbucket only): skip replying to a dev comment @-directed solely at someone else.
+    skipDirectedElsewhere: optional('SKIP_DIRECTED_REPLIES', 'false') === 'true',
   },
 
   review: {

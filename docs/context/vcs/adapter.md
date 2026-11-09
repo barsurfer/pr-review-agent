@@ -25,6 +25,7 @@ interface VCSAdapter {
   // Comment replies
   getRepliesToReviewComments(prId: string, reviewCommentIds: string[], includeAnswered?: boolean): Promise<ReplyResult>  // ReplyResult = { replies: CommentReply[]; agentReplyCount: number }
   postReply(prId: string, parentId: string, body: string): Promise<void>
+  filterAddressedToAgent?(replies: CommentReply[], agentIds: ReadonlySet<string>): Promise<CommentReply[]>  // optional capability — Bitbucket only
 
   // Commit diff (for delta diff pre-check)
   getCommitDiff(fromCommit: string, toCommit: string): Promise<string>
@@ -69,6 +70,7 @@ interface VCSAdapter {
 - **API token scopes required:** `read:repository:bitbucket`, `read:pullrequest:bitbucket`, `write:pullrequest:bitbucket`
 - **Cloud only:** the adapter targets Bitbucket Cloud API 2.0 response shapes (`values` pagination, `content.raw`, diffstat redirects). Bitbucket Server/DC exposes a different v1 REST API — pointing `BITBUCKET_BASE_URL` at it fails on the first call; Server support would need its own adapter.
 - **Agent comment detection:** the agent's own comments are recognized by their exact footer line (`hasReviewFooter`/`hasReplyFooter` from `review/formatter.ts`), not by author — a comment quoting a full agent footer would still match (rare, accepted).
+- **`filterAddressedToAgent` (optional capability, Bitbucket only):** of the unanswered replies, keeps only those addressed to the agent and drops ones a dev `@`-directed solely at another person/team (`SKIP_DIRECTED_REPLIES`, default off). GitHub/Azure/GitLab/ReviewBench omit it → unchanged by construction. The agent **id-set is derived, never fetched** (`/2.0/user` would double the `/2.0` path and likely lacks the scope): during `getRepliesToReviewComments` the adapter records `user.account_id` + brace-stripped `user.uuid` (and `display_name`/`nickname` for the plain-text `@name` check) of the review comments and the agent-reply footer comments into a private set. Derivation only ever *adds* ids, so it fails safe; an empty set keeps everything + warns. The method is valid only right after a `getRepliesToReviewComments` call (true at both orchestrator sites). The pure drop rule lives in `src/vcs/mention-filter.ts`. **Mentions match `account_id`, not `uuid`** — every real `content.raw` mention is `@{account_id}` (legacy 24-hex or `NNN:uuid`); matching uuid would drop every genuine agent-directed reply. Over-drop-averse: a reply is dropped only when its code-stripped body **starts with** an id-shaped `@{…}`, **no** id-shaped token anywhere is an agent id, and **no** plain-text `@<agent name>` appears — so `@{vm.name}` code, mid-sentence mentions, and picker-less agent mentions are all kept.
 
 ---
 

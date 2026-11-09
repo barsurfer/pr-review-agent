@@ -33,9 +33,12 @@ FETCH_PR_INFO
                                 ├─ [NO_CHANGE] → CHECK_REPLIES (answer a dev reply even with no code change; else SKIP, label kept NO_CHANGE)
                                 └─ BREADTH_REVIEW (passthrough unless ENABLE_BREADTH_REVIEW + triggered)
                                      └─ JUDGE_REVIEW
+                                          ├─ [0-finding re-review + unanswered dev reply] → RESPOND_TO_REPLIES → DONE (reply priority)
                                           ├─ [JUDGING_MODEL set] → validate reviewer + breadth candidates → POST_REVIEW → DONE
                                           └─ [no judge] → POST_REVIEW → DONE
 ```
+
+Both inbound edges to `RESPOND_TO_REPLIES` (`CHECK_REPLIES` and this `JUDGE_REVIEW` reply-priority branch) run the optional directed-elsewhere filter (`SKIP_DIRECTED_REPLIES`, Bitbucket) before their reply-limit check — see [replies.md](replies.md).
 
 **Bundled path (`ENABLE_BUNDLED_REVIEW=true`, default off):** after `FETCH_CONTEXT`, `ESTIMATE_TOKENS` drops file contexts if over `MAX_INPUT_TOKENS`; if the diff alone is still over budget it routes to `BUNDLED_REVIEW` instead of SKIP, then `POST_REVIEW`. In-budget PRs never enter it.
 

@@ -22,7 +22,22 @@ function supersedeBoundary<T extends { resolved?: boolean }>(reviews: T[]): T | 
 
 import type { ReviewContext, OutcomeSink } from './types.js'
 import { PrTooLargeError } from '../vcs/adapter.js'
-import type { VCSAdapter } from '../vcs/adapter.js'
+import type { VCSAdapter, CommentReply } from '../vcs/adapter.js'
+
+// Reply flow only answers questions put to the agent. When enabled, drop replies a dev @-directed
+// solely at someone else. Fail-safe: config off, no adapter capability, or any error keeps all.
+async function dropRepliesDirectedElsewhere(ctx: ReviewContext, replies: CommentReply[]): Promise<CommentReply[]> {
+  if (!config.reply.skipDirectedElsewhere || !ctx.adapter.filterAddressedToAgent || replies.length === 0) return replies
+  try {
+    const kept = await ctx.adapter.filterAddressedToAgent(replies, new Set())
+    const dropped = replies.length - kept.length
+    if (dropped > 0) console.log(`  Skipped ${dropped} reply(s) @-directed at someone else`)
+    return kept
+  } catch (err: unknown) {
+    console.warn(`  Directed-reply filter failed (${(err as Error).message}) — keeping all replies`)
+    return replies
+  }
+}
 
 import type { UsageRecord } from './usage.js'
 export type { UsageRecord } from './usage.js'
@@ -200,6 +215,9 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       if (ctx.replies.length < replies.length) {
         console.log(`  Filtered ${replies.length - ctx.replies.length} reply(s) older than latest review (${latestReviewDate})`)
       }
+
+      // Before the reply-limit check: all-directed-elsewhere becomes the normal "no unanswered questions" skip.
+      ctx.replies = await dropRepliesDirectedElsewhere(ctx, ctx.replies)
 
       if (ctx.replies.length > 0) {
         if (config.reply.maxComments > 0 && agentReplyCount >= config.reply.maxComments) {
@@ -487,8 +505,8 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         const replies = ctx.replies ?? []
         const lastAgentReplyAt = replies.filter(r => hasReplyFooter(r.body))
           .reduce((max, r) => (r.createdOn > max ? r.createdOn : max), '')
-        const unanswered = replies.filter(r =>
-          !hasReplyFooter(r.body) && !!lastReview && r.createdOn > lastReview.createdOn && r.createdOn > lastAgentReplyAt)
+        const unanswered = await dropRepliesDirectedElsewhere(ctx, replies.filter(r =>
+          !hasReplyFooter(r.body) && !!lastReview && r.createdOn > lastReview.createdOn && r.createdOn > lastAgentReplyAt))
 
         if (unanswered.length > 0) {
           const agentReplies = replies.filter(r => hasReplyFooter(r.body)).length

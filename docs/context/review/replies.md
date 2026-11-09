@@ -68,6 +68,14 @@ This footer is what the detection algorithm uses to identify agent replies in th
 
 ---
 
+## Skip Replies Directed at Someone Else
+
+Opt-in (`SKIP_DIRECTED_REPLIES` / `--skip-directed-replies`, default off, Bitbucket only). A dev comment under an agent review that is `@`-directed solely at another human/team (`@alice wdyt?`) is not a question for the agent, so answering it is noise. When enabled, a shared private helper in `review/index.ts` (`dropRepliesDirectedElsewhere`) wraps the adapter's optional `filterAddressedToAgent` capability (see [vcs/adapter.md](../vcs/adapter.md) for the drop rule and id-set derivation).
+
+- **Answer-path-only, two sites.** The filter runs at **both** inbound edges to `RESPOND_TO_REPLIES`: `CHECK_REPLIES` (after the supersede filter, **before** the reply-limit check, so an all-directed-elsewhere run falls to the normal `DEDUP_SKIP` "no unanswered questions", not "reply limit reached") and the `JUDGE_REVIEW` 0-finding re-review path (on its `unanswered` set, before its reply-limit check). The delta-context `getRepliesToReviewComments(..., true)` call is untouched — directed-elsewhere replies still reach the reviewer prompt as context.
+- **Fail-safe.** Config off, an adapter without the capability, an empty reply list, or any thrown error → keep all, no behavior change. Dropped replies are not marked answered, so each later run re-evaluates them deterministically.
+- **Order-preserving.** The kept list is a subset in original order (`RESPOND_TO_REPLIES` posts under `replies[last].parentId`). Per-drop logging (id, author, matched token) happens in the adapter; the helper logs the count.
+
 ## Reply Limit
 
 See [review/skip-logic.md#5-reply-limit](skip-logic.md#5-reply-limit).

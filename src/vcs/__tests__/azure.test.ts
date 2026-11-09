@@ -315,6 +315,18 @@ describe('getRepliesToReviewComments — same-thread replies, composite IDs', ()
     expect(replies.map(r => r.id)).toEqual(['10:2'])
   })
 
+  it('ignores a deleted agent-reply tombstone, so the human reply stays unanswered', async () => {
+    clientMock.get.mockResolvedValue(threadData([
+      base[0], base[1],
+      { ...comment(4, AGENT_REPLY_BODY, '2026-07-01T12:00:00Z', 'Review Bot', 1), isDeleted: true },
+    ]))
+
+    const { replies, agentReplyCount } = await makeAdapter().getRepliesToReviewComments('42', ['10:1'])
+
+    expect(agentReplyCount).toBe(0)
+    expect(replies.map(r => r.id)).toEqual(['10:2'])
+  })
+
   it('includeAnswered returns the full discussion with agent replies labeled', async () => {
     clientMock.get.mockResolvedValue(threadData(base))
 

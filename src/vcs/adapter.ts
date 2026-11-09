@@ -57,6 +57,9 @@ export interface VCSAdapter {
   getRepliesToReviewComments(prId: string, reviewCommentIds: string[], includeAnswered?: boolean): Promise<ReplyResult>
   /** Post a threaded reply to an existing comment. */
   postReply(prId: string, parentId: string, body: string): Promise<void>
+  /** Keep only replies addressed to the agent, dropping ones @-directed solely elsewhere. Valid only
+   *  right after getRepliesToReviewComments, where the agent id-set is derived. Omit if unsupported. */
+  filterAddressedToAgent?(replies: CommentReply[], agentIds: ReadonlySet<string>): Promise<CommentReply[]>
   /** Fetch the diff between two commits (for delta reviews). */
   getCommitDiff(fromCommit: string, toCommit: string): Promise<string>
 }

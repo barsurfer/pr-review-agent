@@ -1790,3 +1790,75 @@ describe('error path → ERROR', () => {
     expect(adapter.postComment).not.toHaveBeenCalled()
   })
 })
+
+// ===========================================================================
+// Scenario 17: skip replies @-directed at someone else (Bitbucket capability)
+// Filter runs at BOTH inbound edges to RESPOND_TO_REPLIES; off / absent / throwing keeps all.
+// ===========================================================================
+
+describe('skip directed-elsewhere replies', () => {
+  beforeEach(() => { cfg.reply.skipDirectedElsewhere = true })
+  afterEach(() => { cfg.reply.skipDirectedElsewhere = false })
+
+  const checkRepliesAdapter = (overrides: Partial<VCSAdapter> = {}) => makeAdapter({
+    getPreviousReviewComments: vi.fn().mockResolvedValue([
+      { id: '200', body: '### Review' + footer(1, COMMIT_A), createdOn: '2026-03-10T10:00:00Z' },
+    ]),
+    getRepliesToReviewComments: vi.fn().mockResolvedValue({ replies: [devReply('2026-03-10T14:00:00Z')], agentReplyCount: 0 }),
+    ...overrides,
+  })
+
+  it('CHECK_REPLIES: all-directed-elsewhere → normal DEDUP_SKIP, not "reply limit"', async () => {
+    const filter = vi.fn().mockResolvedValue([])
+    const adapter = checkRepliesAdapter({ filterAddressedToAgent: filter })
+
+    const record = await review(adapter, '100', true)
+
+    expect(filter).toHaveBeenCalledTimes(1)
+    expect(record!.action).toBe('DEDUP_SKIP')
+    expect(record!.skip_reason).toContain('no unanswered questions')
+    expect(mockRunCommentResponse).not.toHaveBeenCalled()
+  })
+
+  it('config off → adapter capability is never called', async () => {
+    cfg.reply.skipDirectedElsewhere = false
+    const filter = vi.fn().mockResolvedValue([])
+    const adapter = checkRepliesAdapter({ filterAddressedToAgent: filter })
+
+    const record = await review(adapter, '100', true)
+
+    expect(filter).not.toHaveBeenCalled()
+    expect(record!.action).toBe('REPLY')
+  })
+
+  it('adapter without the capability → unchanged (replies answered)', async () => {
+    const adapter = checkRepliesAdapter()
+
+    const record = await review(adapter, '100', true)
+
+    expect(record!.action).toBe('REPLY')
+  })
+
+  it('filter throws → keep all (fail-safe), reply still posts', async () => {
+    const filter = vi.fn().mockRejectedValue(new Error('boom'))
+    const adapter = checkRepliesAdapter({ filterAddressedToAgent: filter })
+
+    const record = await review(adapter, '100', true)
+
+    expect(filter).toHaveBeenCalledTimes(1)
+    expect(record!.action).toBe('REPLY')
+  })
+
+  it('JUDGE_REVIEW (0-finding re-review): drops the only unanswered dev reply → no RESPOND', async () => {
+    const filter = vi.fn().mockResolvedValue([])
+    const adapter = reReviewAdapter(CLEAN_PRIOR, [devReply('2026-03-09T12:00:00Z')], { filterAddressedToAgent: filter })
+    mockReviewer(reviewWith([], { delta_stats: { resolved: 0, still_open: 0, new_findings: 0 } }))
+
+    const record = await review(adapter, '100', false)
+
+    expect(filter).toHaveBeenCalled()
+    expect(record!.action).not.toBe('REPLY')
+    expect(mockRunCommentResponse).not.toHaveBeenCalled()
+    expect(adapter.postReply).not.toHaveBeenCalled()
+  })
+})

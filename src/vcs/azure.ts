@@ -242,7 +242,10 @@ export class AzureDevOpsAdapter implements VCSAdapter {
   private async fetchThreads(prId: string): Promise<any[]> {
     const repo = this.getRepoSlug()
     const { data } = await this.client.get(`/repositories/${encodeURIComponent(repo)}/pullRequests/${prId}/threads`)
-    return data.value ?? []
+    const threads = data.value ?? []
+    // Drop deleted comments so no flow treats a tombstone as a real review/reply.
+    for (const t of threads) if (t.comments) t.comments = t.comments.filter((c: any) => !c.isDeleted)
+    return threads
   }
 
   /** GET diffs/commits and normalize to blob-only changes (folders/trees dropped). */

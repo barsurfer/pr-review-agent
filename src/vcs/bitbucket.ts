@@ -1,5 +1,6 @@
 import axios, { AxiosInstance, AxiosRequestConfig } from 'axios'
 import { hasReviewFooter, hasReplyFooter } from '../review/formatter.js'
+import { decideDirectedElsewhere } from './mention-filter.js'
 import type { VCSAdapter, PRInfo, ChangedFile, ReviewComment, CommentReply, ReplyResult } from './adapter.js'
 
 // Bound every Bitbucket call so a hung request fails fast instead of stalling the whole run
@@ -130,72 +131,82 @@ export class BitbucketAdapter implements VCSAdapter {
     )
   }
 
-  async getPreviousReviewComments(prId: string): Promise<ReviewComment[]> {
+  // All PR comments, paginated, with deleted tombstones dropped so no flow treats them as real.
+  private async fetchComments(prId: string): Promise<any[]> {
     const repoSlug = this.getRepoSlug()
-    const comments: ReviewComment[] = []
+    const out: any[] = []
     let url: string | null = `/repositories/${this.workspace}/${repoSlug}/pullrequests/${prId}/comments`
-
     while (url) {
       const { data }: { data: any } = await this.client.get(url)
-      for (const c of data.values) {
-        const body: string = c.content?.raw ?? ''
-        // Match the agent's exact footer line, not a substring — a human writing
-        // "Reviewed by me" must not be mistaken for an agent review
-        if (hasReviewFooter(body)) {
-          comments.push({
-            id: String(c.id),
-            body,
-            createdOn: c.created_on,
-            resolved: c.resolution != null,   // a human marked this review thread resolved
-          })
-        }
-      }
+      for (const c of data.values) if (!c.deleted) out.push(c)
       url = data.next ?? null
     }
+    return out
+  }
 
+  async getPreviousReviewComments(prId: string): Promise<ReviewComment[]> {
+    const comments: ReviewComment[] = []
+    for (const c of await this.fetchComments(prId)) {
+      const body: string = c.content?.raw ?? ''
+      // Match the agent's exact footer line, not a substring — a human writing
+      // "Reviewed by me" must not be mistaken for an agent review
+      if (hasReviewFooter(body)) {
+        comments.push({
+          id: String(c.id),
+          body,
+          createdOn: c.created_on,
+          resolved: c.resolution != null,   // a human marked this review thread resolved
+        })
+      }
+    }
     return comments
   }
 
   async getRepliesToReviewComments(prId: string, reviewCommentIds: string[], includeAnswered = false): Promise<ReplyResult> {
-    const repoSlug = this.getRepoSlug()
     const parentIds = new Set(reviewCommentIds)
+    const reviewIdSet = new Set(reviewCommentIds)
+    this.agentIds = new Set()
+    this.agentNames = new Set()
     const humanReplies: CommentReply[] = []
     let agentReplyCount = 0
     let latestAgentReply = ''   // ISO timestamp of our most recent reply
-    let url: string | null = `/repositories/${this.workspace}/${repoSlug}/pullrequests/${prId}/comments`
 
-    while (url) {
-      const { data }: { data: any } = await this.client.get(url)
-      for (const c of data.values) {
-        const parentId = c.parent?.id ? String(c.parent.id) : null
-        if (!parentId || !parentIds.has(parentId)) continue
-        const body: string = c.content?.raw ?? ''
-        if (hasReplyFooter(body)) {
-          agentReplyCount++
-          // Track agent reply IDs so we also find replies nested under them
-          parentIds.add(String(c.id))
-          if (c.created_on > latestAgentReply) latestAgentReply = c.created_on
-          // For delta reviews, include agent replies so the model sees its own prior conclusions
-          if (includeAnswered) {
-            humanReplies.push({
-              id: String(c.id),
-              parentId,
-              author: 'Agent (prior reply)',
-              body,
-              createdOn: c.created_on,
-            })
-          }
-          continue
-        }
-        humanReplies.push({
-          id: String(c.id),
-          parentId,
-          author: c.user?.display_name ?? 'Unknown',
-          body,
-          createdOn: c.created_on,
-        })
+    for (const c of await this.fetchComments(prId)) {
+      const body: string = c.content?.raw ?? ''
+      // Agent identity for filterAddressedToAgent: the authors of our review comments and our own
+      // replies. Derivation only ever adds ids, so it can't wrongly mark a human reply as the agent.
+      if (c.user && (reviewIdSet.has(String(c.id)) || hasReplyFooter(body))) {
+        if (c.user.account_id) this.agentIds.add(String(c.user.account_id))
+        if (c.user.uuid) this.agentIds.add(String(c.user.uuid).replace(/[{}]/g, ''))
+        if (c.user.display_name) this.agentNames.add(String(c.user.display_name).toLowerCase())
+        if (c.user.nickname) this.agentNames.add(String(c.user.nickname).toLowerCase())
       }
-      url = data.next ?? null
+      const parentId = c.parent?.id ? String(c.parent.id) : null
+      if (!parentId || !parentIds.has(parentId)) continue
+      if (hasReplyFooter(body)) {
+        agentReplyCount++
+        // Track agent reply IDs so we also find replies nested under them
+        parentIds.add(String(c.id))
+        if (c.created_on > latestAgentReply) latestAgentReply = c.created_on
+        // For delta reviews, include agent replies so the model sees its own prior conclusions
+        if (includeAnswered) {
+          humanReplies.push({
+            id: String(c.id),
+            parentId,
+            author: 'Agent (prior reply)',
+            body,
+            createdOn: c.created_on,
+          })
+        }
+        continue
+      }
+      humanReplies.push({
+        id: String(c.id),
+        parentId,
+        author: c.user?.display_name ?? 'Unknown',
+        body,
+        createdOn: c.created_on,
+      })
     }
 
     // For delta review context: return all human replies
@@ -211,6 +222,29 @@ export class BitbucketAdapter implements VCSAdapter {
       `/repositories/${this.workspace}/${repoSlug}/pullrequests/${prId}/comments`,
       { parent: { id: Number(parentId) }, content: { raw: body } }
     )
+  }
+
+  // Agent id-set/names derived from comment authors during the last getRepliesToReviewComments; the
+  // caller can only add to the set. Empty set (no identity resolved) fails safe: keep everything + warn.
+  private agentIds = new Set<string>()
+  private agentNames = new Set<string>()
+
+  async filterAddressedToAgent(replies: CommentReply[], agentIds: ReadonlySet<string>): Promise<CommentReply[]> {
+    const ids = new Set<string>([...agentIds, ...this.agentIds])
+    if (ids.size === 0) {
+      console.warn('  Could not derive the agent id-set — keeping all replies (skip-directed-replies inert this run)')
+      return replies
+    }
+    const kept: CommentReply[] = []
+    for (const r of replies) {
+      const decision = decideDirectedElsewhere(r.body, ids, this.agentNames)
+      if (decision.drop) {
+        console.log(`  Dropping reply ${r.id} by ${r.author} — @-directed elsewhere (matched @{${decision.matchedToken}})`)
+        continue
+      }
+      kept.push(r)
+    }
+    return kept
   }
 
   async getCommitDiff(fromCommit: string, toCommit: string): Promise<string> {

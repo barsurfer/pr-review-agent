@@ -53,6 +53,7 @@ credentials in source code or commit them to version control.**
 | `ENABLE_JUDGE_KEEP_UNVERIFIED` | `false` | Post candidates the judge classifies `unverifiable` or `framework_uncertainty` (score capped at 5) instead of dropping / moving them to Unresolved Questions. |
 | `ENABLE_JUDGE_FILE_CONTEXT` | `false` | Send the judge the same full-file context the reviewer got, not just the diff. Roughly doubles judge input tokens. |
 | `MAX_REPLY_COMMENTS` | `5` | Max agent reply comments per PR (0 = unlimited). Prevents runaway token usage on extended conversations. Default: `5` |
+| `SKIP_DIRECTED_REPLIES` | `false` | Skip replying to a dev comment `@`-directed solely at someone else (a human/team, not the agent). Bitbucket only; fail-safe keeps all on any uncertainty. CLI: `--skip-directed-replies`. |
 | `MAX_FINDINGS` | `0` | Cap the number of findings the reviewer reports (0 = unlimited). When set, appends a findings-limit instruction to the reviewer prompt. |
 | `ENABLE_SPLIT_CHECK` | `true` | Reviewer adds a "Can Be Split" section when the PR spans independent themes that could be separate PRs. Set `false` to disable. |
 | `ENABLE_TODO_SCAN` | `true` | Deterministically scan added lines for `TODO`/`FIXME`/`HACK` markers and append a "TODOs Introduced" section (file:line) to the review. |
@@ -204,6 +205,9 @@ MAX_RETRIES=3
 
 # Reply limit — max agent reply comments per PR (0 = unlimited)
 # MAX_REPLY_COMMENTS=5
+
+# Skip replying to dev comments @-directed at someone else (Bitbucket only)
+# SKIP_DIRECTED_REPLIES=false
 
 # Context limits
 MAX_CONTEXT_FILES=20
