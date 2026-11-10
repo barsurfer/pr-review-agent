@@ -40,7 +40,7 @@ See [prompt/judge.md](prompt/judge.md).
 
 ## Structured Output
 
-The reviewer and judge return JSON-schema-constrained objects, not free-form markdown. The reviewer fills typed fields (`REVIEW_OUTPUT_SCHEMA`) and `renderReview()` builds the posted comment, so the model cannot leak preamble, tone, or a footer into the review, and metrics read the object instead of regex-parsing markdown. All model I/O goes through the `LLMProvider` seam (`src/llm/provider.ts`, selected by `LLM_PROVIDER`), keeping the SDK in one file so a second provider is a new impl, not a re-plumb.
+The reviewer and judge return JSON-schema-constrained objects, not free-form markdown. The reviewer fills typed fields (`REVIEW_OUTPUT_SCHEMA`) and `renderReview()` builds the posted comment, so the model cannot leak preamble, tone, or a footer into the review, and metrics read the object instead of regex-parsing markdown. All model I/O goes through the `LLMProvider` seam (facade `src/llm/provider.ts`, selected by `LLM_PROVIDER`; contracts in `shared.ts`, each provider isolated in its own file) so a second provider is a new impl, not a re-plumb.
 
 See [llm/structured-output.md](llm/structured-output.md).
 

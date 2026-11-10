@@ -25,7 +25,7 @@ vi.mock('../../config.js', () => ({
   modelContextWindow: vi.fn(() => 200_000),
 }))
 
-vi.mock('../../claude/client.js', () => ({
+vi.mock('../client.js', () => ({
   runReview: vi.fn(),
   runCommentResponse: vi.fn(),
   runJudge: vi.fn(),
@@ -48,7 +48,7 @@ vi.mock('../usage.js', async (importOriginal) => {
 // Import after mocks
 import { review } from '../index.js'
 import { config, modelContextWindow } from '../../config.js'
-import { runReview, runCommentResponse, runJudge, runBreadth } from '../../claude/client.js'
+import { runReview, runCommentResponse, runJudge, runBreadth } from '../client.js'
 import { loadPrompt } from '../../prompt/loader.js'
 import { fetchContext } from '../../context/fetcher.js'
 import { logUsageRecord } from '../usage.js'
@@ -108,7 +108,7 @@ function makeAdapter(overrides: Partial<VCSAdapter> = {}): VCSAdapter {
 const reviewWith = (findings: ReviewObject['findings'] = [], extra: Partial<ReviewObject> = {}): ReviewObject =>
   ({ summary: 'ok', findings, behavioral_diff: [], production_risk: [], unresolved_questions: [], ...extra })
 
-function setupClaudeMocks(
+function setupModelMocks(
   reviewText = '### Summary\nAll good.\n\n### Findings\n\nNo findings.\n\n### Unresolved Questions\nNone.',
   review: ReviewObject = reviewWith(),
 ) {
@@ -119,7 +119,7 @@ function setupClaudeMocks(
 }
 
 // Rendered text and typed object must agree, as they do in production (runReview renders the object).
-const mockReviewer = (obj: ReviewObject) => setupClaudeMocks(renderReview(obj), obj)
+const mockReviewer = (obj: ReviewObject) => setupModelMocks(renderReview(obj), obj)
 
 const PRIOR_COMMIT = 'aabbcc112233'
 const PRIOR_AT = '2026-03-09T10:00:00Z'
@@ -145,7 +145,7 @@ function reReviewAdapter(priorBody: string, replies: CommentReply[] = [], overri
 beforeEach(() => {
   vi.clearAllMocks()
   // Reset mock implementations (clearAllMocks only clears call records)
-  setupClaudeMocks()
+  setupModelMocks()
   cfg.judge.model = ''
   cfg.reply.maxComments = 3
   cfg.anthropic.maxInputTokens = 150000
@@ -163,7 +163,7 @@ beforeEach(() => {
 describe('first review (new PR)', () => {
   it('posts review → action=REVIEW, review_number=1', async () => {
     const adapter = makeAdapter()
-    setupClaudeMocks()
+    setupModelMocks()
 
     const record = await review(adapter, '100', true)
 
@@ -214,7 +214,7 @@ describe('same commit + new reply → REPLY', () => {
         agentReplyCount: 0,
       }),
     })
-    setupClaudeMocks()
+    setupModelMocks()
 
     const record = await review(adapter, '100', true)
 
@@ -233,7 +233,7 @@ describe('same commit + new reply → REPLY', () => {
         agentReplyCount: 0,
       }),
     })
-    setupClaudeMocks()
+    setupModelMocks()
     cfg.reply.model = 'claude-haiku-5-5'
     try {
       await review(adapter, '100', true)
@@ -403,7 +403,7 @@ describe('gate (new-commit path): resolved later review does not bury an unanswe
         agentReplyCount: 0,
       }),
     })
-    setupClaudeMocks(undefined, reviewWith([]))
+    setupModelMocks(undefined, reviewWith([]))
 
     const record = await review(adapter, '100', false)
 
@@ -500,7 +500,7 @@ describe('new commit → RE_REVIEW', () => {
       getCommitDiff: vi.fn().mockResolvedValue(DIFF),
     })
     // Prior review flagged a finding, now resolved, no open discussion → one delta confirmation (RE_REVIEW)
-    setupClaudeMocks(undefined, reviewWith([], { delta_stats: { resolved: 1, still_open: 0, new_findings: 0 } }))
+    setupModelMocks(undefined, reviewWith([], { delta_stats: { resolved: 1, still_open: 0, new_findings: 0 } }))
 
     const record = await review(adapter, '100', true)
 
@@ -526,7 +526,7 @@ describe('re-review, no findings, prior review already clean → NO_NEW_FINDINGS
       ]),
       getCommitDiff: vi.fn().mockResolvedValue(DIFF),
     })
-    setupClaudeMocks(undefined, reviewWith([]))
+    setupModelMocks(undefined, reviewWith([]))
 
     const record = await review(adapter, '100', false)
 
@@ -554,7 +554,7 @@ describe('re-review, no findings, prior clean, BUT unanswered dev reply → answ
         agentReplyCount: 0,
       }),
     })
-    setupClaudeMocks(undefined, reviewWith([]))
+    setupModelMocks(undefined, reviewWith([]))
 
     const record = await review(adapter, '100', false)
 
@@ -960,7 +960,7 @@ describe('getDiff throws PrTooLargeError → SKIP', () => {
 
 describe('Claude returns NO_CHANGE on a re-review → skip', () => {
   // NO_CHANGE is only valid when a prior review exists — set up a re-review (old-commit footer
-  // + a delta diff) so CALL_CLAUDE is reached with previousReviews populated.
+  // + a delta diff) so CALL_MODEL is reached with previousReviews populated.
   const reReviewAdapter = () => makeAdapter({
     getPreviousReviewComments: vi.fn().mockResolvedValue([
       { id: '200', body: '### Old' + footer(1, 'aabbcc112233'), createdOn: '2026-03-09T10:00:00Z' },
@@ -970,7 +970,7 @@ describe('Claude returns NO_CHANGE on a re-review → skip', () => {
 
   it('does not post NO_CHANGE as a comment', async () => {
     const adapter = reReviewAdapter()
-    setupClaudeMocks('NO_CHANGE')
+    setupModelMocks('NO_CHANGE')
 
     const record = await review(adapter, '100', true)
 
@@ -980,7 +980,7 @@ describe('Claude returns NO_CHANGE on a re-review → skip', () => {
 
   it('does not post summary + standalone NO_CHANGE line (PR 8718 regression)', async () => {
     const adapter = reReviewAdapter()
-    setupClaudeMocks('### Summary\n\nNo new findings. New commits contain only cosmetic changes.\n\nNO_CHANGE')
+    setupModelMocks('### Summary\n\nNo new findings. New commits contain only cosmetic changes.\n\nNO_CHANGE')
 
     const record = await review(adapter, '100', true)
 
@@ -996,7 +996,7 @@ describe('Claude returns NO_CHANGE on a re-review → skip', () => {
 
   it('answers an unanswered developer reply even when the re-review is NO_CHANGE (PR 8989 bug)', async () => {
     const adapter = noChangeReReview([devReply('2026-03-10T11:00:00Z', '200')])
-    setupClaudeMocks('NO_CHANGE')   // reviewer finds no material change in the delta
+    setupModelMocks('NO_CHANGE')   // reviewer finds no material change in the delta
 
     const record = await review(adapter, '100', false)
 
@@ -1011,7 +1011,7 @@ describe('Claude returns NO_CHANGE on a re-review → skip', () => {
 
   it('does not answer a stale reply after NO_CHANGE (older than the latest review)', async () => {
     const adapter = noChangeReReview([devReply('2026-03-08T10:00:00Z', '200')])   // before PRIOR_AT
-    setupClaudeMocks('NO_CHANGE')
+    setupModelMocks('NO_CHANGE')
 
     const record = await review(adapter, '100', true)
 
@@ -1023,7 +1023,7 @@ describe('Claude returns NO_CHANGE on a re-review → skip', () => {
   it('does not answer after NO_CHANGE once the reply limit is reached', async () => {
     cfg.reply.maxComments = 2
     const adapter = noChangeReReview([devReply('2026-03-10T11:00:00Z', '200')], 2)
-    setupClaudeMocks('NO_CHANGE')
+    setupModelMocks('NO_CHANGE')
 
     const record = await review(adapter, '100', false)
 
@@ -1035,7 +1035,7 @@ describe('Claude returns NO_CHANGE on a re-review → skip', () => {
 
   it('errors instead of silently skipping when NO_CHANGE fires on a FIRST review (build 10233 bug)', async () => {
     const adapter = makeAdapter()   // no previous reviews → first review
-    setupClaudeMocks('NO_CHANGE')
+    setupModelMocks('NO_CHANGE')
 
     await expect(review(adapter, '100', false)).rejects.toThrow(/NO_CHANGE on a first review/i)
     expect(adapter.postComment).not.toHaveBeenCalled()
@@ -1049,7 +1049,7 @@ describe('Claude returns NO_CHANGE on a re-review → skip', () => {
 describe('judge preamble leak → stripped before posting', () => {
   it('posts only from ### Summary onward (PR 45 regression)', async () => {
     const adapter = makeAdapter()
-    setupClaudeMocks('### Summary\nRisky refactor.\n\n### Findings\n\n- **MEDIUM – Substring matching** (a.ts:1)\n  Over-matches rows.', reviewWith([{ severity: 'MEDIUM', title: 'Substring matching', body: 'Over-matches rows.' }]))
+    setupModelMocks('### Summary\nRisky refactor.\n\n### Findings\n\n- **MEDIUM – Substring matching** (a.ts:1)\n  Over-matches rows.', reviewWith([{ severity: 'MEDIUM', title: 'Substring matching', body: 'Over-matches rows.' }]))
     cfg.judge.model = 'judge-model'
     mockRunJudge.mockResolvedValue({
       text: 'I need to validate each finding against the actual diff. Let me check each one carefully.\n\n**Finding 1: MEDIUM** — visible in the diff, keep.\n\n### Summary\nRisky refactor, validated.\n\n### Findings\n\n- **MEDIUM – Substring matching** (a.ts:1)\n  Over-matches rows.\n\n### Merge Confidence: 78%',
@@ -1067,7 +1067,7 @@ describe('judge preamble leak → stripped before posting', () => {
 
   it('strips JUDGE_NOTES from the posted comment (PR 8722 regression)', async () => {
     const adapter = makeAdapter()
-    setupClaudeMocks('### Summary\nRisky.\n\n### Findings\n\n- **MEDIUM – Something** (a.ts:1)\n  Desc.', reviewWith([{ severity: 'MEDIUM', title: 'Something', body: 'Desc.' }]))
+    setupModelMocks('### Summary\nRisky.\n\n### Findings\n\n- **MEDIUM – Something** (a.ts:1)\n  Desc.', reviewWith([{ severity: 'MEDIUM', title: 'Something', body: 'Desc.' }]))
     cfg.judge.model = 'judge-model'
     mockRunJudge.mockResolvedValue({
       text: '### Summary\nLow-risk change.\n\n### Findings\n\n- **LOW – Fragile helper** (a.ts:1)\n  Desc.\n\n### Merge Confidence: 80%\n\n<!-- JUDGE_NOTES: Dropped MEDIUM — convention claim not verifiable from diff. -->',
@@ -1096,7 +1096,7 @@ describe('judge preamble leak → stripped before posting', () => {
 describe('cut guard — truncated review not posted', () => {
   it('rejects a judged review missing the Merge Confidence tail', async () => {
     const adapter = makeAdapter()
-    setupClaudeMocks('### Summary\nRisky.\n\n### Findings\n\n- **MEDIUM – X** (a.ts:1)\n  Desc.', reviewWith([{ severity: 'MEDIUM', title: 'X', body: 'Desc.' }]))
+    setupModelMocks('### Summary\nRisky.\n\n### Findings\n\n- **MEDIUM – X** (a.ts:1)\n  Desc.', reviewWith([{ severity: 'MEDIUM', title: 'X', body: 'Desc.' }]))
     cfg.judge.model = 'judge-model'
     // Judge output truncated mid-Behavioral-Diff — no Merge Confidence section
     mockRunJudge.mockResolvedValue({
@@ -1111,7 +1111,7 @@ describe('cut guard — truncated review not posted', () => {
   it('rejects a reviewer-only review missing the Unresolved Questions tail', async () => {
     const adapter = makeAdapter()
     // No judge; reviewer output cut off before Unresolved Questions
-    setupClaudeMocks('### Summary\nAll good.\n\n### Findings\n\n- **LOW – Z** (a.ts:1)\n  Desc.\n\n### Behavioral Diff\n- cut off here')
+    setupModelMocks('### Summary\nAll good.\n\n### Findings\n\n- **LOW – Z** (a.ts:1)\n  Desc.\n\n### Behavioral Diff\n- cut off here')
 
     await expect(review(adapter, '100', false)).rejects.toThrow(/truncated/i)
     expect(adapter.postComment).not.toHaveBeenCalled()
@@ -1128,7 +1128,7 @@ describe('CI job link in footer', () => {
     process.env.BUILD_URL = 'https://ci/job/pr-review/709/'
     try {
       const adapter = makeAdapter()
-      setupClaudeMocks()
+      setupModelMocks()
 
       await review(adapter, '100', false)
 
@@ -1146,7 +1146,7 @@ describe('CI job link in footer', () => {
     delete process.env.BUILD_URL
     try {
       const adapter = makeAdapter()
-      setupClaudeMocks()
+      setupModelMocks()
 
       await review(adapter, '100', false)
 
@@ -1166,7 +1166,7 @@ describe('CI job link in footer', () => {
 describe('MAX_FINDINGS cap', () => {
   it('appends a findings limit to the reviewer prompt when set', async () => {
     const adapter = makeAdapter()
-    setupClaudeMocks()
+    setupModelMocks()
     cfg.review.maxFindings = 3
 
     await review(adapter, '100', true)
@@ -1178,7 +1178,7 @@ describe('MAX_FINDINGS cap', () => {
 
   it('does not append anything when MAX_FINDINGS is 0', async () => {
     const adapter = makeAdapter()
-    setupClaudeMocks()
+    setupModelMocks()
 
     await review(adapter, '100', true)
 
@@ -1195,7 +1195,7 @@ describe('TODO scan', () => {
   it('appends a TODOs Introduced section for markers in added lines', async () => {
     const todoDiff = 'diff --git a/src/app.ts b/src/app.ts\n--- a/src/app.ts\n+++ b/src/app.ts\n@@ -1 +1,2 @@\n+const x = 1 // TODO: handle error\n'
     const adapter = makeAdapter({ getDiff: vi.fn().mockResolvedValue(todoDiff) })
-    setupClaudeMocks()
+    setupModelMocks()
 
     const record = await review(adapter, '100', false)
 
@@ -1209,7 +1209,7 @@ describe('TODO scan', () => {
   it('omits the section when todoScan is disabled', async () => {
     const todoDiff = 'diff --git a/src/app.ts b/src/app.ts\n--- a/src/app.ts\n+++ b/src/app.ts\n@@ -1 +1,2 @@\n+const x = 1 // TODO: handle error\n'
     const adapter = makeAdapter({ getDiff: vi.fn().mockResolvedValue(todoDiff) })
-    setupClaudeMocks()
+    setupModelMocks()
     cfg.review.todoScan = false
 
     await review(adapter, '100', false)
@@ -1232,7 +1232,7 @@ describe('normal mode: judge failure surfaces as ERROR (not swallowed)', () => {
       ]),
       getCommitDiff: vi.fn().mockResolvedValue(DIFF),
     })
-    setupClaudeMocks('### Summary\nRisky.\n\n### Findings\n- **MEDIUM – New** (`a.ts:1`)\n  desc', reviewWith([{ severity: 'MEDIUM', title: 'New', file: 'a.ts', lines: '1', body: 'desc' }]))
+    setupModelMocks('### Summary\nRisky.\n\n### Findings\n- **MEDIUM – New** (`a.ts:1`)\n  desc', reviewWith([{ severity: 'MEDIUM', title: 'New', file: 'a.ts', lines: '1', body: 'desc' }]))
     mockRunJudge.mockRejectedValue(new Error('judge boom'))
 
     await expect(review(adapter, '100', false)).rejects.toThrow(/judge boom/)
@@ -1504,7 +1504,7 @@ describe('second-look review and the judge in normal mode', () => {
 describe('token-budget degradation', () => {
   it('drops file contexts and reviews diff-only when over MAX_INPUT_TOKENS', async () => {
     const adapter = makeAdapter()
-    setupClaudeMocks()
+    setupModelMocks()
     mockFetchContext.mockResolvedValue([{ path: 'big.ts', content: 'x'.repeat(8000) }])
     cfg.anthropic.maxInputTokens = 100   // tiny budget — contexts blow it
 
@@ -1519,7 +1519,7 @@ describe('token-budget degradation', () => {
   it('skips only when even the diff alone exceeds the budget', async () => {
     const bigDiff = 'diff --git a/x.ts b/x.ts\n--- a/x.ts\n+++ b/x.ts\n@@ -1 +1,6 @@\n' + Array(6).fill('+' + 'a'.repeat(80)).join('\n') + '\n'
     const adapter = makeAdapter({ getDiff: vi.fn().mockResolvedValue(bigDiff) })
-    setupClaudeMocks()
+    setupModelMocks()
     mockFetchContext.mockResolvedValue([{ path: 'big.ts', content: 'y'.repeat(8000) }])
     cfg.anthropic.maxInputTokens = 100
 
@@ -1544,7 +1544,7 @@ describe('token-budget degradation', () => {
       ]),
       getCommitDiff: vi.fn().mockResolvedValue(mergeInflatedDelta),   // delta >> the small full PR diff
     })
-    setupClaudeMocks(undefined, reviewWith([{ severity: 'LOW', title: 'x', body: 'y' }]))
+    setupModelMocks(undefined, reviewWith([{ severity: 'LOW', title: 'x', body: 'y' }]))
 
     const record = await review(adapter, '100', true)
 
@@ -1569,7 +1569,7 @@ describe('input budget from context window', () => {
 
   it('derives the reviewer window and skips a diff that exceeds it', async () => {
     const adapter = makeAdapter({ getDiff: vi.fn().mockResolvedValue(overBudget) })
-    setupClaudeMocks()
+    setupModelMocks()
     cfg.anthropic.maxInputTokens = 1_000_000   // not the binding limit
     cfg.anthropic.maxTokens = 10
     cfg.anthropic.modelContextTokens = 0        // derive from the model
@@ -1584,7 +1584,7 @@ describe('input budget from context window', () => {
 
   it('lets MODEL_CONTEXT_TOKENS override the derived cap', async () => {
     const adapter = makeAdapter({ getDiff: vi.fn().mockResolvedValue(overBudget) })
-    setupClaudeMocks()
+    setupModelMocks()
     cfg.anthropic.maxInputTokens = 1_000_000
     cfg.anthropic.maxTokens = 10
     cfg.anthropic.modelContextTokens = 100_000   // override wins over the tiny derived window below
@@ -1649,7 +1649,7 @@ describe('ENABLE_SPLIT_CHECK add-on', () => {
 describe('Claude returns empty → skip', () => {
   it('does not post empty comment', async () => {
     const adapter = makeAdapter()
-    setupClaudeMocks('')
+    setupModelMocks('')
 
     const record = await review(adapter, '100', true)
 
@@ -1756,7 +1756,7 @@ describe('pre-post dedup catches race condition', () => {
           { id: '999', body: '### Concurrent' + footer(1, COMMIT_A), createdOn: '2026-03-11T11:42:00Z' },
         ]),
     })
-    setupClaudeMocks()
+    setupModelMocks()
 
     // NOT dry run — pre-post dedup only fires on real posts
     const record = await review(adapter, '100', false)
@@ -1800,7 +1800,7 @@ describe('--force clean → fresh review', () => {
         { id: '200', body: '### Review' + footer(1, COMMIT_A), createdOn: '2026-03-10T10:00:00Z' },
       ]),
     })
-    setupClaudeMocks()
+    setupModelMocks()
 
     const record = await review(adapter, '100', true, undefined, 'clean')
 
@@ -1839,7 +1839,7 @@ describe('--force re-review → bypass dedup with context', () => {
         agentReplyCount: 0,
       }),
     })
-    setupClaudeMocks()
+    setupModelMocks()
 
     const record = await review(adapter, '100', true, undefined, 're-review')
 

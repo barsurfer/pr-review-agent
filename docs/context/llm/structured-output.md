@@ -15,16 +15,16 @@ All model calls go through `LLMProvider` (`src/llm/provider.ts`), never the SDK 
 - `complete(system, user, opts)` → `{ text, usage }`
 - `completeStructured<T>(system, user, schema, opts)` → `{ object: T, usage }` (JSON-schema-constrained)
 
-`createProvider(apiKey)` selects the impl by `LLM_PROVIDER` (`anthropic` default, or `openrouter`; anything else throws). Both impls live in `provider.ts`, so provider code stays in one file and a new backend is a new class — not a re-plumb across the codebase. Both `complete` and `completeStructured` throw a `TruncatedResponseError` on a cut-off (`max_tokens` / `finish_reason: length`) — it carries the response usage, so the record keeps real token counts (not zeros); `completeStructured` also throws on invalid JSON or missing required keys, so a truncated or malformed object is never returned.
+`createProvider(apiKey)` selects the impl by `LLM_PROVIDER` (`anthropic` default, or `openrouter`; anything else throws). `provider.ts` is the stable facade (factory + re-exports); each impl lives in its own file (`anthropic-provider.ts`, `openrouter-provider.ts`) over the shared contracts in `shared.ts`, so a new backend is a new class and file — not a re-plumb across the codebase. Both `complete` and `completeStructured` throw a `TruncatedResponseError` on a cut-off (`max_tokens` / `finish_reason: length`) — it carries the response usage, so the record keeps real token counts (not zeros); `completeStructured` also throws on invalid JSON or missing required keys, so a truncated or malformed object is never returned.
 
-Usage currency is `LLMUsage` (defined in `provider.ts`, formerly `ClaudeUsage`): token counts plus an optional `cost_usd`. `cost_usd` is set only by OpenRouter; when absent (Anthropic) the usage record falls back to the static pricing-table estimate, so the Anthropic record is unchanged.
+Usage currency is `LLMUsage` (defined in `shared.ts`, re-exported by `provider.ts`; formerly `ClaudeUsage`): token counts plus an optional `cost_usd`. `cost_usd` is set only by OpenRouter; when absent (Anthropic) the usage record falls back to the static pricing-table estimate, so the Anthropic record is unchanged.
 
 | Impl | Selected by | Transport | Notes |
 |------|-------------|-----------|-------|
 | `AnthropicProvider` | `LLM_PROVIDER=anthropic` (default) | `@anthropic-ai/sdk`, streamed | Structured output via `output_config.format`; effort rides `output_config.effort` with a one-shot retry without it on a 400 |
 | `OpenRouterProvider` | `LLM_PROVIDER=openrouter` | axios → OpenAI-compatible `POST {OPENROUTER_BASE_URL}/chat/completions`, non-streaming | See below |
 
-**Why:** keep provider code in one place and make structured output and the backend an implementation detail. Prompts stay Claude-tuned — portability to other models is a separate per-model effort.
+**Why:** isolate each provider behind one seam and make structured output and the backend an implementation detail. Prompts stay Claude-tuned — portability to other models is a separate per-model effort.
 
 ### OpenRouter specifics
 
@@ -43,7 +43,7 @@ Usage currency is `LLMUsage` (defined in `provider.ts`, formerly `ClaudeUsage`):
 
 ## Structured Reviewer Output
 
-The reviewer returns a typed object (`REVIEW_OUTPUT_SCHEMA` in `src/claude/client.ts`), not markdown:
+The reviewer returns a typed object (`REVIEW_OUTPUT_SCHEMA` in `src/review/client.ts`), not markdown:
 `summary`, `findings[{severity, title, file?, lines?, body, type?}]` (`type` = one of `ISSUE_TYPES` in `src/review/formatter.ts` — analytics-only, nothing keys off it), `behavioral_diff[]`, `production_risk[]`, `unresolved_questions[]`, plus optional `can_be_split[]` (SPLIT CHECK add-on), `delta_stats{resolved, still_open, new_findings}` (re-reviews), and `no_change` (delta stop signal). The breadth pass (`runBreadth`) returns `findings[]` only (`BREADTH_OUTPUT_SCHEMA`, reusing the reviewer's finding item schema); its findings go to the judge, never into `reviewObject`.
 
 `renderReview(obj)` (`src/review/formatter.ts`) builds the posted markdown from those fields. Because the code owns the rendering, the model cannot leak preamble, tone, or a footer into the review. `no_change: true` renders the `NO_CHANGE` sentinel (reuses the existing `isNoChange` path). Merge Confidence is NOT rendered here — the judge adds it.

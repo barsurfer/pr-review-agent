@@ -33,7 +33,7 @@ vi.mock('../llm/provider.js', () => ({
 
 import { runBenchmark } from '../benchmark.js'
 import { config } from '../config.js'
-import { REVIEW_OUTPUT_SCHEMA, BREADTH_OUTPUT_SCHEMA } from '../claude/client.js'
+import { REVIEW_OUTPUT_SCHEMA, BREADTH_OUTPUT_SCHEMA } from '../review/client.js'
 import { estimateCost } from '../review/usage.js'
 import type { ReviewObject } from '../review/formatter.js'
 import type { JudgeOutput } from '../review/judge-decisions.js'

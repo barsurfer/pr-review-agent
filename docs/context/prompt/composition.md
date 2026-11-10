@@ -25,7 +25,7 @@ Final system prompt = base-prompt.txt + repo prompt sections
 - Developer discussion trust rules
 - OUTPUT — the reviewer fills a typed object (`summary`, `findings[]`, `behavioral_diff[]`, `production_risk[]`, `unresolved_questions[]`), not markdown; `renderReview` builds the posted comment (see [llm/structured-output.md](../llm/structured-output.md)). A finding's `lines` is digits only — a number or range, never a symbol name or quoted code
 
-**Runtime add-ons** (appended to the assembled system prompt in `CALL_CLAUDE`, opt-in, never touch the base template):
+**Runtime add-ons** (appended to the assembled system prompt in `CALL_MODEL`, opt-in, never touch the base template):
 - `MAX_FINDINGS` > 0 → a `## FINDINGS LIMIT` instruction capping reported findings
 - `ENABLE_SPLIT_CHECK` → a `## SPLIT CHECK` instruction directing the reviewer to fill the `can_be_split` field for multi-theme PRs
 

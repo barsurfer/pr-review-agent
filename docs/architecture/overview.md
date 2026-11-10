@@ -32,11 +32,13 @@ pr-review-agent/
 │   │   ├── findings-output.ts    # Benchmark findings: judge-markdown + structured-recovery merge
 │   │   ├── aggregate.ts          # Merge/dedupe findings across bundles
 │   │   ├── bundler.ts            # Split an over-budget PR into directory bundles
-│   │   └── bundled.ts            # Per-bundle reviewer+judge orchestration
-│   ├── claude/
+│   │   ├── bundled.ts            # Per-bundle reviewer+judge orchestration
 │   │   └── client.ts             # Review/judge/reply calls + REVIEW/JUDGE output schemas
 │   ├── llm/
-│   │   └── provider.ts           # LLMProvider seam: Anthropic SDK + OpenRouter via axios (complete/completeStructured)
+│   │   ├── provider.ts           # Stable facade + createProvider factory (LLM_PROVIDER); re-exports shared surface
+│   │   ├── shared.ts             # LLMProvider/LLMUsage/LLMOptions contracts, TruncatedResponseError, missingRequired
+│   │   ├── anthropic-provider.ts # AnthropicProvider: Anthropic SDK, streamed
+│   │   └── openrouter-provider.ts # OpenRouterProvider: OpenAI-compatible via axios
 │   ├── vcs/
 │   │   ├── adapter.ts            # VCSAdapter interface + provider selection
 │   │   ├── bitbucket.ts          # Bitbucket Cloud implementation
@@ -116,7 +118,7 @@ FETCH_PR_INFO → CHECK_BRANCHES
                                        ├─ [delta diff empty after filter] → CHECK_REPLIES
                                        │   ├─ [replies] → RESPOND_TO_REPLIES → DONE
                                        │   └─ [none] → SKIP → DONE
-                                       └─ LOAD_PROMPT → FETCH_CONTEXT → CALL_CLAUDE
+                                       └─ LOAD_PROMPT → FETCH_CONTEXT → CALL_MODEL
                                             → CHECK_NO_CHANGE
                                                ├─ [NO_CHANGE] → CHECK_REPLIES (reply if one is pending, else SKIP) → DONE
                                                └─ BREADTH_REVIEW (no-op unless enabled + enough untouched files) → JUDGE_REVIEW

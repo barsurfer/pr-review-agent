@@ -8,8 +8,8 @@ vi.mock('../../llm/provider.js', () => ({
 }))
 
 import { runReview, runJudge, runCommentResponse, REVIEW_OUTPUT_SCHEMA, JUDGE_OUTPUT_SCHEMA } from '../client.js'
-import { renderReview, type ReviewObject } from '../../review/formatter.js'
-import { REASON_CATEGORIES } from '../../review/judge-decisions.js'
+import { renderReview, type ReviewObject } from '../formatter.js'
+import { REASON_CATEGORIES } from '../judge-decisions.js'
 import type { PRInfo, ReviewComment, CommentReply } from '../../vcs/adapter.js'
 import type { LoadedPrompt } from '../../prompt/loader.js'
 

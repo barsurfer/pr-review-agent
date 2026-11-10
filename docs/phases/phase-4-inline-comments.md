@@ -17,7 +17,7 @@ a single summary comment.
 - [ ] `src/context/diffParser.ts` — unified diff parser, builds position map
 - [ ] Add `postInlineComment` to `VCSAdapter` interface
 - [ ] Implement `postInlineComment` in `BitbucketAdapter`
-- [ ] Update `src/claude/client.ts` — JSON output mode, structured findings schema
+- [ ] Update `src/review/client.ts` — JSON output mode, structured findings schema
 - [ ] Update system prompt template to enforce JSON output and line-grounding rules
 - [ ] `src/review/index.ts` — finding validation against diff map, post loop with rate limiting
 - [ ] `REVIEW_MODE` env var + `.agent-review-instructions.md` override support

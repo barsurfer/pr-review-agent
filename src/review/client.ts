@@ -3,27 +3,27 @@ import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { createHash } from 'crypto'
 import { createProvider, type LLMUsage } from '../llm/provider.js'
-import { renderReview, ISSUE_TYPES, type ReviewObject, type ReviewFinding, type FindingScore } from '../review/formatter.js'
-import type { KeptFinding } from '../review/findings-output.js'
+import { renderReview, ISSUE_TYPES, type ReviewObject, type ReviewFinding, type FindingScore } from './formatter.js'
+import type { KeptFinding } from './findings-output.js'
 import {
   REASON_CATEGORIES, DEFAULT_JUDGE_POLICY, applyJudgeDecisions, renderCandidatesForJudge, summarizeDecisions,
   type JudgeOutput, type JudgePolicy, type AppliedDecision, type JudgeAnomalies,
-} from '../review/judge-decisions.js'
-import { numberDiffLines, numberFileLines } from '../review/parsers.js'
+} from './judge-decisions.js'
+import { numberDiffLines, numberFileLines } from './parsers.js'
 import type { PRInfo, ReviewComment, CommentReply } from '../vcs/adapter.js'
 import type { FileContext } from '../context/fetcher.js'
 import type { LoadedPrompt } from '../prompt/loader.js'
 
 const REPLY_MAX_TOKENS = 4096
 
-export interface ClaudeResult {
+export interface ModelResult {
   text: string
   usage: LLMUsage
   /** Reviewer's structured output — typed source for findings/delta metrics. Review runs only. */
   review?: ReviewObject
 }
 
-export interface JudgeResult extends ClaudeResult {
+export interface JudgeResult extends ModelResult {
   /** Validation reasoning — logged, never posted. */
   notes?: string
   /** Per-finding 0–10 confidence for the kept findings — logged to results.jsonl, never posted. */
@@ -129,10 +129,10 @@ export async function runReview(
   developerReplies: CommentReply[] = [],
   changesSinceLastReview = '',
   lineNumbers = false,
-): Promise<ClaudeResult> {
+): Promise<ModelResult> {
   const userMessage = buildUserMessage(prInfo, diff, fileContexts, previousReviews, developerReplies, changesSinceLastReview, lineNumbers)
 
-  console.log(`Sending request to Claude (${model}, maxRetries: ${maxRetries})...`)
+  console.log(`Sending request to the model (${model}, maxRetries: ${maxRetries})...`)
   const { object, usage } = await createProvider(apiKey).completeStructured<ReviewObject>(
     prompt.content, userMessage, REVIEW_OUTPUT_SCHEMA, { model, maxTokens, maxRetries, effort: effort || undefined },
   )
@@ -295,7 +295,7 @@ export async function runCommentResponse(
   diff: string,
   originalReview: string,
   replies: CommentReply[]
-): Promise<ClaudeResult> {
+): Promise<ModelResult> {
   const parts: string[] = []
   parts.push(`## Your Original Review:\n${originalReview}`)
   parts.push(`## Diff:\n\`\`\`diff\n${diff}\n\`\`\``)
@@ -305,7 +305,7 @@ export async function runCommentResponse(
   }
   const userMessage = parts.join('\n\n')
 
-  console.log(`Sending reply request to Claude (${model}, maxRetries: ${maxRetries})...`)
+  console.log(`Sending reply request to the model (${model}, maxRetries: ${maxRetries})...`)
   const { text, usage } = await createProvider(apiKey).complete(getReplyPrompt(), userMessage, { model, maxTokens: REPLY_MAX_TOKENS, maxRetries })
 
   console.log(`Reply received (${usage.input_tokens} in / ${usage.output_tokens} out tokens)`)

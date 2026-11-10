@@ -4,7 +4,7 @@
 
 import { config } from '../config.js'
 import { fetchContext, type FileContext } from '../context/fetcher.js'
-import { runReview, runJudge } from '../claude/client.js'
+import { runReview, runJudge } from './client.js'
 import { planBundles, splitDiffByFile, estimateTokens as tok } from './bundler.js'
 import { parseReviewMarkdown, mergeReviews, type BundleReview } from './aggregate.js'
 import { countFindings, isNoChange } from './formatter.js'
@@ -75,7 +75,7 @@ export async function runBundledReview(ctx: ReviewContext, maxInputTokens: numbe
     }
     content += `\n\n## BUNDLED REVIEW\nThis PR is too large for one pass. You are reviewing bundle ${i + 1} of ${plan.bundles.length}; the diff contains only: ${bundle.files.slice(0, 40).join(', ')}${bundle.files.length > 40 ? ', ...' : ''}. Review only these files and do not flag code you cannot see. Leave \`can_be_split\` empty.`
 
-    // Same backstop as CALL_CLAUDE: the chars/4 estimate can under-count, so on a context-length
+    // Same backstop as CALL_MODEL: the chars/4 estimate can under-count, so on a context-length
     // rejection drop this bundle's file contexts and retry diff-only; if the diff alone won't fit,
     // leave the bundle unreviewed (surfaced under Unresolved Questions) rather than fail the PR.
     let bundleContexts = contexts

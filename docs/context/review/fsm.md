@@ -28,7 +28,7 @@ FETCH_PR_INFO
                       ├─ [delta diff empty after filter] → CHECK_REPLIES
                       │    ├─ [unanswered replies] → RESPOND_TO_REPLIES → DONE
                       │    └─ [none] → SKIP → DONE
-                      └─ LOAD_PROMPT → FETCH_CONTEXT → CALL_CLAUDE
+                      └─ LOAD_PROMPT → FETCH_CONTEXT → CALL_MODEL
                            └─ CHECK_NO_CHANGE
                                 ├─ [NO_CHANGE] → CHECK_REPLIES (answer a dev reply even with no code change; else SKIP, label kept NO_CHANGE)
                                 └─ BREADTH_REVIEW (passthrough unless ENABLE_BREADTH_REVIEW + triggered)
@@ -69,7 +69,7 @@ Both inbound edges to `RESPOND_TO_REPLIES` (`CHECK_REPLIES` and this `JUDGE_REVI
 | `LOAD_PROMPT` | Fetches `.agent-review-instructions.md` from the target repo (CLI `--prompt` → source commit → target branch; each ref probes root → `docs/` → single-module-dir fallback; then composed tech-stack rule sets; defaults last) |
 | `FETCH_CONTEXT` | Fetches full file content for changed files (see [fetching/strategy.md](../fetching/strategy.md)) |
 | `ESTIMATE_TOKENS` | Estimates input (~chars/4); over the input budget (min of `MAX_INPUT_TOKENS` and the context window — the smaller of the reviewer's and judge's, derived from the model id or `MODEL_CONTEXT_TOKENS` — minus the output reserve) → drops file contexts (diff-only); still over → `BUNDLED_REVIEW` when enabled, else SKIP |
-| `CALL_CLAUDE` | Assembles payload (PR info, prior review, developer discussion, diff, file context); calls reviewer model. The reviewer returns a typed object (`ctx.reviewObject`); `renderReview` builds `reviewText`. See [llm/structured-output.md](../llm/structured-output.md) |
+| `CALL_MODEL` | Assembles payload (PR info, prior review, developer discussion, diff, file context); calls reviewer model. The reviewer returns a typed object (`ctx.reviewObject`); `renderReview` builds `reviewText`. See [llm/structured-output.md](../llm/structured-output.md) |
 | `CHECK_NO_CHANGE` | Inspects `reviewText` for the `NO_CHANGE` sentinel (rendered when the reviewer sets `no_change`) before any further processing |
 | `BREADTH_REVIEW` | Off unless `ENABLE_BREADTH_REVIEW`. On a first, single-pass review with a judge configured, ≥`BREADTH_MIN_FILES` (5) reviewable changed files and ≥`BREADTH_MIN_UNTOUCHED` (3) of them without any reviewer finding, runs a second reviewer-sized call (`runBreadth`) on `BREADTH_MODEL` (unset → judge model, resolved here so benchmark labels apply). Same system prompt + a `## BREADTH LENS` block (untouched files, same defect elsewhere, changed-together, incomplete changes — all on added/modified lines), same diff/contexts + first-pass findings (`file:lines — title`) + the untouched list. Findings go to `ctx.breadthFindings` (never into `reviewObject`, so reviewer metrics and the judge-failure fallback stay reviewer-only). Every skip and failure is recorded in `breadth_status`; a failure never fails the review. Under `--benchmark` it is skipped (`skipped_time`) once over half of `BENCHMARK_DEADLINE_SECONDS` has elapsed. The judge holds breadth numeric anchors to changed lines (reviewer anchors stay ungated), and if the judge fails after a clean reviewer + breadth-only candidates, the breadth findings are dropped and the reviewer's own review posts (with reviewer findings it still throws). **Why:** run 312 left 32% of golden issues in files with no finding at all |
 | `JUDGE_REVIEW` | If `JUDGING_MODEL` set: sends diff + review to judge for finding validation; stores per-finding scores (`ctx.judgeScores`). With breadth findings, the judge gets reviewer + breadth candidates in one call (ids in that order, `origin` logged in `review_candidates`, never shown to the judge). Skipped only when both lists are empty. Otherwise passthrough |
@@ -104,7 +104,7 @@ interface ReviewContext {
   developerReplies: CommentReply[]
   prompt: string
   contextFiles: ContextFile[]
-  reviewText: string       // rendered markdown from CALL_CLAUDE / JUDGE_REVIEW
+  reviewText: string       // rendered markdown from CALL_MODEL / JUDGE_REVIEW
   reviewObject?: ReviewObject   // reviewer's typed output — source for findings/delta metrics
   judgeScores?: FindingScore[]  // judge's per-finding 0–10 confidence — logged, never posted
   skipReason?: string

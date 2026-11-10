@@ -20,14 +20,14 @@ vi.mock('../../config.js', () => ({
   modelContextWindow: () => 200_000,
 }))
 
-vi.mock('../../claude/client.js', () => ({ runReview: vi.fn(), runCommentResponse: vi.fn(), runJudge: vi.fn() }))
+vi.mock('../client.js', () => ({ runReview: vi.fn(), runCommentResponse: vi.fn(), runJudge: vi.fn() }))
 vi.mock('../../prompt/loader.js', () => ({ loadPrompt: vi.fn() }))
 vi.mock('../../context/fetcher.js', () => ({ fetchContext: vi.fn() }))
 vi.mock('../usage.js', async (importOriginal) => ({ ...(await importOriginal() as any), logUsageRecord: vi.fn() }))
 
 import { review } from '../index.js'
 import { config } from '../../config.js'
-import { runReview, runJudge } from '../../claude/client.js'
+import { runReview, runJudge } from '../client.js'
 import { loadPrompt } from '../../prompt/loader.js'
 import { fetchContext } from '../../context/fetcher.js'
 import { renderReview, type ReviewObject } from '../formatter.js'

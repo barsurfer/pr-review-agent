@@ -65,7 +65,7 @@ The reply prompt is loaded from file at runtime (`src/prompt/reply-prompt.txt`) 
 fallback to the embedded copy (`__REPLY_PROMPT__`) in the bundled build, matching the
 same pattern used for the base review prompt.
 
-### Claude client: `src/claude/client.ts`
+### Review client: `src/review/client.ts`
 
 ```ts
 export async function runCommentResponse(
@@ -150,7 +150,7 @@ No review number or commit hash — these are conversational replies, not review
 - **Modified** `src/vcs/bitbucket.ts` — implemented `getRepliesToReviewComments()` and `postReply()`
 - **Modified** `src/vcs/github.ts` — added stub methods
 - **Modified** `src/vcs/gitlab.ts` — added stub methods
-- **Modified** `src/claude/client.ts` — added `runCommentResponse()` and `getReplyPrompt()`
+- **Modified** `src/review/client.ts` — added `runCommentResponse()` and `getReplyPrompt()`
 - **Modified** `src/review/index.ts` — added reply-handling branch in commit-skip logic
 - **Created** `src/prompt/reply-prompt.txt` — dedicated reply system prompt
 - **Modified** `scripts/bundle.mjs` — embedded `__REPLY_PROMPT__` alongside `__BASE_PROMPT__`

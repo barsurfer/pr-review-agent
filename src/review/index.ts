@@ -5,7 +5,7 @@
 import { config, modelContextWindow } from '../config.js'
 import { loadPrompt } from '../prompt/loader.js'
 import { fetchContext } from '../context/fetcher.js'
-import { runReview, runCommentResponse, runJudge, runBreadth } from '../claude/client.js'
+import { runReview, runCommentResponse, runJudge, runBreadth } from './client.js'
 import { fileCoverage, breadthSystemPrompt, breadthBriefing, flaggedFiles, findingsInFiles, secondLookSystemPrompt, secondLookBriefing } from './breadth.js'
 import { splitDiffByFile } from './bundler.js'
 import { normalizeFindingPath } from './findings-output.js'
@@ -359,10 +359,10 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         ctx.skipReason = `Estimated input ~${s.total.toLocaleString()} tokens exceeds the input budget (${max.toLocaleString()}; min of MAX_INPUT_TOKENS and model context) even without file context — ${fmt(s)}`
         return State.SKIP
       }
-      return State.CALL_CLAUDE
+      return State.CALL_MODEL
     }
 
-    case State.CALL_CLAUDE: {
+    case State.CALL_MODEL: {
       // Runtime prompt add-ons (opt-in) — appended without touching the base template
       let content = ctx.prompt!.content
       if (config.review.maxFindings > 0) {
