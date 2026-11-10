@@ -34,8 +34,8 @@ ARG LINE_NUMBERS=true
 ARG BREADTH=true
 ARG BREADTH_FILES=1
 ARG BREADTH_UNTOUCHED=0
-# Off by default (unlike NITPICKS/BREADTH): the experiment image opts in with --build-arg SECOND_LOOK=true.
-ARG SECOND_LOOK=false
+# Baked on for the bench image (recall lever under test); prod is unaffected (Jenkins sets its own env).
+ARG SECOND_LOOK=true
 ENV ENABLE_JUDGE_KEEP_MINOR=$JUDGE_KEEP_MINOR \
     ENABLE_JUDGE_KEEP_UNVERIFIED=$JUDGE_KEEP_UNVERIFIED \
     ENABLE_JUDGE_FILE_CONTEXT=$JUDGE_FILE_CONTEXT \
