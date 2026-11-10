@@ -36326,7 +36326,7 @@ var config = {
     },
     // Off by default: sending the reviewer's file context roughly doubles judge input tokens.
     fileContext: optional("ENABLE_JUDGE_FILE_CONTEXT", "false") === "true",
-    // Off by default: bundles contradiction/duplicate repair, per-file findings and concrete-defect/handled prompt recalibration; may add one repair call.
+    // Off by default: narrow low_value evidence check, same-file duplicate validation and guarded per-file expansion; still one judge call.
     quality: optional("ENABLE_JUDGE_QUALITY", "false") === "true",
     // Off by default: lets breadth/second-look/judge anchors land on unchanged lines the model was actually shown.
     shownAnchors: optional("ENABLE_JUDGE_SHOWN_CONTEXT_ANCHORS", "false") === "true"
@@ -44964,23 +44964,6 @@ function summarizeDecisions(decisions) {
 
 // src/review/judge-quality.ts
 init_define_STACK_PROMPTS();
-var DROPPING = /* @__PURE__ */ new Set(["incorrect", "already_handled", "unverifiable", "style_only", "low_value", "duplicate", "out_of_scope"]);
-var AFFIRMATIVE = [
-  /\b(?:kept|keep|keeping|stands|retained) as validated\b/,
-  /\b(?:this|the|that) (?:finding|claim|issue|concern|candidate) is (?:a )?(?:valid|correct|accurate|real|confirmed)\b/,
-  /\bthis is a (?:valid|real|genuine|correct) (?:finding|issue|problem|bug|concern)\b/
-];
-var NEGATED_OR_ATTRIBUTED = /\b(?:not|never|no longer|cannot|neither|nor|without|if|whether|claims?|claimed|says?|said|argues?|asserts?|alleges?|calls?|states?|suggests?|reviewer|believes?|thinks?)\b|n't/;
-var insideQuote = (prefix) => (prefix.match(/["“”`]/g) ?? []).length % 2 === 1;
-function contradictoryDrop(d) {
-  if (!DROPPING.has(d.reason_category)) return false;
-  return String(d.note ?? "").toLowerCase().split(/[.;!?]\s+|\n/).some((sentence) => AFFIRMATIVE.some((re) => {
-    const m = re.exec(sentence);
-    if (!m) return false;
-    const prefix = sentence.slice(0, m.index);
-    return !NEGATED_OR_ATTRIBUTED.test(prefix) && !insideQuote(prefix);
-  }));
-}
 function swapLine(text, startsWith, replacement) {
   const lines = text.split("\n");
   const at = lines.findIndex((l) => l.startsWith(startsWith));
@@ -44988,13 +44971,17 @@ function swapLine(text, startsWith, replacement) {
   lines[at] = replacement;
   return lines.join("\n");
 }
-var ALREADY_HANDLED = '- `already_handled` \u2014 a guard, default, control flow, test, or evidenced guarantee in the code actually prevents the candidate\'s stated failure. Put the mechanism in `evidence` and explain how it covers the precise scenario. A comment that acknowledges overhead, accepts a tradeoff, or explains intent is not by itself mitigation; "flagging for awareness" counts only when the finding names what covers it.';
-var LOW_VALUE = '- `low_value` \u2014 an unsupported preference or generic request without a demonstrated defect: add a docstring/type-hint/comment, recommend a more specific exception type, offer a configurability opinion or a "nice to have", or merely ask the developer to "verify" or "ensure" something with no shown failure. "Add", "verify", or "ensure" in a proposed fix does not decide the category, and a demonstrably required missing import is not a generic addition request.';
-var MINOR = "- `minor` \u2014 a real, concrete problem with no demonstrated runtime, performance, or visible UI impact: an unused import or variable, or other dead code; a comment, docstring, or document the change made wrong; a misleading name; duplicated logic; an existing changed test whose setup or assertions cannot exercise the branch it claims to cover (an unexercised fallback, a pagination fixture stuck on its first branch), even when the proposed fix adds a test case. A demonstrated runtime, performance (a formatter allocated on every call, unconditional tracing overhead) or visible UI defect (a decoration that disappears) is classified on its merits, normally `validated`, with small impact expressed through severity. Formatting and naming preferences stay `style_only`.";
 var DUPLICATE = "- `duplicate` \u2014 the same root cause at the same location in the same file as another candidate that you keep; classify the clearer one on its merits, this one as `duplicate`, and set `duplicate_of` to the kept candidate's id. A body mentioning another file does not give that file a kept finding: the same defect in a different file or at a different location is its own finding.";
-var CONSISTENCY = `## DECISION CONSISTENCY
+var LOW_VALUE_EVIDENCE = `## LOW_VALUE EVIDENCE CHECK
 
-Before answering, check that each candidate's \`reason_category\`, \`evidence\`, and \`note\` agree. A note concluding the finding is valid or correct must not be paired with a dropping category. Evidence for \`incorrect\` must disprove the claim; quoting the implicated code is not enough.`;
+Before assigning \`low_value\`, apply this narrow exception only when ALL of the following hold:
+- The candidate itself states a specific failing input, execution path, or user interaction and a concrete runtime failure, performance cost, or visible UI failure caused by code this diff adds or modifies.
+- The code you were shown demonstrates the stated scenario and its causal mechanism. Quote the specific file:line and code in \`evidence\`, and explain the scenario-to-failure connection in \`note\`.
+- The claim is more than a preference, a possible optimization, or an unsupported assertion of impact. For performance claims, identify the repeated work or allocation and the execution path that incurs it; do not infer material overhead merely from an API name or invent workload or timing assumptions.
+
+When all conditions hold and no other rejection category applies, use \`validated\` instead of \`low_value\`. The existing \`unconfirmed_high\` and \`chained_hypothetical\` rules still apply. Do not change or propose a severity; the application derives it from the candidate and category.
+
+A bare request to "add a docstring", "consider configurable", or "verify/ensure X" does not qualify. A proposed fix containing those words does not disqualify an otherwise demonstrated failure. Do not invent a scenario or consequence to rescue a candidate. If the conditions fail, apply the existing category definitions: unsupported defect claims remain \`unverifiable\`, pure asks remain \`low_value\`, and concrete problems without runtime impact remain \`minor\`. This exception does not relax \`incorrect\`, \`already_handled\`, \`style_only\`, \`duplicate\`, or \`out_of_scope\`.`;
 var MULTI_FILE = `## MULTI-FILE FINDINGS
 
 When a candidate you keep explicitly alleges the same defect in additional changed files, list each additional file in \`additional_locations\`: its \`file\`, numeric \`lines\`, a verbatim \`anchor_quote\` of the added line, a \`candidate_excerpt\` copied verbatim from the candidate that names that file, and a one-sentence \`body\` for that file's consequence. Do not list files mentioned only as callers, dependencies, examples, or fix locations, and do not discover new defects.`;
@@ -45007,13 +44994,10 @@ function composeJudgePrompt(base, opts2) {
     out = out.replace(ANCHOR_SENTENCE, () => ANCHOR_SHOWN);
   }
   if (opts2.quality) {
-    out = swapLine(out, "- `already_handled`", ALREADY_HANDLED);
-    out = swapLine(out, "- `low_value`", LOW_VALUE);
-    out = swapLine(out, "- `minor`", MINOR);
     out = swapLine(out, "- `duplicate`", DUPLICATE);
     out = `${out.trimEnd()}
 
-${CONSISTENCY}
+${LOW_VALUE_EVIDENCE}
 
 ${MULTI_FILE}
 `;
@@ -45043,13 +45027,6 @@ var QUALITY_DECISION_PROPERTIES = {
     }
   }
 };
-function repairInstruction(items) {
-  const list = items.map((i) => `- ${i.id}: you answered \`${i.reason_category}\` with note "${i.note}" \u2014 ${i.why}`).join("\n");
-  return `## Reconsider
-
-These earlier decisions were inconsistent or not justified. Re-validate each listed candidate on its merits against the code above and return exactly one consistent decision for each (plus the usual narrative fields). Do not decide any other candidate.
-${list}`;
-}
 
 // src/review/client.ts
 var import_meta2 = {};
@@ -45237,13 +45214,6 @@ function getJudgePrompt() {
     throw new Error("Cannot load judge prompt: file not found and no embedded copy");
   }
 }
-var addUsage = (a, b) => ({
-  input_tokens: a.input_tokens + b.input_tokens,
-  output_tokens: a.output_tokens + b.output_tokens,
-  cache_read_input_tokens: (a.cache_read_input_tokens ?? 0) + (b.cache_read_input_tokens ?? 0) || void 0,
-  cache_creation_input_tokens: (a.cache_creation_input_tokens ?? 0) + (b.cache_creation_input_tokens ?? 0) || void 0,
-  cost_usd: a.cost_usd === void 0 && b.cost_usd === void 0 ? void 0 : (a.cost_usd ?? 0) + (b.cost_usd ?? 0)
-});
 async function runJudge(apiKey, model, maxRetries, maxTokens, effort, diff, review2, fileContexts = [], policy = DEFAULT_JUDGE_POLICY, lineNumbers = false, breadthFrom, options) {
   const parts = [];
   parts.push(renderDiff(diff, lineNumbers));
@@ -45257,62 +45227,9 @@ ${renderCandidatesForJudge(review2)}`);
   const schema = judgeOutputSchema(quality, shownAnchors);
   const callOpts = { model, maxTokens, maxRetries, effort: effort || void 0 };
   console.log(`Sending to judge (${model}, maxRetries: ${maxRetries}${fileContexts.length ? `, ${fileContexts.length} context file(s)` : ""})...`);
-  const first = await createProvider(apiKey).completeStructured(judgePrompt, userMessage, schema, callOpts);
-  let { object, usage } = first;
+  const { object, usage } = await createProvider(apiKey).completeStructured(judgePrompt, userMessage, schema, callOpts);
   console.log(`Judge received (${usage.input_tokens} in / ${usage.output_tokens} out tokens)`);
-  const apply = (o) => applyJudgeDecisions(review2.findings, o, policy, review2.can_be_split, diff, breadthFrom, options);
-  let judged = apply(object);
-  if (quality) {
-    const requested = /* @__PURE__ */ new Map();
-    const known = new Set(review2.findings.map((_, i) => candidateId(i)));
-    for (const d of object.decisions ?? []) {
-      const id = normalizeId(d.candidate_id);
-      if (known.has(id) && contradictoryDrop(d)) requested.set(id, { reason_category: d.reason_category, note: String(d.note ?? ""), why: "the note concludes the finding is valid but the category drops it" });
-    }
-    for (const d of judged.decisions) {
-      if (d.invalid_duplicate) requested.set(d.candidate_id, { reason_category: "duplicate", note: d.note, why: "duplicate_of must name a different kept candidate in the same file and an overlapping location; classify it on its own merits and do not use duplicate" });
-    }
-    if (requested.size > 0) {
-      const dupIds = new Set(judged.decisions.filter((d) => d.invalid_duplicate).map((d) => d.candidate_id));
-      const replaced = /* @__PURE__ */ new Map();
-      let narrative;
-      try {
-        const items = [...requested].map(([id, r]) => ({ id, ...r }));
-        const repair = await createProvider(apiKey).completeStructured(judgePrompt, `${userMessage}
-
-${repairInstruction(items)}`, schema, callOpts);
-        usage = addUsage(usage, repair.usage);
-        const byId = /* @__PURE__ */ new Map();
-        for (const d of repair.object.decisions ?? []) {
-          const id = normalizeId(d.candidate_id);
-          if (requested.has(id)) byId.set(id, [...byId.get(id) ?? [], d]);
-        }
-        for (const [id, list] of byId) {
-          if (list.length === 1 && REASON_CATEGORIES.includes(list[0].reason_category) && !contradictoryDrop(list[0]) && !(dupIds.has(id) && list[0].reason_category === "duplicate")) replaced.set(id, list[0]);
-        }
-        if (replaced.size > 0) narrative = repair.object;
-      } catch (err) {
-        const spent = err.usage;
-        if (spent) usage = addUsage(usage, spent);
-        console.warn(`  Judge repair FAILED (${err.message}) \u2014 keeping the original decisions`);
-      }
-      if (replaced.size > 0) {
-        object = {
-          ...narrative,
-          decisions: [...(object.decisions ?? []).filter((d) => !replaced.has(normalizeId(d.candidate_id))), ...replaced.values()]
-        };
-        judged = apply(object);
-      }
-      for (const d of judged.decisions) {
-        const asked = requested.get(d.candidate_id);
-        if (!asked) continue;
-        d.repair = { status: replaced.has(d.candidate_id) ? "replaced" : "unresolved", original_reason: asked.reason_category, original_note: asked.note };
-      }
-      const unresolved = requested.size - replaced.size;
-      if (unresolved > 0) judged.anomalies.unresolved_repair = unresolved;
-      console.log(`  Judge repair: ${requested.size} requested, ${replaced.size} replaced, ${unresolved} unresolved`);
-    }
-  }
+  const judged = applyJudgeDecisions(review2.findings, object, policy, review2.can_be_split, diff, breadthFrom, options);
   const promptHash = (0, import_crypto2.createHash)("sha256").update(judgePrompt).digest("hex").slice(0, 12);
   return {
     text: judged.markdown,
@@ -45804,7 +45721,7 @@ This PR is too large for one pass. You are reviewing bundle ${i + 1} of ${plan.b
       anyOverflow = true;
       continue;
     }
-    addUsage2(ctx, result.usage);
+    addUsage(ctx, result.usage);
     if (result.review?.no_change || isNoChange(result.text)) {
       console.log("  Reviewer: NO_CHANGE for this bundle");
       continue;
@@ -45834,7 +45751,7 @@ This PR is too large for one pass. You are reviewing bundle ${i + 1} of ${plan.b
           config.review.lineNumbers,
           ...judgeTail
         );
-        addUsage2(ctx, verdict.usage);
+        addUsage(ctx, verdict.usage);
         judgeUsage.input_tokens += verdict.usage.input_tokens;
         judgeUsage.output_tokens += verdict.usage.output_tokens;
         if (verdict.usage.cost_usd !== void 0) judgeUsage.cost_usd = (judgeUsage.cost_usd ?? 0) + verdict.usage.cost_usd;
@@ -45868,7 +45785,7 @@ This PR is too large for one pass. You are reviewing bundle ${i + 1} of ${plan.b
 Merged ${reviews.length} bundle review(s): ${merged.object.findings.length} finding(s) after dedupe`);
   return { ok: true };
 }
-function addUsage2(ctx, u) {
+function addUsage(ctx, u) {
   ctx.usage.input_tokens += u.input_tokens;
   ctx.usage.output_tokens += u.output_tokens;
   ctx.usage.cache_read += u.cache_read_input_tokens ?? 0;
@@ -45927,7 +45844,7 @@ function getAgentVersion() {
     const pkg = JSON.parse((0, import_fs4.readFileSync)(pkgPath, "utf-8"));
     return pkg.version;
   } catch {
-    if (true) return "0.0.36";
+    if (true) return "0.0.37";
     return "unknown";
   }
 }
@@ -45939,7 +45856,7 @@ function getBuildCommit() {
     const dirty = (0, import_child_process.execSync)("git status --porcelain", opts2).toString().trim() ? "-dirty" : "";
     return hash + dirty;
   } catch {
-    if (true) return "88ffd42";
+    if (true) return "db34525";
     return "unknown";
   }
 }
@@ -46503,14 +46420,14 @@ If this PR spans multiple independent themes that could each be a separate, inde
         ctx.breadthFindings = result.findings;
         ctx.breadthPromptHash = result.promptHash;
         ctx.breadthUsage = { input_tokens: result.usage.input_tokens, output_tokens: result.usage.output_tokens, cost_usd: result.usage.cost_usd };
-        addUsage2(ctx, result.usage);
+        addUsage(ctx, result.usage);
         ctx.breadthStatus = "succeeded";
         console.log(`  Breadth review: ${coverage.untouched.length} untouched file(s) \u2192 ${result.findings.length} finding(s)`);
       } catch (err) {
         const e = err;
         if (e.usage) {
           ctx.breadthUsage = { input_tokens: e.usage.input_tokens, output_tokens: e.usage.output_tokens, cost_usd: e.usage.cost_usd };
-          addUsage2(ctx, e.usage);
+          addUsage(ctx, e.usage);
         }
         ctx.breadthStatus = "failed";
         console.warn(`  Breadth review FAILED (${isContextLengthError(err) ? "context length" : e.message}) \u2014 continuing with first-pass findings only`);
@@ -46585,14 +46502,14 @@ If this PR spans multiple independent themes that could each be a separate, inde
         ctx.secondLookFindings = result.findings;
         ctx.secondLookPromptHash = result.promptHash;
         ctx.secondLookUsage = { input_tokens: result.usage.input_tokens, output_tokens: result.usage.output_tokens, cost_usd: result.usage.cost_usd };
-        addUsage2(ctx, result.usage);
+        addUsage(ctx, result.usage);
         ctx.secondLookStatus = "succeeded";
         console.log(`  Second-look: ${flagged.length} flagged file(s) \u2192 ${result.findings.length} additional finding(s)`);
       } catch (err) {
         const e = err;
         if (e.usage) {
           ctx.secondLookUsage = { input_tokens: e.usage.input_tokens, output_tokens: e.usage.output_tokens, cost_usd: e.usage.cost_usd };
-          addUsage2(ctx, e.usage);
+          addUsage(ctx, e.usage);
         }
         ctx.secondLookStatus = "failed";
         console.warn(`  Second-look FAILED (${isContextLengthError(err) ? "context length" : e.message}) \u2014 continuing with first-pass and breadth findings only`);
