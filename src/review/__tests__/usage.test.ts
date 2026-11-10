@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest'
 import type { ReviewContext } from '../types.js'
 import type { KeptFinding } from '../findings-output.js'
 
@@ -248,5 +248,76 @@ describe('buildUsageRecord breadth fields', () => {
     cfg.breadth.enabled = false
     expect(buildUsageRecord(baseCtx({ bundleCount: 2 }), 1, null).breadth_status).toBe('disabled')
     expect(buildUsageRecord(baseCtx(), 1, null).breadth_status).toBeNull()
+  })
+})
+
+describe('buildUsageRecord J_QUALITY fields', () => {
+  type Judge = typeof import('../judge-decisions.js')
+  let applyJudgeDecisions: Judge['applyJudgeDecisions']
+  let cfg: { judge: { quality?: boolean } }
+  let savedQuality: boolean | undefined
+  beforeAll(async () => {
+    ;({ applyJudgeDecisions } = await import('../judge-decisions.js'))
+    cfg = (await import('../../config.js')).config as unknown as typeof cfg
+  })
+  beforeEach(() => { savedQuality = cfg.judge.quality; vi.useFakeTimers(); vi.setSystemTime(new Date('2026-01-01T00:00:00Z')) })
+  afterEach(() => { cfg.judge.quality = savedQuality; vi.useRealTimers() })
+
+  const file = (path: string, lines: string[]) =>
+    `diff --git a/${path} b/${path}\nnew file mode 100644\n--- /dev/null\n+++ b/${path}\n@@ -0,0 +1,${lines.length} @@\n${lines.map(l => `+${l}`).join('\n')}\n`
+  const diff = file('x.ts', ['const a = 1', 'run: shared call here']) + file('y.ts', ['const b = 2', 'run: shared call here']) + file('z.ts', ['const c = 3'])
+  const candidates = [
+    { severity: 'MEDIUM' as const, title: 'Shared call', file: 'x.ts', lines: '2', body: 'Call is wrong in x.ts and also in y.ts.' },
+    { severity: 'LOW' as const, title: 'Same call', file: 'z.ts', lines: '1', body: 'Looks like the first.' },
+  ]
+  const judgeOutput = {
+    decisions: [
+      { candidate_id: 'c0', reason_category: 'validated' as const, evidence: 'x.ts:2', note: 'real', score: 8,
+        additional_locations: [{ file: 'y.ts', lines: '2', anchor_quote: 'run: shared call here', candidate_excerpt: 'also in y.ts', body: 'Same call in y.ts.' }] },
+      { candidate_id: 'c1', reason_category: 'duplicate' as const, evidence: '', note: 'dup', score: 4, duplicate_of: 'c0' },
+    ],
+    summary: 's', behavioral_diff: [], production_risk: [], unresolved_questions: [], merge_confidence: 70,
+  }
+  const reviewObject = { summary: 's', findings: candidates, behavioral_diff: [], production_risk: [], unresolved_questions: [] }
+  const POLICY = { keepMinor: false, keepUnverified: false }
+
+  const record = (quality: boolean | undefined) => {
+    cfg.judge.quality = quality
+    const judged = applyJudgeDecisions(candidates, judgeOutput, POLICY, [], diff, Infinity, quality ? { quality } : undefined)
+    return buildUsageRecord({
+      adapter: {}, prId: '7', dryRun: false, force: 'off', logUsage: false, repoSlug: 'repo',
+      usage: { input_tokens: 10, output_tokens: 5, cache_read: 0, cache_write: 0 },
+      estimatedInputTokens: 10, action: 'REVIEW', reviewNumber: 1, reviewObject,
+      judgeDecisions: judged.decisions, judgeAnomalies: judged.anomalies, judgeUsage: { input_tokens: 4, output_tokens: 2 }, judgeStatus: 'succeeded',
+    } as unknown as ReviewContext, 1, null)
+  }
+
+  it('emits duplicate_of, invalid_duplicate and expansions only under quality', () => {
+    const on = JSON.stringify(record(true).judge_decisions)
+    expect(on).toContain('"duplicate_of":"c0"')
+    expect(on).toContain('"invalid_duplicate":true')
+    expect(on).toContain('"expansions":[{"file":"y.ts","accepted":true}]')
+    expect(record(true).judge_anomalies).toMatchObject({ invalid_duplicate: 1 })
+
+    const off = record(false)
+    expect(JSON.stringify(off.judge_decisions)).not.toMatch(/duplicate_of|invalid_duplicate|expansions/)
+    expect(off.judge_anomalies).not.toHaveProperty('invalid_duplicate')
+  })
+
+  it('never emits repair metadata in either flag state', () => {
+    for (const quality of [false, true]) expect(JSON.stringify(record(quality))).not.toMatch(/repair/)
+  })
+
+  it('an unset and an explicitly false flag produce byte-identical records, with j_quality false', () => {
+    const unset = record(undefined)
+    expect(unset.recall_levers.j_quality).toBe(false)
+    expect(JSON.stringify(record(false))).toBe(JSON.stringify(unset))
+  })
+
+  it('quality on changes only the quality-gated fields, preserving every other record field', () => {
+    const { recall_levers: onLevers, judge_decisions: _d, judge_anomalies: _a, ...onRest } = record(true)
+    const { recall_levers: offLevers, judge_decisions: _d2, judge_anomalies: _a2, ...offRest } = record(false)
+    expect(onLevers).toEqual({ ...offLevers, j_quality: true })
+    expect(JSON.stringify(onRest)).toBe(JSON.stringify(offRest))
   })
 })

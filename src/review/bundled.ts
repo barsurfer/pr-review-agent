@@ -118,7 +118,7 @@ export async function runBundledReview(ctx: ReviewContext, maxInputTokens: numbe
     const found = result.review ? countFindings(result.review) : { high: 0, medium: 0, low: 0 }
     console.log(`  Reviewer findings: ${found.high}H / ${found.medium}M / ${found.low}L`)
     if (config.judge.model && result.review && found.high + found.medium + found.low > 0) {
-      // Shown-context anchors need per-pass provenance a bundle does not carry, so only the quality repairs apply here.
+      // Shown-context anchors need per-pass provenance a bundle does not carry, so only the quality flag is forwarded here.
       const judgeTail: [number?, JudgeOptions?] = config.judge.quality ? [undefined, { quality: true }] : []
       try {
         const verdict = await runJudge(

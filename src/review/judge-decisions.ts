@@ -70,7 +70,6 @@ export interface AppliedDecision {
   duplicate_of?: string
   invalid_duplicate?: boolean
   expansions?: Array<{ file: string; accepted: boolean }>
-  repair?: { status: 'replaced' | 'unresolved'; original_reason: string; original_note: string }
 }
 
 export interface JudgeAnomalies {
@@ -79,7 +78,6 @@ export interface JudgeAnomalies {
   duplicate_ids: number
   drop_without_evidence: number
   invalid_duplicate?: number
-  unresolved_repair?: number
 }
 
 export interface JudgeOptions {

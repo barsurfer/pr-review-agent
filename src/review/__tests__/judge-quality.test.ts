@@ -8,9 +8,10 @@ vi.mock('../../llm/provider.js', () => ({
 
 import { runJudge, judgeOutputSchema, JUDGE_OUTPUT_SCHEMA } from '../client.js'
 import { applyJudgeDecisions, type JudgeDecision, type JudgeOutput } from '../judge-decisions.js'
-import { composeJudgePrompt, contradictoryDrop } from '../judge-quality.js'
+import { composeJudgePrompt } from '../judge-quality.js'
 import type { ReviewFinding, ReviewObject } from '../formatter.js'
 import { readFileSync } from 'fs'
+import { createHash } from 'crypto'
 
 const file = (path: string, lines: string[]): string =>
   `diff --git a/${path} b/${path}\nnew file mode 100644\n--- /dev/null\n+++ b/${path}\n@@ -0,0 +1,${lines.length} @@\n${lines.map(l => `+${l}`).join('\n')}\n`
@@ -31,27 +32,6 @@ const out = (decisions: JudgeDecision[]): JudgeOutput =>
 const ON = { quality: true }
 const POLICY = { keepMinor: false, keepUnverified: false }
 
-describe('contradictoryDrop', () => {
-  it('flags an affirmative conclusion paired with a dropping category', () => {
-    expect(contradictoryDrop({ reason_category: 'unverifiable', note: 'The pinned version is wrong. Kept as validated.' })).toBe(true)
-    expect(contradictoryDrop({ reason_category: 'incorrect', note: 'This is a valid finding: the quote shows the leak.' })).toBe(true)
-    expect(contradictoryDrop({ reason_category: 'low_value', note: 'The finding is correct and the code confirms it.' })).toBe(true)
-  })
-
-  it('does not flag a consistent rejection, a negation, an attribution, or a quoted phrase', () => {
-    expect(contradictoryDrop({ reason_category: 'incorrect', note: 'The guard on line 4 disproves the claim.' })).toBe(false)
-    expect(contradictoryDrop({ reason_category: 'incorrect', note: 'This is not a valid finding.' })).toBe(false)
-    expect(contradictoryDrop({ reason_category: 'incorrect', note: "The reviewer claims the finding is correct, but line 4 guards it." })).toBe(false)
-    expect(contradictoryDrop({ reason_category: 'incorrect', note: 'The body says "the finding is correct" yet the code differs.' })).toBe(false)
-    expect(contradictoryDrop({ reason_category: 'incorrect', note: 'Valid syntax, but the claim is wrong.' })).toBe(false)
-  })
-
-  it('never flags a surviving category', () => {
-    expect(contradictoryDrop({ reason_category: 'validated', note: 'Kept as validated.' })).toBe(false)
-    expect(contradictoryDrop({ reason_category: 'minor', note: 'This is a valid finding.' })).toBe(false)
-  })
-})
-
 describe('composeJudgePrompt', () => {
   const base = readFileSync(new URL('../../prompt/judge-prompt.txt', import.meta.url), 'utf-8')
 
@@ -59,17 +39,39 @@ describe('composeJudgePrompt', () => {
     expect(composeJudgePrompt(base, { quality: false, shownAnchors: false })).toBe(base)
   })
 
-  it('quality swaps the four category lines once each and appends the consistency and multi-file sections', () => {
+  const LOW_VALUE_SECTION = `## LOW_VALUE EVIDENCE CHECK
+
+Before assigning \`low_value\`, apply this narrow exception only when ALL of the following hold:
+- The candidate itself states a specific failing input, execution path, or user interaction and a concrete runtime failure, performance cost, or visible UI failure caused by code this diff adds or modifies.
+- The code you were shown demonstrates the stated scenario and its causal mechanism. Quote the specific file:line and code in \`evidence\`, and explain the scenario-to-failure connection in \`note\`.
+- The claim is more than a preference, a possible optimization, or an unsupported assertion of impact. For performance claims, identify the repeated work or allocation and the execution path that incurs it; do not infer material overhead merely from an API name or invent workload or timing assumptions.
+
+When all conditions hold and no other rejection category applies, use \`validated\` instead of \`low_value\`. The existing \`unconfirmed_high\` and \`chained_hypothetical\` rules still apply. Do not change or propose a severity; the application derives it from the candidate and category.
+
+A bare request to "add a docstring", "consider configurable", or "verify/ensure X" does not qualify. A proposed fix containing those words does not disqualify an otherwise demonstrated failure. Do not invent a scenario or consequence to rescue a candidate. If the conditions fail, apply the existing category definitions: unsupported defect claims remain \`unverifiable\`, pure asks remain \`low_value\`, and concrete problems without runtime impact remain \`minor\`. This exception does not relax \`incorrect\`, \`already_handled\`, \`style_only\`, \`duplicate\`, or \`out_of_scope\`.`
+
+  it('quality swaps only the duplicate line and appends the evidence check before the multi-file section', () => {
     const p = composeJudgePrompt(base, { quality: true, shownAnchors: false })
+    const baseLines = new Set(base.split('\n'))
+    const changed = p.split('\n').filter(l => l.startsWith('- `') && !baseLines.has(l))
+    expect(changed).toHaveLength(1)
+    expect(changed[0]).toContain('set `duplicate_of`')
     for (const name of ['already_handled', 'low_value', 'minor', 'duplicate']) {
       expect(p.split(`- \`${name}\``).length - 1).toBe(1)
     }
-    expect(p).toContain('is not by itself mitigation')
-    expect(p).toContain('set `duplicate_of`')
-    expect(p).toContain('cannot exercise the branch it claims to cover')
-    expect(p).toContain('## DECISION CONSISTENCY')
+    expect(p).toContain(LOW_VALUE_SECTION)
+    expect(p.indexOf('## LOW_VALUE EVIDENCE CHECK')).toBeLessThan(p.indexOf('## MULTI-FILE FINDINGS'))
     expect(p).toContain('`additional_locations`')
-    expect(p).not.toContain('merely ask the developer to "verify" or "ensure" something already in the diff')
+    expect(p).not.toContain('## DECISION CONSISTENCY')
+    expect(p).not.toContain('is not by itself mitigation')
+    expect(p).not.toContain('cannot exercise the branch it claims to cover')
+  })
+
+  it('quality and shown anchors compose independently', () => {
+    const both = composeJudgePrompt(base, { quality: true, shownAnchors: true })
+    expect(both).toContain('cannot be confirmed from the code you were shown')
+    expect(both).toContain('## LOW_VALUE EVIDENCE CHECK')
+    expect(both).toContain('## MULTI-FILE FINDINGS')
   })
 
   it('shown anchors replace only the omit-numeric rule', () => {
@@ -186,7 +188,7 @@ describe('applyJudgeDecisions — per-file findings (quality)', () => {
     expect(res.decisions[0].expansions).toEqual([{ file: '.github/workflows/publish-b.yml', accepted: true }])
   })
 
-  it('rejects a file the candidate never names, a fabricated quote, a wrong line, a non-verbatim excerpt and an ambiguous basename', () => {
+  it('rejects a file the candidate never names, a fabricated quote, a wrong line and a non-verbatim excerpt', () => {
     expect(run([loc({ file: 'src/other.ts', candidate_excerpt: 'also in publish-b.yml', anchor_quote: 'export const y = 2', lines: '2' })]).kept).toHaveLength(1)
     expect(run([loc({ anchor_quote: 'run: something invented entirely' })]).kept).toHaveLength(1)
     expect(run([loc({ lines: '3' })]).kept).toHaveLength(1)
@@ -194,7 +196,33 @@ describe('applyJudgeDecisions — per-file findings (quality)', () => {
     expect(run([loc({ candidate_excerpt: 'where the same step runs' })]).kept).toHaveLength(1)
   })
 
-  it('ignores the parent file and repeated files, and keeps the primary when a secondary is malformed', () => {
+  it('rejects a bare basename shared by two changed files but accepts the full path', () => {
+    const diff = file('src/main.ts', ['const shared = 1']) + file('a/index.ts', ['const shared = 1']) + file('b/index.ts', ['const shared = 1'])
+    const parentMain = cand({ file: 'src/main.ts', lines: '1', body: 'Shared constant also duplicated in index.ts and in a/index.ts.' })
+    const attempt = (excerpt: string) => applyJudgeDecisions([parentMain], out([dec({ additional_locations: [{ file: 'a/index.ts', lines: '1', anchor_quote: 'const shared = 1', candidate_excerpt: excerpt, body: 'Same here.' }] })]), POLICY, [], diff, Infinity, ON)
+    expect(attempt('duplicated in index.ts').decisions[0].expansions).toEqual([{ file: 'a/index.ts', accepted: false }])
+    expect(attempt('in a/index.ts').decisions[0].expansions).toEqual([{ file: 'a/index.ts', accepted: true }])
+  })
+
+  it('rejects a quote on an unchanged context line, an ambiguous quote, and empty body or excerpt', () => {
+    const ctxDiff = `diff --git a/c.ts b/c.ts\n--- a/c.ts\n+++ b/c.ts\n@@ -1,2 +1,3 @@\n const ctxLine = keepMe()\n+const added = 1\n unchanged()\n`
+      + file('d.ts', ['duplicateLine()', 'duplicateLine()'])
+    const p = cand({ file: 'src/other.ts', lines: '1', body: 'Also affects c.ts and d.ts here.' })
+    const attempt = (l: Record<string, string>) => applyJudgeDecisions([p], out([dec({ additional_locations: [{ file: 'c.ts', lines: '1', anchor_quote: 'const ctxLine = keepMe()', candidate_excerpt: 'Also affects c.ts', body: 'Same.', ...l }] })]), POLICY, [], DIFF + ctxDiff, Infinity, ON).decisions[0].expansions
+    expect(attempt({})).toEqual([{ file: 'c.ts', accepted: false }])
+    expect(attempt({ lines: '2', anchor_quote: 'const added = 1' })).toEqual([{ file: 'c.ts', accepted: true }])
+    expect(attempt({ file: 'd.ts', lines: '1-2', anchor_quote: 'duplicateLine()', candidate_excerpt: 'd.ts' })).toEqual([{ file: 'd.ts', accepted: false }])
+    expect(attempt({ lines: '2', anchor_quote: 'const added = 1', body: '  ' })).toEqual([{ file: 'c.ts', accepted: false }])
+    expect(attempt({ lines: '2', anchor_quote: 'const added = 1', candidate_excerpt: '' })).toEqual([{ file: 'c.ts', accepted: false }])
+  })
+
+  it('expansion rows inherit the parent type', () => {
+    const typed = cand({ type: 'performance', body: 'Token leaks in publish-a.yml and also in publish-b.yml where the same step runs.' })
+    const res = applyJudgeDecisions([typed], out([dec({ additional_locations: [loc()] })]), POLICY, [], DIFF, Infinity, ON)
+    expect(res.kept.map(k => k.type)).toEqual(['performance', 'performance'])
+  })
+
+  it('ignores the parent file and repeated files,and keeps the primary when a secondary is malformed', () => {
     const res = run([loc(), loc(), loc({ file: '.github/workflows/publish-a.yml' }), loc({ anchor_quote: 'zz' })])
     expect(res.kept.map(k => k.file)).toEqual(['.github/workflows/publish-a.yml', '.github/workflows/publish-b.yml'])
     expect(res.decisions[0].expansions?.filter(e => e.accepted)).toHaveLength(1)
@@ -220,116 +248,281 @@ describe('applyJudgeDecisions — per-file findings (quality)', () => {
   })
 })
 
-describe('runJudge — repair call (quality)', () => {
+describe('runJudge — single invocation', () => {
   beforeEach(() => { complete.mockReset(); completeStructured.mockReset() })
   const usage = (n: number) => ({ input_tokens: n, output_tokens: n / 2 })
   const review: ReviewObject = {
     summary: 's', behavioral_diff: [], production_risk: [], unresolved_questions: [],
     findings: [cand(), cand({ title: 'Other', file: 'src/other.ts', lines: '1', body: 'x is wrong' })],
   }
+  const twoFiles: ReviewObject = { ...review, findings: [cand(), cand({ file: '.github/workflows/publish-b.yml', title: 'Token in b' })] }
   const contradictory = out([
     dec({ reason_category: 'unverifiable', evidence: '', note: 'The leak is real. Kept as validated.' }),
     dec({ candidate_id: 'c1', reason_category: 'style_only', note: 'naming only' }),
   ])
-  const call = (options?: object) => runJudge('k', 'm', 1, 1000, '', DIFF, review, [], POLICY, false, undefined, options)
+  const call = (options?: object, r: ReviewObject = review, policy = POLICY) => runJudge('k', 'm', 1, 1000, '', DIFF, r, [], policy, false, undefined, options)
 
-  it('replaces the contradictory drop with the repaired decision, sums usage, and records provenance', async () => {
-    completeStructured
-      .mockResolvedValueOnce({ object: contradictory, usage: usage(100) })
-      .mockResolvedValueOnce({ object: out([dec({ reason_category: 'validated', note: 'confirmed by the quoted line' })]), usage: usage(40) })
-
-    const res = await call(ON)
-
-    expect(completeStructured).toHaveBeenCalledTimes(2)
-    expect(completeStructured.mock.calls[1][1]).toContain('## Reconsider')
-    expect(completeStructured.mock.calls[1][1]).toContain('c0')
-    expect(completeStructured.mock.calls[1][1]).not.toContain('- c1:')
-    expect(res.kept?.map(k => k.title)).toEqual(['Token exposed'])
-    expect(res.usage.input_tokens).toBe(140)
-    expect(res.decisions![0].repair).toEqual({ status: 'replaced', original_reason: 'unverifiable', original_note: 'The leak is real. Kept as validated.' })
-    expect(res.decisions![1].repair).toBeUndefined()
-  })
-
-  it('keeps the original drop and records an unresolved repair when the replacement is still contradictory or missing', async () => {
-    completeStructured
-      .mockResolvedValueOnce({ object: contradictory, usage: usage(100) })
-      .mockResolvedValueOnce({ object: out([dec({ reason_category: 'incorrect', note: 'This is a valid finding.' })]), usage: usage(40) })
-    const res = await call(ON)
-    expect(res.kept).toHaveLength(0)
-    expect(res.decisions![0].repair?.status).toBe('unresolved')
-    expect(res.anomalies?.unresolved_repair).toBe(1)
-    expect(completeStructured).toHaveBeenCalledTimes(2)
-  })
-
-  it('rejects a repair with an off-enum category: the original decision stands even under keepUnverified', async () => {
-    const original = out([dec({ reason_category: 'incorrect', note: 'This is a valid finding.' }), dec({ candidate_id: 'c1', reason_category: 'style_only' })])
-    for (const bad of ['', 'bogus']) {
-      completeStructured.mockReset()
-      completeStructured
-        .mockResolvedValueOnce({ object: original, usage: usage(100) })
-        .mockResolvedValueOnce({ object: out([dec({ reason_category: bad as never, note: 'fine' })]), usage: usage(40) })
-      const res = await runJudge('k', 'm', 1, 1000, '', DIFF, review, [], { keepMinor: false, keepUnverified: true }, false, undefined, ON)
-      expect(res.kept).toHaveLength(0)
-      expect(res.decisions![0]).toMatchObject({ reason_category: 'incorrect', action: 'drop', repair: { status: 'unresolved' } })
-    }
-  })
-
-  it('survives a failed repair call and still counts its usage', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    completeStructured
-      .mockResolvedValueOnce({ object: contradictory, usage: usage(100) })
-      .mockRejectedValueOnce(Object.assign(new Error('truncated'), { usage: usage(60) }))
-    const res = await call(ON)
-    expect(res.kept).toHaveLength(0)
-    expect(res.usage.input_tokens).toBe(160)
-    expect(res.decisions![0].repair?.status).toBe('unresolved')
-    warn.mockRestore()
-  })
-
-  it('ignores replacements for ids it did not request, and for duplicate on an invalid-duplicate repair', async () => {
-    completeStructured
-      .mockResolvedValueOnce({ object: contradictory, usage: usage(100) })
-      .mockResolvedValueOnce({ object: out([dec(), dec({ candidate_id: 'c1', reason_category: 'validated' })]), usage: usage(40) })
-    const res = await call(ON)
-    expect(res.kept?.map(k => k.title)).toEqual(['Token exposed'])
-    expect(res.decisions![1]).toMatchObject({ reason_category: 'style_only', action: 'drop' })
-  })
-
-  it('repairs an invalid duplicate once, in the same single repair call, and bans duplicate for it', async () => {
-    const twoFiles: ReviewObject = { ...review, findings: [cand(), cand({ file: '.github/workflows/publish-b.yml', title: 'Token in b' })] }
-    const first = out([dec(), dec({ candidate_id: 'c1', reason_category: 'duplicate', duplicate_of: 'c0' })])
-    completeStructured
-      .mockResolvedValueOnce({ object: first, usage: usage(100) })
-      .mockResolvedValueOnce({ object: out([dec({ candidate_id: 'c1', reason_category: 'duplicate', duplicate_of: 'c0' })]), usage: usage(40) })
-    const res = await runJudge('k', 'm', 1, 1000, '', DIFF, twoFiles, [], POLICY, false, undefined, ON)
-    expect(completeStructured).toHaveBeenCalledTimes(2)
-    expect(res.decisions![1]).toMatchObject({ reason_category: 'unverifiable', invalid_duplicate: true, repair: { status: 'unresolved' } })
-
-    completeStructured.mockReset()
-    completeStructured
-      .mockResolvedValueOnce({ object: first, usage: usage(100) })
-      .mockResolvedValueOnce({ object: out([dec({ candidate_id: 'c1', reason_category: 'validated' })]), usage: usage(40) })
-    const fixed = await runJudge('k', 'm', 1, 1000, '', DIFF, twoFiles, [], POLICY, false, undefined, ON)
-    expect(fixed.kept?.map(k => k.title)).toEqual(['Token exposed', 'Token in b'])
-  })
-
-  it('makes no repair call when decisions are consistent, and flag off never repairs', async () => {
-    completeStructured.mockResolvedValue({ object: out([dec(), dec({ candidate_id: 'c1', reason_category: 'style_only' })]), usage: usage(100) })
-    await call(ON)
-    expect(completeStructured).toHaveBeenCalledTimes(1)
-
-    completeStructured.mockReset()
+  it('a contradictory note is not re-asked: one call, its decisions and usage stand, no repair fields', async () => {
     completeStructured.mockResolvedValue({ object: contradictory, usage: usage(100) })
-    const off = await call(undefined)
+    const res = await call(ON)
     expect(completeStructured).toHaveBeenCalledTimes(1)
-    expect(completeStructured.mock.calls[0][2]).toBe(JUDGE_OUTPUT_SCHEMA)
-    expect(off.kept).toHaveLength(0)
+    expect(completeStructured.mock.calls[0][1]).not.toContain('## Reconsider')
+    expect(res.kept).toHaveLength(0)
+    expect(res.usage).toEqual(usage(100))
+    expect(res.decisions![0]).toMatchObject({ reason_category: 'unverifiable', action: 'drop' })
+    expect(JSON.stringify(res)).not.toContain('repair')
+  })
+
+  it('an invalid duplicate is demoted locally under both keepUnverified settings, one call each', async () => {
+    const first = out([dec(), dec({ candidate_id: 'c1', reason_category: 'duplicate', duplicate_of: 'c0', score: 9 })])
+    completeStructured.mockResolvedValue({ object: first, usage: usage(100) })
+
+    const dropped = await call(ON, twoFiles)
+    expect(dropped.kept?.map(k => k.title)).toEqual(['Token exposed'])
+    expect(dropped.decisions![1]).toMatchObject({ reason_category: 'unverifiable', action: 'drop', invalid_duplicate: true })
+    expect(completeStructured).toHaveBeenCalledTimes(1)
+
+    const kept = await call(ON, twoFiles, { keepMinor: false, keepUnverified: true })
+    expect(kept.kept?.map(k => k.title)).toEqual(['Token exposed', 'Token in b'])
+    expect(kept.decisions![1]).toMatchObject({ action: 'keep', score: 5, invalid_duplicate: true })
+    expect(kept.anomalies).toMatchObject({ invalid_duplicate: 1 })
+    expect(kept.anomalies).not.toHaveProperty('unresolved_repair')
+    expect(completeStructured).toHaveBeenCalledTimes(2)
+  })
+
+  it('ordinary decisions take one call and the narrative comes from that response', async () => {
+    completeStructured.mockResolvedValue({ object: out([dec(), dec({ candidate_id: 'c1', reason_category: 'style_only' })]), usage: usage(100) })
+    const res = await call(ON)
+    expect(completeStructured).toHaveBeenCalledTimes(1)
+    expect(res.text).toContain('Merge Confidence: 70%')
+    expect(res.usage).toEqual(usage(100))
+  })
+
+  it('an off-enum category on the first response still becomes unverifiable', async () => {
+    completeStructured.mockResolvedValue({ object: out([dec({ reason_category: 'bogus' as never }), dec({ candidate_id: 'c1', reason_category: 'style_only' })]), usage: usage(100) })
+    const res = await call(ON, review, { keepMinor: false, keepUnverified: true })
+    expect(completeStructured).toHaveBeenCalledTimes(1)
+    expect(res.decisions![0]).toMatchObject({ reason_category: 'unverifiable', action: 'keep', score: 5 })
   })
 
   it('sends the composed prompt and the quality schema when on', async () => {
     completeStructured.mockResolvedValue({ object: out([dec(), dec({ candidate_id: 'c1', reason_category: 'style_only' })]), usage: usage(100) })
     await call(ON)
-    expect(completeStructured.mock.calls[0][0]).toContain('## DECISION CONSISTENCY')
+    expect(completeStructured.mock.calls[0][0]).toContain('## LOW_VALUE EVIDENCE CHECK')
     expect(JSON.stringify(completeStructured.mock.calls[0][2])).toContain('additional_locations')
+  })
+})
+
+describe('flag-off byte identity', () => {
+  beforeEach(() => { complete.mockReset(); completeStructured.mockReset() })
+  const baseText = readFileSync(new URL('../../prompt/judge-prompt.txt', import.meta.url), 'utf-8')
+  const review: ReviewObject = {
+    summary: 's', behavioral_diff: [], production_risk: [], unresolved_questions: [],
+    findings: [cand(), cand({ file: '.github/workflows/publish-b.yml', title: 'Token in b' })],
+  }
+  const stray = out([
+    dec({ duplicate_of: 'c0', additional_locations: [{ file: 'src/other.ts', lines: '1', anchor_quote: 'export const x = 1', candidate_excerpt: 'x', body: 'b' }] }),
+    dec({ candidate_id: 'c1', reason_category: 'duplicate', duplicate_of: 'c0', note: 'This is a valid finding.' }),
+  ])
+  const snapshot = async (options: object | undefined, policy = POLICY) => {
+    completeStructured.mockReset()
+    completeStructured.mockResolvedValue({ object: stray, usage: { input_tokens: 10, output_tokens: 5 } })
+    const res = await runJudge('k', 'm', 2, 1000, '', DIFF, review, [], policy, false, undefined, options)
+    return { calls: completeStructured.mock.calls, res }
+  }
+
+  it('omitted options and quality:false produce identical requests and results', async () => {
+    const a = await snapshot(undefined)
+    const b = await snapshot({ quality: false })
+    expect(JSON.stringify(b.calls)).toBe(JSON.stringify(a.calls))
+    expect(a.calls).toHaveLength(1)
+    expect(JSON.stringify(b.res)).toBe(JSON.stringify(a.res))
+    expect(a.calls[0][2]).toBe(JUDGE_OUTPUT_SCHEMA)
+    expect(a.calls[0][0]).toBe(baseText)
+  })
+
+  it('ignores stray quality-only fields: no expansion, no duplicate validation, no repair metadata', async () => {
+    const { res } = await snapshot(undefined)
+    expect(res.kept).toHaveLength(1)
+    expect(res.decisions![1]).toMatchObject({ reason_category: 'duplicate', action: 'drop' })
+    expect(JSON.stringify(res.decisions)).not.toMatch(/invalid_duplicate|expansions|repair|"duplicate_of"/)
+    expect(res.anomalies).toEqual({ unknown_ids: 0, undecided: 0, duplicate_ids: 0, drop_without_evidence: 0 })
+  })
+
+  it('shown-anchor-only keeps its prompt bytes whether quality is omitted or false', async () => {
+    const shownAnchors = { judge: new Map() } as never
+    const a = await snapshot({ shownAnchors })
+    const b = await snapshot({ quality: false, shownAnchors })
+    expect(JSON.stringify(b.calls)).toBe(JSON.stringify(a.calls))
+    expect(a.calls[0][0]).toBe(composeJudgePrompt(baseText, { quality: false, shownAnchors: true }))
+  })
+
+  it('flag-off request and result match the persisted pre-change baseline', async () => {
+    const { calls, res } = await snapshot(undefined)
+    const sha = (s: string) => createHash('sha256').update(s).digest('hex').slice(0, 16)
+    expect({
+      system: sha(calls[0][0]), user: sha(calls[0][1]), schema: sha(JSON.stringify(calls[0][2])), options: calls[0].slice(3),
+      text: res.text, kept: res.kept, decisions: res.decisions, anomalies: res.anomalies, scores: res.scores, usage: res.usage,
+    }).toMatchInlineSnapshot(`
+      {
+        "anomalies": {
+          "drop_without_evidence": 0,
+          "duplicate_ids": 0,
+          "undecided": 0,
+          "unknown_ids": 0,
+        },
+        "decisions": [
+          {
+            "action": "keep",
+            "anchor_file": ".github/workflows/publish-a.yml",
+            "anchor_lines": "2",
+            "anchor_source": "reviewer",
+            "candidate_id": "c0",
+            "evidence": "a:2",
+            "final_severity": "MEDIUM",
+            "note": "real",
+            "original_severity": "MEDIUM",
+            "reason_category": "validated",
+            "reclassified_from": null,
+            "rewritten": false,
+            "score": 8,
+          },
+          {
+            "action": "drop",
+            "anchor_file": ".github/workflows/publish-b.yml",
+            "anchor_lines": "2",
+            "anchor_source": "reviewer",
+            "candidate_id": "c1",
+            "evidence": "a:2",
+            "final_severity": null,
+            "note": "This is a valid finding.",
+            "original_severity": "MEDIUM",
+            "reason_category": "duplicate",
+            "reclassified_from": null,
+            "rewritten": false,
+            "score": 8,
+          },
+        ],
+        "kept": [
+          {
+            "anchorSource": "reviewer",
+            "body": "Token leaks in publish-a.yml.",
+            "file": ".github/workflows/publish-a.yml",
+            "lines": "2",
+            "score": 8,
+            "severity": "MEDIUM",
+            "title": "Token exposed",
+            "type": undefined,
+          },
+        ],
+        "options": [
+          {
+            "effort": undefined,
+            "maxRetries": 2,
+            "maxTokens": 1000,
+            "model": "m",
+          },
+        ],
+        "schema": "40f6be83e39a3172",
+        "scores": [
+          {
+            "file": ".github/workflows/publish-a.yml",
+            "lines": "2",
+            "score": 8,
+            "severity": "MEDIUM",
+            "title": "Token exposed",
+          },
+        ],
+        "system": "92f330cd8a87e1f4",
+        "text": "### Summary
+      s
+
+      ### Findings
+      - **MEDIUM – Token exposed** (\`.github/workflows/publish-a.yml:2\`)
+        Token leaks in publish-a.yml.
+
+      ### Behavioral Diff
+      None.
+
+      ### Production Risk
+      None.
+
+      ### Unresolved Questions
+      None.
+
+      ### Merge Confidence: 70%
+
+      *"This verdict is opinionated and must be validated by a human reviewer."*",
+        "usage": {
+          "input_tokens": 10,
+          "output_tokens": 5,
+        },
+        "user": "36766c07b42b67da",
+      }
+    `)
+  })
+
+  it('an unset benchmark label (undefined quality) matches omitted options and quality:false', async () => {
+    const omitted = await snapshot(undefined)
+    for (const options of [{ quality: undefined }, { quality: undefined, shownAnchors: undefined }, { quality: false, shownAnchors: undefined }]) {
+      const labelled = await snapshot(options)
+      expect(JSON.stringify(labelled.calls)).toBe(JSON.stringify(omitted.calls))
+      expect(JSON.stringify(labelled.res)).toBe(JSON.stringify(omitted.res))
+    }
+  })
+
+  it('shown-anchor results are identical whether quality is omitted or false', async () => {
+    const shownAnchors = { judge: new Map([['src/ctx.ts', new Map([[3, 'const unchanged = 3']])]]) }
+    const unanchored: ReviewFinding = { severity: 'MEDIUM', title: 'Context bug', body: 'Unchanged helper is wrong.' }
+    const decisions = out([dec({ anchor_file: 'src/ctx.ts', anchor_lines: '3' })])
+    const omitted = applyJudgeDecisions([unanchored], decisions, POLICY, [], DIFF, Infinity, { shownAnchors })
+    const off = applyJudgeDecisions([unanchored], decisions, POLICY, [], DIFF, Infinity, { quality: false, shownAnchors })
+    expect(omitted.decisions[0]).toMatchObject({ anchor_source: 'judge', anchor_file: 'src/ctx.ts', anchor_lines: '3' })
+    expect(JSON.stringify(off)).toBe(JSON.stringify(omitted))
+
+    const viaClient = async (options: object) => {
+      completeStructured.mockReset()
+      completeStructured.mockResolvedValue({ object: decisions, usage: { input_tokens: 10, output_tokens: 5 } })
+      const res = await runJudge('k', 'm', 2, 1000, '', DIFF, { ...review, findings: [unanchored] }, [], POLICY, false, undefined, options)
+      return JSON.stringify({ calls: completeStructured.mock.calls, res })
+    }
+    expect(await viaClient({ quality: false, shownAnchors })).toBe(await viaClient({ shownAnchors }))
+  })
+
+  it('the provider request does not depend on the application policy', async () => {
+    const requests = new Set<string>()
+    for (const keepMinor of [false, true]) for (const keepUnverified of [false, true]) {
+      for (const options of [undefined, ON]) {
+        const { calls } = await snapshot(options, { keepMinor, keepUnverified })
+        requests.add(`${options ? 'on' : 'off'}:${JSON.stringify(calls)}`)
+      }
+    }
+    expect(requests.size).toBe(2)
+  })
+})
+
+describe('LOW_VALUE evidence check — classification fixtures', () => {
+  beforeEach(() => { complete.mockReset(); completeStructured.mockReset() })
+  const diff = file('src/list.ts', ['export function render(items: Item[]) {', '  return items.map(i => new Intl.NumberFormat("en").format(i.n))', '}'])
+    + file('src/ui.css', ['.row { overflow: visible }', '.row:hover { display: none }'])
+  const fixtures: Array<{ name: string; finding: ReviewFinding; category: JudgeDecision['reason_category']; kept: boolean }> = [
+    { name: 'demonstrated per-call allocation on a hot render path', category: 'validated', kept: true, finding: { severity: 'LOW', title: 'Formatter built per row', file: 'src/list.ts', lines: '2', body: 'render() maps every item and constructs a new Intl.NumberFormat per element; with 5k rows this allocates 5k formatters per render. Hoist it.' } },
+    { name: 'visible UI failure on hover', category: 'validated', kept: true, finding: { severity: 'LOW', title: 'Row disappears on hover', file: 'src/ui.css', lines: '2', body: 'Hovering a .row sets display:none so the row vanishes under the pointer and cannot be clicked.' } },
+    { name: 'unsupported performance claim', category: 'unverifiable', kept: false, finding: { severity: 'LOW', title: 'Possible slowness', file: 'src/list.ts', lines: '2', body: 'Using Intl may be slow; consider optimizing.' } },
+    { name: 'pure ask to add a docstring', category: 'low_value', kept: false, finding: { severity: 'LOW', title: 'Add docstring', file: 'src/list.ts', lines: '1', body: 'Add a docstring to render().' } },
+    { name: 'verify or ensure request', category: 'low_value', kept: false, finding: { severity: 'LOW', title: 'Ensure items non-null', file: 'src/list.ts', lines: '1', body: 'Verify that items is never null.' } },
+    { name: 'already handled defect', category: 'already_handled', kept: false, finding: { severity: 'LOW', title: 'Missing guard', file: 'src/list.ts', lines: '2', body: 'No guard on items; for awareness only.' } },
+    { name: 'style preference', category: 'style_only', kept: false, finding: { severity: 'LOW', title: 'Prefer single quotes', file: 'src/list.ts', lines: '2', body: 'Use single quotes.' } },
+    { name: 'concrete problem without runtime impact', category: 'minor', kept: false, finding: { severity: 'LOW', title: 'Misleading name', file: 'src/list.ts', lines: '1', body: 'render() returns data, not a view.' } },
+    { name: 'claim outside the diff', category: 'out_of_scope', kept: false, finding: { severity: 'LOW', title: 'Legacy loop', file: 'src/list.ts', lines: '3', body: 'The untouched legacy loop elsewhere is slow.' } },
+  ]
+
+  it.each(fixtures)('$name', async ({ finding, category, kept }) => {
+    completeStructured.mockResolvedValue({ object: out([dec({ reason_category: category, evidence: 'src/list.ts:2 new Intl.NumberFormat', score: 7 })]), usage: { input_tokens: 1, output_tokens: 1 } })
+    const res = await runJudge('k', 'm', 1, 1000, '', diff, { summary: 's', behavioral_diff: [], production_risk: [], unresolved_questions: [], findings: [finding] }, [], POLICY, false, undefined, ON)
+    expect(completeStructured.mock.calls[0][1]).toContain(finding.title)
+    expect(completeStructured.mock.calls[0][0]).toContain('## LOW_VALUE EVIDENCE CHECK')
+    expect(res.kept).toHaveLength(kept ? 1 : 0)
+    if (kept) expect(res.kept![0].severity).toBe(finding.severity)
   })
 })

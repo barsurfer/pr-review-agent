@@ -1,30 +1,3 @@
-import type { JudgeDecision } from './judge-decisions.js'
-
-const DROPPING: ReadonlySet<string> = new Set(['incorrect', 'already_handled', 'unverifiable', 'style_only', 'low_value', 'duplicate', 'out_of_scope'])
-
-const AFFIRMATIVE: readonly RegExp[] = [
-  /\b(?:kept|keep|keeping|stands|retained) as validated\b/,
-  /\b(?:this|the|that) (?:finding|claim|issue|concern|candidate) is (?:a )?(?:valid|correct|accurate|real|confirmed)\b/,
-  /\bthis is a (?:valid|real|genuine|correct) (?:finding|issue|problem|bug|concern)\b/,
-]
-
-// Words before the phrase that make it someone else's claim or a negated one, not the judge's own conclusion.
-const NEGATED_OR_ATTRIBUTED = /\b(?:not|never|no longer|cannot|neither|nor|without|if|whether|claims?|claimed|says?|said|argues?|asserts?|alleges?|calls?|states?|suggests?|reviewer|believes?|thinks?)\b|n't/
-
-// Quoting a phrase from the candidate must not read as the judge's own verdict.
-const insideQuote = (prefix: string): boolean => ((prefix.match(/["“”`]/g) ?? []).length % 2) === 1
-
-export function contradictoryDrop(d: Pick<JudgeDecision, 'reason_category' | 'note'>): boolean {
-  if (!DROPPING.has(d.reason_category)) return false
-  return String(d.note ?? '').toLowerCase().split(/[.;!?]\s+|\n/).some(sentence =>
-    AFFIRMATIVE.some(re => {
-      const m = re.exec(sentence)
-      if (!m) return false
-      const prefix = sentence.slice(0, m.index)
-      return !NEGATED_OR_ATTRIBUTED.test(prefix) && !insideQuote(prefix)
-    }))
-}
-
 // Compose after loading the unconditional template so flag-off bytes never change.
 function swapLine(text: string, startsWith: string, replacement: string): string {
   const lines = text.split('\n')
@@ -34,14 +7,18 @@ function swapLine(text: string, startsWith: string, replacement: string): string
   return lines.join('\n')
 }
 
-const ALREADY_HANDLED = '- `already_handled` — a guard, default, control flow, test, or evidenced guarantee in the code actually prevents the candidate\'s stated failure. Put the mechanism in `evidence` and explain how it covers the precise scenario. A comment that acknowledges overhead, accepts a tradeoff, or explains intent is not by itself mitigation; "flagging for awareness" counts only when the finding names what covers it.'
-const LOW_VALUE = '- `low_value` — an unsupported preference or generic request without a demonstrated defect: add a docstring/type-hint/comment, recommend a more specific exception type, offer a configurability opinion or a "nice to have", or merely ask the developer to "verify" or "ensure" something with no shown failure. "Add", "verify", or "ensure" in a proposed fix does not decide the category, and a demonstrably required missing import is not a generic addition request.'
-const MINOR = '- `minor` — a real, concrete problem with no demonstrated runtime, performance, or visible UI impact: an unused import or variable, or other dead code; a comment, docstring, or document the change made wrong; a misleading name; duplicated logic; an existing changed test whose setup or assertions cannot exercise the branch it claims to cover (an unexercised fallback, a pagination fixture stuck on its first branch), even when the proposed fix adds a test case. A demonstrated runtime, performance (a formatter allocated on every call, unconditional tracing overhead) or visible UI defect (a decoration that disappears) is classified on its merits, normally `validated`, with small impact expressed through severity. Formatting and naming preferences stay `style_only`.'
 const DUPLICATE = '- `duplicate` — the same root cause at the same location in the same file as another candidate that you keep; classify the clearer one on its merits, this one as `duplicate`, and set `duplicate_of` to the kept candidate\'s id. A body mentioning another file does not give that file a kept finding: the same defect in a different file or at a different location is its own finding.'
 
-const CONSISTENCY = `## DECISION CONSISTENCY
+const LOW_VALUE_EVIDENCE = `## LOW_VALUE EVIDENCE CHECK
 
-Before answering, check that each candidate's \`reason_category\`, \`evidence\`, and \`note\` agree. A note concluding the finding is valid or correct must not be paired with a dropping category. Evidence for \`incorrect\` must disprove the claim; quoting the implicated code is not enough.`
+Before assigning \`low_value\`, apply this narrow exception only when ALL of the following hold:
+- The candidate itself states a specific failing input, execution path, or user interaction and a concrete runtime failure, performance cost, or visible UI failure caused by code this diff adds or modifies.
+- The code you were shown demonstrates the stated scenario and its causal mechanism. Quote the specific file:line and code in \`evidence\`, and explain the scenario-to-failure connection in \`note\`.
+- The claim is more than a preference, a possible optimization, or an unsupported assertion of impact. For performance claims, identify the repeated work or allocation and the execution path that incurs it; do not infer material overhead merely from an API name or invent workload or timing assumptions.
+
+When all conditions hold and no other rejection category applies, use \`validated\` instead of \`low_value\`. The existing \`unconfirmed_high\` and \`chained_hypothetical\` rules still apply. Do not change or propose a severity; the application derives it from the candidate and category.
+
+A bare request to "add a docstring", "consider configurable", or "verify/ensure X" does not qualify. A proposed fix containing those words does not disqualify an otherwise demonstrated failure. Do not invent a scenario or consequence to rescue a candidate. If the conditions fail, apply the existing category definitions: unsupported defect claims remain \`unverifiable\`, pure asks remain \`low_value\`, and concrete problems without runtime impact remain \`minor\`. This exception does not relax \`incorrect\`, \`already_handled\`, \`style_only\`, \`duplicate\`, or \`out_of_scope\`.`
 
 const MULTI_FILE = `## MULTI-FILE FINDINGS
 
@@ -57,11 +34,8 @@ export function composeJudgePrompt(base: string, opts: { quality: boolean; shown
     out = out.replace(ANCHOR_SENTENCE, () => ANCHOR_SHOWN)
   }
   if (opts.quality) {
-    out = swapLine(out, '- `already_handled`', ALREADY_HANDLED)
-    out = swapLine(out, '- `low_value`', LOW_VALUE)
-    out = swapLine(out, '- `minor`', MINOR)
     out = swapLine(out, '- `duplicate`', DUPLICATE)
-    out = `${out.trimEnd()}\n\n${CONSISTENCY}\n\n${MULTI_FILE}\n`
+    out = `${out.trimEnd()}\n\n${LOW_VALUE_EVIDENCE}\n\n${MULTI_FILE}\n`
   }
   return out
 }
@@ -97,9 +71,4 @@ export interface AdditionalLocation {
   anchor_quote: string
   candidate_excerpt: string
   body: string
-}
-
-export function repairInstruction(items: ReadonlyArray<{ id: string; reason_category: string; note: string; why: string }>): string {
-  const list = items.map(i => `- ${i.id}: you answered \`${i.reason_category}\` with note "${i.note}" — ${i.why}`).join('\n')
-  return `## Reconsider\n\nThese earlier decisions were inconsistent or not justified. Re-validate each listed candidate on its merits against the code above and return exactly one consistent decision for each (plus the usual narrative fields). Do not decide any other candidate.\n${list}`
 }

@@ -271,6 +271,28 @@ describe('benchmark mode end-to-end (model + judge mocked)', () => {
     warnSpy.mockRestore()
   })
 
+  it('RB_CONFIG_J_QUALITY absent and =0 leave quality off with identical judge requests and findings; =1 turns it on', async () => {
+    const run = async (labels: Record<string, string>) => {
+      completeStructured.mockReset()
+      mockModel()
+      const env = { ...fixture(), ...labels }
+      await runBenchmark(env)
+      return { quality: cfg.judge.quality, calls: JSON.stringify(completeStructured.mock.calls), findings: readOut(env).findings }
+    }
+    const absent = await run({})
+    const zero = await run({ RB_CONFIG_J_QUALITY: '0' })
+    const one = await run({ RB_CONFIG_J_QUALITY: '1' })
+
+    expect(absent.quality).toBeFalsy()
+    expect(zero.quality).toBe(false)
+    expect(zero.calls).toBe(absent.calls)
+    expect(zero.findings).toEqual(absent.findings)
+    expect(one.quality).toBe(true)
+    expect(one.calls).not.toBe(absent.calls)
+    expect(one.calls).toContain('LOW_VALUE EVIDENCE CHECK')
+    expect(absent.calls).not.toContain('LOW_VALUE EVIDENCE CHECK')
+  })
+
   it('LNUM=1 numbers the diff the reviewer sees and is echoed', async () => {
     await runBenchmark({ ...fixture(), RB_CONFIG_LNUM: '1' })
 

@@ -6,10 +6,10 @@ import { createProvider, type LLMUsage } from '../llm/provider.js'
 import { renderReview, ISSUE_TYPES, type ReviewObject, type ReviewFinding, type FindingScore } from './formatter.js'
 import type { KeptFinding } from './findings-output.js'
 import {
-  REASON_CATEGORIES, DEFAULT_JUDGE_POLICY, applyJudgeDecisions, renderCandidatesForJudge, summarizeDecisions, candidateId, normalizeId,
-  type JudgeOutput, type JudgePolicy, type JudgeOptions, type JudgeDecision, type AppliedDecision, type JudgeAnomalies,
+  REASON_CATEGORIES, DEFAULT_JUDGE_POLICY, applyJudgeDecisions, renderCandidatesForJudge, summarizeDecisions,
+  type JudgeOutput, type JudgePolicy, type JudgeOptions, type AppliedDecision, type JudgeAnomalies,
 } from './judge-decisions.js'
-import { composeJudgePrompt, contradictoryDrop, repairInstruction, QUALITY_DECISION_PROPERTIES, SHOWN_ANCHOR_DESCRIPTIONS } from './judge-quality.js'
+import { composeJudgePrompt, QUALITY_DECISION_PROPERTIES, SHOWN_ANCHOR_DESCRIPTIONS } from './judge-quality.js'
 import { numberDiffLines, numberFileLines } from './parsers.js'
 import type { PRInfo, ReviewComment, CommentReply } from '../vcs/adapter.js'
 import type { FileContext } from '../context/fetcher.js'
@@ -262,14 +262,6 @@ function getJudgePrompt(): string {
   }
 }
 
-const addUsage = (a: LLMUsage, b: LLMUsage): LLMUsage => ({
-  input_tokens: a.input_tokens + b.input_tokens,
-  output_tokens: a.output_tokens + b.output_tokens,
-  cache_read_input_tokens: (a.cache_read_input_tokens ?? 0) + (b.cache_read_input_tokens ?? 0) || undefined,
-  cache_creation_input_tokens: (a.cache_creation_input_tokens ?? 0) + (b.cache_creation_input_tokens ?? 0) || undefined,
-  cost_usd: a.cost_usd === undefined && b.cost_usd === undefined ? undefined : (a.cost_usd ?? 0) + (b.cost_usd ?? 0),
-})
-
 export async function runJudge(
   apiKey: string,
   model: string,
@@ -296,67 +288,11 @@ export async function runJudge(
   const schema = judgeOutputSchema(quality, shownAnchors)
   const callOpts = { model, maxTokens, maxRetries, effort: effort || undefined }
   console.log(`Sending to judge (${model}, maxRetries: ${maxRetries}${fileContexts.length ? `, ${fileContexts.length} context file(s)` : ''})...`)
-  const first = await createProvider(apiKey).completeStructured<JudgeOutput>(judgePrompt, userMessage, schema, callOpts)
-  let { object, usage } = first
+  const { object, usage } = await createProvider(apiKey).completeStructured<JudgeOutput>(judgePrompt, userMessage, schema, callOpts)
 
   console.log(`Judge received (${usage.input_tokens} in / ${usage.output_tokens} out tokens)`)
 
-  const apply = (o: JudgeOutput) => applyJudgeDecisions(review.findings, o, policy, review.can_be_split, diff, breadthFrom, options)
-  let judged = apply(object)
-
-  if (quality) {
-    const requested = new Map<string, { reason_category: string; note: string; why: string }>()
-    const known = new Set(review.findings.map((_, i) => candidateId(i)))
-    for (const d of object.decisions ?? []) {
-      const id = normalizeId(d.candidate_id)
-      if (known.has(id) && contradictoryDrop(d)) requested.set(id, { reason_category: d.reason_category, note: String(d.note ?? ''), why: 'the note concludes the finding is valid but the category drops it' })
-    }
-    for (const d of judged.decisions) {
-      if (d.invalid_duplicate) requested.set(d.candidate_id, { reason_category: 'duplicate', note: d.note, why: 'duplicate_of must name a different kept candidate in the same file and an overlapping location; classify it on its own merits and do not use duplicate' })
-    }
-
-    if (requested.size > 0) {
-      const dupIds = new Set(judged.decisions.filter(d => d.invalid_duplicate).map(d => d.candidate_id))
-      const replaced = new Map<string, JudgeDecision>()
-      let narrative: JudgeOutput | undefined
-      try {
-        const items = [...requested].map(([id, r]) => ({ id, ...r }))
-        const repair = await createProvider(apiKey).completeStructured<JudgeOutput>(judgePrompt, `${userMessage}\n\n${repairInstruction(items)}`, schema, callOpts)
-        usage = addUsage(usage, repair.usage)
-        const byId = new Map<string, JudgeDecision[]>()
-        for (const d of repair.object.decisions ?? []) {
-          const id = normalizeId(d.candidate_id)
-          if (requested.has(id)) byId.set(id, [...(byId.get(id) ?? []), d])
-        }
-        for (const [id, list] of byId) {
-          // A strict:false provider can return an off-enum category, which resolve() would turn into a retained unverifiable finding.
-          if (list.length === 1 && (REASON_CATEGORIES as readonly string[]).includes(list[0].reason_category) && !contradictoryDrop(list[0]) && !(dupIds.has(id) && list[0].reason_category === 'duplicate')) replaced.set(id, list[0])
-        }
-        if (replaced.size > 0) narrative = repair.object
-      } catch (err: unknown) {
-        // A truncated repair still billed its tokens; the original decisions stand.
-        const spent = (err as { usage?: LLMUsage }).usage
-        if (spent) usage = addUsage(usage, spent)
-        console.warn(`  Judge repair FAILED (${(err as Error).message}) — keeping the original decisions`)
-      }
-
-      if (replaced.size > 0) {
-        object = {
-          ...narrative!,
-          decisions: [...(object.decisions ?? []).filter(d => !replaced.has(normalizeId(d.candidate_id))), ...replaced.values()],
-        }
-        judged = apply(object)
-      }
-      for (const d of judged.decisions) {
-        const asked = requested.get(d.candidate_id)
-        if (!asked) continue
-        d.repair = { status: replaced.has(d.candidate_id) ? 'replaced' : 'unresolved', original_reason: asked.reason_category, original_note: asked.note }
-      }
-      const unresolved = requested.size - replaced.size
-      if (unresolved > 0) judged.anomalies.unresolved_repair = unresolved
-      console.log(`  Judge repair: ${requested.size} requested, ${replaced.size} replaced, ${unresolved} unresolved`)
-    }
-  }
+  const judged = applyJudgeDecisions(review.findings, object, policy, review.can_be_split, diff, breadthFrom, options)
 
   const promptHash = createHash('sha256').update(judgePrompt).digest('hex').slice(0, 12)
   return {

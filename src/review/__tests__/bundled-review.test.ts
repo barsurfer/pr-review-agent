@@ -31,6 +31,7 @@ import { runReview, runJudge } from '../client.js'
 import { loadPrompt } from '../../prompt/loader.js'
 import { fetchContext } from '../../context/fetcher.js'
 import { renderReview, type ReviewObject } from '../formatter.js'
+import { applyJudgeDecisions } from '../judge-decisions.js'
 
 const mockRunReview = vi.mocked(runReview)
 const mockRunJudge = vi.mocked(runJudge)
@@ -90,6 +91,61 @@ describe('bundled review', () => {
       expect(mockRunJudge.mock.calls.every(c => c[9] === true)).toBe(true)
     } finally {
       cfg.review.lineNumbers = false
+    }
+  })
+
+  it('forwards the quality flag to each bundle judge only when on, leaving off-call arguments unchanged', async () => {
+    mockRunReview.mockImplementation(async (...args) => {
+      const o = obj('Alpha problem', (args[6] as string).includes('a/one.ts') ? 'a/one.ts' : 'b/one.ts')
+      return { text: renderReview(o), usage, review: o }
+    })
+    const files = ['a/one.ts', 'a/two.ts', 'b/one.ts', 'b/two.ts']
+    await review(adapter(BIG_DIFF, files), '1', false)
+    expect(mockRunJudge.mock.calls.every(c => c.length === 10 && c[10] === undefined && c[11] === undefined)).toBe(true)
+
+    vi.clearAllMocks()
+    cfg.judge.quality = true
+    try {
+      await review(adapter(BIG_DIFF, files), '1', false)
+      expect(mockRunJudge.mock.calls.length).toBeGreaterThan(1)
+      expect(mockRunJudge.mock.calls.every(c => c[10] === undefined && (c[11] as { quality?: boolean }).quality === true)).toBe(true)
+    } finally {
+      cfg.judge.quality = false
+    }
+  })
+
+  it('a per-file expansion row emitted by a quality judge survives bundled parsing and merge, with usage counted once per judge result', async () => {
+    const parent = { severity: 'MEDIUM' as const, title: 'Shared bug', file: 'a/one.ts', lines: '5', body: 'Wrong in a/one.ts and also in a/two.ts.' }
+    const other = { severity: 'MEDIUM' as const, title: 'Beta problem', file: 'b/one.ts', lines: '5', body: 'bad' }
+    mockRunReview.mockImplementation(async (...args) => {
+      const o: ReviewObject = { ...obj('x', 'x'), findings: [(args[6] as string).includes('a/one.ts') ? parent : other] }
+      return { text: renderReview(o), usage, review: o }
+    })
+    mockRunJudge.mockImplementation(async (_k, _m, _r, _t, _e, diff, review, _ctx, policy, _ln, _s, options) => {
+      const withExpansion = review.findings[0].file === 'a/one.ts'
+      const judged = applyJudgeDecisions(review.findings, {
+        decisions: [{
+          candidate_id: 'c0', reason_category: 'validated', evidence: 'x', note: 'real', score: 8,
+          ...(withExpansion ? { additional_locations: [{ file: 'a/two.ts', lines: '5', anchor_quote: 'const line4 = 4', candidate_excerpt: 'also in a/two.ts', body: 'Same defect in a/two.ts.' }] } : {}),
+        }],
+        summary: 's', behavioral_diff: [], production_risk: [], unresolved_questions: [], merge_confidence: 80,
+      }, policy, [], diff, Infinity, options)
+      return { text: judged.markdown, usage, scores: judged.scores }
+    })
+    cfg.judge.quality = true
+    try {
+      const a = adapter(BIG_DIFF, ['a/one.ts', 'a/two.ts', 'b/one.ts', 'b/two.ts'])
+      const record = await review(a, '1', false)
+
+      const posted = vi.mocked(a.postComment).mock.calls[0][1] as string
+      expect(posted).toContain('a/one.ts:5')
+      expect(posted).toContain('a/two.ts:5')
+      expect(posted).toContain('Same defect in a/two.ts.')
+      expect(posted).toContain('Beta problem')
+      expect(record!.review_findings).toEqual({ high: 0, medium: 3, low: 0 })
+      expect(record!.judge_tokens).toEqual({ input: 200, output: 20 })
+    } finally {
+      cfg.judge.quality = false
     }
   })
 

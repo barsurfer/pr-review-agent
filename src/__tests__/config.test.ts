@@ -107,4 +107,12 @@ describe('recall-lever flags', () => {
     expect((await load({ ENABLE_BREADTH_PRIORITY_TARGETS: 'true' })).breadth.priorityTargets).toBe(true)
     expect((await load({ ENABLE_JUDGE_QUALITY: '1' })).judge.quality).toBe(false)
   })
+
+  it('ENABLE_JUDGE_QUALITY unset and explicitly false yield identical judge and review config', async () => {
+    const unset = await load({})
+    const snapshot = JSON.stringify([unset.judge, unset.review, unset.breadth])
+    const explicit = await load({ ENABLE_JUDGE_QUALITY: 'false' })
+    expect(explicit.judge.quality).toBe(false)
+    expect(JSON.stringify([explicit.judge, explicit.review, explicit.breadth])).toBe(snapshot)
+  })
 })

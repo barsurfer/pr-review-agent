@@ -124,7 +124,7 @@ export const config = {
     },
     // Off by default: sending the reviewer's file context roughly doubles judge input tokens.
     fileContext: optional('ENABLE_JUDGE_FILE_CONTEXT', 'false') === 'true',
-    // Off by default: bundles contradiction/duplicate repair, per-file findings and concrete-defect/handled prompt recalibration; may add one repair call.
+    // Off by default: narrow low_value evidence check, same-file duplicate validation and guarded per-file expansion; still one judge call.
     quality: optional('ENABLE_JUDGE_QUALITY', 'false') === 'true',
     // Off by default: lets breadth/second-look/judge anchors land on unchanged lines the model was actually shown.
     shownAnchors: optional('ENABLE_JUDGE_SHOWN_CONTEXT_ANCHORS', 'false') === 'true',
