@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { fileCoverage, breadthBriefing, breadthSystemPrompt, BREADTH_LENS, MAX_UNTOUCHED_LISTED } from '../breadth.js'
+import { fileCoverage, breadthBriefing, breadthSystemPrompt, BREADTH_LENS, MAX_UNTOUCHED_LISTED, flaggedFiles, findingsInFiles, secondLookBriefing, secondLookSystemPrompt, SECOND_LOOK_LENS } from '../breadth.js'
 import type { ReviewFinding } from '../formatter.js'
 
 const section = (path: string, body: string, header = '') =>
@@ -57,6 +57,53 @@ describe('breadthSystemPrompt', () => {
     expect(breadthSystemPrompt('BASE', 7)).toContain('## FINDINGS LIMIT\nReport at most 7 findings')
   })
 
+})
+
+describe('flaggedFiles', () => {
+  const DIFF = [
+    section('src/a.ts', '@@ -1 +1 @@\n-x\n+y'),
+    section('src/b.ts', '@@ -1 +1,2 @@\n x\n+z'),
+  ].join('')
+
+  it('returns the reviewable files that carry a finding — the inverse of untouched', () => {
+    expect(flaggedFiles(DIFF, [finding({ file: 'a.ts', lines: undefined })])).toEqual(['src/a.ts'])
+  })
+
+  it('is empty when nothing is flagged', () => {
+    expect(flaggedFiles(DIFF, [])).toEqual([])
+  })
+})
+
+describe('findingsInFiles', () => {
+  it('keeps only findings whose normalized path lands in the target files', () => {
+    const kept = findingsInFiles(
+      [finding({ file: 'a.ts', title: 'in-a' }), finding({ file: 'src/b.ts', title: 'in-b' }), finding({ file: undefined, title: 'pr-level' })],
+      ['src/a.ts'],
+    )
+    expect(kept.map(f => f.title)).toEqual(['in-a'])
+  })
+})
+
+describe('secondLookBriefing', () => {
+  it('lists known findings as anchor + title and omits the untouched-files section', () => {
+    const out = secondLookBriefing([finding({ body: 'LONG BODY' }), finding({ file: undefined, title: 'PR-level' })])
+    expect(out).toContain('- src/a.ts:1 — Bug')
+    expect(out).toContain('- (no file) — PR-level')
+    expect(out).not.toContain('LONG BODY')
+    expect(out).not.toContain('Files with no finding yet')
+  })
+
+  it('says None. when nothing is known', () => {
+    expect(secondLookBriefing([])).toContain('do NOT repeat — find additional distinct problems in these files):\nNone.')
+  })
+})
+
+describe('secondLookSystemPrompt', () => {
+  it('appends the trimmed lens, dropping the untouched-files item', () => {
+    expect(secondLookSystemPrompt('BASE', 0)).toBe(`BASE\n\n${SECOND_LOOK_LENS}`)
+    expect(SECOND_LOOK_LENS).not.toContain('Files with no finding yet')
+    expect(secondLookSystemPrompt('BASE', 7)).toContain('## FINDINGS LIMIT\nReport at most 7 findings')
+  })
 })
 
 describe('fileCoverage filters', () => {

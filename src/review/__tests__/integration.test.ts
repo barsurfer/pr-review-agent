@@ -13,7 +13,7 @@ vi.mock('../../config.js', () => ({
     breadth: { enabled: false, model: '', effort: '', minFiles: 5, minUntouched: 3, benchmarkDeadlineSeconds: 840 },
     agentIdentity: 'test-bot',
     reply: { maxComments: 3 },
-    review: { maxFindings: 0, splitCheck: false, todoScan: true, effort: '', enableNitpicks: false },
+    review: { maxFindings: 0, splitCheck: false, todoScan: true, effort: '', enableNitpicks: false, secondLook: false },
     context: { maxFiles: 20, maxFileLines: 500 },
     skipSourceBranches: ['main', 'master', 'release/*', 'hotfix/*'],
     skipTargetBranches: ['main', 'master'],
@@ -1345,6 +1345,155 @@ describe('breadth review and the judge in normal mode', () => {
     const record = await review(bigAdapter(), '100', true)
 
     expect(record!.breadth_status).toBe('succeeded')
+  })
+})
+
+// ===========================================================================
+// Scenario 8f2: Second-look — re-read already-flagged files for additional issues
+// ===========================================================================
+
+describe('second-look review and the judge in normal mode', () => {
+  const NAMES = ['a', 'b', 'c', 'd', 'e']
+  const MULTI_DIFF = NAMES.map(n => `diff --git a/src/${n}.ts b/src/${n}.ts\nnew file mode 100644\n--- /dev/null\n+++ b/src/${n}.ts\n@@ -0,0 +1,2 @@\n+export const ${n} = 1\n+export const ${n}2 = 2\n`).join('')
+  const bigAdapter = () => makeAdapter({
+    getDiff: vi.fn().mockResolvedValue(MULTI_DIFF),
+    getChangedFiles: vi.fn().mockResolvedValue(NAMES.map(n => ({ path: `src/${n}.ts`, status: 'added' }))),
+  })
+  const A_BUG: ReviewObject['findings'][number] = { severity: 'MEDIUM', title: 'A bug', file: 'src/a.ts', lines: '1', body: 'a is wrong.' }
+  const A_BUG2: ReviewObject['findings'][number] = { severity: 'MEDIUM', title: 'Second bug in a', file: 'src/a.ts', lines: '2', body: 'a2 is also wrong.' }
+  const B_BUG: ReviewObject['findings'][number] = { severity: 'MEDIUM', title: 'Same bug in b', file: 'src/b.ts', lines: '1', body: 'b repeats a.' }
+  const posted = (adapter: VCSAdapter) => vi.mocked(adapter.postComment).mock.calls[0][1] as string
+  const isSecondLook = (c: unknown[]) => c[11] === 'second-look'
+
+  // runBreadth backs both the breadth and second-look passes; branch on the label arg (index 11).
+  const mockPasses = (opts: { breadth?: ReviewObject['findings']; secondLook?: ReviewObject['findings'] }) =>
+    vi.mocked(runBreadth).mockImplementation(async (...args) => ({
+      findings: args[11] === 'second-look' ? (opts.secondLook ?? []) : (opts.breadth ?? []),
+      usage: { input_tokens: 300, output_tokens: 100 }, promptHash: args[11] === 'second-look' ? 'slhash' : 'brhash',
+    }))
+
+  const mockJudgeKeepsAll = () => mockRunJudge.mockImplementation(async (_k, _m, _r, _t, _e, diff, judgeInput, _f, policy, _l, boundary) => {
+    const judged = applyJudgeDecisions(judgeInput.findings, {
+      decisions: judgeInput.findings.map((_, i) => ({ candidate_id: `c${i}`, reason_category: 'validated' as const, evidence: 'src/a.ts:1', note: 'n', score: 8 })),
+      summary: 'ok', behavioral_diff: [], production_risk: [], unresolved_questions: [], merge_confidence: 80,
+    }, policy, judgeInput.can_be_split, diff, boundary)
+    return { text: judged.markdown, usage: { input_tokens: 800, output_tokens: 300 }, scores: judged.scores, promptHash: 'judgehash', decisions: judged.decisions, anomalies: judged.anomalies, kept: judged.kept }
+  })
+
+  beforeEach(() => {
+    cfg.judge.model = 'judge-model'
+    cfg.review.secondLook = true
+  })
+  afterEach(() => {
+    cfg.review.secondLook = false
+    cfg.breadth.enabled = false
+    vi.useRealTimers()
+  })
+
+  it('re-reads only the flagged files, excludes known findings, and tags its output second_look', async () => {
+    const adapter = bigAdapter()
+    mockReviewer(reviewWith([A_BUG]))
+    mockPasses({ secondLook: [A_BUG2] })
+    mockJudgeKeepsAll()
+
+    const record = await review(adapter, '100', false)
+
+    // Breadth is off, so the only runBreadth call is second-look; its diff holds the flagged file alone.
+    const slCall = vi.mocked(runBreadth).mock.calls.find(isSecondLook)!
+    expect(slCall[6]).toContain('src/a.ts')
+    expect(slCall[6]).not.toContain('src/b.ts')
+    expect(slCall[9]).toContain('A bug')   // exclusion briefing names the known finding
+    const [judgeInput, boundary] = [mockRunJudge.mock.calls[0][6], mockRunJudge.mock.calls[0][10]]
+    expect(judgeInput.findings.map(f => f.title)).toEqual(['A bug', 'Second bug in a'])
+    expect(boundary).toBe(1)
+    expect(record!.review_candidates!.map(c => c.origin)).toEqual(['review', 'second_look'])
+    expect(record!.second_look_status).toBe('succeeded')
+    expect(posted(adapter)).toContain('**MEDIUM – Second bug in a** (`src/a.ts:2`)')
+  })
+
+  it('orders judge candidates review, breadth, second_look when all three produce findings', async () => {
+    cfg.breadth.enabled = true
+    const adapter = bigAdapter()
+    mockReviewer(reviewWith([A_BUG]))
+    mockPasses({ breadth: [B_BUG], secondLook: [A_BUG2] })
+    mockJudgeKeepsAll()
+
+    const record = await review(adapter, '100', false)
+
+    expect(record!.review_candidates!.map(c => c.origin)).toEqual(['review', 'breadth', 'second_look'])
+    // Boundary is the reviewer count: breadth + second_look are both held to changed lines.
+    expect(mockRunJudge.mock.calls[0][10]).toBe(1)
+  })
+
+  it('skips when the reviewer flagged nothing to re-read', async () => {
+    const adapter = bigAdapter()
+    mockReviewer(reviewWith([]))
+    mockPasses({ secondLook: [A_BUG2] })
+
+    const record = await review(adapter, '100', false)
+
+    expect(vi.mocked(runBreadth).mock.calls.some(isSecondLook)).toBe(false)
+    expect(record!.second_look_status).toBe('skipped_no_findings')
+  })
+
+  it('skips without a judge, since its candidates are only posted after judging', async () => {
+    cfg.judge.model = ''
+    const adapter = bigAdapter()
+    mockReviewer(reviewWith([A_BUG]))
+    mockPasses({ secondLook: [A_BUG2] })
+
+    const record = await review(adapter, '100', false)
+
+    expect(vi.mocked(runBreadth).mock.calls.some(isSecondLook)).toBe(false)
+    expect(record!.second_look_status).toBe('skipped_no_judge')
+  })
+
+  it('falls back to review + breadth when the second-look call fails', async () => {
+    cfg.breadth.enabled = true
+    const adapter = bigAdapter()
+    mockReviewer(reviewWith([A_BUG]))
+    vi.mocked(runBreadth).mockImplementation(async (...args) => {
+      if (args[11] === 'second-look') throw new Error('second-look boom')
+      return { findings: [B_BUG], usage: { input_tokens: 300, output_tokens: 100 }, promptHash: 'brhash' }
+    })
+    mockJudgeKeepsAll()
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const record = await review(adapter, '100', false)
+
+    expect(record!.second_look_status).toBe('failed')
+    expect(record!.review_candidates!.map(c => c.origin)).toEqual(['review', 'breadth'])
+    expect(warnSpy.mock.calls.map(c => c.join(' ')).join('\n')).toContain('Second-look FAILED')
+    warnSpy.mockRestore()
+  })
+
+  it('is a byte-level pass-through when disabled: no call, status disabled, origins unchanged', async () => {
+    cfg.review.secondLook = false
+    const adapter = bigAdapter()
+    mockReviewer(reviewWith([A_BUG]))
+    mockPasses({ secondLook: [A_BUG2] })
+    mockJudgeKeepsAll()
+
+    const record = await review(adapter, '100', false)
+
+    expect(vi.mocked(runBreadth).mock.calls.some(isSecondLook)).toBe(false)
+    expect(record!.second_look_status).toBe('disabled')
+    expect(record!.review_candidates!.map(c => c.origin)).toEqual(['review'])
+  })
+
+  it('never runs on a re-review, even when enabled', async () => {
+    const adapter = reReviewAdapter(FLAGGED_PRIOR, [], {
+      getDiff: vi.fn().mockResolvedValue(MULTI_DIFF),
+      getChangedFiles: vi.fn().mockResolvedValue(NAMES.map(n => ({ path: `src/${n}.ts`, status: 'added' }))),
+    })
+    mockReviewer(reviewWith([A_BUG], { delta_stats: { resolved: 0, still_open: 1, new_findings: 1 } }))
+    mockPasses({ secondLook: [A_BUG2] })
+    mockJudgeKeepsAll()
+
+    const record = await review(adapter, '100', false)
+
+    expect(vi.mocked(runBreadth).mock.calls.some(isSecondLook)).toBe(false)
+    expect(record!.second_look_status).toBe('skipped_rereview')
   })
 })
 

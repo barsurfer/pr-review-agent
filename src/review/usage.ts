@@ -13,7 +13,7 @@ import { countFindings, normalizeIssueType } from './formatter.js'
 import type { FindingScore, ReviewFinding, IssueType } from './formatter.js'
 import { isAnchored, parseLineRange, normalizeFindingPath } from './findings-output.js'
 import { candidateId, type AppliedDecision, type JudgeAnomalies } from './judge-decisions.js'
-import { MAX_UNTOUCHED_LISTED, type BreadthStatus, type CandidateOrigin } from './breadth.js'
+import { MAX_UNTOUCHED_LISTED, type BreadthStatus, type SecondLookStatus, type CandidateOrigin } from './breadth.js'
 import type { ReviewContext } from './types.js'
 
 // 12 hex chars of sha256 — enough to tell prompt/code versions apart across runs without bloating the record.
@@ -88,6 +88,10 @@ export interface UsageRecord {
   breadth_prompt_hash: string | null
   breadth_tokens: { input: number; output: number } | null
   breadth_cost_usd: number | null
+  second_look_status: SecondLookStatus | null
+  second_look_prompt_hash: string | null
+  second_look_tokens: { input: number; output: number } | null
+  second_look_cost_usd: number | null
   untouched_files: { count: number; paths: string[]; cut: number } | null
   touch_rate: number | null
   delta: { developer_replies: number; resolved: number; still_open: number; new_findings: number } | null
@@ -210,19 +214,23 @@ export function buildUsageRecord(
   const judgeCost = ctx.judgeUsage?.cost_usd ?? (judgeTokens && judgeModel ? estimateCost(judgeTokens, judgeModel) : null)
   const breadthTokens = ctx.breadthUsage ? { input: ctx.breadthUsage.input_tokens, output: ctx.breadthUsage.output_tokens } : null
   const breadthCost = ctx.breadthUsage?.cost_usd ?? (breadthTokens && ctx.breadthModel ? estimateCost(breadthTokens, ctx.breadthModel) : null)
+  // Second-look runs on the reviewer model, so its missing-actual cost is estimated at that model.
+  const secondLookTokens = ctx.secondLookUsage ? { input: ctx.secondLookUsage.input_tokens, output: ctx.secondLookUsage.output_tokens } : null
+  const secondLookCost = ctx.secondLookUsage?.cost_usd ?? (secondLookTokens ? estimateCost(secondLookTokens, config.anthropic.model) : null)
   // A reply-only run uses the reply model (REPLY_MODEL), so log + cost it at that model, not the reviewer's.
   const recordModel = ctx.action === 'REPLY' && config.reply.model ? config.reply.model : config.anthropic.model
   // Reviewer-only cost: subtract the per-stage actuals from the all-calls actual aggregate when present,
-  // else estimate from the reviewer's own tokens. Summing the three stages keeps the total consistent
+  // else estimate from the reviewer's own tokens. Summing the stages keeps the total consistent
   // with the per-stage columns even when only some calls reported an actual cost (mixed-vendor runs).
   const reviewerCost = ctx.usage.cost_usd !== undefined
-    ? ctx.usage.cost_usd - (ctx.judgeUsage?.cost_usd ?? 0) - (ctx.breadthUsage?.cost_usd ?? 0)
+    ? ctx.usage.cost_usd - (ctx.judgeUsage?.cost_usd ?? 0) - (ctx.breadthUsage?.cost_usd ?? 0) - (ctx.secondLookUsage?.cost_usd ?? 0)
     : estimateCost({
-        input: ctx.usage.input_tokens - (judgeTokens?.input ?? 0) - (breadthTokens?.input ?? 0),
-        output: ctx.usage.output_tokens - (judgeTokens?.output ?? 0) - (breadthTokens?.output ?? 0),
+        input: ctx.usage.input_tokens - (judgeTokens?.input ?? 0) - (breadthTokens?.input ?? 0) - (secondLookTokens?.input ?? 0),
+        output: ctx.usage.output_tokens - (judgeTokens?.output ?? 0) - (breadthTokens?.output ?? 0) - (secondLookTokens?.output ?? 0),
       }, recordModel)
   // The bundled path never enters BREADTH_REVIEW, so its status is inferred here.
   const breadthStatus = ctx.breadthStatus ?? (ctx.bundleCount ? (config.breadth.enabled ? 'skipped_bundled' : 'disabled') : null)
+  const secondLookStatus = ctx.secondLookStatus ?? (ctx.bundleCount ? (config.review.secondLook ? 'skipped_bundled' : 'disabled') : null)
 
   return {
     run_id: `${config.vcsProvider}-${ctx.repoSlug}-${ctx.prId}-${commitShort}`,
@@ -263,7 +271,7 @@ export function buildUsageRecord(
       cache_write: ctx.usage.cache_write,
       estimated_input: ctx.estimatedInputTokens,
     },
-    cost_usd: reviewerCost + (judgeCost ?? 0) + (breadthCost ?? 0),
+    cost_usd: reviewerCost + (judgeCost ?? 0) + (breadthCost ?? 0) + (secondLookCost ?? 0),
     judge_model: judgeModel,
     judge_effort: config.judge.effort || null,
     judge_tokens: judgeTokens,
@@ -306,6 +314,10 @@ export function buildUsageRecord(
     breadth_prompt_hash: ctx.breadthPromptHash ?? null,
     breadth_tokens: breadthTokens,
     breadth_cost_usd: breadthCost,
+    second_look_status: secondLookStatus,
+    second_look_prompt_hash: ctx.secondLookPromptHash ?? null,
+    second_look_tokens: secondLookTokens,
+    second_look_cost_usd: secondLookCost,
     untouched_files: ctx.untouchedFiles
       ? { count: ctx.untouchedFiles.length, paths: ctx.untouchedFiles.slice(0, MAX_UNTOUCHED_LISTED), cut: Math.max(0, ctx.untouchedFiles.length - MAX_UNTOUCHED_LISTED) }
       : null,

@@ -163,13 +163,14 @@ export async function runBreadth(
   systemPrompt: string,
   briefing: string,
   lineNumbers = false,
+  label = 'breadth',
 ): Promise<{ findings: ReviewFinding[]; usage: LLMUsage; promptHash: string }> {
   const userMessage = `${buildUserMessage(prInfo, diff, fileContexts, [], [], '', lineNumbers)}\n\n${briefing}`
-  console.log(`Sending to breadth reviewer (${model}, maxRetries: ${maxRetries})...`)
+  console.log(`Sending to ${label} reviewer (${model}, maxRetries: ${maxRetries})...`)
   const { object, usage } = await createProvider(apiKey).completeStructured<{ findings: ReviewFinding[] }>(
     systemPrompt, userMessage, BREADTH_OUTPUT_SCHEMA, { model, maxTokens, maxRetries, effort: effort || undefined },
   )
-  console.log(`Breadth received (${usage.input_tokens} in / ${usage.output_tokens} out tokens, ${object.findings?.length ?? 0} findings)`)
+  console.log(`${label[0].toUpperCase()}${label.slice(1)} received (${usage.input_tokens} in / ${usage.output_tokens} out tokens, ${object.findings?.length ?? 0} findings)`)
   return { findings: object.findings ?? [], usage, promptHash: createHash('sha256').update(systemPrompt).digest('hex').slice(0, 12) }
 }
 

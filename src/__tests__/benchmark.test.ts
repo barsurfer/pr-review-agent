@@ -471,7 +471,7 @@ describe('breadth review (end-to-end)', () => {
     expect(r.review_findings).toEqual({ high: 0, medium: 1, low: 0 })
     expect(r.untouched_files).toEqual({ count: 4, paths: ['src/b.ts', 'src/c.ts', 'src/d.ts', 'src/e.ts'], cut: 0 })
     expect(r.breadth_tokens).toEqual({ input: 100, output: 50 })
-    expect(logSpy.mock.calls.map(c => c.join(' ')).join('\n')).toContain('reviewer 1, breadth 1, judge kept 2')
+    expect(logSpy.mock.calls.map(c => c.join(' ')).join('\n')).toContain('reviewer 1, breadth 1, second-look 0, judge kept 2')
   })
 
   it('holds a breadth finding to changed lines: cited off the diff it lands on the first changed line, while the reviewer citation stands', async () => {

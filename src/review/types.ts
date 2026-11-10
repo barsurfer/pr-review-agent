@@ -8,7 +8,7 @@ import type { FileContext } from '../context/fetcher.js'
 import type { ReviewObject, ReviewFinding, FindingScore } from './formatter.js'
 import type { KeptFinding } from './findings-output.js'
 import type { AppliedDecision, JudgeAnomalies } from './judge-decisions.js'
-import type { BreadthStatus, CandidateOrigin } from './breadth.js'
+import type { BreadthStatus, SecondLookStatus, CandidateOrigin } from './breadth.js'
 
 /** Every node in the review flow. */
 export enum State {
@@ -25,6 +25,7 @@ export enum State {
   CALL_CLAUDE,
   CHECK_NO_CHANGE,
   BREADTH_REVIEW,
+  SECOND_LOOK,
   JUDGE_REVIEW,
   BUNDLED_REVIEW,
   POST_REVIEW,
@@ -40,6 +41,7 @@ export interface ReviewOutcome {
   judgeScores?: FindingScore[]
   judgedFindings?: KeptFinding[]   // set only by the single-pass structured judge; bundled review leaves it unset
   breadthFindings?: ReviewFinding[]
+  secondLookFindings?: ReviewFinding[]
 }
 
 export type OutcomeSink = (outcome: ReviewOutcome) => void | Promise<void>
@@ -88,6 +90,11 @@ export interface ReviewContext {
   breadthModel?: string
   breadthPromptHash?: string
   breadthUsage?: { input_tokens: number; output_tokens: number; cost_usd?: number }
+  // Second-look re-reads the already-flagged files for misses; kept apart from reviewObject for the same reason as breadth.
+  secondLookFindings?: ReviewFinding[]
+  secondLookStatus?: SecondLookStatus
+  secondLookPromptHash?: string
+  secondLookUsage?: { input_tokens: number; output_tokens: number; cost_usd?: number }
   untouchedFiles?: string[]
   judgeCandidates?: Array<ReviewFinding & { origin: CandidateOrigin }>
   estimatedInputTokens: number

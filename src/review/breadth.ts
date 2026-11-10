@@ -16,7 +16,11 @@ export type BreadthStatus =
   | 'disabled' | 'skipped_no_judge' | 'skipped_rereview' | 'skipped_bundled'
   | 'skipped_small' | 'skipped_few_untouched' | 'skipped_limit' | 'skipped_budget' | 'skipped_time' | 'succeeded' | 'failed'
 
-export type CandidateOrigin = 'review' | 'breadth'
+export type CandidateOrigin = 'review' | 'breadth' | 'second_look'
+
+export type SecondLookStatus =
+  | 'disabled' | 'skipped_no_judge' | 'skipped_rereview' | 'skipped_bundled'
+  | 'skipped_no_findings' | 'skipped_limit' | 'skipped_budget' | 'skipped_time' | 'succeeded' | 'failed'
 
 export const MAX_UNTOUCHED_LISTED = 40
 
@@ -70,4 +74,43 @@ export function breadthBriefing(firstPass: readonly ReviewFinding[], untouched: 
   const shown = untouched.slice(0, MAX_UNTOUCHED_LISTED)
   const more = untouched.length > shown.length ? `\n- …and ${untouched.length - shown.length} more` : ''
   return `## First-pass findings (already reported — do not repeat):\n${findings}\n\n## Files with no finding yet:\n${shown.length ? shown.map(p => `- ${p}`).join('\n') : 'None.'}${more}`
+}
+
+// Reviewable diff sections that already carry a finding — second-look's targets, the inverse of breadth's untouched.
+export function flaggedFiles(filteredDiff: string, findings: readonly ReviewFinding[]): string[] {
+  const { reviewable, untouched } = fileCoverage(filteredDiff, findings)
+  const untouchedSet = new Set(untouched)
+  return reviewable.filter(p => !untouchedSet.has(p))
+}
+
+// Findings that land in the target files, by the same path mapping as fileCoverage — breadth findings can too.
+export function findingsInFiles(findings: readonly ReviewFinding[], files: readonly string[]): ReviewFinding[] {
+  const set = new Set(files)
+  return findings.filter(f => {
+    if (!f.file) return false
+    const path = normalizeFindingPath(f.file, files)
+    return set.has(path) || files.some(p => p.endsWith('/' + path))
+  })
+}
+
+// Breadth lens minus its untouched-files item: hunt for what the first pass missed in the files it already flagged.
+export const SECOND_LOOK_LENS = `## SECOND LOOK
+A first review pass already ran; its findings are listed in the message. You are re-reading the SAME files it already flagged, to find real problems it MISSED — not to re-report what it found. Work through, in order:
+1. The same defect at another place: for each first-pass finding, look for the same pattern on other added or modified lines in these files. Each other place is its own finding.
+2. Things that should have changed together: an inconsistency this change introduces between changed code and other code visible in the diff or file context — a caller not updated for a new parameter, an interface missing what its implementation adds, a sibling copy left behind. Anchor the finding on the added or modified line, and report it only when both sides are visible in what you were shown.
+3. Incomplete changes on added or modified lines: stubs, placeholder returns, options parsed but ignored, a capability added at one layer but never wired up. A diff segment that ends at an opening brace or \`if\` is a hunk boundary, not an incomplete change.
+Do not repeat a first-pass finding (same root cause at the same place). Every finding needs a concrete failing scenario, a file, and a numeric line on an added or modified line. Return an empty list if you find nothing.`
+
+export function secondLookSystemPrompt(reviewerPrompt: string, limit: number): string {
+  const limitSection = limit > 0
+    ? `\n\n## FINDINGS LIMIT\nReport at most ${limit} findings, prioritized by severity and impact. If more exist, include only the most important and omit the rest.`
+    : ''
+  return `${reviewerPrompt}${limitSection}\n\n${SECOND_LOOK_LENS}`
+}
+
+// Known findings (review + breadth) in the target files — titles + anchors only, so the pass avoids repeats.
+export function secondLookBriefing(known: readonly ReviewFinding[]): string {
+  const located = (f: ReviewFinding) => (f.file ? `${f.file}${f.lines ? `:${f.lines}` : ''}` : '(no file)')
+  const findings = known.length ? known.map(f => `- ${located(f)} — ${f.title}`).join('\n') : 'None.'
+  return `## Findings already reported (do NOT repeat — find additional distinct problems in these files):\n${findings}`
 }

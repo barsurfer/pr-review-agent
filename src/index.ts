@@ -41,6 +41,7 @@ program
   .option('--effort <level>', 'Reviewer thinking effort: low|medium|high|xhigh|max (overrides REVIEW_EFFORT; ignored by models without effort)')
   .option('--judge-effort <level>', 'Judge thinking effort (overrides JUDGE_EFFORT)')
   .option('--skip-directed-replies', 'Skip replying to dev comments @-directed at someone else (Bitbucket only; overrides SKIP_DIRECTED_REPLIES)')
+  .option('--second-look', 'Second reviewer pass over already-flagged files to lift recall (overrides ENABLE_SECOND_LOOK; requires a judge)')
   .option('--benchmark', 'ReviewBench mode: read the PR from RB_* env + mounted files, write findings JSON to RB_OUT instead of posting; always exits 0')
   .parse(process.argv)
 
@@ -66,6 +67,7 @@ const opts = program.opts<{
   effort?: string
   judgeEffort?: string
   skipDirectedReplies?: boolean
+  secondLook?: boolean
   benchmark?: boolean
 }>()
 
@@ -186,6 +188,7 @@ async function main(): Promise<void> {
   if (opts.effort) config.review.effort = opts.effort
   if (opts.judgeEffort) config.judge.effort = opts.judgeEffort
   if (opts.skipDirectedReplies) config.reply.skipDirectedElsewhere = true
+  if (opts.secondLook) config.review.secondLook = true
   if (opts.repoSlug) config.repoSlug = opts.repoSlug
 
   // --force with no value defaults to 're-review'; --force clean or --force re-review explicit

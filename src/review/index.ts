@@ -6,7 +6,9 @@ import { config, modelContextWindow } from '../config.js'
 import { loadPrompt } from '../prompt/loader.js'
 import { fetchContext } from '../context/fetcher.js'
 import { runReview, runCommentResponse, runJudge, runBreadth } from '../claude/client.js'
-import { fileCoverage, breadthSystemPrompt, breadthBriefing } from './breadth.js'
+import { fileCoverage, breadthSystemPrompt, breadthBriefing, flaggedFiles, findingsInFiles, secondLookSystemPrompt, secondLookBriefing } from './breadth.js'
+import { splitDiffByFile } from './bundler.js'
+import { normalizeFindingPath } from './findings-output.js'
 import { filterDiff, countChangedLines, parseVerdictScore, isPathExcluded, scanTodos, isContextLengthError, shownLength } from './parsers.js'
 import { buildReviewFooter, buildReplyFooter, stripPreviousFooter, stripDeltaStats, stripJudgeNotes, stripJenkinsMeta, stripPreamble, isNoChange, extractCommitHash, countFindings, markdownHasFindings, hasReplyFooter } from './formatter.js'
 import { runBundledReview, addUsage } from './bundled.js'
@@ -434,17 +436,17 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
 
     case State.BREADTH_REVIEW: {
       // Breadth findings are only ever posted after judging, so without a judge the call would be paid for and lost.
-      if (!config.breadth.enabled) { ctx.breadthStatus = 'disabled'; return State.JUDGE_REVIEW }
-      if (!config.judge.model) { ctx.breadthStatus = 'skipped_no_judge'; return State.JUDGE_REVIEW }
-      if (ctx.reviewNumber > 1) { ctx.breadthStatus = 'skipped_rereview'; return State.JUDGE_REVIEW }
+      if (!config.breadth.enabled) { ctx.breadthStatus = 'disabled'; return State.SECOND_LOOK }
+      if (!config.judge.model) { ctx.breadthStatus = 'skipped_no_judge'; return State.SECOND_LOOK }
+      if (ctx.reviewNumber > 1) { ctx.breadthStatus = 'skipped_rereview'; return State.SECOND_LOOK }
 
       const firstPass = ctx.reviewObject?.findings ?? []
       const coverage = fileCoverage(ctx.filteredDiff!, firstPass)
       ctx.untouchedFiles = coverage.untouched
-      if (coverage.reviewable.length < config.breadth.minFiles) { ctx.breadthStatus = 'skipped_small'; return State.JUDGE_REVIEW }
-      if (coverage.untouched.length < config.breadth.minUntouched) { ctx.breadthStatus = 'skipped_few_untouched'; return State.JUDGE_REVIEW }
+      if (coverage.reviewable.length < config.breadth.minFiles) { ctx.breadthStatus = 'skipped_small'; return State.SECOND_LOOK }
+      if (coverage.untouched.length < config.breadth.minUntouched) { ctx.breadthStatus = 'skipped_few_untouched'; return State.SECOND_LOOK }
       const remaining = config.review.maxFindings > 0 ? config.review.maxFindings - firstPass.length : 0
-      if (config.review.maxFindings > 0 && remaining <= 0) { ctx.breadthStatus = 'skipped_limit'; return State.JUDGE_REVIEW }
+      if (config.review.maxFindings > 0 && remaining <= 0) { ctx.breadthStatus = 'skipped_limit'; return State.SECOND_LOOK }
 
       // Resolved here, after benchmark labels were applied, so RB_CONFIG_JUDGE_MODEL also picks the breadth model.
       const model = config.breadth.model || config.judge.model
@@ -458,14 +460,14 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       if (estimate > budget) {
         ctx.breadthStatus = 'skipped_budget'
         console.log(`  Breadth review skipped: ~${estimate.toLocaleString()} tokens exceeds the ${model} budget (${budget.toLocaleString()})`)
-        return State.JUDGE_REVIEW
+        return State.SECOND_LOOK
       }
       // The benchmark entrypoint kills the agent at the deadline and a killed run scores nothing, so breadth must leave the judge the second half.
       const elapsedSeconds = (Date.now() - ctx.startTime) / 1000
       if (ctx.outcomeSink && elapsedSeconds > config.breadth.benchmarkDeadlineSeconds / 2) {
         ctx.breadthStatus = 'skipped_time'
         console.log(`  Breadth review skipped: ${Math.round(elapsedSeconds)}s elapsed, over half the ${config.breadth.benchmarkDeadlineSeconds}s benchmark deadline`)
-        return State.JUDGE_REVIEW
+        return State.SECOND_LOOK
       }
 
       ctx.breadthModel = model
@@ -490,6 +492,72 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         }
         ctx.breadthStatus = 'failed'
         console.warn(`  Breadth review FAILED (${isContextLengthError(err) ? 'context length' : e.message}) — continuing with first-pass findings only`)
+      }
+      return State.SECOND_LOOK
+    }
+
+    case State.SECOND_LOOK: {
+      // Second-look candidates are only ever posted after judging (same as breadth); a re-review targets the delta, not a full re-read.
+      if (!config.review.secondLook) { ctx.secondLookStatus = 'disabled'; return State.JUDGE_REVIEW }
+      if (!config.judge.model) { ctx.secondLookStatus = 'skipped_no_judge'; return State.JUDGE_REVIEW }
+      if (ctx.reviewNumber > 1) { ctx.secondLookStatus = 'skipped_rereview'; return State.JUDGE_REVIEW }
+
+      const firstPass = ctx.reviewObject?.findings ?? []
+      const breadth = ctx.breadthFindings ?? []
+      const flagged = flaggedFiles(ctx.filteredDiff!, firstPass)
+      if (flagged.length === 0) { ctx.secondLookStatus = 'skipped_no_findings'; return State.JUDGE_REVIEW }
+
+      const remaining = config.review.maxFindings > 0 ? config.review.maxFindings - firstPass.length - breadth.length : 0
+      if (config.review.maxFindings > 0 && remaining <= 0) { ctx.secondLookStatus = 'skipped_limit'; return State.JUDGE_REVIEW }
+
+      const sections = splitDiffByFile(ctx.filteredDiff!)
+      const restrictedDiff = flagged.map(p => sections.get(p) ?? '').join('')
+      const flaggedSet = new Set(flagged)
+      const contexts = (ctx.fileContexts ?? []).filter(c => flaggedSet.has(normalizeFindingPath(c.path, flagged)))
+      const known = findingsInFiles([...firstPass, ...breadth], flagged)
+
+      const model = config.anthropic.model
+      const system = secondLookSystemPrompt(ctx.prompt!.content, remaining)
+      const briefing = secondLookBriefing(known)
+      // Estimate on the restricted inputs, not the full diff, so a large PR with few flagged files isn't needlessly skipped.
+      // shownLength on the numbered payloads (diff + file contexts) so the guard counts the line-number gutter, as ESTIMATE_TOKENS does.
+      const shownSL = (s: string) => shownLength(s, config.review.lineNumbers)
+      const estimate = Math.ceil((system.length + shownSL(restrictedDiff) + briefing.length + contexts.reduce((n, c) => n + shownSL(c.content), 0)) / 4)
+      const limits = [config.anthropic.maxInputTokens, modelContextWindow(model) - config.anthropic.maxTokens].filter(n => n > 0)
+      const budget = limits.length ? Math.min(...limits) : Infinity
+      if (estimate > budget) {
+        ctx.secondLookStatus = 'skipped_budget'
+        console.log(`  Second-look skipped: ~${estimate.toLocaleString()} tokens exceeds the ${model} budget (${budget.toLocaleString()})`)
+        return State.JUDGE_REVIEW
+      }
+      // Same deadline guard as breadth: a killed benchmark run scores nothing, so leave the judge the second half.
+      const elapsedSeconds = (Date.now() - ctx.startTime) / 1000
+      if (ctx.outcomeSink && elapsedSeconds > config.breadth.benchmarkDeadlineSeconds / 2) {
+        ctx.secondLookStatus = 'skipped_time'
+        console.log(`  Second-look skipped: ${Math.round(elapsedSeconds)}s elapsed, over half the ${config.breadth.benchmarkDeadlineSeconds}s benchmark deadline`)
+        return State.JUDGE_REVIEW
+      }
+
+      console.log(`  Second-look: re-reading ${flagged.length} flagged file(s), excluding ${known.length} known finding(s)`)
+      try {
+        const result = await runBreadth(
+          config.llmApiKey, model, config.anthropic.maxRetries, config.anthropic.maxTokens, config.review.effort,
+          ctx.prInfo!, restrictedDiff, contexts, system, briefing, config.review.lineNumbers, 'second-look',
+        )
+        ctx.secondLookFindings = result.findings
+        ctx.secondLookPromptHash = result.promptHash
+        ctx.secondLookUsage = { input_tokens: result.usage.input_tokens, output_tokens: result.usage.output_tokens, cost_usd: result.usage.cost_usd }
+        addUsage(ctx, result.usage)
+        ctx.secondLookStatus = 'succeeded'
+        console.log(`  Second-look: ${flagged.length} flagged file(s) → ${result.findings.length} additional finding(s)`)
+      } catch (err: unknown) {
+        const e = err as Error & { usage?: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number; cost_usd?: number } }
+        if (e.usage) {
+          ctx.secondLookUsage = { input_tokens: e.usage.input_tokens, output_tokens: e.usage.output_tokens, cost_usd: e.usage.cost_usd }
+          addUsage(ctx, e.usage)
+        }
+        ctx.secondLookStatus = 'failed'
+        console.warn(`  Second-look FAILED (${isContextLengthError(err) ? 'context length' : e.message}) — continuing with first-pass and breadth findings only`)
       }
       return State.JUDGE_REVIEW
     }
@@ -540,18 +608,22 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
 
       // The re-review gate above stays on reviewer findings; the judge runs whenever there is anything to validate.
       const breadth = ctx.breadthFindings ?? []
-      if (noFindings && breadth.length === 0) {
+      const secondLook = ctx.secondLookFindings ?? []
+      if (noFindings && breadth.length === 0 && secondLook.length === 0) {
         ctx.judgeStatus = 'skipped_no_findings'
         console.log('  Skipping judge — no findings to validate')
         return State.POST_REVIEW
       }
 
       const firstPass = ctx.reviewObject?.findings ?? []
+      // Order is load-bearing: the boundary arg (firstPass.length) keeps review as trusted-anchor, breadth+second_look changed-line-only.
       ctx.judgeCandidates = [
         ...firstPass.map(f => ({ ...f, origin: 'review' as const })),
         ...breadth.map(f => ({ ...f, origin: 'breadth' as const })),
+        ...secondLook.map(f => ({ ...f, origin: 'second_look' as const })),
       ]
-      const judgeInput = breadth.length ? { ...ctx.reviewObject!, findings: [...firstPass, ...breadth] } : ctx.reviewObject!
+      const extra = breadth.length > 0 || secondLook.length > 0
+      const judgeInput = extra ? { ...ctx.reviewObject!, findings: [...firstPass, ...breadth, ...secondLook] } : ctx.reviewObject!
 
       ctx.reviewTextBeforeJudge = ctx.reviewText
       try {
@@ -566,7 +638,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
           config.judge.fileContext ? ctx.fileContexts ?? [] : [],
           config.judge.policy,
           config.review.lineNumbers,
-          breadth.length ? firstPass.length : undefined,
+          extra ? firstPass.length : undefined,
         )
         ctx.reviewText = result.text
         ctx.judgeScores = result.scores
@@ -627,7 +699,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
     case State.POST_REVIEW: {
       // The sink takes the structured review instead of a posted comment, so cleanup, cut guard and footer don't apply.
       if (ctx.outcomeSink) {
-        await ctx.outcomeSink({ review: ctx.reviewObject!, reviewText: ctx.reviewText!, judged: ctx.judgeUsage !== undefined, judgeScores: ctx.judgeScores, judgedFindings: ctx.judgedFindings, breadthFindings: ctx.breadthFindings })
+        await ctx.outcomeSink({ review: ctx.reviewObject!, reviewText: ctx.reviewText!, judged: ctx.judgeUsage !== undefined, judgeScores: ctx.judgeScores, judgedFindings: ctx.judgedFindings, breadthFindings: ctx.breadthFindings, secondLookFindings: ctx.secondLookFindings })
         ctx.action = 'REVIEW'
         return State.DONE
       }

@@ -30,11 +30,21 @@ ARG JUDGE_KEEP_UNVERIFIED=true
 ARG JUDGE_FILE_CONTEXT=false
 ARG NITPICKS=true
 ARG LINE_NUMBERS=true
+# Breadth baked on (best showcase config) so its three RB_CONFIG label slots are free for models + effort.
+ARG BREADTH=true
+ARG BREADTH_FILES=1
+ARG BREADTH_UNTOUCHED=0
+# Off by default (unlike NITPICKS/BREADTH): the experiment image opts in with --build-arg SECOND_LOOK=true.
+ARG SECOND_LOOK=false
 ENV ENABLE_JUDGE_KEEP_MINOR=$JUDGE_KEEP_MINOR \
     ENABLE_JUDGE_KEEP_UNVERIFIED=$JUDGE_KEEP_UNVERIFIED \
     ENABLE_JUDGE_FILE_CONTEXT=$JUDGE_FILE_CONTEXT \
     ENABLE_NITPICKS=$NITPICKS \
-    ENABLE_LINE_NUMBERS=$LINE_NUMBERS
+    ENABLE_LINE_NUMBERS=$LINE_NUMBERS \
+    ENABLE_BREADTH_REVIEW=$BREADTH \
+    BREADTH_MIN_FILES=$BREADTH_FILES \
+    BREADTH_MIN_UNTOUCHED=$BREADTH_UNTOUCHED \
+    ENABLE_SECOND_LOOK=$SECOND_LOOK
 
 # Runs as root like the reference agents: /work/out is a host mount whose owner we don't control.
 ENTRYPOINT ["node", "/app/entrypoint.mjs"]
