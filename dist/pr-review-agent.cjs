@@ -36325,7 +36325,11 @@ var config = {
       keepUnverified: optional("ENABLE_JUDGE_KEEP_UNVERIFIED", "false") === "true"
     },
     // Off by default: sending the reviewer's file context roughly doubles judge input tokens.
-    fileContext: optional("ENABLE_JUDGE_FILE_CONTEXT", "false") === "true"
+    fileContext: optional("ENABLE_JUDGE_FILE_CONTEXT", "false") === "true",
+    // Off by default: bundles contradiction/duplicate repair, per-file findings and concrete-defect/handled prompt recalibration; may add one repair call.
+    quality: optional("ENABLE_JUDGE_QUALITY", "false") === "true",
+    // Off by default: lets breadth/second-look/judge anchors land on unchanged lines the model was actually shown.
+    shownAnchors: optional("ENABLE_JUDGE_SHOWN_CONTEXT_ANCHORS", "false") === "true"
   },
   // Off by default: a second reviewer-sized call. The model is resolved at run time (empty → the judge model) so benchmark labels apply.
   breadth: {
@@ -36334,7 +36338,9 @@ var config = {
     effort: optional("BREADTH_EFFORT", ""),
     minFiles: finiteOr(parseInt(optional("BREADTH_MIN_FILES", "5"), 10), 5),
     minUntouched: finiteOr(parseInt(optional("BREADTH_MIN_UNTOUCHED", "3"), 10), 3),
-    benchmarkDeadlineSeconds: positiveOr(Number(optional("BENCHMARK_DEADLINE_SECONDS", "840")), 840)
+    benchmarkDeadlineSeconds: positiveOr(Number(optional("BENCHMARK_DEADLINE_SECONDS", "840")), 840),
+    // Off by default: pick the listed untouched targets by subsystem diversity and substance instead of diff order.
+    priorityTargets: optional("ENABLE_BREADTH_PRIORITY_TARGETS", "false") === "true"
   },
   agentIdentity: process.env.AGENT_IDENTITY || process.env.BITBUCKET_USERNAME || "Claude",
   // Reviewed repo slug — set from --repo-slug at runtime; sent as OpenRouter's `user` for segmentation.
@@ -36361,6 +36367,8 @@ var config = {
     enableNitpicks: optional("ENABLE_NITPICKS", "false") === "true",
     // Off by default: a second reviewer pass over files that already got findings, excluding known ones, to lift recall.
     secondLook: optional("ENABLE_SECOND_LOOK", "false") === "true",
+    // Off by default: second-look also re-reads files that only the breadth pass flagged.
+    secondLookBreadthTargets: optional("ENABLE_SECOND_LOOK_BREADTH_TARGETS", "false") === "true",
     // On by default: without numbered lines ~40% of findings carried no line; set false to send the raw diff/context (saves the per-line gutter tokens).
     lineNumbers: optional("ENABLE_LINE_NUMBERS", "true") !== "false"
   },
@@ -43928,7 +43936,7 @@ async function fetchContext(adapter2, changedFiles, sourceCommit, diff, maxFiles
   return results;
 }
 
-// src/claude/client.ts
+// src/review/client.ts
 init_define_STACK_PROMPTS();
 var import_fs3 = require("fs");
 var import_path71 = require("path");
@@ -43937,7 +43945,39 @@ var import_crypto2 = require("crypto");
 
 // src/llm/provider.ts
 init_define_STACK_PROMPTS();
+
+// src/llm/anthropic-provider.ts
+init_define_STACK_PROMPTS();
 init_sdk();
+
+// src/llm/shared.ts
+init_define_STACK_PROMPTS();
+var TruncatedResponseError = class extends Error {
+  constructor(message, usage) {
+    super(message);
+    this.usage = usage;
+    this.name = "TruncatedResponseError";
+  }
+  usage;
+};
+function missingRequired(object, schema, deep = false) {
+  const required2 = schema.required ?? [];
+  const obj = object ?? {};
+  const missing = required2.filter((k) => obj[k] === void 0);
+  if (!deep) return missing;
+  const props = schema.properties ?? {};
+  for (const [key, prop] of Object.entries(props)) {
+    const itemRequired = prop?.items?.required;
+    if (!itemRequired || !Array.isArray(obj[key])) continue;
+    obj[key].forEach((el, i) => {
+      const elObj = el ?? {};
+      for (const rk of itemRequired) if (elObj[rk] === void 0) missing.push(`${key}[${i}].${rk}`);
+    });
+  }
+  return missing;
+}
+
+// src/llm/anthropic-provider.ts
 var AnthropicProvider = class {
   client;
   constructor(apiKey) {
@@ -43977,6 +44017,37 @@ var AnthropicProvider = class {
     });
   }
 };
+function textOf(response, maxTokens) {
+  if (response.stop_reason === "max_tokens") {
+    throw new TruncatedResponseError(`Model response truncated at ${maxTokens} output tokens \u2014 refusing to post a cut-off response`, mapUsage(response.usage));
+  }
+  const block = response.content.find((b) => b.type === "text");
+  if (!block || block.type !== "text") throw new Error("Unexpected response type from Claude (no text block)");
+  return block.text;
+}
+function mapUsage(u) {
+  return {
+    input_tokens: u.input_tokens,
+    output_tokens: u.output_tokens,
+    cache_read_input_tokens: u.cache_read_input_tokens ?? 0,
+    cache_creation_input_tokens: u.cache_creation_input_tokens ?? 0
+  };
+}
+function anthropicBaseUrl(url2) {
+  return url2.trim().replace(/\/+$/, "").replace(/\/v1$/, "") || void 0;
+}
+function anthropicClientOptions(apiKey) {
+  const baseURL = anthropicBaseUrl(config.anthropic.baseUrl);
+  const workspaceId = config.anthropic.workspaceId.trim();
+  return {
+    apiKey,
+    ...baseURL ? { baseURL } : {},
+    ...workspaceId ? { defaultHeaders: { "anthropic-workspace-id": workspaceId } } : {}
+  };
+}
+
+// src/llm/openrouter-provider.ts
+init_define_STACK_PROMPTS();
 var OpenRouterProvider = class {
   constructor(apiKey) {
     this.apiKey = apiKey;
@@ -44031,30 +44102,6 @@ var OpenRouterProvider = class {
     throw axiosToError(lastErr);
   }
 };
-var TruncatedResponseError = class extends Error {
-  constructor(message, usage) {
-    super(message);
-    this.usage = usage;
-    this.name = "TruncatedResponseError";
-  }
-  usage;
-};
-function textOf(response, maxTokens) {
-  if (response.stop_reason === "max_tokens") {
-    throw new TruncatedResponseError(`Model response truncated at ${maxTokens} output tokens \u2014 refusing to post a cut-off response`, mapUsage(response.usage));
-  }
-  const block = response.content.find((b) => b.type === "text");
-  if (!block || block.type !== "text") throw new Error("Unexpected response type from Claude (no text block)");
-  return block.text;
-}
-function mapUsage(u) {
-  return {
-    input_tokens: u.input_tokens,
-    output_tokens: u.output_tokens,
-    cache_read_input_tokens: u.cache_read_input_tokens ?? 0,
-    cache_creation_input_tokens: u.cache_creation_input_tokens ?? 0
-  };
-}
 var OPENROUTER_TIMEOUT_MS = 6e5;
 function openRouterMessages(system, user) {
   return [{ role: "system", content: system }, { role: "user", content: user }];
@@ -44116,34 +44163,8 @@ function retryDelayMs(attempt, err) {
 function delay(ms) {
   return new Promise((resolve4) => setTimeout(resolve4, ms));
 }
-function anthropicBaseUrl(url2) {
-  return url2.trim().replace(/\/+$/, "").replace(/\/v1$/, "") || void 0;
-}
-function anthropicClientOptions(apiKey) {
-  const baseURL = anthropicBaseUrl(config.anthropic.baseUrl);
-  const workspaceId = config.anthropic.workspaceId.trim();
-  return {
-    apiKey,
-    ...baseURL ? { baseURL } : {},
-    ...workspaceId ? { defaultHeaders: { "anthropic-workspace-id": workspaceId } } : {}
-  };
-}
-function missingRequired(object, schema, deep = false) {
-  const required2 = schema.required ?? [];
-  const obj = object ?? {};
-  const missing = required2.filter((k) => obj[k] === void 0);
-  if (!deep) return missing;
-  const props = schema.properties ?? {};
-  for (const [key, prop] of Object.entries(props)) {
-    const itemRequired = prop?.items?.required;
-    if (!itemRequired || !Array.isArray(obj[key])) continue;
-    obj[key].forEach((el, i) => {
-      const elObj = el ?? {};
-      for (const rk of itemRequired) if (elObj[rk] === void 0) missing.push(`${key}[${i}].${rk}`);
-    });
-  }
-  return missing;
-}
+
+// src/llm/provider.ts
 function createProvider(apiKey) {
   switch (config.llmProvider) {
     case "anthropic":
@@ -44564,6 +44585,59 @@ function writeFindingsReport(path4, report) {
   (0, import_fs2.renameSync)(tmp, path4);
 }
 
+// src/review/shown-anchors.ts
+init_define_STACK_PROMPTS();
+var MAX_RANGE = 500;
+function buildShownSource(diff, contexts = []) {
+  const out = /* @__PURE__ */ new Map();
+  const put = (file2, line, text) => {
+    const key = normalizeFindingPath(file2);
+    const lines = out.get(key) ?? /* @__PURE__ */ new Map();
+    lines.set(line, text);
+    out.set(key, lines);
+  };
+  let file = "";
+  let newLine = 0;
+  let inHunk = false;
+  const rows = diff.split("\n");
+  rows.forEach((raw, i) => {
+    if (raw.startsWith("diff --git")) {
+      file = "";
+      inHunk = false;
+      return;
+    }
+    if (!inHunk && raw.startsWith("+++ b/")) {
+      file = raw.slice(6).trim();
+      return;
+    }
+    const hunk = raw.match(/^@@ -\d+(?:,\d+)? \+(\d+)/);
+    if (hunk) {
+      newLine = parseInt(hunk[1], 10);
+      inHunk = true;
+      return;
+    }
+    if (!inHunk || !file || raw.startsWith("-") || raw.startsWith("\\")) return;
+    if (raw === "" && i === rows.length - 1) return;
+    put(file, newLine++, raw.slice(1));
+  });
+  for (const c of contexts) {
+    const lines = c.content.split("\n");
+    if (lines.at(-1) === "") lines.pop();
+    lines.forEach((text, i) => put(c.path, i + 1, text));
+  }
+  return out;
+}
+function shownFile(src, file) {
+  return src.get(normalizeFindingPath(file, [...src.keys()]));
+}
+function coversRange(src, file, lines) {
+  const range = parseLineRange(lines);
+  const shown = shownFile(src, file);
+  if (!range || !shown || range.end - range.start > MAX_RANGE) return false;
+  for (let n = range.start; n <= range.end; n++) if (!shown.has(n)) return false;
+  return true;
+}
+
 // src/review/judge-decisions.ts
 var REASON_CATEGORIES = [
   "validated",
@@ -44641,24 +44715,46 @@ function quoteMatches(idx, file, quote) {
   const pool = file ? idx.byFile.get(file) ?? [] : [...idx.byFile.values()].flat();
   return pool.filter((a) => a.text.trim().includes(q));
 }
-function resolveAnchor(candidate, d, idx, breadthOrigin = false) {
-  const gated = breadthOrigin && !!candidate.file && isNumericLines(candidate.lines) && !(idx.present && onChangedLine(idx, candidate.file, candidate.lines));
-  if (candidate.file && isNumericLines(candidate.lines) && !gated) return { file: candidate.file, lines: candidate.lines, source: "reviewer" };
+function shownQuoteHit(src, rawFiles, quote) {
+  for (const raw of rawFiles) {
+    if (!raw) continue;
+    const key = normalizeFindingPath(String(raw), [...src.keys()]);
+    const lines = shownFile(src, key);
+    if (!lines) continue;
+    const hits = [...lines].filter(([, text]) => text.trim().includes(quote));
+    return hits.length === 1 ? { file: key, line: hits[0][0] } : null;
+  }
+  return null;
+}
+function resolveAnchor(candidate, d, idx, breadthOrigin = false, shown = {}) {
+  const tracked = !!(shown.origin || shown.judge);
+  const numeric = !!candidate.file && isNumericLines(candidate.lines);
+  const onAdded = numeric && idx.present && onChangedLine(idx, candidate.file, candidate.lines);
+  const onShown = numeric && !!shown.origin && coversRange(shown.origin, candidate.file, candidate.lines);
+  const gated = breadthOrigin && numeric && !(onAdded || onShown);
+  if (candidate.file && isNumericLines(candidate.lines) && !gated) return { file: candidate.file, lines: candidate.lines, source: "reviewer", basis: tracked ? onAdded ? "added_line" : onShown ? "shown_context" : void 0 : void 0 };
   const judgeFile = normalizeFindingPath(String(d.anchor_file ?? "")) || candidate.file;
   const judgeLines = String(d.anchor_lines ?? "").trim();
   if (judgeFile && isNumericLines(judgeLines) && idx.present && onChangedLine(idx, judgeFile, judgeLines)) {
-    return { file: judgeFile, lines: judgeLines, source: "judge" };
+    return { file: judgeFile, lines: judgeLines, source: "judge", basis: tracked ? "added_line" : void 0 };
   }
-  const quote = String(d.anchor_quote ?? "").trim().replace(/^\d+\s+/, "").replace(/^\+/, "").trim();
+  if (judgeFile && isNumericLines(judgeLines) && shown.judge && coversRange(shown.judge, judgeFile, judgeLines)) {
+    return { file: judgeFile, lines: judgeLines, source: "judge", basis: "shown_context" };
+  }
+  const quote = cleanQuote(String(d.anchor_quote ?? ""));
   if (idx.present && quote.length >= MIN_QUOTE_LEN) {
     const hits = quoteMatches(idx, quoteFile(candidate, d, idx), quote);
-    if (hits.length === 1) return { file: hits[0].file, lines: String(hits[0].line), source: "diff" };
+    if (hits.length === 1) return { file: hits[0].file, lines: String(hits[0].line), source: "diff", basis: tracked ? "added_line" : void 0 };
   }
-  return { file: candidate.file ?? quoteFile(candidate, d, idx), lines: isNumericLines(candidate.lines) && !gated ? candidate.lines : void 0, source: "none" };
+  if (shown.judge && quote.length >= MIN_QUOTE_LEN) {
+    const hit = shownQuoteHit(shown.judge, [candidate.file, d.anchor_file, filePrefix(d.anchor_quote), filePrefix(d.evidence)], quote);
+    if (hit) return { file: hit.file, lines: String(hit.line), source: "diff", basis: "shown_context" };
+  }
+  return { file: candidate.file ?? quoteFile(candidate, d, idx), lines: isNumericLines(candidate.lines) && !gated ? candidate.lines : void 0, source: "none", basis: tracked ? "fallback" : void 0 };
 }
 var normalizeId = (id) => String(id).trim().replace(/^\[|\]$/g, "").toLowerCase();
 var clampScore = (n) => Math.max(0, Math.min(10, Math.round(Number(n) || 0)));
-function resolve2(d, candidate, policy, idx, breadthOrigin) {
+function resolve2(d, candidate, policy, idx, breadthOrigin, shown = {}) {
   let reason = REASON_CATEGORIES.includes(d.reason_category) ? d.reason_category : "unverifiable";
   let reclassified_from = null;
   const evidence = String(d.evidence ?? "").trim();
@@ -44672,7 +44768,7 @@ function resolve2(d, candidate, policy, idx, breadthOrigin) {
   const score = kept && unproven ? Math.min(clampScore(d.score), UNVERIFIED_SCORE_CAP) : clampScore(d.score);
   const rewrite = String(d.rewritten_body ?? "").trim();
   const rewritten = kept && rewrite.length > 0 && rewrite.length <= REWRITE_CAP;
-  const anchor = resolveAnchor(candidate, d, idx, breadthOrigin);
+  const anchor = resolveAnchor(candidate, d, idx, breadthOrigin, shown);
   return {
     candidate_id: "",
     reason_category: reason,
@@ -44687,12 +44783,13 @@ function resolve2(d, candidate, policy, idx, breadthOrigin) {
     anchor_source: anchor.source,
     anchor_file: anchor.file ?? null,
     anchor_lines: anchor.lines ?? null,
+    ...anchor.basis ? { anchor_basis: anchor.basis } : {},
     question: String(d.question ?? "").trim() || void 0,
     body: rewritten ? rewrite : candidate.body,
     anchor
   };
 }
-function applyJudgeDecisions(candidates, output, policy = DEFAULT_JUDGE_POLICY, canBeSplit = [], diff = "", breadthFrom = Infinity) {
+function applyJudgeDecisions(candidates, output, policy = DEFAULT_JUDGE_POLICY, canBeSplit = [], diff = "", breadthFrom = Infinity, options) {
   const idx = buildDiffIndex(diff);
   const anomalies = { unknown_ids: 0, undecided: 0, duplicate_ids: 0, drop_without_evidence: 0 };
   const index = new Map(candidates.map((_, i) => [candidateId(i), i]));
@@ -44705,14 +44802,31 @@ function applyJudgeDecisions(candidates, output, policy = DEFAULT_JUDGE_POLICY, 
     }
     byCandidate.set(i, [...byCandidate.get(i) ?? [], d]);
   }
+  const sa = options?.shownAnchors;
+  const shownFor = (i) => !sa ? {} : {
+    judge: sa.judge,
+    origin: i >= (sa.secondLookFrom ?? Infinity) ? sa.secondLook : i >= breadthFrom ? sa.breadth : void 0
+  };
+  const entries = candidates.map((candidate, i) => {
+    const given = byCandidate.get(i) ?? [];
+    if (!given.length) {
+      anomalies.undecided++;
+      return null;
+    }
+    if (given.length > 1) anomalies.duplicate_ids++;
+    const resolved = given.map((d) => ({ r: resolve2(d, candidate, policy, idx, i >= breadthFrom, shownFor(i)), d }));
+    const chosen = resolved.find((x) => x.r.action === "drop") ?? resolved[0];
+    if (chosen.r.reclassified_from) anomalies.drop_without_evidence++;
+    return { i, candidate, r: chosen.r, d: chosen.d };
+  });
+  if (options?.quality) demoteInvalidDuplicates(entries, candidates, index, idx, policy, anomalies);
   const decisions = [];
   const kept = [];
   const moved = [];
   candidates.forEach((candidate, i) => {
     const id = candidateId(i);
-    const given = byCandidate.get(i) ?? [];
-    if (!given.length) {
-      anomalies.undecided++;
+    const entry = entries[i];
+    if (!entry) {
       decisions.push({
         candidate_id: id,
         reason_category: null,
@@ -44730,28 +44844,91 @@ function applyJudgeDecisions(candidates, output, policy = DEFAULT_JUDGE_POLICY, 
       });
       return;
     }
-    if (given.length > 1) anomalies.duplicate_ids++;
-    const resolved = given.map((d) => resolve2(d, candidate, policy, idx, i >= breadthFrom));
-    const chosen = resolved.find((r) => r.action === "drop") ?? resolved[0];
-    if (chosen.reclassified_from) anomalies.drop_without_evidence++;
-    const { question, body, anchor, ...applied } = chosen;
-    decisions.push({ ...applied, candidate_id: id });
-    if (chosen.action === "move_to_unresolved") moved.push(question ?? candidate.title);
-    if (chosen.action === "keep" || chosen.action === "downgrade") {
+    const { question, body, anchor, ...applied } = entry.r;
+    const isKept = entry.r.action === "keep" || entry.r.action === "downgrade";
+    const expansion = options?.quality && isKept && entry.d.additional_locations?.length ? expandLocations(candidate, entry.d.additional_locations, anchor, idx) : null;
+    decisions.push({ ...applied, candidate_id: id, ...expansion ? { expansions: expansion.log } : {} });
+    if (entry.r.action === "move_to_unresolved") moved.push(question ?? candidate.title);
+    if (isKept) {
       kept.push({
-        severity: chosen.final_severity,
+        severity: entry.r.final_severity,
         title: candidate.title,
         body,
         file: anchor.file,
         lines: anchor.lines,
-        score: chosen.score,
+        score: entry.r.score,
         type: candidate.type,
         anchorSource: anchor.source
       });
+      for (const x of expansion?.accepted ?? []) {
+        kept.push({ severity: entry.r.final_severity, title: candidate.title, body: x.body, file: x.file, lines: x.lines, score: entry.r.score, type: candidate.type, anchorSource: "diff" });
+      }
     }
   });
   const scores = kept.map((k) => ({ title: k.title, severity: k.severity, score: k.score, file: k.file, lines: k.lines }));
   return { kept, decisions, anomalies, scores, markdown: renderJudgedReview(kept, output, moved, canBeSplit) };
+}
+var locationOf = (a, idx) => {
+  const file = a.file ? normalizeFindingPath(a.file, [...idx.byFile.keys()]) : "";
+  return { file: idx.byFile.has(file) ? file : "", range: isNumericLines(a.lines) ? parseLineRange(a.lines) : null };
+};
+function demoteInvalidDuplicates(entries, candidates, index, idx, policy, anomalies) {
+  const retained = /* @__PURE__ */ new Set();
+  for (const e of entries) {
+    if (e && e.r.reason_category !== "duplicate" && (e.r.action === "keep" || e.r.action === "downgrade")) retained.add(e.i);
+  }
+  for (const e of entries) {
+    if (!e || e.r.reason_category !== "duplicate") continue;
+    const target = index.get(normalizeId(String(e.d.duplicate_of ?? "")));
+    const here = locationOf(e.r.anchor, idx);
+    const there = target === void 0 ? null : entries[target] ? locationOf(entries[target].r.anchor, idx) : null;
+    if (target !== void 0 && there && target !== e.i && retained.has(target) && here.file && here.file === there.file && here.range && there.range && here.range.start <= there.range.end && there.range.start <= here.range.end) {
+      e.r.duplicate_of = candidateId(target);
+      continue;
+    }
+    const { action, severity } = policyAction("unverifiable", e.candidate.severity, policy);
+    const kept = action === "keep" || action === "downgrade";
+    Object.assign(e.r, {
+      reason_category: "unverifiable",
+      action,
+      final_severity: severity,
+      score: kept ? Math.min(e.r.score ?? 0, UNVERIFIED_SCORE_CAP) : e.r.score,
+      invalid_duplicate: true,
+      duplicate_of: String(e.d.duplicate_of ?? "").trim() || void 0
+    });
+    anomalies.invalid_duplicate = (anomalies.invalid_duplicate ?? 0) + 1;
+  }
+}
+var cleanQuote = (q) => q.trim().replace(/^\d+\s+/, "").replace(/^\+/, "").trim();
+function namesFile(text, token) {
+  const esc = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(^|[^\\w.\\-])${esc}(?![\\w\\-]|\\.\\w)`).test(text);
+}
+function expandLocations(candidate, locations, parent, idx) {
+  const accepted = [];
+  const log = [];
+  const keys = [...idx.byFile.keys()];
+  const used = new Set(parent.file ? [normalizeFindingPath(parent.file, keys)] : []);
+  const haystack = `${candidate.title}
+${candidate.body}`;
+  for (const loc of locations) {
+    if (!loc || typeof loc !== "object") continue;
+    const file = normalizeFindingPath(String(loc.file ?? ""), keys);
+    if (!file || used.has(file)) continue;
+    const base = file.split("/").pop();
+    const uniqueBase = keys.filter((k) => k.split("/").pop() === base).length === 1;
+    const excerpt = String(loc.candidate_excerpt ?? "").trim();
+    const quote = cleanQuote(String(loc.anchor_quote ?? ""));
+    const range = isNumericLines(loc.lines) ? parseLineRange(loc.lines) : null;
+    const hits = !range || quote.length < MIN_QUOTE_LEN ? [] : (idx.byFile.get(file) ?? []).filter((a) => a.line >= range.start && a.line <= range.end && a.text.trim().includes(quote));
+    const body = String(loc.body ?? "").trim().slice(0, REWRITE_CAP);
+    const ok = idx.byFile.has(file) && excerpt.length > 0 && haystack.includes(excerpt) && (namesFile(excerpt, file) || uniqueBase && namesFile(excerpt, base)) && hits.length === 1 && body.length > 0;
+    log.push({ file, accepted: ok });
+    if (!ok) continue;
+    used.add(file);
+    accepted.push({ file, lines: String(hits[0].line), body });
+  }
+  return { accepted, log };
 }
 function renderJudgedReview(kept, output, movedQuestions = [], canBeSplit = []) {
   const questions = [...output.unresolved_questions ?? []];
@@ -44785,7 +44962,96 @@ function summarizeDecisions(decisions) {
   }).join("\n");
 }
 
-// src/claude/client.ts
+// src/review/judge-quality.ts
+init_define_STACK_PROMPTS();
+var DROPPING = /* @__PURE__ */ new Set(["incorrect", "already_handled", "unverifiable", "style_only", "low_value", "duplicate", "out_of_scope"]);
+var AFFIRMATIVE = [
+  /\b(?:kept|keep|keeping|stands|retained) as validated\b/,
+  /\b(?:this|the|that) (?:finding|claim|issue|concern|candidate) is (?:a )?(?:valid|correct|accurate|real|confirmed)\b/,
+  /\bthis is a (?:valid|real|genuine|correct) (?:finding|issue|problem|bug|concern)\b/
+];
+var NEGATED_OR_ATTRIBUTED = /\b(?:not|never|no longer|cannot|neither|nor|without|if|whether|claims?|claimed|says?|said|argues?|asserts?|alleges?|calls?|states?|suggests?|reviewer|believes?|thinks?)\b|n't/;
+var insideQuote = (prefix) => (prefix.match(/["“”`]/g) ?? []).length % 2 === 1;
+function contradictoryDrop(d) {
+  if (!DROPPING.has(d.reason_category)) return false;
+  return String(d.note ?? "").toLowerCase().split(/[.;!?]\s+|\n/).some((sentence) => AFFIRMATIVE.some((re) => {
+    const m = re.exec(sentence);
+    if (!m) return false;
+    const prefix = sentence.slice(0, m.index);
+    return !NEGATED_OR_ATTRIBUTED.test(prefix) && !insideQuote(prefix);
+  }));
+}
+function swapLine(text, startsWith, replacement) {
+  const lines = text.split("\n");
+  const at = lines.findIndex((l) => l.startsWith(startsWith));
+  if (at < 0) throw new Error(`Judge prompt line not found: ${startsWith}`);
+  lines[at] = replacement;
+  return lines.join("\n");
+}
+var ALREADY_HANDLED = '- `already_handled` \u2014 a guard, default, control flow, test, or evidenced guarantee in the code actually prevents the candidate\'s stated failure. Put the mechanism in `evidence` and explain how it covers the precise scenario. A comment that acknowledges overhead, accepts a tradeoff, or explains intent is not by itself mitigation; "flagging for awareness" counts only when the finding names what covers it.';
+var LOW_VALUE = '- `low_value` \u2014 an unsupported preference or generic request without a demonstrated defect: add a docstring/type-hint/comment, recommend a more specific exception type, offer a configurability opinion or a "nice to have", or merely ask the developer to "verify" or "ensure" something with no shown failure. "Add", "verify", or "ensure" in a proposed fix does not decide the category, and a demonstrably required missing import is not a generic addition request.';
+var MINOR = "- `minor` \u2014 a real, concrete problem with no demonstrated runtime, performance, or visible UI impact: an unused import or variable, or other dead code; a comment, docstring, or document the change made wrong; a misleading name; duplicated logic; an existing changed test whose setup or assertions cannot exercise the branch it claims to cover (an unexercised fallback, a pagination fixture stuck on its first branch), even when the proposed fix adds a test case. A demonstrated runtime, performance (a formatter allocated on every call, unconditional tracing overhead) or visible UI defect (a decoration that disappears) is classified on its merits, normally `validated`, with small impact expressed through severity. Formatting and naming preferences stay `style_only`.";
+var DUPLICATE = "- `duplicate` \u2014 the same root cause at the same location in the same file as another candidate that you keep; classify the clearer one on its merits, this one as `duplicate`, and set `duplicate_of` to the kept candidate's id. A body mentioning another file does not give that file a kept finding: the same defect in a different file or at a different location is its own finding.";
+var CONSISTENCY = `## DECISION CONSISTENCY
+
+Before answering, check that each candidate's \`reason_category\`, \`evidence\`, and \`note\` agree. A note concluding the finding is valid or correct must not be paired with a dropping category. Evidence for \`incorrect\` must disprove the claim; quoting the implicated code is not enough.`;
+var MULTI_FILE = `## MULTI-FILE FINDINGS
+
+When a candidate you keep explicitly alleges the same defect in additional changed files, list each additional file in \`additional_locations\`: its \`file\`, numeric \`lines\`, a verbatim \`anchor_quote\` of the added line, a \`candidate_excerpt\` copied verbatim from the candidate that names that file, and a one-sentence \`body\` for that file's consequence. Do not list files mentioned only as callers, dependencies, examples, or fix locations, and do not discover new defects.`;
+var ANCHOR_SENTENCE = "Omit both anchor fields when the candidate already shows a numeric line, and omit all three";
+var ANCHOR_SHOWN = "If the candidate's numeric line cannot be confirmed from the code you were shown, give a replacement `anchor_file`, `anchor_lines` and `anchor_quote`; an unchanged line of the new file that you were shown is allowed, but prefer added or modified lines when equally accurate. Omit all three";
+function composeJudgePrompt(base, opts2) {
+  let out = base;
+  if (opts2.shownAnchors) {
+    if (!out.includes(ANCHOR_SENTENCE)) throw new Error("Judge prompt anchor sentence not found");
+    out = out.replace(ANCHOR_SENTENCE, () => ANCHOR_SHOWN);
+  }
+  if (opts2.quality) {
+    out = swapLine(out, "- `already_handled`", ALREADY_HANDLED);
+    out = swapLine(out, "- `low_value`", LOW_VALUE);
+    out = swapLine(out, "- `minor`", MINOR);
+    out = swapLine(out, "- `duplicate`", DUPLICATE);
+    out = `${out.trimEnd()}
+
+${CONSISTENCY}
+
+${MULTI_FILE}
+`;
+  }
+  return out;
+}
+var SHOWN_ANCHOR_DESCRIPTIONS = {
+  anchor_file: "When the candidate shows no numeric line, or its numeric line cannot be confirmed from the code you were shown: the file path where the problem is.",
+  anchor_lines: 'Same condition as anchor_file: digits only \u2014 the line number or range, e.g. "42" or "26-31", never a symbol name or quoted code. An unchanged line you were shown is allowed.'
+};
+var QUALITY_DECISION_PROPERTIES = {
+  duplicate_of: { type: "string", description: "duplicate only: the id of the kept candidate with the same root cause in the same file and location." },
+  additional_locations: {
+    type: "array",
+    description: "Only for a candidate you keep that explicitly alleges the same defect in other changed files: one entry per additional file.",
+    items: {
+      type: "object",
+      properties: {
+        file: { type: "string", description: "The additional changed file path." },
+        lines: { type: "string", description: "Digits only: the added line number in that file." },
+        anchor_quote: { type: "string", description: "Verbatim copy of that added line." },
+        candidate_excerpt: { type: "string", description: "Verbatim excerpt of the candidate title or body that names this file." },
+        body: { type: "string", description: "One sentence: the same defect's consequence in this file." }
+      },
+      required: ["file", "lines", "anchor_quote", "candidate_excerpt", "body"],
+      additionalProperties: false
+    }
+  }
+};
+function repairInstruction(items) {
+  const list = items.map((i) => `- ${i.id}: you answered \`${i.reason_category}\` with note "${i.note}" \u2014 ${i.why}`).join("\n");
+  return `## Reconsider
+
+These earlier decisions were inconsistent or not justified. Re-validate each listed candidate on its merits against the code above and return exactly one consistent decision for each (plus the usual narrative fields). Do not decide any other candidate.
+${list}`;
+}
+
+// src/review/client.ts
 var import_meta2 = {};
 var REPLY_MAX_TOKENS = 4096;
 var JUDGE_OUTPUT_SCHEMA = {
@@ -44821,6 +45087,22 @@ var JUDGE_OUTPUT_SCHEMA = {
   required: ["decisions", "summary", "behavioral_diff", "production_risk", "unresolved_questions", "merge_confidence"],
   additionalProperties: false
 };
+var schemaVariants = /* @__PURE__ */ new Map();
+function judgeOutputSchema(quality, shownAnchors) {
+  if (!quality && !shownAnchors) return JUDGE_OUTPUT_SCHEMA;
+  const key = `${quality}:${shownAnchors}`;
+  const cached = schemaVariants.get(key);
+  if (cached) return cached;
+  const schema = structuredClone(JUDGE_OUTPUT_SCHEMA);
+  const props = schema.properties.decisions.items.properties;
+  if (shownAnchors) {
+    props.anchor_file.description = SHOWN_ANCHOR_DESCRIPTIONS.anchor_file;
+    props.anchor_lines.description = SHOWN_ANCHOR_DESCRIPTIONS.anchor_lines;
+  }
+  if (quality) Object.assign(props, structuredClone(QUALITY_DECISION_PROPERTIES));
+  schemaVariants.set(key, schema);
+  return schema;
+}
 var REVIEW_OUTPUT_SCHEMA = {
   type: "object",
   properties: {
@@ -44864,7 +45146,7 @@ var REVIEW_OUTPUT_SCHEMA = {
 };
 async function runReview(apiKey, model, maxRetries, maxTokens, effort, prInfo, diff, fileContexts, prompt, previousReviews, developerReplies = [], changesSinceLastReview = "", lineNumbers = false) {
   const userMessage = buildUserMessage(prInfo, diff, fileContexts, previousReviews, developerReplies, changesSinceLastReview, lineNumbers);
-  console.log(`Sending request to Claude (${model}, maxRetries: ${maxRetries})...`);
+  console.log(`Sending request to the model (${model}, maxRetries: ${maxRetries})...`);
   const { object, usage } = await createProvider(apiKey).completeStructured(
     prompt.content,
     userMessage,
@@ -44955,23 +45237,82 @@ function getJudgePrompt() {
     throw new Error("Cannot load judge prompt: file not found and no embedded copy");
   }
 }
-async function runJudge(apiKey, model, maxRetries, maxTokens, effort, diff, review2, fileContexts = [], policy = DEFAULT_JUDGE_POLICY, lineNumbers = false, breadthFrom) {
+var addUsage = (a, b) => ({
+  input_tokens: a.input_tokens + b.input_tokens,
+  output_tokens: a.output_tokens + b.output_tokens,
+  cache_read_input_tokens: (a.cache_read_input_tokens ?? 0) + (b.cache_read_input_tokens ?? 0) || void 0,
+  cache_creation_input_tokens: (a.cache_creation_input_tokens ?? 0) + (b.cache_creation_input_tokens ?? 0) || void 0,
+  cost_usd: a.cost_usd === void 0 && b.cost_usd === void 0 ? void 0 : (a.cost_usd ?? 0) + (b.cost_usd ?? 0)
+});
+async function runJudge(apiKey, model, maxRetries, maxTokens, effort, diff, review2, fileContexts = [], policy = DEFAULT_JUDGE_POLICY, lineNumbers = false, breadthFrom, options) {
   const parts = [];
   parts.push(renderDiff(diff, lineNumbers));
   if (fileContexts.length > 0) parts.push(renderFileContexts(fileContexts, lineNumbers));
   parts.push(`## Review to Validate:
 ${renderCandidatesForJudge(review2)}`);
   const userMessage = parts.join("\n\n");
-  const judgePrompt = getJudgePrompt();
+  const quality = !!options?.quality;
+  const shownAnchors = !!options?.shownAnchors;
+  const judgePrompt = quality || shownAnchors ? composeJudgePrompt(getJudgePrompt(), { quality, shownAnchors }) : getJudgePrompt();
+  const schema = judgeOutputSchema(quality, shownAnchors);
+  const callOpts = { model, maxTokens, maxRetries, effort: effort || void 0 };
   console.log(`Sending to judge (${model}, maxRetries: ${maxRetries}${fileContexts.length ? `, ${fileContexts.length} context file(s)` : ""})...`);
-  const { object, usage } = await createProvider(apiKey).completeStructured(
-    judgePrompt,
-    userMessage,
-    JUDGE_OUTPUT_SCHEMA,
-    { model, maxTokens, maxRetries, effort: effort || void 0 }
-  );
+  const first = await createProvider(apiKey).completeStructured(judgePrompt, userMessage, schema, callOpts);
+  let { object, usage } = first;
   console.log(`Judge received (${usage.input_tokens} in / ${usage.output_tokens} out tokens)`);
-  const judged = applyJudgeDecisions(review2.findings, object, policy, review2.can_be_split, diff, breadthFrom);
+  const apply = (o) => applyJudgeDecisions(review2.findings, o, policy, review2.can_be_split, diff, breadthFrom, options);
+  let judged = apply(object);
+  if (quality) {
+    const requested = /* @__PURE__ */ new Map();
+    const known = new Set(review2.findings.map((_, i) => candidateId(i)));
+    for (const d of object.decisions ?? []) {
+      const id = normalizeId(d.candidate_id);
+      if (known.has(id) && contradictoryDrop(d)) requested.set(id, { reason_category: d.reason_category, note: String(d.note ?? ""), why: "the note concludes the finding is valid but the category drops it" });
+    }
+    for (const d of judged.decisions) {
+      if (d.invalid_duplicate) requested.set(d.candidate_id, { reason_category: "duplicate", note: d.note, why: "duplicate_of must name a different kept candidate in the same file and an overlapping location; classify it on its own merits and do not use duplicate" });
+    }
+    if (requested.size > 0) {
+      const dupIds = new Set(judged.decisions.filter((d) => d.invalid_duplicate).map((d) => d.candidate_id));
+      const replaced = /* @__PURE__ */ new Map();
+      let narrative;
+      try {
+        const items = [...requested].map(([id, r]) => ({ id, ...r }));
+        const repair = await createProvider(apiKey).completeStructured(judgePrompt, `${userMessage}
+
+${repairInstruction(items)}`, schema, callOpts);
+        usage = addUsage(usage, repair.usage);
+        const byId = /* @__PURE__ */ new Map();
+        for (const d of repair.object.decisions ?? []) {
+          const id = normalizeId(d.candidate_id);
+          if (requested.has(id)) byId.set(id, [...byId.get(id) ?? [], d]);
+        }
+        for (const [id, list] of byId) {
+          if (list.length === 1 && REASON_CATEGORIES.includes(list[0].reason_category) && !contradictoryDrop(list[0]) && !(dupIds.has(id) && list[0].reason_category === "duplicate")) replaced.set(id, list[0]);
+        }
+        if (replaced.size > 0) narrative = repair.object;
+      } catch (err) {
+        const spent = err.usage;
+        if (spent) usage = addUsage(usage, spent);
+        console.warn(`  Judge repair FAILED (${err.message}) \u2014 keeping the original decisions`);
+      }
+      if (replaced.size > 0) {
+        object = {
+          ...narrative,
+          decisions: [...(object.decisions ?? []).filter((d) => !replaced.has(normalizeId(d.candidate_id))), ...replaced.values()]
+        };
+        judged = apply(object);
+      }
+      for (const d of judged.decisions) {
+        const asked = requested.get(d.candidate_id);
+        if (!asked) continue;
+        d.repair = { status: replaced.has(d.candidate_id) ? "replaced" : "unresolved", original_reason: asked.reason_category, original_note: asked.note };
+      }
+      const unresolved = requested.size - replaced.size;
+      if (unresolved > 0) judged.anomalies.unresolved_repair = unresolved;
+      console.log(`  Judge repair: ${requested.size} requested, ${replaced.size} replaced, ${unresolved} unresolved`);
+    }
+  }
   const promptHash = (0, import_crypto2.createHash)("sha256").update(judgePrompt).digest("hex").slice(0, 12);
   return {
     text: judged.markdown,
@@ -45007,7 +45348,7 @@ ${diff}
 > ${r.body}`);
   }
   const userMessage = parts.join("\n\n");
-  console.log(`Sending reply request to Claude (${model}, maxRetries: ${maxRetries})...`);
+  console.log(`Sending reply request to the model (${model}, maxRetries: ${maxRetries})...`);
   const { text, usage } = await createProvider(apiKey).complete(getReplyPrompt(), userMessage, { model, maxTokens: REPLY_MAX_TOKENS, maxRetries });
   console.log(`Reply received (${usage.input_tokens} in / ${usage.output_tokens} out tokens)`);
   return { text, usage };
@@ -45085,6 +45426,7 @@ function planBundles(units, budget) {
 }
 
 // src/review/breadth.ts
+var SHOWN_LINE_CLAUSE = "a numeric line on an added or modified line.";
 var GENERATED_OR_LOCK = [
   /(^|\/)(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|go\.sum)$/,
   /\.lock$/,
@@ -45119,18 +45461,80 @@ A first review pass already ran; its findings are listed in the message. Your jo
 3. Things that should have changed together: an inconsistency this change introduces between changed code and other code visible in the diff or file context \u2014 a caller not updated for a new parameter, an interface missing what its implementation adds, a sibling copy left behind. Anchor the finding on the added or modified line, and report it only when both sides are visible in what you were shown.
 4. Incomplete changes on added or modified lines: stubs, placeholder returns, options parsed but ignored, a capability added at one layer but never wired up. A diff segment that ends at an opening brace or \`if\` is a hunk boundary, not an incomplete change.
 Do not repeat a first-pass finding (same root cause at the same place). Every finding needs a concrete failing scenario, a file, and a numeric line on an added or modified line. Return an empty list if you find nothing.`;
-function breadthSystemPrompt(reviewerPrompt, limit2) {
+function allowShownContext(lens) {
+  if (!lens.includes(SHOWN_LINE_CLAUSE)) throw new Error("Lens anchor clause not found");
+  return lens.replace(SHOWN_LINE_CLAUSE, () => "a numeric line on an added or modified line, or on an unchanged line you were shown when it explains a defect this change introduces.");
+}
+function breadthSystemPrompt(reviewerPrompt, limit2, shownAnchors = false) {
   const limitSection = limit2 > 0 ? `
 
 ## FINDINGS LIMIT
 Report at most ${limit2} findings, prioritized by severity and impact. If more exist, include only the most important and omit the rest.` : "";
   return `${reviewerPrompt}${limitSection}
 
-${BREADTH_LENS}`;
+${shownAnchors ? allowShownContext(BREADTH_LENS) : BREADTH_LENS}`;
 }
-function breadthBriefing(firstPass, untouched) {
+var DOC_SLOTS = 8;
+var DOC_EXT = /\.(md|markdown|rst|txt|adoc|asciidoc)$/i;
+var isReleaseEntry = (path4) => /^\.changeset\/[^/]+\.md$/i.test(path4) && !/^\.changeset\/readme\.md$/i.test(path4);
+function subsystem(path4) {
+  const pkg = path4.match(/^(?:packages|apps)\/[^/]+/);
+  if (pkg) return pkg[0];
+  const slash = path4.indexOf("/");
+  return slash < 0 ? "" : path4.slice(0, slash);
+}
+var dirOf = (path4) => path4.slice(0, Math.max(0, path4.lastIndexOf("/")));
+function pickDiverse(paths, slots, rank) {
+  const cmp = (a, b) => {
+    const [pa, la, na] = rank(a);
+    const [pb, lb, nb] = rank(b);
+    return pa - pb || lb - la || (na < nb ? -1 : na > nb ? 1 : 0);
+  };
+  const groups = /* @__PURE__ */ new Map();
+  for (const p of paths) groups.set(subsystem(p), [...groups.get(subsystem(p)) ?? [], p]);
+  for (const list of groups.values()) list.sort(cmp);
+  const out = [];
+  while (out.length < slots) {
+    const live = [...groups.entries()].filter(([, list]) => list.length > 0).sort(([ka, a], [kb, b]) => cmp(a[0], b[0]) || (ka < kb ? -1 : 1));
+    if (live.length === 0) break;
+    for (const [, list] of live) {
+      if (out.length >= slots) break;
+      out.push(list.shift());
+    }
+  }
+  return out;
+}
+function prioritizeUntouched(untouched, filteredDiff, findings) {
+  const eligible = untouched.filter((p) => !isReleaseEntry(p));
+  const docs = eligible.filter((p) => DOC_EXT.test(p));
+  const other = eligible.filter((p) => !DOC_EXT.test(p));
+  const sections2 = splitDiffByFile(filteredDiff);
+  const size = (p) => {
+    const { added, removed } = countDiffLines(sections2.get(p) ?? "");
+    return added + removed;
+  };
+  const changed = parseChangedFiles(filteredDiff).map((f) => f.path);
+  const found = findings.filter((f) => f.file).map((f) => normalizeFindingPath(f.file, changed));
+  const foundDirs = new Set(found.map(dirOf));
+  const foundSystems = new Set(found.map(subsystem));
+  const rank = (p) => [foundDirs.has(dirOf(p)) ? 0 : foundSystems.has(subsystem(p)) ? 1 : 2, size(p), p];
+  const otherSlots = Math.min(other.length, MAX_UNTOUCHED_LISTED - DOC_SLOTS + Math.max(0, DOC_SLOTS - docs.length));
+  const docSlots = Math.min(docs.length, MAX_UNTOUCHED_LISTED - otherSlots);
+  const selected = [...pickDiverse(other, otherSlots, rank), ...pickDiverse(docs, docSlots, rank)];
+  return { selected, deprioritizedReleaseEntries: untouched.length - eligible.length, omitted: eligible.length - selected.length };
+}
+function breadthBriefing(firstPass, untouched, plan) {
   const located = (f) => f.file ? `${f.file}${f.lines ? `:${f.lines}` : ""}` : "(no file)";
   const findings = firstPass.length ? firstPass.map((f) => `- ${located(f)} \u2014 ${f.title}`).join("\n") : "None.";
+  if (plan) {
+    const more2 = plan.omitted > 0 ? `
+- \u2026and ${plan.omitted} more eligible file(s) not listed` : "";
+    return `## First-pass findings (already reported \u2014 do not repeat):
+${findings}
+
+## Files with no finding yet (prioritized targets; unlisted files remain in the supplied diff):
+${plan.selected.length ? plan.selected.map((p) => `- ${p}`).join("\n") : "None."}${more2}`;
+  }
   const shown = untouched.slice(0, MAX_UNTOUCHED_LISTED);
   const more = untouched.length > shown.length ? `
 - \u2026and ${untouched.length - shown.length} more` : "";
@@ -45159,14 +45563,14 @@ A first review pass already ran; its findings are listed in the message. You are
 2. Things that should have changed together: an inconsistency this change introduces between changed code and other code visible in the diff or file context \u2014 a caller not updated for a new parameter, an interface missing what its implementation adds, a sibling copy left behind. Anchor the finding on the added or modified line, and report it only when both sides are visible in what you were shown.
 3. Incomplete changes on added or modified lines: stubs, placeholder returns, options parsed but ignored, a capability added at one layer but never wired up. A diff segment that ends at an opening brace or \`if\` is a hunk boundary, not an incomplete change.
 Do not repeat a first-pass finding (same root cause at the same place). Every finding needs a concrete failing scenario, a file, and a numeric line on an added or modified line. Return an empty list if you find nothing.`;
-function secondLookSystemPrompt(reviewerPrompt, limit2) {
+function secondLookSystemPrompt(reviewerPrompt, limit2, shownAnchors = false) {
   const limitSection = limit2 > 0 ? `
 
 ## FINDINGS LIMIT
 Report at most ${limit2} findings, prioritized by severity and impact. If more exist, include only the most important and omit the rest.` : "";
   return `${reviewerPrompt}${limitSection}
 
-${SECOND_LOOK_LENS}`;
+${shownAnchors ? allowShownContext(SECOND_LOOK_LENS) : SECOND_LOOK_LENS}`;
 }
 function secondLookBriefing(known) {
   const located = (f) => f.file ? `${f.file}${f.lines ? `:${f.lines}` : ""}` : "(no file)";
@@ -45400,7 +45804,7 @@ This PR is too large for one pass. You are reviewing bundle ${i + 1} of ${plan.b
       anyOverflow = true;
       continue;
     }
-    addUsage(ctx, result.usage);
+    addUsage2(ctx, result.usage);
     if (result.review?.no_change || isNoChange(result.text)) {
       console.log("  Reviewer: NO_CHANGE for this bundle");
       continue;
@@ -45415,6 +45819,7 @@ This PR is too large for one pass. You are reviewing bundle ${i + 1} of ${plan.b
     const found = result.review ? countFindings(result.review) : { high: 0, medium: 0, low: 0 };
     console.log(`  Reviewer findings: ${found.high}H / ${found.medium}M / ${found.low}L`);
     if (config.judge.model && result.review && found.high + found.medium + found.low > 0) {
+      const judgeTail = config.judge.quality ? [void 0, { quality: true }] : [];
       try {
         const verdict = await runJudge(
           config.llmApiKey,
@@ -45426,9 +45831,10 @@ This PR is too large for one pass. You are reviewing bundle ${i + 1} of ${plan.b
           result.review,
           config.judge.fileContext ? bundleContexts : [],
           config.judge.policy,
-          config.review.lineNumbers
+          config.review.lineNumbers,
+          ...judgeTail
         );
-        addUsage(ctx, verdict.usage);
+        addUsage2(ctx, verdict.usage);
         judgeUsage.input_tokens += verdict.usage.input_tokens;
         judgeUsage.output_tokens += verdict.usage.output_tokens;
         if (verdict.usage.cost_usd !== void 0) judgeUsage.cost_usd = (judgeUsage.cost_usd ?? 0) + verdict.usage.cost_usd;
@@ -45462,7 +45868,7 @@ This PR is too large for one pass. You are reviewing bundle ${i + 1} of ${plan.b
 Merged ${reviews.length} bundle review(s): ${merged.object.findings.length} finding(s) after dedupe`);
   return { ok: true };
 }
-function addUsage(ctx, u) {
+function addUsage2(ctx, u) {
   ctx.usage.input_tokens += u.input_tokens;
   ctx.usage.output_tokens += u.output_tokens;
   ctx.usage.cache_read += u.cache_read_input_tokens ?? 0;
@@ -45521,7 +45927,7 @@ function getAgentVersion() {
     const pkg = JSON.parse((0, import_fs4.readFileSync)(pkgPath, "utf-8"));
     return pkg.version;
   } catch {
-    if (true) return "0.0.35";
+    if (true) return "0.0.36";
     return "unknown";
   }
 }
@@ -45533,7 +45939,7 @@ function getBuildCommit() {
     const dirty = (0, import_child_process.execSync)("git status --porcelain", opts2).toString().trim() ? "-dirty" : "";
     return hash + dirty;
   } catch {
-    if (true) return "825fc79";
+    if (true) return "88ffd42";
     return "unknown";
   }
 }
@@ -45654,7 +46060,8 @@ function buildUsageRecord(ctx, durationMs, error) {
     second_look_prompt_hash: ctx.secondLookPromptHash ?? null,
     second_look_tokens: secondLookTokens,
     second_look_cost_usd: secondLookCost,
-    untouched_files: ctx.untouchedFiles ? { count: ctx.untouchedFiles.length, paths: ctx.untouchedFiles.slice(0, MAX_UNTOUCHED_LISTED), cut: Math.max(0, ctx.untouchedFiles.length - MAX_UNTOUCHED_LISTED) } : null,
+    untouched_files: ctx.untouchedFiles ? ctx.breadthPlan ? { count: ctx.untouchedFiles.length, paths: ctx.breadthPlan.selected, cut: ctx.breadthPlan.omitted, deprioritized: ctx.breadthPlan.deprioritizedReleaseEntries } : { count: ctx.untouchedFiles.length, paths: ctx.untouchedFiles.slice(0, MAX_UNTOUCHED_LISTED), cut: Math.max(0, ctx.untouchedFiles.length - MAX_UNTOUCHED_LISTED) } : null,
+    recall_levers: { j_quality: !!config.judge.quality, sl_breadth: !!config.review.secondLookBreadthTargets, j_shown_anchor: !!config.judge.shownAnchors, b_priority: !!config.breadth.priorityTargets },
     touch_rate: ctx.reviewNumber > 1 && deltaStats ? (() => {
       const total = deltaStats.resolved + deltaStats.still_open;
       return total > 0 ? Math.round(deltaStats.resolved / total * 100) : null;
@@ -45957,9 +46364,9 @@ async function transition(state, ctx) {
         ctx.skipReason = `Estimated input ~${s.total.toLocaleString()} tokens exceeds the input budget (${max.toLocaleString()}; min of MAX_INPUT_TOKENS and model context) even without file context \u2014 ${fmt(s)}`;
         return 17 /* SKIP */;
       }
-      return 10 /* CALL_CLAUDE */;
+      return 10 /* CALL_MODEL */;
     }
-    case 10 /* CALL_CLAUDE */: {
+    case 10 /* CALL_MODEL */: {
       let content = ctx.prompt.content;
       if (config.review.maxFindings > 0) {
         content += `
@@ -46059,8 +46466,9 @@ If this PR spans multiple independent themes that could each be a separate, inde
       }
       const model = config.breadth.model || config.judge.model;
       const effort = config.breadth.effort || (config.breadth.model ? "" : config.judge.effort);
-      const system = breadthSystemPrompt(ctx.prompt.content, remaining);
-      const briefing = breadthBriefing(firstPass, coverage.untouched);
+      const system = breadthSystemPrompt(ctx.prompt.content, remaining, config.judge.shownAnchors);
+      ctx.breadthPlan = config.breadth.priorityTargets ? prioritizeUntouched(coverage.untouched, ctx.filteredDiff, firstPass) : void 0;
+      const briefing = breadthBriefing(firstPass, coverage.untouched, ctx.breadthPlan);
       const estimate = ctx.estimatedInputTokens + Math.ceil((system.length - ctx.prompt.content.length + briefing.length) / 4);
       const limits = [config.anthropic.maxInputTokens, modelContextWindow(model) - config.anthropic.maxTokens].filter((n) => n > 0);
       const budget = limits.length ? Math.min(...limits) : Infinity;
@@ -46076,6 +46484,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
         return 13 /* SECOND_LOOK */;
       }
       ctx.breadthModel = model;
+      if (config.judge.shownAnchors) ctx.shownBreadth = buildShownSource(ctx.filteredDiff, ctx.fileContexts ?? []);
       console.log(`  Breadth review: ${coverage.untouched.length} untouched of ${coverage.reviewable.length} reviewable file(s)`);
       try {
         const result = await runBreadth(
@@ -46094,14 +46503,14 @@ If this PR spans multiple independent themes that could each be a separate, inde
         ctx.breadthFindings = result.findings;
         ctx.breadthPromptHash = result.promptHash;
         ctx.breadthUsage = { input_tokens: result.usage.input_tokens, output_tokens: result.usage.output_tokens, cost_usd: result.usage.cost_usd };
-        addUsage(ctx, result.usage);
+        addUsage2(ctx, result.usage);
         ctx.breadthStatus = "succeeded";
         console.log(`  Breadth review: ${coverage.untouched.length} untouched file(s) \u2192 ${result.findings.length} finding(s)`);
       } catch (err) {
         const e = err;
         if (e.usage) {
           ctx.breadthUsage = { input_tokens: e.usage.input_tokens, output_tokens: e.usage.output_tokens, cost_usd: e.usage.cost_usd };
-          addUsage(ctx, e.usage);
+          addUsage2(ctx, e.usage);
         }
         ctx.breadthStatus = "failed";
         console.warn(`  Breadth review FAILED (${isContextLengthError(err) ? "context length" : e.message}) \u2014 continuing with first-pass findings only`);
@@ -46123,7 +46532,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
       }
       const firstPass = ctx.reviewObject?.findings ?? [];
       const breadth = ctx.breadthFindings ?? [];
-      const flagged = flaggedFiles(ctx.filteredDiff, firstPass);
+      const flagged = flaggedFiles(ctx.filteredDiff, config.review.secondLookBreadthTargets ? [...firstPass, ...breadth] : firstPass);
       if (flagged.length === 0) {
         ctx.secondLookStatus = "skipped_no_findings";
         return 14 /* JUDGE_REVIEW */;
@@ -46139,7 +46548,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
       const contexts = (ctx.fileContexts ?? []).filter((c) => flaggedSet.has(normalizeFindingPath(c.path, flagged)));
       const known = findingsInFiles([...firstPass, ...breadth], flagged);
       const model = config.anthropic.model;
-      const system = secondLookSystemPrompt(ctx.prompt.content, remaining);
+      const system = secondLookSystemPrompt(ctx.prompt.content, remaining, config.judge.shownAnchors);
       const briefing = secondLookBriefing(known);
       const shownSL = (s) => shownLength(s, config.review.lineNumbers);
       const estimate = Math.ceil((system.length + shownSL(restrictedDiff) + briefing.length + contexts.reduce((n, c) => n + shownSL(c.content), 0)) / 4);
@@ -46156,6 +46565,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
         console.log(`  Second-look skipped: ${Math.round(elapsedSeconds)}s elapsed, over half the ${config.breadth.benchmarkDeadlineSeconds}s benchmark deadline`);
         return 14 /* JUDGE_REVIEW */;
       }
+      if (config.judge.shownAnchors) ctx.shownSecondLook = buildShownSource(restrictedDiff, contexts);
       console.log(`  Second-look: re-reading ${flagged.length} flagged file(s), excluding ${known.length} known finding(s)`);
       try {
         const result = await runBreadth(
@@ -46175,14 +46585,14 @@ If this PR spans multiple independent themes that could each be a separate, inde
         ctx.secondLookFindings = result.findings;
         ctx.secondLookPromptHash = result.promptHash;
         ctx.secondLookUsage = { input_tokens: result.usage.input_tokens, output_tokens: result.usage.output_tokens, cost_usd: result.usage.cost_usd };
-        addUsage(ctx, result.usage);
+        addUsage2(ctx, result.usage);
         ctx.secondLookStatus = "succeeded";
         console.log(`  Second-look: ${flagged.length} flagged file(s) \u2192 ${result.findings.length} additional finding(s)`);
       } catch (err) {
         const e = err;
         if (e.usage) {
           ctx.secondLookUsage = { input_tokens: e.usage.input_tokens, output_tokens: e.usage.output_tokens, cost_usd: e.usage.cost_usd };
-          addUsage(ctx, e.usage);
+          addUsage2(ctx, e.usage);
         }
         ctx.secondLookStatus = "failed";
         console.warn(`  Second-look FAILED (${isContextLengthError(err) ? "context length" : e.message}) \u2014 continuing with first-pass and breadth findings only`);
@@ -46240,6 +46650,11 @@ If this PR spans multiple independent themes that could each be a separate, inde
       const extra = breadth.length > 0 || secondLook.length > 0;
       const judgeInput = extra ? { ...ctx.reviewObject, findings: [...firstPass, ...breadth, ...secondLook] } : ctx.reviewObject;
       ctx.reviewTextBeforeJudge = ctx.reviewText;
+      const judgeOptions = config.judge.quality || config.judge.shownAnchors ? {
+        quality: config.judge.quality,
+        shownAnchors: config.judge.shownAnchors ? { judge: buildShownSource(ctx.filteredDiff, config.judge.fileContext ? ctx.fileContexts ?? [] : []), breadth: ctx.shownBreadth, secondLook: ctx.shownSecondLook, secondLookFrom: firstPass.length + breadth.length } : void 0
+      } : void 0;
+      const judgeTail = judgeOptions ? [judgeOptions] : [];
       try {
         const result = await runJudge(
           config.llmApiKey,
@@ -46252,7 +46667,8 @@ If this PR spans multiple independent themes that could each be a separate, inde
           config.judge.fileContext ? ctx.fileContexts ?? [] : [],
           config.judge.policy,
           config.review.lineNumbers,
-          extra ? firstPass.length : void 0
+          extra ? firstPass.length : void 0,
+          ...judgeTail
         );
         ctx.reviewText = result.text;
         ctx.judgeScores = result.scores;
@@ -46573,6 +46989,18 @@ var CONFIG_LABELS = {
   }),
   SECOND_LOOK: flag((on) => {
     config.review.secondLook = on;
+  }),
+  J_QUALITY: flag((on) => {
+    config.judge.quality = on;
+  }),
+  SL_BREADTH: flag((on) => {
+    config.review.secondLookBreadthTargets = on;
+  }),
+  J_SHOWN_ANCHOR: flag((on) => {
+    config.judge.shownAnchors = on;
+  }),
+  B_PRIORITY: flag((on) => {
+    config.breadth.priorityTargets = on;
   })
 };
 var bit = (on) => on ? "1" : "0";
@@ -46593,7 +47021,7 @@ function applyBenchmarkConfig(env) {
   if (!env.MAX_CHANGED_LINES) config.thresholds.maxChangedLines = 0;
   config.review.splitCheck = false;
   applyConfigLabels(env);
-  console.log(`Benchmark settings: model=${config.anthropic.model} effort=${config.review.effort || "default"} judge_model=${config.judge.model || "off"} judge_effort=${config.judge.effort || "default"} nits=${bit(config.review.enableNitpicks)} j_minor=${bit(config.judge.policy.keepMinor)} j_unver=${bit(config.judge.policy.keepUnverified)} j_ctx=${bit(config.judge.fileContext)} lnum=${bit(config.review.lineNumbers)} breadth=${bit(config.breadth.enabled)} b_files=${config.breadth.minFiles} b_untch=${config.breadth.minUntouched} second_look=${bit(config.review.secondLook)}`);
+  console.log(`Benchmark settings: model=${config.anthropic.model} effort=${config.review.effort || "default"} judge_model=${config.judge.model || "off"} judge_effort=${config.judge.effort || "default"} nits=${bit(config.review.enableNitpicks)} j_minor=${bit(config.judge.policy.keepMinor)} j_unver=${bit(config.judge.policy.keepUnverified)} j_ctx=${bit(config.judge.fileContext)} lnum=${bit(config.review.lineNumbers)} breadth=${bit(config.breadth.enabled)} b_files=${config.breadth.minFiles} b_untch=${config.breadth.minUntouched} second_look=${bit(config.review.secondLook)} j_quality=${bit(config.judge.quality)} sl_breadth=${bit(config.review.secondLookBreadthTargets)} j_shown_anchor=${bit(config.judge.shownAnchors)} b_priority=${bit(config.breadth.priorityTargets)}`);
   if (config.review.enableNitpicks && !config.judge.policy.keepMinor) {
     console.warn("  NITS=1 but J_MINOR=0 \u2014 nitpicks are logged for offline scoring only; set J_MINOR=1 to post them.");
   }
