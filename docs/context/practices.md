@@ -62,6 +62,9 @@ See [prompt/composition.md](prompt/composition.md).
 
 ## Build & Deploy
 
+> [!NOTE]
+> Tooling is managed by mise. Run `mise install` to download and install it. In non-interactive environments (CI/CD or AI agents), use `mise exec -- npm …`.
+
 The agent ships as a single-file CJS bundle (`dist/pr-review-agent.cjs`) built with esbuild. All dependencies are baked in; only Node.js 22+ is required on the host. Rebuild with `npm run bundle` after source changes. The bundle is committed to the repo so Jenkins requires no `npm install`.
 
 ## Versioning & Releases

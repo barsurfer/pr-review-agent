@@ -52,6 +52,17 @@ The repo includes a `.nvmrc` file pinned to Node 22, so you can also just run:
 nvm use       # reads .nvmrc automatically
 ```
 
+Alternatively, with [mise](https://mise.jdx.dev/) installed and activated, run
+these commands from the cloned repository:
+
+```bash
+mise trust
+mise install
+```
+
+The repository's `mise.toml` selects Node 22, matching `.nvmrc` and CI.
+Node includes npm; no separate package manager installation is needed.
+
 Verify:
 ```bash
 node --version   # should print v22.x.x
