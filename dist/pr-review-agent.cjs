@@ -36359,6 +36359,8 @@ var config = {
     // 0 = unlimited
     // Off by default: lets the reviewer emit real-but-minor findings; posting them still needs ENABLE_JUDGE_KEEP_MINOR (policy drops minor otherwise).
     enableNitpicks: optional("ENABLE_NITPICKS", "false") === "true",
+    // Off by default: a second reviewer pass over files that already got findings, excluding known ones, to lift recall.
+    secondLook: optional("ENABLE_SECOND_LOOK", "false") === "true",
     // On by default: without numbered lines ~40% of findings carried no line; set false to send the raw diff/context (saves the per-line gutter tokens).
     lineNumbers: optional("ENABLE_LINE_NUMBERS", "true") !== "false"
   },
@@ -44879,18 +44881,18 @@ var BREADTH_OUTPUT_SCHEMA = {
   required: ["findings"],
   additionalProperties: false
 };
-async function runBreadth(apiKey, model, maxRetries, maxTokens, effort, prInfo, diff, fileContexts, systemPrompt, briefing, lineNumbers = false) {
+async function runBreadth(apiKey, model, maxRetries, maxTokens, effort, prInfo, diff, fileContexts, systemPrompt, briefing, lineNumbers = false, label = "breadth") {
   const userMessage = `${buildUserMessage(prInfo, diff, fileContexts, [], [], "", lineNumbers)}
 
 ${briefing}`;
-  console.log(`Sending to breadth reviewer (${model}, maxRetries: ${maxRetries})...`);
+  console.log(`Sending to ${label} reviewer (${model}, maxRetries: ${maxRetries})...`);
   const { object, usage } = await createProvider(apiKey).completeStructured(
     systemPrompt,
     userMessage,
     BREADTH_OUTPUT_SCHEMA,
     { model, maxTokens, maxRetries, effort: effort || void 0 }
   );
-  console.log(`Breadth received (${usage.input_tokens} in / ${usage.output_tokens} out tokens, ${object.findings?.length ?? 0} findings)`);
+  console.log(`${label[0].toUpperCase()}${label.slice(1)} received (${usage.input_tokens} in / ${usage.output_tokens} out tokens, ${object.findings?.length ?? 0} findings)`);
   return { findings: object.findings ?? [], usage, promptHash: (0, import_crypto2.createHash)("sha256").update(systemPrompt).digest("hex").slice(0, 12) };
 }
 function buildUserMessage(prInfo, diff, fileContexts, previousReviews, developerReplies, changesSinceLastReview = "", lineNumbers = false) {
@@ -45137,6 +45139,40 @@ ${findings}
 
 ## Files with no finding yet:
 ${shown.length ? shown.map((p) => `- ${p}`).join("\n") : "None."}${more}`;
+}
+function flaggedFiles(filteredDiff, findings) {
+  const { reviewable, untouched } = fileCoverage(filteredDiff, findings);
+  const untouchedSet = new Set(untouched);
+  return reviewable.filter((p) => !untouchedSet.has(p));
+}
+function findingsInFiles(findings, files) {
+  const set = new Set(files);
+  return findings.filter((f) => {
+    if (!f.file) return false;
+    const path4 = normalizeFindingPath(f.file, files);
+    return set.has(path4) || files.some((p) => p.endsWith("/" + path4));
+  });
+}
+var SECOND_LOOK_LENS = `## SECOND LOOK
+A first review pass already ran; its findings are listed in the message. You are re-reading the SAME files it already flagged, to find real problems it MISSED \u2014 not to re-report what it found. Work through, in order:
+1. The same defect at another place: for each first-pass finding, look for the same pattern on other added or modified lines in these files. Each other place is its own finding.
+2. Things that should have changed together: an inconsistency this change introduces between changed code and other code visible in the diff or file context \u2014 a caller not updated for a new parameter, an interface missing what its implementation adds, a sibling copy left behind. Anchor the finding on the added or modified line, and report it only when both sides are visible in what you were shown.
+3. Incomplete changes on added or modified lines: stubs, placeholder returns, options parsed but ignored, a capability added at one layer but never wired up. A diff segment that ends at an opening brace or \`if\` is a hunk boundary, not an incomplete change.
+Do not repeat a first-pass finding (same root cause at the same place). Every finding needs a concrete failing scenario, a file, and a numeric line on an added or modified line. Return an empty list if you find nothing.`;
+function secondLookSystemPrompt(reviewerPrompt, limit2) {
+  const limitSection = limit2 > 0 ? `
+
+## FINDINGS LIMIT
+Report at most ${limit2} findings, prioritized by severity and impact. If more exist, include only the most important and omit the rest.` : "";
+  return `${reviewerPrompt}${limitSection}
+
+${SECOND_LOOK_LENS}`;
+}
+function secondLookBriefing(known) {
+  const located = (f) => f.file ? `${f.file}${f.lines ? `:${f.lines}` : ""}` : "(no file)";
+  const findings = known.length ? known.map((f) => `- ${located(f)} \u2014 ${f.title}`).join("\n") : "None.";
+  return `## Findings already reported (do NOT repeat \u2014 find additional distinct problems in these files):
+${findings}`;
 }
 
 // src/review/bundled.ts
@@ -45485,7 +45521,7 @@ function getAgentVersion() {
     const pkg = JSON.parse((0, import_fs4.readFileSync)(pkgPath, "utf-8"));
     return pkg.version;
   } catch {
-    if (true) return "0.0.34";
+    if (true) return "0.0.35";
     return "unknown";
   }
 }
@@ -45497,7 +45533,7 @@ function getBuildCommit() {
     const dirty = (0, import_child_process.execSync)("git status --porcelain", opts2).toString().trim() ? "-dirty" : "";
     return hash + dirty;
   } catch {
-    if (true) return "47a9a4a";
+    if (true) return "825fc79";
     return "unknown";
   }
 }
@@ -45525,12 +45561,15 @@ function buildUsageRecord(ctx, durationMs, error) {
   const judgeCost = ctx.judgeUsage?.cost_usd ?? (judgeTokens && judgeModel ? estimateCost(judgeTokens, judgeModel) : null);
   const breadthTokens = ctx.breadthUsage ? { input: ctx.breadthUsage.input_tokens, output: ctx.breadthUsage.output_tokens } : null;
   const breadthCost = ctx.breadthUsage?.cost_usd ?? (breadthTokens && ctx.breadthModel ? estimateCost(breadthTokens, ctx.breadthModel) : null);
+  const secondLookTokens = ctx.secondLookUsage ? { input: ctx.secondLookUsage.input_tokens, output: ctx.secondLookUsage.output_tokens } : null;
+  const secondLookCost = ctx.secondLookUsage?.cost_usd ?? (secondLookTokens ? estimateCost(secondLookTokens, config.anthropic.model) : null);
   const recordModel = ctx.action === "REPLY" && config.reply.model ? config.reply.model : config.anthropic.model;
-  const reviewerCost = ctx.usage.cost_usd !== void 0 ? ctx.usage.cost_usd - (ctx.judgeUsage?.cost_usd ?? 0) - (ctx.breadthUsage?.cost_usd ?? 0) : estimateCost({
-    input: ctx.usage.input_tokens - (judgeTokens?.input ?? 0) - (breadthTokens?.input ?? 0),
-    output: ctx.usage.output_tokens - (judgeTokens?.output ?? 0) - (breadthTokens?.output ?? 0)
+  const reviewerCost = ctx.usage.cost_usd !== void 0 ? ctx.usage.cost_usd - (ctx.judgeUsage?.cost_usd ?? 0) - (ctx.breadthUsage?.cost_usd ?? 0) - (ctx.secondLookUsage?.cost_usd ?? 0) : estimateCost({
+    input: ctx.usage.input_tokens - (judgeTokens?.input ?? 0) - (breadthTokens?.input ?? 0) - (secondLookTokens?.input ?? 0),
+    output: ctx.usage.output_tokens - (judgeTokens?.output ?? 0) - (breadthTokens?.output ?? 0) - (secondLookTokens?.output ?? 0)
   }, recordModel);
   const breadthStatus = ctx.breadthStatus ?? (ctx.bundleCount ? config.breadth.enabled ? "skipped_bundled" : "disabled" : null);
+  const secondLookStatus = ctx.secondLookStatus ?? (ctx.bundleCount ? config.review.secondLook ? "skipped_bundled" : "disabled" : null);
   return {
     run_id: `${config.vcsProvider}-${ctx.repoSlug}-${ctx.prId}-${commitShort}`,
     timestamp: (/* @__PURE__ */ new Date()).toISOString(),
@@ -45573,7 +45612,7 @@ function buildUsageRecord(ctx, durationMs, error) {
       cache_write: ctx.usage.cache_write,
       estimated_input: ctx.estimatedInputTokens
     },
-    cost_usd: reviewerCost + (judgeCost ?? 0) + (breadthCost ?? 0),
+    cost_usd: reviewerCost + (judgeCost ?? 0) + (breadthCost ?? 0) + (secondLookCost ?? 0),
     judge_model: judgeModel,
     judge_effort: config.judge.effort || null,
     judge_tokens: judgeTokens,
@@ -45611,6 +45650,10 @@ function buildUsageRecord(ctx, durationMs, error) {
     breadth_prompt_hash: ctx.breadthPromptHash ?? null,
     breadth_tokens: breadthTokens,
     breadth_cost_usd: breadthCost,
+    second_look_status: secondLookStatus,
+    second_look_prompt_hash: ctx.secondLookPromptHash ?? null,
+    second_look_tokens: secondLookTokens,
+    second_look_cost_usd: secondLookCost,
     untouched_files: ctx.untouchedFiles ? { count: ctx.untouchedFiles.length, paths: ctx.untouchedFiles.slice(0, MAX_UNTOUCHED_LISTED), cut: Math.max(0, ctx.untouchedFiles.length - MAX_UNTOUCHED_LISTED) } : null,
     touch_rate: ctx.reviewNumber > 1 && deltaStats ? (() => {
       const total = deltaStats.resolved + deltaStats.still_open;
@@ -45667,12 +45710,12 @@ async function transition(state, ctx) {
       if (config.skipSourceBranches.length > 0 && matchesPattern(src, config.skipSourceBranches)) {
         ctx.action = "SKIP";
         ctx.skipReason = `source branch "${src}" matches SKIP_SOURCE_BRANCHES`;
-        return 16 /* SKIP */;
+        return 17 /* SKIP */;
       }
       if (config.skipTargetBranches.length > 0 && matchesPattern(tgt, config.skipTargetBranches)) {
         ctx.action = "SKIP";
         ctx.skipReason = `target branch "${tgt}" matches SKIP_TARGET_BRANCHES`;
-        return 16 /* SKIP */;
+        return 17 /* SKIP */;
       }
       return 2 /* FETCH_DIFF */;
     }
@@ -45684,7 +45727,7 @@ async function transition(state, ctx) {
         if (err instanceof PrTooLargeError) {
           ctx.action = "SKIP";
           ctx.skipReason = err.message;
-          return 16 /* SKIP */;
+          return 17 /* SKIP */;
         }
         throw err;
       }
@@ -45703,7 +45746,7 @@ async function transition(state, ctx) {
       if (ctx.reviewableLineCount === 0) {
         ctx.action = "SKIP";
         ctx.skipReason = "no reviewable changes after exclusions";
-        return 16 /* SKIP */;
+        return 17 /* SKIP */;
       }
       return 3 /* CHECK_THRESHOLDS */;
     }
@@ -45714,23 +45757,23 @@ async function transition(state, ctx) {
       if (minChangedFiles > 0 && fileCount < minChangedFiles) {
         ctx.action = "SKIP";
         ctx.skipReason = `PR has ${fileCount} reviewable file(s), minimum is ${minChangedFiles}`;
-        return 16 /* SKIP */;
+        return 17 /* SKIP */;
       }
       const bundling = config.review.bundledReview;
       if (!bundling && maxChangedFiles > 0 && fileCount > maxChangedFiles) {
         ctx.action = "SKIP";
         ctx.skipReason = `PR has ${fileCount} reviewable file(s), maximum is ${maxChangedFiles}`;
-        return 16 /* SKIP */;
+        return 17 /* SKIP */;
       }
       if (minChangedLines > 0 && lineCount < minChangedLines) {
         ctx.action = "SKIP";
         ctx.skipReason = `PR has ${lineCount} reviewable line(s), minimum is ${minChangedLines}`;
-        return 16 /* SKIP */;
+        return 17 /* SKIP */;
       }
       if (!bundling && maxChangedLines > 0 && lineCount > maxChangedLines) {
         ctx.action = "SKIP";
         ctx.skipReason = `PR has ${lineCount} reviewable line(s), maximum is ${maxChangedLines}`;
-        return 16 /* SKIP */;
+        return 17 /* SKIP */;
       }
       return 4 /* CHECK_PREVIOUS_REVIEWS */;
     }
@@ -45799,7 +45842,7 @@ async function transition(state, ctx) {
           console.log(`  Found ${ctx.replies.length} unanswered reply(s), but agent already posted ${agentReplyCount}/${config.reply.maxComments} replies \u2014 skipping`);
           ctx.action = "DEDUP_SKIP";
           ctx.skipReason = `reply limit reached (${agentReplyCount}/${config.reply.maxComments})`;
-          return 16 /* SKIP */;
+          return 17 /* SKIP */;
         }
         console.log(`  Found ${ctx.replies.length} unanswered reply(s) \u2014 responding... (${agentReplyCount}/${config.reply.maxComments || "\u221E"} replies used)`);
         return 6 /* RESPOND_TO_REPLIES */;
@@ -45808,7 +45851,7 @@ async function transition(state, ctx) {
         ctx.action = "DEDUP_SKIP";
         ctx.skipReason = "no new commits and no unanswered questions";
       }
-      return 16 /* SKIP */;
+      return 17 /* SKIP */;
     }
     case 6 /* RESPOND_TO_REPLIES */: {
       const lastReview = ctx.previousReviews[ctx.previousReviews.length - 1];
@@ -45838,7 +45881,7 @@ async function transition(state, ctx) {
       }
       ctx.action = "REPLY";
       ctx.skipReason = void 0;
-      return 17 /* DONE */;
+      return 18 /* DONE */;
     }
     case 7 /* LOAD_PROMPT */: {
       console.log("Loading prompt...");
@@ -45907,12 +45950,12 @@ async function transition(state, ctx) {
       if (max > 0 && s.total > max && config.review.bundledReview) {
         console.log("  Still over budget \u2014 switching to bundled review");
         ctx.inputBudget = max;
-        return 14 /* BUNDLED_REVIEW */;
+        return 15 /* BUNDLED_REVIEW */;
       }
       if (max > 0 && s.total > max) {
         ctx.action = "SKIP";
         ctx.skipReason = `Estimated input ~${s.total.toLocaleString()} tokens exceeds the input budget (${max.toLocaleString()}; min of MAX_INPUT_TOKENS and model context) even without file context \u2014 ${fmt(s)}`;
-        return 16 /* SKIP */;
+        return 17 /* SKIP */;
       }
       return 10 /* CALL_CLAUDE */;
     }
@@ -45962,7 +46005,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
       if (!result) {
         ctx.action = "SKIP";
         ctx.skipReason = "Diff exceeds the model context window";
-        return 16 /* SKIP */;
+        return 17 /* SKIP */;
       }
       ctx.reviewText = result.text;
       ctx.reviewObject = result.review;
@@ -45988,31 +46031,31 @@ If this PR spans multiple independent themes that could each be a separate, inde
     case 12 /* BREADTH_REVIEW */: {
       if (!config.breadth.enabled) {
         ctx.breadthStatus = "disabled";
-        return 13 /* JUDGE_REVIEW */;
+        return 13 /* SECOND_LOOK */;
       }
       if (!config.judge.model) {
         ctx.breadthStatus = "skipped_no_judge";
-        return 13 /* JUDGE_REVIEW */;
+        return 13 /* SECOND_LOOK */;
       }
       if (ctx.reviewNumber > 1) {
         ctx.breadthStatus = "skipped_rereview";
-        return 13 /* JUDGE_REVIEW */;
+        return 13 /* SECOND_LOOK */;
       }
       const firstPass = ctx.reviewObject?.findings ?? [];
       const coverage = fileCoverage(ctx.filteredDiff, firstPass);
       ctx.untouchedFiles = coverage.untouched;
       if (coverage.reviewable.length < config.breadth.minFiles) {
         ctx.breadthStatus = "skipped_small";
-        return 13 /* JUDGE_REVIEW */;
+        return 13 /* SECOND_LOOK */;
       }
       if (coverage.untouched.length < config.breadth.minUntouched) {
         ctx.breadthStatus = "skipped_few_untouched";
-        return 13 /* JUDGE_REVIEW */;
+        return 13 /* SECOND_LOOK */;
       }
       const remaining = config.review.maxFindings > 0 ? config.review.maxFindings - firstPass.length : 0;
       if (config.review.maxFindings > 0 && remaining <= 0) {
         ctx.breadthStatus = "skipped_limit";
-        return 13 /* JUDGE_REVIEW */;
+        return 13 /* SECOND_LOOK */;
       }
       const model = config.breadth.model || config.judge.model;
       const effort = config.breadth.effort || (config.breadth.model ? "" : config.judge.effort);
@@ -46024,13 +46067,13 @@ If this PR spans multiple independent themes that could each be a separate, inde
       if (estimate > budget) {
         ctx.breadthStatus = "skipped_budget";
         console.log(`  Breadth review skipped: ~${estimate.toLocaleString()} tokens exceeds the ${model} budget (${budget.toLocaleString()})`);
-        return 13 /* JUDGE_REVIEW */;
+        return 13 /* SECOND_LOOK */;
       }
       const elapsedSeconds = (Date.now() - ctx.startTime) / 1e3;
       if (ctx.outcomeSink && elapsedSeconds > config.breadth.benchmarkDeadlineSeconds / 2) {
         ctx.breadthStatus = "skipped_time";
         console.log(`  Breadth review skipped: ${Math.round(elapsedSeconds)}s elapsed, over half the ${config.breadth.benchmarkDeadlineSeconds}s benchmark deadline`);
-        return 13 /* JUDGE_REVIEW */;
+        return 13 /* SECOND_LOOK */;
       }
       ctx.breadthModel = model;
       console.log(`  Breadth review: ${coverage.untouched.length} untouched of ${coverage.reviewable.length} reviewable file(s)`);
@@ -46063,9 +46106,90 @@ If this PR spans multiple independent themes that could each be a separate, inde
         ctx.breadthStatus = "failed";
         console.warn(`  Breadth review FAILED (${isContextLengthError(err) ? "context length" : e.message}) \u2014 continuing with first-pass findings only`);
       }
-      return 13 /* JUDGE_REVIEW */;
+      return 13 /* SECOND_LOOK */;
     }
-    case 13 /* JUDGE_REVIEW */: {
+    case 13 /* SECOND_LOOK */: {
+      if (!config.review.secondLook) {
+        ctx.secondLookStatus = "disabled";
+        return 14 /* JUDGE_REVIEW */;
+      }
+      if (!config.judge.model) {
+        ctx.secondLookStatus = "skipped_no_judge";
+        return 14 /* JUDGE_REVIEW */;
+      }
+      if (ctx.reviewNumber > 1) {
+        ctx.secondLookStatus = "skipped_rereview";
+        return 14 /* JUDGE_REVIEW */;
+      }
+      const firstPass = ctx.reviewObject?.findings ?? [];
+      const breadth = ctx.breadthFindings ?? [];
+      const flagged = flaggedFiles(ctx.filteredDiff, firstPass);
+      if (flagged.length === 0) {
+        ctx.secondLookStatus = "skipped_no_findings";
+        return 14 /* JUDGE_REVIEW */;
+      }
+      const remaining = config.review.maxFindings > 0 ? config.review.maxFindings - firstPass.length - breadth.length : 0;
+      if (config.review.maxFindings > 0 && remaining <= 0) {
+        ctx.secondLookStatus = "skipped_limit";
+        return 14 /* JUDGE_REVIEW */;
+      }
+      const sections2 = splitDiffByFile(ctx.filteredDiff);
+      const restrictedDiff = flagged.map((p) => sections2.get(p) ?? "").join("");
+      const flaggedSet = new Set(flagged);
+      const contexts = (ctx.fileContexts ?? []).filter((c) => flaggedSet.has(normalizeFindingPath(c.path, flagged)));
+      const known = findingsInFiles([...firstPass, ...breadth], flagged);
+      const model = config.anthropic.model;
+      const system = secondLookSystemPrompt(ctx.prompt.content, remaining);
+      const briefing = secondLookBriefing(known);
+      const shownSL = (s) => shownLength(s, config.review.lineNumbers);
+      const estimate = Math.ceil((system.length + shownSL(restrictedDiff) + briefing.length + contexts.reduce((n, c) => n + shownSL(c.content), 0)) / 4);
+      const limits = [config.anthropic.maxInputTokens, modelContextWindow(model) - config.anthropic.maxTokens].filter((n) => n > 0);
+      const budget = limits.length ? Math.min(...limits) : Infinity;
+      if (estimate > budget) {
+        ctx.secondLookStatus = "skipped_budget";
+        console.log(`  Second-look skipped: ~${estimate.toLocaleString()} tokens exceeds the ${model} budget (${budget.toLocaleString()})`);
+        return 14 /* JUDGE_REVIEW */;
+      }
+      const elapsedSeconds = (Date.now() - ctx.startTime) / 1e3;
+      if (ctx.outcomeSink && elapsedSeconds > config.breadth.benchmarkDeadlineSeconds / 2) {
+        ctx.secondLookStatus = "skipped_time";
+        console.log(`  Second-look skipped: ${Math.round(elapsedSeconds)}s elapsed, over half the ${config.breadth.benchmarkDeadlineSeconds}s benchmark deadline`);
+        return 14 /* JUDGE_REVIEW */;
+      }
+      console.log(`  Second-look: re-reading ${flagged.length} flagged file(s), excluding ${known.length} known finding(s)`);
+      try {
+        const result = await runBreadth(
+          config.llmApiKey,
+          model,
+          config.anthropic.maxRetries,
+          config.anthropic.maxTokens,
+          config.review.effort,
+          ctx.prInfo,
+          restrictedDiff,
+          contexts,
+          system,
+          briefing,
+          config.review.lineNumbers,
+          "second-look"
+        );
+        ctx.secondLookFindings = result.findings;
+        ctx.secondLookPromptHash = result.promptHash;
+        ctx.secondLookUsage = { input_tokens: result.usage.input_tokens, output_tokens: result.usage.output_tokens, cost_usd: result.usage.cost_usd };
+        addUsage(ctx, result.usage);
+        ctx.secondLookStatus = "succeeded";
+        console.log(`  Second-look: ${flagged.length} flagged file(s) \u2192 ${result.findings.length} additional finding(s)`);
+      } catch (err) {
+        const e = err;
+        if (e.usage) {
+          ctx.secondLookUsage = { input_tokens: e.usage.input_tokens, output_tokens: e.usage.output_tokens, cost_usd: e.usage.cost_usd };
+          addUsage(ctx, e.usage);
+        }
+        ctx.secondLookStatus = "failed";
+        console.warn(`  Second-look FAILED (${isContextLengthError(err) ? "context length" : e.message}) \u2014 continuing with first-pass and breadth findings only`);
+      }
+      return 14 /* JUDGE_REVIEW */;
+    }
+    case 14 /* JUDGE_REVIEW */: {
       const reviewFindings = ctx.reviewObject ? countFindings(ctx.reviewObject) : { high: 0, medium: 0, low: 0 };
       console.log(`  Reviewer findings: ${reviewFindings.high}H / ${reviewFindings.medium}M / ${reviewFindings.low}L`);
       const noFindings = reviewFindings.high === 0 && reviewFindings.medium === 0 && reviewFindings.low === 0;
@@ -46080,7 +46204,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
             console.log(`  Unanswered dev reply, but reply limit reached (${agentReplies}/${config.reply.maxComments}) \u2014 skipping`);
             ctx.action = "DEDUP_SKIP";
             ctx.skipReason = `reply limit reached (${agentReplies}/${config.reply.maxComments})`;
-            return 16 /* SKIP */;
+            return 17 /* SKIP */;
           }
           ctx.replies = unanswered;
           console.log("  Re-review found nothing new, but a developer reply is unanswered \u2014 answering it in-thread");
@@ -46092,26 +46216,29 @@ If this PR spans multiple independent themes that could each be a separate, inde
           console.log("  Re-review: no findings, prior clean, nothing open, no discussion \u2014 nothing to post, skipping");
           ctx.action = "NO_NEW_FINDINGS";
           ctx.skipReason = "Re-review found no new findings (prior review already clean)";
-          return 16 /* SKIP */;
+          return 17 /* SKIP */;
         }
         console.log(`  Re-review with no new findings \u2014 posting (${stillOpen ? "findings still open" : "prior review had findings"})`);
       }
       if (!config.judge.model) {
         ctx.judgeStatus = "disabled";
-        return 15 /* POST_REVIEW */;
+        return 16 /* POST_REVIEW */;
       }
       const breadth = ctx.breadthFindings ?? [];
-      if (noFindings && breadth.length === 0) {
+      const secondLook = ctx.secondLookFindings ?? [];
+      if (noFindings && breadth.length === 0 && secondLook.length === 0) {
         ctx.judgeStatus = "skipped_no_findings";
         console.log("  Skipping judge \u2014 no findings to validate");
-        return 15 /* POST_REVIEW */;
+        return 16 /* POST_REVIEW */;
       }
       const firstPass = ctx.reviewObject?.findings ?? [];
       ctx.judgeCandidates = [
         ...firstPass.map((f) => ({ ...f, origin: "review" })),
-        ...breadth.map((f) => ({ ...f, origin: "breadth" }))
+        ...breadth.map((f) => ({ ...f, origin: "breadth" })),
+        ...secondLook.map((f) => ({ ...f, origin: "second_look" }))
       ];
-      const judgeInput = breadth.length ? { ...ctx.reviewObject, findings: [...firstPass, ...breadth] } : ctx.reviewObject;
+      const extra = breadth.length > 0 || secondLook.length > 0;
+      const judgeInput = extra ? { ...ctx.reviewObject, findings: [...firstPass, ...breadth, ...secondLook] } : ctx.reviewObject;
       ctx.reviewTextBeforeJudge = ctx.reviewText;
       try {
         const result = await runJudge(
@@ -46125,7 +46252,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
           config.judge.fileContext ? ctx.fileContexts ?? [] : [],
           config.judge.policy,
           config.review.lineNumbers,
-          breadth.length ? firstPass.length : void 0
+          extra ? firstPass.length : void 0
         );
         ctx.reviewText = result.text;
         ctx.judgeScores = result.scores;
@@ -46155,14 +46282,14 @@ If this PR spans multiple independent themes that could each be a separate, inde
         if (!ctx.outcomeSink && !noFindings) throw err;
         console.warn(`  Judge failed (${err.message}) \u2014 proceeding with unjudged reviewer findings`);
       }
-      return 15 /* POST_REVIEW */;
+      return 16 /* POST_REVIEW */;
     }
-    case 14 /* BUNDLED_REVIEW */: {
+    case 15 /* BUNDLED_REVIEW */: {
       const outcome = await runBundledReview(ctx, ctx.inputBudget);
       if (!outcome.ok) {
         ctx.action = "SKIP";
         ctx.skipReason = `Bundled review not possible: ${outcome.reason}`;
-        return 16 /* SKIP */;
+        return 17 /* SKIP */;
       }
       if (isNoChange(ctx.reviewText)) return 11 /* CHECK_NO_CHANGE */;
       const merged = ctx.reviewObject;
@@ -46172,16 +46299,16 @@ If this PR spans multiple independent themes that could each be a separate, inde
         if (!priorHadFindings && (merged.delta_stats?.still_open ?? 0) === 0) {
           ctx.action = "NO_NEW_FINDINGS";
           ctx.skipReason = "Re-review found no new findings (prior review already clean)";
-          return 16 /* SKIP */;
+          return 17 /* SKIP */;
         }
       }
-      return 15 /* POST_REVIEW */;
+      return 16 /* POST_REVIEW */;
     }
-    case 15 /* POST_REVIEW */: {
+    case 16 /* POST_REVIEW */: {
       if (ctx.outcomeSink) {
-        await ctx.outcomeSink({ review: ctx.reviewObject, reviewText: ctx.reviewText, judged: ctx.judgeUsage !== void 0, judgeScores: ctx.judgeScores, judgedFindings: ctx.judgedFindings, breadthFindings: ctx.breadthFindings });
+        await ctx.outcomeSink({ review: ctx.reviewObject, reviewText: ctx.reviewText, judged: ctx.judgeUsage !== void 0, judgeScores: ctx.judgeScores, judgedFindings: ctx.judgedFindings, breadthFindings: ctx.breadthFindings, secondLookFindings: ctx.secondLookFindings });
         ctx.action = "REVIEW";
-        return 17 /* DONE */;
+        return 18 /* DONE */;
       }
       const judgeNotes = ctx.reviewText.match(/<!--\s*JUDGE_NOTES:([\s\S]*?)-->/);
       if (judgeNotes) {
@@ -46207,7 +46334,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
         console.log("  Review text empty or NO_CHANGE after cleanup \u2014 skipping post");
         ctx.action = "NO_CHANGE";
         ctx.skipReason = "Review text empty or NO_CHANGE after cleanup";
-        return 16 /* SKIP */;
+        return 17 /* SKIP */;
       }
       const judged = ctx.judgeUsage !== void 0;
       const tailOk = judged ? parseVerdictScore(cleaned) !== null : /^#{1,4}\s*Unresolved Questions\b/im.test(cleaned);
@@ -46235,7 +46362,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
             console.log(`  Commit ${commitShort} already reviewed by another run \u2014 skipping post`);
             ctx.action = "DEDUP_SKIP";
             ctx.skipReason = "Another agent run already reviewed this commit (race condition avoided)";
-            return 16 /* SKIP */;
+            return 17 /* SKIP */;
           }
         }
         console.log("Posting review comment...");
@@ -46243,15 +46370,15 @@ If this PR spans multiple independent themes that could each be a separate, inde
         console.log("Done. Review posted to PR.\n");
       }
       ctx.action = ctx.reviewNumber > 1 ? "RE_REVIEW" : "REVIEW";
-      return 17 /* DONE */;
+      return 18 /* DONE */;
     }
-    case 16 /* SKIP */: {
+    case 17 /* SKIP */: {
       console.log(`
 Skipping: ${ctx.skipReason}`);
-      return 17 /* DONE */;
+      return 18 /* DONE */;
     }
     default:
-      return 17 /* DONE */;
+      return 18 /* DONE */;
   }
 }
 async function review(adapter2, prId, dryRun = false, promptPath, force = "off", logUsage = false, repoSlug = "", outcomeSink) {
@@ -46276,7 +46403,7 @@ Starting review for PR #${prId}`);
   let error = null;
   try {
     let state = 0 /* FETCH_PR_INFO */;
-    while (state !== 17 /* DONE */) {
+    while (state !== 18 /* DONE */) {
       state = await transition(state, ctx);
     }
   } catch (err) {
@@ -46443,6 +46570,9 @@ var CONFIG_LABELS = {
   }),
   B_UNTCH: count((n) => {
     config.breadth.minUntouched = n;
+  }),
+  SECOND_LOOK: flag((on) => {
+    config.review.secondLook = on;
   })
 };
 var bit = (on) => on ? "1" : "0";
@@ -46463,7 +46593,7 @@ function applyBenchmarkConfig(env) {
   if (!env.MAX_CHANGED_LINES) config.thresholds.maxChangedLines = 0;
   config.review.splitCheck = false;
   applyConfigLabels(env);
-  console.log(`Benchmark settings: model=${config.anthropic.model} effort=${config.review.effort || "default"} judge_model=${config.judge.model || "off"} judge_effort=${config.judge.effort || "default"} nits=${bit(config.review.enableNitpicks)} j_minor=${bit(config.judge.policy.keepMinor)} j_unver=${bit(config.judge.policy.keepUnverified)} j_ctx=${bit(config.judge.fileContext)} lnum=${bit(config.review.lineNumbers)} breadth=${bit(config.breadth.enabled)} b_files=${config.breadth.minFiles} b_untch=${config.breadth.minUntouched}`);
+  console.log(`Benchmark settings: model=${config.anthropic.model} effort=${config.review.effort || "default"} judge_model=${config.judge.model || "off"} judge_effort=${config.judge.effort || "default"} nits=${bit(config.review.enableNitpicks)} j_minor=${bit(config.judge.policy.keepMinor)} j_unver=${bit(config.judge.policy.keepUnverified)} j_ctx=${bit(config.judge.fileContext)} lnum=${bit(config.review.lineNumbers)} breadth=${bit(config.breadth.enabled)} b_files=${config.breadth.minFiles} b_untch=${config.breadth.minUntouched} second_look=${bit(config.review.secondLook)}`);
   if (config.review.enableNitpicks && !config.judge.policy.keepMinor) {
     console.warn("  NITS=1 but J_MINOR=0 \u2014 nitpicks are logged for offline scoring only; set J_MINOR=1 to post them.");
   }
@@ -46488,7 +46618,7 @@ async function runBenchmark(env = process.env) {
         const placed = anchorToFile(outcome.judgedFindings, firstAddedLines(await adapter2.getDiff(prNumber)), changedFiles);
         findings = keptToReportFindings(placed, rb.agent, changedPaths);
         const fileLevel = placed.filter((k) => k.anchorSource === "file");
-        console.log(`Benchmark findings: reviewer ${outcome.review.findings.length}, breadth ${outcome.breadthFindings?.length ?? 0}, judge kept ${outcome.judgedFindings.length}, line-anchored ${findings.length} (${fileLevel.length} placed on the file's first changed line)`);
+        console.log(`Benchmark findings: reviewer ${outcome.review.findings.length}, breadth ${outcome.breadthFindings?.length ?? 0}, second-look ${outcome.secondLookFindings?.length ?? 0}, judge kept ${outcome.judgedFindings.length}, line-anchored ${findings.length} (${fileLevel.length} placed on the file's first changed line)`);
         if (fileLevel.length > 0) console.log(`  File-level findings: ${fileLevel.map((k) => `${k.file}:${k.lines} ${k.title}`).join(" | ")}`);
         const unanchored = placed.filter((k) => !isAnchored(k));
         if (unanchored.length > 0) console.warn(`  Parse check: ${unanchored.length} kept finding(s) with no usable file:line, dropped from findings.json: ${unanchored.map((k) => k.title).join(" | ")}`);
@@ -46534,7 +46664,7 @@ if (major < 22) {
   process.exit(1);
 }
 var program2 = new Command();
-program2.name("pr-review-agent").description("Automated PR code review powered by Claude").option("--pr-id <id>", "Pull request ID").option("--workspace <workspace>", "VCS workspace / org (overrides BITBUCKET_WORKSPACE)").option("--repo-slug <slug>", "Repository slug").option("--vcs <provider>", "VCS provider: bitbucket | azure (WIP) | github | gitlab (overrides VCS_PROVIDER)").option("--dry-run", "Print the review to stdout without posting to the PR").option("--force [mode]", 'Force review: "clean" (no prior context) or "re-review" (keep context, bypass dedup)').option("--log-usage [bool]", "Log usage data to results.jsonl (default: true)", (v) => v !== "false", true).option("--prompt <path>", "Path to a local prompt file (overrides repo .agent-review-instructions.md)").option("--validate-prompt", "Validate prompt and exit (local via --prompt, or repo via --pr-id)").option("--model <id>", "Claude model ID (overrides CLAUDE_MODEL)").option("--judge-model <id>", "Judge model ID (overrides JUDGING_MODEL)").option("--reply-model <id>", "Model ID for developer replies (overrides REPLY_MODEL; empty = reviewer model)").option("--min-changed-files <n>", "Skip review if fewer files changed (overrides MIN_CHANGED_FILES)").option("--max-changed-files <n>", "Skip review if more files changed (overrides MAX_CHANGED_FILES)").option("--min-changed-lines <n>", "Skip review if fewer lines changed (overrides MIN_CHANGED_LINES)").option("--max-changed-lines <n>", "Skip review if more lines changed (overrides MAX_CHANGED_LINES)").option("--max-input-tokens <n>", "Max estimated input tokens before degrade/skip (overrides MAX_INPUT_TOKENS)").option("--max-output-tokens <n>", "Max output tokens for reviewer + judge (overrides MAX_OUTPUT_TOKENS)").option("--effort <level>", "Reviewer thinking effort: low|medium|high|xhigh|max (overrides REVIEW_EFFORT; ignored by models without effort)").option("--judge-effort <level>", "Judge thinking effort (overrides JUDGE_EFFORT)").option("--skip-directed-replies", "Skip replying to dev comments @-directed at someone else (Bitbucket only; overrides SKIP_DIRECTED_REPLIES)").option("--benchmark", "ReviewBench mode: read the PR from RB_* env + mounted files, write findings JSON to RB_OUT instead of posting; always exits 0").parse(process.argv);
+program2.name("pr-review-agent").description("Automated PR code review powered by Claude").option("--pr-id <id>", "Pull request ID").option("--workspace <workspace>", "VCS workspace / org (overrides BITBUCKET_WORKSPACE)").option("--repo-slug <slug>", "Repository slug").option("--vcs <provider>", "VCS provider: bitbucket | azure (WIP) | github | gitlab (overrides VCS_PROVIDER)").option("--dry-run", "Print the review to stdout without posting to the PR").option("--force [mode]", 'Force review: "clean" (no prior context) or "re-review" (keep context, bypass dedup)').option("--log-usage [bool]", "Log usage data to results.jsonl (default: true)", (v) => v !== "false", true).option("--prompt <path>", "Path to a local prompt file (overrides repo .agent-review-instructions.md)").option("--validate-prompt", "Validate prompt and exit (local via --prompt, or repo via --pr-id)").option("--model <id>", "Claude model ID (overrides CLAUDE_MODEL)").option("--judge-model <id>", "Judge model ID (overrides JUDGING_MODEL)").option("--reply-model <id>", "Model ID for developer replies (overrides REPLY_MODEL; empty = reviewer model)").option("--min-changed-files <n>", "Skip review if fewer files changed (overrides MIN_CHANGED_FILES)").option("--max-changed-files <n>", "Skip review if more files changed (overrides MAX_CHANGED_FILES)").option("--min-changed-lines <n>", "Skip review if fewer lines changed (overrides MIN_CHANGED_LINES)").option("--max-changed-lines <n>", "Skip review if more lines changed (overrides MAX_CHANGED_LINES)").option("--max-input-tokens <n>", "Max estimated input tokens before degrade/skip (overrides MAX_INPUT_TOKENS)").option("--max-output-tokens <n>", "Max output tokens for reviewer + judge (overrides MAX_OUTPUT_TOKENS)").option("--effort <level>", "Reviewer thinking effort: low|medium|high|xhigh|max (overrides REVIEW_EFFORT; ignored by models without effort)").option("--judge-effort <level>", "Judge thinking effort (overrides JUDGE_EFFORT)").option("--skip-directed-replies", "Skip replying to dev comments @-directed at someone else (Bitbucket only; overrides SKIP_DIRECTED_REPLIES)").option("--second-look", "Second reviewer pass over already-flagged files to lift recall (overrides ENABLE_SECOND_LOOK; requires a judge)").option("--benchmark", "ReviewBench mode: read the PR from RB_* env + mounted files, write findings JSON to RB_OUT instead of posting; always exits 0").parse(process.argv);
 var opts = program2.opts();
 async function main() {
   if (opts.benchmark) {
@@ -46626,6 +46756,7 @@ Filled prompt length: ${result.content.length} chars (~${Math.ceil(result.conten
   if (opts.effort) config.review.effort = opts.effort;
   if (opts.judgeEffort) config.judge.effort = opts.judgeEffort;
   if (opts.skipDirectedReplies) config.reply.skipDirectedElsewhere = true;
+  if (opts.secondLook) config.review.secondLook = true;
   if (opts.repoSlug) config.repoSlug = opts.repoSlug;
   const forceMode = opts.force === true ? "re-review" : typeof opts.force === "string" ? opts.force : "off";
   await review(adapter2, opts.prId, opts.dryRun ?? false, opts.prompt, forceMode, opts.logUsage ?? true, opts.repoSlug ?? "");
