@@ -359,7 +359,8 @@ describe('flag-off byte identity', () => {
 
   it('flag-off request and result match the persisted pre-change baseline', async () => {
     const { calls, res } = await snapshot(undefined)
-    const sha = (s: string) => createHash('sha256').update(s).digest('hex').slice(0, 16)
+    // normalize CRLF so the baseline hash is stable across Windows/Linux checkouts
+    const sha = (s: string) => createHash('sha256').update(s.replace(/\r\n/g, '\n')).digest('hex').slice(0, 16)
     expect({
       system: sha(calls[0][0]), user: sha(calls[0][1]), schema: sha(JSON.stringify(calls[0][2])), options: calls[0].slice(3),
       text: res.text, kept: res.kept, decisions: res.decisions, anomalies: res.anomalies, scores: res.scores, usage: res.usage,
@@ -433,7 +434,7 @@ describe('flag-off byte identity', () => {
             "title": "Token exposed",
           },
         ],
-        "system": "92f330cd8a87e1f4",
+        "system": "3c4bdfdaba163339",
         "text": "### Summary
       s
 
