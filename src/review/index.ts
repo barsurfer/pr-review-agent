@@ -6,7 +6,9 @@ import { config, modelContextWindow } from '../config.js'
 import { loadPrompt } from '../prompt/loader.js'
 import { fetchContext } from '../context/fetcher.js'
 import { runReview, runCommentResponse, runJudge, runBreadth } from './client.js'
-import { fileCoverage, breadthSystemPrompt, breadthBriefing, flaggedFiles, findingsInFiles, secondLookSystemPrompt, secondLookBriefing } from './breadth.js'
+import { buildShownSource } from './shown-anchors.js'
+import type { JudgeOptions } from './judge-decisions.js'
+import { fileCoverage, prioritizeUntouched, breadthSystemPrompt, breadthBriefing, flaggedFiles, findingsInFiles, secondLookSystemPrompt, secondLookBriefing } from './breadth.js'
 import { splitDiffByFile } from './bundler.js'
 import { normalizeFindingPath } from './findings-output.js'
 import { filterDiff, countChangedLines, parseVerdictScore, isPathExcluded, scanTodos, isContextLengthError, shownLength } from './parsers.js'
@@ -451,8 +453,9 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       // Resolved here, after benchmark labels were applied, so RB_CONFIG_JUDGE_MODEL also picks the breadth model.
       const model = config.breadth.model || config.judge.model
       const effort = config.breadth.effort || (config.breadth.model ? '' : config.judge.effort)
-      const system = breadthSystemPrompt(ctx.prompt!.content, remaining)
-      const briefing = breadthBriefing(firstPass, coverage.untouched)
+      const system = breadthSystemPrompt(ctx.prompt!.content, remaining, config.judge.shownAnchors)
+      ctx.breadthPlan = config.breadth.priorityTargets ? prioritizeUntouched(coverage.untouched, ctx.filteredDiff!, firstPass) : undefined
+      const briefing = breadthBriefing(firstPass, coverage.untouched, ctx.breadthPlan)
       const estimate = ctx.estimatedInputTokens + Math.ceil((system.length - ctx.prompt!.content.length + briefing.length) / 4)
       // A 0 limit means "disabled", as in ESTIMATE_TOKENS; without this filter MAX_INPUT_TOKENS=0 would skip every breadth pass.
       const limits = [config.anthropic.maxInputTokens, modelContextWindow(model) - config.anthropic.maxTokens].filter(n => n > 0)
@@ -471,6 +474,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       }
 
       ctx.breadthModel = model
+      if (config.judge.shownAnchors) ctx.shownBreadth = buildShownSource(ctx.filteredDiff!, ctx.fileContexts ?? [])
       console.log(`  Breadth review: ${coverage.untouched.length} untouched of ${coverage.reviewable.length} reviewable file(s)`)
       try {
         const result = await runBreadth(
@@ -504,7 +508,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
 
       const firstPass = ctx.reviewObject?.findings ?? []
       const breadth = ctx.breadthFindings ?? []
-      const flagged = flaggedFiles(ctx.filteredDiff!, firstPass)
+      const flagged = flaggedFiles(ctx.filteredDiff!, config.review.secondLookBreadthTargets ? [...firstPass, ...breadth] : firstPass)
       if (flagged.length === 0) { ctx.secondLookStatus = 'skipped_no_findings'; return State.JUDGE_REVIEW }
 
       const remaining = config.review.maxFindings > 0 ? config.review.maxFindings - firstPass.length - breadth.length : 0
@@ -517,7 +521,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       const known = findingsInFiles([...firstPass, ...breadth], flagged)
 
       const model = config.anthropic.model
-      const system = secondLookSystemPrompt(ctx.prompt!.content, remaining)
+      const system = secondLookSystemPrompt(ctx.prompt!.content, remaining, config.judge.shownAnchors)
       const briefing = secondLookBriefing(known)
       // Estimate on the restricted inputs, not the full diff, so a large PR with few flagged files isn't needlessly skipped.
       // shownLength on the numbered payloads (diff + file contexts) so the guard counts the line-number gutter, as ESTIMATE_TOKENS does.
@@ -538,6 +542,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         return State.JUDGE_REVIEW
       }
 
+      if (config.judge.shownAnchors) ctx.shownSecondLook = buildShownSource(restrictedDiff, contexts)
       console.log(`  Second-look: re-reading ${flagged.length} flagged file(s), excluding ${known.length} known finding(s)`)
       try {
         const result = await runBreadth(
@@ -626,6 +631,15 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       const judgeInput = extra ? { ...ctx.reviewObject!, findings: [...firstPass, ...breadth, ...secondLook] } : ctx.reviewObject!
 
       ctx.reviewTextBeforeJudge = ctx.reviewText
+      const judgeOptions: JudgeOptions | undefined = config.judge.quality || config.judge.shownAnchors
+        ? {
+            quality: config.judge.quality,
+            shownAnchors: config.judge.shownAnchors
+              ? { judge: buildShownSource(ctx.filteredDiff!, config.judge.fileContext ? ctx.fileContexts ?? [] : []), breadth: ctx.shownBreadth, secondLook: ctx.shownSecondLook, secondLookFrom: firstPass.length + breadth.length }
+              : undefined,
+          }
+        : undefined
+      const judgeTail: [JudgeOptions?] = judgeOptions ? [judgeOptions] : []
       try {
         const result = await runJudge(
           config.llmApiKey,
@@ -639,6 +653,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
           config.judge.policy,
           config.review.lineNumbers,
           extra ? firstPass.length : undefined,
+          ...judgeTail,
         )
         ctx.reviewText = result.text
         ctx.judgeScores = result.scores

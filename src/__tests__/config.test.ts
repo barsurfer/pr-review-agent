@@ -84,3 +84,27 @@ describe('llmApiKey — conditional required key per provider', () => {
     await expect(import('../config.js')).rejects.toThrow(/OPENROUTER_API_KEY/)
   })
 })
+
+describe('recall-lever flags', () => {
+  afterEach(() => { vi.unstubAllEnvs() })
+
+  const load = async (env: Record<string, string>) => {
+    vi.unstubAllEnvs()
+    for (const [name, value] of Object.entries(env)) vi.stubEnv(name, value)
+    vi.resetModules()
+    return (await import('../config.js')).config
+  }
+
+  it('all four default to off', async () => {
+    const c = await load({})
+    expect([c.judge.quality, c.judge.shownAnchors, c.review.secondLookBreadthTargets, c.breadth.priorityTargets]).toEqual([false, false, false, false])
+  })
+
+  it('each turns on only from the exact string true, independently', async () => {
+    expect((await load({ ENABLE_JUDGE_QUALITY: 'true' })).judge).toMatchObject({ quality: true, shownAnchors: false })
+    expect((await load({ ENABLE_JUDGE_SHOWN_CONTEXT_ANCHORS: 'true' })).judge).toMatchObject({ quality: false, shownAnchors: true })
+    expect((await load({ ENABLE_SECOND_LOOK_BREADTH_TARGETS: 'true' })).review.secondLookBreadthTargets).toBe(true)
+    expect((await load({ ENABLE_BREADTH_PRIORITY_TARGETS: 'true' })).breadth.priorityTargets).toBe(true)
+    expect((await load({ ENABLE_JUDGE_QUALITY: '1' })).judge.quality).toBe(false)
+  })
+})

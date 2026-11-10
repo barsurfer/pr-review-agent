@@ -8,7 +8,8 @@ import type { FileContext } from '../context/fetcher.js'
 import type { ReviewObject, ReviewFinding, FindingScore } from './formatter.js'
 import type { KeptFinding } from './findings-output.js'
 import type { AppliedDecision, JudgeAnomalies } from './judge-decisions.js'
-import type { BreadthStatus, SecondLookStatus, CandidateOrigin } from './breadth.js'
+import type { BreadthStatus, SecondLookStatus, CandidateOrigin, BreadthPlan } from './breadth.js'
+import type { ShownSource } from './shown-anchors.js'
 
 /** Every node in the review flow. */
 export enum State {
@@ -96,6 +97,10 @@ export interface ReviewContext {
   secondLookPromptHash?: string
   secondLookUsage?: { input_tokens: number; output_tokens: number; cost_usd?: number }
   untouchedFiles?: string[]
+  breadthPlan?: BreadthPlan
+  // What each discovery pass was actually shown, so a judge anchor on an unchanged line is only accepted for code that pass saw.
+  shownBreadth?: ShownSource
+  shownSecondLook?: ShownSource
   judgeCandidates?: Array<ReviewFinding & { origin: CandidateOrigin }>
   estimatedInputTokens: number
 

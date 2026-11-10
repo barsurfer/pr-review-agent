@@ -5,6 +5,8 @@ import { splitDiffByFile } from './bundler.js'
 import { normalizeFindingPath } from './findings-output.js'
 import type { ReviewFinding } from './formatter.js'
 
+const SHOWN_LINE_CLAUSE = 'a numeric line on an added or modified line.'
+
 // Not the fetcher's context-exclusion list: migrations are real review targets, while lockfiles and generated code only pad the trigger counts.
 const GENERATED_OR_LOCK = [
   /(^|\/)(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|go\.sum)$/, /\.lock$/,
@@ -60,17 +62,88 @@ A first review pass already ran; its findings are listed in the message. Your jo
 Do not repeat a first-pass finding (same root cause at the same place). Every finding needs a concrete failing scenario, a file, and a numeric line on an added or modified line. Return an empty list if you find nothing.`
 
 // `limit` is what MAX_FINDINGS leaves after the first pass; the breadth pass is only told this remaining budget, as the reviewer is told the cap.
-export function breadthSystemPrompt(reviewerPrompt: string, limit: number): string {
+// Lets a pass cite an unchanged line it was shown while the introduced-by-change requirement stays.
+function allowShownContext(lens: string): string {
+  if (!lens.includes(SHOWN_LINE_CLAUSE)) throw new Error('Lens anchor clause not found')
+  return lens.replace(SHOWN_LINE_CLAUSE, () => 'a numeric line on an added or modified line, or on an unchanged line you were shown when it explains a defect this change introduces.')
+}
+
+export function breadthSystemPrompt(reviewerPrompt: string, limit: number, shownAnchors = false): string {
   const limitSection = limit > 0
     ? `\n\n## FINDINGS LIMIT\nReport at most ${limit} findings, prioritized by severity and impact. If more exist, include only the most important and omit the rest.`
     : ''
-  return `${reviewerPrompt}${limitSection}\n\n${BREADTH_LENS}`
+  return `${reviewerPrompt}${limitSection}\n\n${shownAnchors ? allowShownContext(BREADTH_LENS) : BREADTH_LENS}`
+}
+
+export interface BreadthPlan {
+  selected: string[]
+  deprioritizedReleaseEntries: number
+  omitted: number
+}
+
+const DOC_SLOTS = 8
+const DOC_EXT = /\.(md|markdown|rst|txt|adoc|asciidoc)$/i
+// Per-release changeset entries are near-identical prose; README.md in that folder is real documentation.
+const isReleaseEntry = (path: string): boolean => /^\.changeset\/[^/]+\.md$/i.test(path) && !/^\.changeset\/readme\.md$/i.test(path)
+
+function subsystem(path: string): string {
+  const pkg = path.match(/^(?:packages|apps)\/[^/]+/)
+  if (pkg) return pkg[0]
+  const slash = path.indexOf('/')
+  return slash < 0 ? '' : path.slice(0, slash)
+}
+
+const dirOf = (path: string): string => path.slice(0, Math.max(0, path.lastIndexOf('/')))
+
+// Round-robin across subsystems so one package or folder cannot take every slot; ranking is fully deterministic regardless of input order.
+function pickDiverse(paths: readonly string[], slots: number, rank: (path: string) => [number, number, string]): string[] {
+  const cmp = (a: string, b: string): number => {
+    const [pa, la, na] = rank(a)
+    const [pb, lb, nb] = rank(b)
+    return pa - pb || lb - la || (na < nb ? -1 : na > nb ? 1 : 0)
+  }
+  const groups = new Map<string, string[]>()
+  for (const p of paths) groups.set(subsystem(p), [...(groups.get(subsystem(p)) ?? []), p])
+  for (const list of groups.values()) list.sort(cmp)
+  const out: string[] = []
+  while (out.length < slots) {
+    const live = [...groups.entries()].filter(([, list]) => list.length > 0).sort(([ka, a], [kb, b]) => cmp(a[0], b[0]) || (ka < kb ? -1 : 1))
+    if (live.length === 0) break
+    for (const [, list] of live) {
+      if (out.length >= slots) break
+      out.push(list.shift()!)
+    }
+  }
+  return out
+}
+
+// Spends the fixed listing cap on substantive, diverse files; the diff payload is unchanged and omitted files stay in it.
+export function prioritizeUntouched(untouched: readonly string[], filteredDiff: string, findings: readonly ReviewFinding[]): BreadthPlan {
+  const eligible = untouched.filter(p => !isReleaseEntry(p))
+  const docs = eligible.filter(p => DOC_EXT.test(p))
+  const other = eligible.filter(p => !DOC_EXT.test(p))
+  const sections = splitDiffByFile(filteredDiff)
+  const size = (p: string): number => { const { added, removed } = countDiffLines(sections.get(p) ?? ''); return added + removed }
+  const changed = parseChangedFiles(filteredDiff).map(f => f.path)
+  const found = findings.filter(f => f.file).map(f => normalizeFindingPath(f.file!, changed))
+  const foundDirs = new Set(found.map(dirOf))
+  const foundSystems = new Set(found.map(subsystem))
+  const rank = (p: string): [number, number, string] => [foundDirs.has(dirOf(p)) ? 0 : foundSystems.has(subsystem(p)) ? 1 : 2, size(p), p]
+
+  const otherSlots = Math.min(other.length, MAX_UNTOUCHED_LISTED - DOC_SLOTS + Math.max(0, DOC_SLOTS - docs.length))
+  const docSlots = Math.min(docs.length, MAX_UNTOUCHED_LISTED - otherSlots)
+  const selected = [...pickDiverse(other, otherSlots, rank), ...pickDiverse(docs, docSlots, rank)]
+  return { selected, deprioritizedReleaseEntries: untouched.length - eligible.length, omitted: eligible.length - selected.length }
 }
 
 // Titles and anchors only: enough to avoid repeats and seed the same-defect search without re-sending every body.
-export function breadthBriefing(firstPass: readonly ReviewFinding[], untouched: readonly string[]): string {
+export function breadthBriefing(firstPass: readonly ReviewFinding[], untouched: readonly string[], plan?: BreadthPlan): string {
   const located = (f: ReviewFinding) => (f.file ? `${f.file}${f.lines ? `:${f.lines}` : ''}` : '(no file)')
   const findings = firstPass.length ? firstPass.map(f => `- ${located(f)} — ${f.title}`).join('\n') : 'None.'
+  if (plan) {
+    const more = plan.omitted > 0 ? `\n- …and ${plan.omitted} more eligible file(s) not listed` : ''
+    return `## First-pass findings (already reported — do not repeat):\n${findings}\n\n## Files with no finding yet (prioritized targets; unlisted files remain in the supplied diff):\n${plan.selected.length ? plan.selected.map(p => `- ${p}`).join('\n') : 'None.'}${more}`
+  }
   const shown = untouched.slice(0, MAX_UNTOUCHED_LISTED)
   const more = untouched.length > shown.length ? `\n- …and ${untouched.length - shown.length} more` : ''
   return `## First-pass findings (already reported — do not repeat):\n${findings}\n\n## Files with no finding yet:\n${shown.length ? shown.map(p => `- ${p}`).join('\n') : 'None.'}${more}`
@@ -101,11 +174,11 @@ A first review pass already ran; its findings are listed in the message. You are
 3. Incomplete changes on added or modified lines: stubs, placeholder returns, options parsed but ignored, a capability added at one layer but never wired up. A diff segment that ends at an opening brace or \`if\` is a hunk boundary, not an incomplete change.
 Do not repeat a first-pass finding (same root cause at the same place). Every finding needs a concrete failing scenario, a file, and a numeric line on an added or modified line. Return an empty list if you find nothing.`
 
-export function secondLookSystemPrompt(reviewerPrompt: string, limit: number): string {
+export function secondLookSystemPrompt(reviewerPrompt: string, limit: number, shownAnchors = false): string {
   const limitSection = limit > 0
     ? `\n\n## FINDINGS LIMIT\nReport at most ${limit} findings, prioritized by severity and impact. If more exist, include only the most important and omit the rest.`
     : ''
-  return `${reviewerPrompt}${limitSection}\n\n${SECOND_LOOK_LENS}`
+  return `${reviewerPrompt}${limitSection}\n\n${shownAnchors ? allowShownContext(SECOND_LOOK_LENS) : SECOND_LOOK_LENS}`
 }
 
 // Known findings (review + breadth) in the target files — titles + anchors only, so the pass avoids repeats.

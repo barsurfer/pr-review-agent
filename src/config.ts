@@ -124,6 +124,10 @@ export const config = {
     },
     // Off by default: sending the reviewer's file context roughly doubles judge input tokens.
     fileContext: optional('ENABLE_JUDGE_FILE_CONTEXT', 'false') === 'true',
+    // Off by default: bundles contradiction/duplicate repair, per-file findings and concrete-defect/handled prompt recalibration; may add one repair call.
+    quality: optional('ENABLE_JUDGE_QUALITY', 'false') === 'true',
+    // Off by default: lets breadth/second-look/judge anchors land on unchanged lines the model was actually shown.
+    shownAnchors: optional('ENABLE_JUDGE_SHOWN_CONTEXT_ANCHORS', 'false') === 'true',
   },
 
   // Off by default: a second reviewer-sized call. The model is resolved at run time (empty → the judge model) so benchmark labels apply.
@@ -134,6 +138,8 @@ export const config = {
     minFiles: finiteOr(parseInt(optional('BREADTH_MIN_FILES', '5'), 10), 5),
     minUntouched: finiteOr(parseInt(optional('BREADTH_MIN_UNTOUCHED', '3'), 10), 3),
     benchmarkDeadlineSeconds: positiveOr(Number(optional('BENCHMARK_DEADLINE_SECONDS', '840')), 840),
+    // Off by default: pick the listed untouched targets by subsystem diversity and substance instead of diff order.
+    priorityTargets: optional('ENABLE_BREADTH_PRIORITY_TARGETS', 'false') === 'true',
   },
 
   agentIdentity: process.env.AGENT_IDENTITY || process.env.BITBUCKET_USERNAME || 'Claude',
@@ -160,6 +166,8 @@ export const config = {
     enableNitpicks: optional('ENABLE_NITPICKS', 'false') === 'true',
     // Off by default: a second reviewer pass over files that already got findings, excluding known ones, to lift recall.
     secondLook: optional('ENABLE_SECOND_LOOK', 'false') === 'true',
+    // Off by default: second-look also re-reads files that only the breadth pass flagged.
+    secondLookBreadthTargets: optional('ENABLE_SECOND_LOOK_BREADTH_TARGETS', 'false') === 'true',
     // On by default: without numbered lines ~40% of findings carried no line; set false to send the raw diff/context (saves the per-line gutter tokens).
     lineNumbers: optional('ENABLE_LINE_NUMBERS', 'true') !== 'false',
   },

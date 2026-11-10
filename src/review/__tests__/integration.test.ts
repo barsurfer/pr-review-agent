@@ -1495,6 +1495,113 @@ describe('second-look review and the judge in normal mode', () => {
     expect(vi.mocked(runBreadth).mock.calls.some(isSecondLook)).toBe(false)
     expect(record!.second_look_status).toBe('skipped_rereview')
   })
+
+  describe('recall levers (default off)', () => {
+    afterEach(() => {
+      cfg.review.secondLookBreadthTargets = false
+      cfg.judge.shownAnchors = false
+      cfg.judge.quality = false
+      cfg.breadth.priorityTargets = false
+    })
+
+    it('SL_BREADTH on: re-reads review- and breadth-flagged files and briefs both known findings', async () => {
+      cfg.breadth.enabled = true
+      cfg.review.secondLookBreadthTargets = true
+      mockReviewer(reviewWith([A_BUG]))
+      mockPasses({ breadth: [B_BUG], secondLook: [A_BUG2] })
+      mockJudgeKeepsAll()
+
+      const record = await review(bigAdapter(), '100', false)
+
+      const slCall = vi.mocked(runBreadth).mock.calls.find(isSecondLook)!
+      expect(slCall[6]).toContain('src/a.ts')
+      expect(slCall[6]).toContain('src/b.ts')
+      expect(slCall[6]).not.toContain('src/c.ts')
+      expect(slCall[9]).toContain('A bug')
+      expect(slCall[9]).toContain('Same bug in b')
+      expect(record!.review_candidates!.map(c => c.origin)).toEqual(['review', 'breadth', 'second_look'])
+      expect(record!.recall_levers.sl_breadth).toBe(true)
+    })
+
+    it('SL_BREADTH on: a breadth-only finding still triggers second-look when the reviewer found nothing', async () => {
+      cfg.breadth.enabled = true
+      cfg.review.secondLookBreadthTargets = true
+      mockReviewer(reviewWith([]))
+      mockPasses({ breadth: [B_BUG], secondLook: [] })
+      mockJudgeKeepsAll()
+
+      const record = await review(bigAdapter(), '100', false)
+
+      expect(record!.second_look_status).toBe('succeeded')
+      const slCall = vi.mocked(runBreadth).mock.calls.find(isSecondLook)!
+      expect(slCall[6]).toContain('src/b.ts')
+      expect(slCall[6]).not.toContain('src/a.ts')
+    })
+
+    it('SL_BREADTH off: breadth-only findings do not trigger second-look and review-only targeting is unchanged', async () => {
+      cfg.breadth.enabled = true
+      mockReviewer(reviewWith([]))
+      mockPasses({ breadth: [B_BUG], secondLook: [A_BUG2] })
+      mockJudgeKeepsAll()
+
+      const record = await review(bigAdapter(), '100', false)
+
+      expect(record!.second_look_status).toBe('skipped_no_findings')
+      expect(vi.mocked(runBreadth).mock.calls.some(isSecondLook)).toBe(false)
+    })
+
+    it('J_SHOWN_ANCHOR on: hands the judge per-pass shown sources; off: no options argument at all', async () => {
+      cfg.breadth.enabled = true
+      cfg.judge.shownAnchors = true
+      mockReviewer(reviewWith([A_BUG]))
+      mockPasses({ breadth: [B_BUG], secondLook: [A_BUG2] })
+      mockJudgeKeepsAll()
+      await review(bigAdapter(), '100', false)
+
+      const options = mockRunJudge.mock.calls[0][11]
+      expect(options?.shownAnchors?.secondLookFrom).toBe(2)
+      expect([...options!.shownAnchors!.breadth!.keys()].sort()).toEqual(['src/a.ts', 'src/b.ts', 'src/c.ts', 'src/d.ts', 'src/e.ts'])
+      expect([...options!.shownAnchors!.secondLook!.keys()]).toEqual(['src/a.ts'])
+      expect(vi.mocked(runBreadth).mock.calls.find(isSecondLook)![8]).toContain('unchanged line you were shown')
+
+      mockRunJudge.mockClear()
+      vi.mocked(runBreadth).mockClear()
+      cfg.judge.shownAnchors = false
+      mockJudgeKeepsAll()
+      await review(bigAdapter(), '100', false)
+      expect(mockRunJudge.mock.calls[0]).toHaveLength(11)
+      expect(vi.mocked(runBreadth).mock.calls.find(isSecondLook)![8]).not.toContain('unchanged line you were shown')
+    })
+
+    it('J_QUALITY on: passes quality to the judge', async () => {
+      cfg.judge.quality = true
+      mockReviewer(reviewWith([A_BUG]))
+      mockPasses({})
+      mockJudgeKeepsAll()
+      const record = await review(bigAdapter(), '100', false)
+
+      expect(mockRunJudge.mock.calls[0][11]).toEqual({ quality: true, shownAnchors: undefined })
+      expect(record!.recall_levers.j_quality).toBe(true)
+    })
+
+    it('B_PRIORITY on: briefs prioritized targets and logs the actual selection; off keeps diff order', async () => {
+      cfg.breadth.enabled = true
+      cfg.breadth.priorityTargets = true
+      mockReviewer(reviewWith([A_BUG]))
+      mockPasses({})
+      mockJudgeKeepsAll()
+      const on = await review(bigAdapter(), '100', false)
+      const briefing = vi.mocked(runBreadth).mock.calls.find(c => !isSecondLook(c))![9] as string
+      expect(briefing).toContain('prioritized targets')
+      expect(on!.untouched_files).toMatchObject({ count: 4, cut: 0, deprioritized: 0 })
+
+      vi.mocked(runBreadth).mockClear()
+      cfg.breadth.priorityTargets = false
+      const off = await review(bigAdapter(), '100', false)
+      expect(vi.mocked(runBreadth).mock.calls.find(c => !isSecondLook(c))![9]).not.toContain('prioritized targets')
+      expect(off!.untouched_files).toEqual({ count: 4, paths: ['src/b.ts', 'src/c.ts', 'src/d.ts', 'src/e.ts'], cut: 0 })
+    })
+  })
 })
 
 // ===========================================================================

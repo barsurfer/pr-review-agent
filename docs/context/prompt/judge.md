@@ -100,6 +100,13 @@ The `computed_score` field in `results.jsonl` provides a separate arithmetic sco
 
 ---
 
+## Recall levers (all default off, label-driven for A/B)
+
+- `ENABLE_JUDGE_QUALITY` / `RB_CONFIG_J_QUALITY` — one gate, four repairs. Prompt: `already_handled` needs a mechanism that actually prevents the failure (an acknowledged tradeoff is not one); `low_value` is an unsupported preference; `minor` covers an existing changed test that cannot exercise its claimed branch, while demonstrated runtime/performance/UI defects go on their merits; `duplicate` must name a kept same-file twin in `duplicate_of`; plus a consistency section. Schema adds optional `duplicate_of` and `additional_locations`. App: `contradictoryDrop` inspects the judge's `note` (never the candidate) for an affirmative conclusion on a dropping category and, together with invalid duplicates, triggers at most ONE batched repair call (same model/prompt/payload; usage summed). Replacements are accepted only for requested ids, exactly one per id, non-contradictory, and non-duplicate for duplicate repairs; otherwise the original stands and `repair.status=unresolved` / `anomalies.unresolved_repair` is recorded. An invalid duplicate (target unknown, self, dropped, different file, non-overlapping range; checked against the final kept set) becomes `unverifiable` and follows `keepUnverified` plus the score cap (`invalid_duplicate`). A kept parent expands into one extra row per additional changed file only when the candidate text itself names it (verbatim `candidate_excerpt`) and the quote resolves to an added line in that file (`expansions` on the decision). `policyAction` is unchanged. The bundled caller gets the same gate.
+- `ENABLE_JUDGE_SHOWN_CONTEXT_ANCHORS` / `RB_CONFIG_J_SHOWN_ANCHOR` — a numeric anchor is also valid when every line of the range was shown (new-side diff context or supplied full-file lines) to the pass that produced the candidate (breadth, second-look; reviewer anchors stay ungated) or, for judge replacement anchors, to the judge. Unique verbatim quotes also resolve against shown lines. `anchor_basis` (`added_line` | `shown_context` | `fallback`) is logged on the decision. Location validity is separate from the PR-introduced-defect requirement; breadth/second-look lens wording gains the shown-line allowance. Not applied in bundled review.
+
+---
+
 ## Judge Prompt (`src/prompt/judge-prompt.txt`)
 
 Standalone file — not derived from the base review template. Includes its own SCOPE LOCK to resist prompt injection from reviewer output that might contain adversarial content.

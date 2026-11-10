@@ -92,7 +92,8 @@ export interface UsageRecord {
   second_look_prompt_hash: string | null
   second_look_tokens: { input: number; output: number } | null
   second_look_cost_usd: number | null
-  untouched_files: { count: number; paths: string[]; cut: number } | null
+  untouched_files: { count: number; paths: string[]; cut: number; deprioritized?: number } | null
+  recall_levers: { j_quality: boolean; sl_breadth: boolean; j_shown_anchor: boolean; b_priority: boolean }
   touch_rate: number | null
   delta: { developer_replies: number; resolved: number; still_open: number; new_findings: number } | null
   jenkins: { job: string; build: string; url: string } | null
@@ -319,8 +320,11 @@ export function buildUsageRecord(
     second_look_tokens: secondLookTokens,
     second_look_cost_usd: secondLookCost,
     untouched_files: ctx.untouchedFiles
-      ? { count: ctx.untouchedFiles.length, paths: ctx.untouchedFiles.slice(0, MAX_UNTOUCHED_LISTED), cut: Math.max(0, ctx.untouchedFiles.length - MAX_UNTOUCHED_LISTED) }
+      ? ctx.breadthPlan
+        ? { count: ctx.untouchedFiles.length, paths: ctx.breadthPlan.selected, cut: ctx.breadthPlan.omitted, deprioritized: ctx.breadthPlan.deprioritizedReleaseEntries }
+        : { count: ctx.untouchedFiles.length, paths: ctx.untouchedFiles.slice(0, MAX_UNTOUCHED_LISTED), cut: Math.max(0, ctx.untouchedFiles.length - MAX_UNTOUCHED_LISTED) }
       : null,
+    recall_levers: { j_quality: !!config.judge.quality, sl_breadth: !!config.review.secondLookBreadthTargets, j_shown_anchor: !!config.judge.shownAnchors, b_priority: !!config.breadth.priorityTargets },
     touch_rate: ctx.reviewNumber > 1 && deltaStats ? (() => {
       const total = deltaStats.resolved + deltaStats.still_open
       return total > 0 ? Math.round((deltaStats.resolved / total) * 100) : null

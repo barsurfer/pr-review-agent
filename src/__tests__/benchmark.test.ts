@@ -251,6 +251,26 @@ describe('benchmark mode end-to-end (model + judge mocked)', () => {
     expect(logSpy.mock.calls.map(c => c.join(' ')).join('\n')).toContain('nits=1 j_minor=1 j_unver=1 j_ctx=0 lnum=0')
   })
 
+  it('sets the four recall-lever flags from 0/1 labels, echoes them, and ignores bad values', async () => {
+    const env = { ...fixture(), RB_CONFIG_J_QUALITY: '1', RB_CONFIG_SL_BREADTH: '1', RB_CONFIG_J_SHOWN_ANCHOR: '1', RB_CONFIG_B_PRIORITY: '1' }
+
+    await runBenchmark(env)
+
+    expect([cfg.judge.quality, cfg.review.secondLookBreadthTargets, cfg.judge.shownAnchors, cfg.breadth.priorityTargets]).toEqual([true, true, true, true])
+    expect(logSpy.mock.calls.map(c => c.join(' ')).join('\n')).toContain('j_quality=1 sl_breadth=1 j_shown_anchor=1 b_priority=1')
+
+    logSpy.mockClear()
+    Object.assign(cfg.judge, { quality: false, shownAnchors: false })
+    Object.assign(cfg.review, { secondLookBreadthTargets: false })
+    Object.assign(cfg.breadth, { priorityTargets: false })
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await runBenchmark({ ...fixture(), RB_CONFIG_J_QUALITY: 'yes' })
+    expect(cfg.judge.quality).toBeFalsy()
+    expect(logSpy.mock.calls.map(c => c.join(' ')).join('\n')).toContain('j_quality=0 sl_breadth=0 j_shown_anchor=0 b_priority=0')
+    expect(warnSpy.mock.calls.map(c => c.join(' ')).join('\n')).toContain('RB_CONFIG_J_QUALITY=yes: expected 0 or 1')
+    warnSpy.mockRestore()
+  })
+
   it('LNUM=1 numbers the diff the reviewer sees and is echoed', async () => {
     await runBenchmark({ ...fixture(), RB_CONFIG_LNUM: '1' })
 

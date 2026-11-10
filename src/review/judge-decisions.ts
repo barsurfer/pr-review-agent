@@ -3,6 +3,8 @@
 import { renderReview, type ReviewFinding, type ReviewObject, type FindingScore } from './formatter.js'
 import { normalizeFindingPath, parseLineRange, type KeptFinding } from './findings-output.js'
 import { addedLines, type AddedLine } from './parsers.js'
+import { coversRange, shownFile, type ShownAnchors, type ShownSource } from './shown-anchors.js'
+import type { AdditionalLocation } from './judge-quality.js'
 
 export const REASON_CATEGORIES = [
   'validated', 'unconfirmed_high', 'chained_hypothetical',
@@ -24,6 +26,8 @@ export interface JudgeDecision {
   anchor_file?: string
   anchor_lines?: string
   anchor_quote?: string
+  duplicate_of?: string
+  additional_locations?: AdditionalLocation[]
 }
 
 export interface JudgeOutput {
@@ -44,6 +48,7 @@ export const DEFAULT_JUDGE_POLICY: JudgePolicy = { keepMinor: false, keepUnverif
 
 export type JudgeAction = 'keep' | 'downgrade' | 'drop' | 'move_to_unresolved'
 type AnchorSource = NonNullable<KeptFinding['anchorSource']>
+export type AnchorBasis = 'added_line' | 'shown_context' | 'fallback'
 
 export interface AppliedDecision {
   candidate_id: string
@@ -60,6 +65,12 @@ export interface AppliedDecision {
   anchor_source: AnchorSource | null
   anchor_file: string | null
   anchor_lines: string | null
+  // Present only under the matching opt-in flag, so flag-off records are unchanged.
+  anchor_basis?: AnchorBasis
+  duplicate_of?: string
+  invalid_duplicate?: boolean
+  expansions?: Array<{ file: string; accepted: boolean }>
+  repair?: { status: 'replaced' | 'unresolved'; original_reason: string; original_note: string }
 }
 
 export interface JudgeAnomalies {
@@ -67,6 +78,13 @@ export interface JudgeAnomalies {
   undecided: number
   duplicate_ids: number
   drop_without_evidence: number
+  invalid_duplicate?: number
+  unresolved_repair?: number
+}
+
+export interface JudgeOptions {
+  quality?: boolean
+  shownAnchors?: ShownAnchors
 }
 
 export interface JudgedReview {
@@ -107,7 +125,10 @@ export function policyAction(reason: ReasonCategory, severity: Severity, policy:
 const NUMERIC_LINES = /^\s*L?\d+(?:\s*[-–—,]\s*L?\d+)*\s*$/i
 const isNumericLines = (lines: string | undefined): boolean => NUMERIC_LINES.test(String(lines ?? ''))
 
-interface Anchor { file?: string; lines?: string; source: AnchorSource }
+interface Anchor { file?: string; lines?: string; source: AnchorSource; basis?: AnchorBasis }
+
+// Sources actually shown: `origin` to the pass that produced the candidate (breadth/second-look), `judge` to the judge; absent unless the opt-in flag is on.
+interface ShownContext { origin?: ShownSource; judge?: ShownSource }
 
 // Below this a quote is too short to locate a unique line without guessing ("}", "return null").
 const MIN_QUOTE_LEN = 12
@@ -161,34 +182,61 @@ export function locateInDiff(candidate: ReviewFinding, d: JudgeDecision, diff: s
   return resolveAnchor(candidate, d, buildDiffIndex(diff))
 }
 
-function resolveAnchor(candidate: ReviewFinding, d: JudgeDecision, idx: DiffIndex, breadthOrigin = false): Anchor {
+// Unique verbatim match among the shown lines of the first named file the pass was actually shown.
+function shownQuoteHit(src: ShownSource, rawFiles: ReadonlyArray<string | undefined>, quote: string): { file: string; line: number } | null {
+  for (const raw of rawFiles) {
+    if (!raw) continue
+    const key = normalizeFindingPath(String(raw), [...src.keys()])
+    const lines = shownFile(src, key)
+    if (!lines) continue
+    const hits = [...lines].filter(([, text]) => text.trim().includes(quote))
+    return hits.length === 1 ? { file: key, line: hits[0][0] } : null
+  }
+  return null
+}
+
+function resolveAnchor(candidate: ReviewFinding, d: JudgeDecision, idx: DiffIndex, breadthOrigin = false, shown: ShownContext = {}): Anchor {
+  const tracked = !!(shown.origin || shown.judge)
+  const numeric = !!candidate.file && isNumericLines(candidate.lines)
+  const onAdded = numeric && idx.present && onChangedLine(idx, candidate.file!, candidate.lines!)
+  // A line on code this pass was shown is a valid location even when unchanged; whether the defect is PR-introduced is a separate judgment.
+  const onShown = numeric && !!shown.origin && coversRange(shown.origin, candidate.file!, candidate.lines!)
   // A breadth line is held to the judge-channel rule below: off the diff it would post a ghost anchor.
-  const gated = breadthOrigin && !!candidate.file && isNumericLines(candidate.lines) && !(idx.present && onChangedLine(idx, candidate.file, candidate.lines!))
+  const gated = breadthOrigin && numeric && !(onAdded || onShown)
   // Ungated: the reviewer saw full files and may cite context/deletion/out-of-diff lines that must keep anchoring.
-  if (candidate.file && isNumericLines(candidate.lines) && !gated) return { file: candidate.file, lines: candidate.lines, source: 'reviewer' }
+  if (candidate.file && isNumericLines(candidate.lines) && !gated) return { file: candidate.file, lines: candidate.lines, source: 'reviewer', basis: tracked ? (onAdded ? 'added_line' : onShown ? 'shown_context' : undefined) : undefined }
 
   // The judge is the untrusted channel, so its numeric anchor is honored only on a changed line of a present diff — a model-typed line with no diff to validate it against would post a ghost anchor.
   const judgeFile = normalizeFindingPath(String(d.anchor_file ?? '')) || candidate.file
   const judgeLines = String(d.anchor_lines ?? '').trim()
   if (judgeFile && isNumericLines(judgeLines) && idx.present && onChangedLine(idx, judgeFile, judgeLines)) {
-    return { file: judgeFile, lines: judgeLines, source: 'judge' }
+    return { file: judgeFile, lines: judgeLines, source: 'judge', basis: tracked ? 'added_line' : undefined }
+  }
+  if (judgeFile && isNumericLines(judgeLines) && shown.judge && coversRange(shown.judge, judgeFile, judgeLines)) {
+    return { file: judgeFile, lines: judgeLines, source: 'judge', basis: 'shown_context' }
   }
 
   // Deterministic recovery: a single long-enough verbatim match, never a guess. The judge may copy the numbered gutter or the `+` marker it was shown.
-  const quote = String(d.anchor_quote ?? '').trim().replace(/^\d+\s+/, '').replace(/^\+/, '').trim()
+  const quote = cleanQuote(String(d.anchor_quote ?? ''))
   if (idx.present && quote.length >= MIN_QUOTE_LEN) {
     const hits = quoteMatches(idx, quoteFile(candidate, d, idx), quote)
-    if (hits.length === 1) return { file: hits[0].file, lines: String(hits[0].line), source: 'diff' }
+    if (hits.length === 1) return { file: hits[0].file, lines: String(hits[0].line), source: 'diff', basis: tracked ? 'added_line' : undefined }
+  }
+  if (shown.judge && quote.length >= MIN_QUOTE_LEN) {
+    const hit = shownQuoteHit(shown.judge, [candidate.file, d.anchor_file, filePrefix(d.anchor_quote), filePrefix(d.evidence)], quote)
+    if (hit) return { file: hit.file, lines: String(hit.line), source: 'diff', basis: 'shown_context' }
   }
 
   // Non-numeric `lines` is dropped (the bundled path re-parses any digit and mis-anchors); a judge-named changed file is kept for file-level placement.
-  return { file: candidate.file ?? quoteFile(candidate, d, idx), lines: isNumericLines(candidate.lines) && !gated ? candidate.lines : undefined, source: 'none' }
+  return { file: candidate.file ?? quoteFile(candidate, d, idx), lines: isNumericLines(candidate.lines) && !gated ? candidate.lines : undefined, source: 'none', basis: tracked ? 'fallback' : undefined }
 }
 
-const normalizeId = (id: string): string => String(id).trim().replace(/^\[|\]$/g, '').toLowerCase()
+export const normalizeId = (id: string): string => String(id).trim().replace(/^\[|\]$/g, '').toLowerCase()
 const clampScore = (n: number): number => Math.max(0, Math.min(10, Math.round(Number(n) || 0)))
 
-function resolve(d: JudgeDecision, candidate: ReviewFinding, policy: JudgePolicy, idx: DiffIndex, breadthOrigin: boolean): AppliedDecision & { question?: string; body: string; anchor: Anchor } {
+type Resolved = AppliedDecision & { question?: string; body: string; anchor: Anchor }
+
+function resolve(d: JudgeDecision, candidate: ReviewFinding, policy: JudgePolicy, idx: DiffIndex, breadthOrigin: boolean, shown: ShownContext = {}): Resolved {
   // A provider that doesn't enforce the enum can hand back anything; treat it as unproven.
   let reason: ReasonCategory = (REASON_CATEGORIES as readonly string[]).includes(d.reason_category) ? d.reason_category : 'unverifiable'
   let reclassified_from: AppliedDecision['reclassified_from'] = null
@@ -204,19 +252,20 @@ function resolve(d: JudgeDecision, candidate: ReviewFinding, policy: JudgePolicy
   const score = kept && unproven ? Math.min(clampScore(d.score), UNVERIFIED_SCORE_CAP) : clampScore(d.score)
   const rewrite = String(d.rewritten_body ?? '').trim()
   const rewritten = kept && rewrite.length > 0 && rewrite.length <= REWRITE_CAP
-  const anchor = resolveAnchor(candidate, d, idx, breadthOrigin)
+  const anchor = resolveAnchor(candidate, d, idx, breadthOrigin, shown)
   return {
     candidate_id: '', reason_category: reason, reclassified_from, action,
     original_severity: candidate.severity, final_severity: severity, score,
     evidence, note: String(d.note ?? '').trim(), rewritten,
     anchor_source: anchor.source, anchor_file: anchor.file ?? null, anchor_lines: anchor.lines ?? null,
+    ...(anchor.basis ? { anchor_basis: anchor.basis } : {}),
     question: String(d.question ?? '').trim() || undefined,
     body: rewritten ? rewrite : candidate.body,
     anchor,
   }
 }
 
-export function applyJudgeDecisions(candidates: readonly ReviewFinding[], output: JudgeOutput, policy: JudgePolicy = DEFAULT_JUDGE_POLICY, canBeSplit: readonly string[] = [], diff = '', breadthFrom = Infinity): JudgedReview {
+export function applyJudgeDecisions(candidates: readonly ReviewFinding[], output: JudgeOutput, policy: JudgePolicy = DEFAULT_JUDGE_POLICY, canBeSplit: readonly string[] = [], diff = '', breadthFrom = Infinity, options?: JudgeOptions): JudgedReview {
   const idx = buildDiffIndex(diff)
   const anomalies: JudgeAnomalies = { unknown_ids: 0, undecided: 0, duplicate_ids: 0, drop_without_evidence: 0 }
   const index = new Map(candidates.map((_, i) => [candidateId(i), i]))
@@ -227,39 +276,136 @@ export function applyJudgeDecisions(candidates: readonly ReviewFinding[], output
     byCandidate.set(i, [...(byCandidate.get(i) ?? []), d])
   }
 
+  const sa = options?.shownAnchors
+  const shownFor = (i: number): ShownContext => !sa ? {} : {
+    judge: sa.judge,
+    origin: i >= (sa.secondLookFrom ?? Infinity) ? sa.secondLook : i >= breadthFrom ? sa.breadth : undefined,
+  }
+
+  const entries: Entry[] = candidates.map((candidate, i) => {
+    const given = byCandidate.get(i) ?? []
+    if (!given.length) {
+      // Precision-safe default: a candidate the judge never ruled on is not posted, only counted.
+      anomalies.undecided++
+      return null
+    }
+    if (given.length > 1) anomalies.duplicate_ids++
+    const resolved = given.map(d => ({ r: resolve(d, candidate, policy, idx, i >= breadthFrom, shownFor(i)), d }))
+    const chosen = resolved.find(x => x.r.action === 'drop') ?? resolved[0]
+    if (chosen.r.reclassified_from) anomalies.drop_without_evidence++
+    return { i, candidate, r: chosen.r, d: chosen.d }
+  })
+
+  if (options?.quality) demoteInvalidDuplicates(entries, candidates, index, idx, policy, anomalies)
+
   const decisions: AppliedDecision[] = []
   const kept: KeptFinding[] = []
   const moved: string[] = []
   candidates.forEach((candidate, i) => {
     const id = candidateId(i)
-    const given = byCandidate.get(i) ?? []
-    if (!given.length) {
-      // Precision-safe default: a candidate the judge never ruled on is not posted, only counted.
-      anomalies.undecided++
+    const entry = entries[i]
+    if (!entry) {
       decisions.push({
         candidate_id: id, reason_category: null, reclassified_from: null, action: 'drop',
         original_severity: candidate.severity, final_severity: null, score: null, evidence: '', note: '', rewritten: false, anchor_source: null, anchor_file: null, anchor_lines: null,
       })
       return
     }
-    if (given.length > 1) anomalies.duplicate_ids++
-    const resolved = given.map(d => resolve(d, candidate, policy, idx, i >= breadthFrom))
-    const chosen = resolved.find(r => r.action === 'drop') ?? resolved[0]
-    if (chosen.reclassified_from) anomalies.drop_without_evidence++
-    const { question, body, anchor, ...applied } = chosen
-    decisions.push({ ...applied, candidate_id: id })
+    const { question, body, anchor, ...applied } = entry.r
+    const isKept = entry.r.action === 'keep' || entry.r.action === 'downgrade'
+    const expansion = options?.quality && isKept && entry.d.additional_locations?.length
+      ? expandLocations(candidate, entry.d.additional_locations, anchor, idx)
+      : null
+    decisions.push({ ...applied, candidate_id: id, ...(expansion ? { expansions: expansion.log } : {}) })
 
-    if (chosen.action === 'move_to_unresolved') moved.push(question ?? candidate.title)
-    if (chosen.action === 'keep' || chosen.action === 'downgrade') {
+    if (entry.r.action === 'move_to_unresolved') moved.push(question ?? candidate.title)
+    if (isKept) {
       kept.push({
-        severity: chosen.final_severity!, title: candidate.title, body, file: anchor.file, lines: anchor.lines,
-        score: chosen.score!, type: candidate.type, anchorSource: anchor.source,
+        severity: entry.r.final_severity!, title: candidate.title, body, file: anchor.file, lines: anchor.lines,
+        score: entry.r.score!, type: candidate.type, anchorSource: anchor.source,
       })
+      for (const x of expansion?.accepted ?? []) {
+        kept.push({ severity: entry.r.final_severity!, title: candidate.title, body: x.body, file: x.file, lines: x.lines, score: entry.r.score!, type: candidate.type, anchorSource: 'diff' })
+      }
     }
   })
 
   const scores: FindingScore[] = kept.map(k => ({ title: k.title, severity: k.severity, score: k.score!, file: k.file, lines: k.lines }))
   return { kept, decisions, anomalies, scores, markdown: renderJudgedReview(kept, output, moved, canBeSplit) }
+}
+
+type Entry = { i: number; candidate: ReviewFinding; r: Resolved; d: JudgeDecision } | null
+
+// The judge can relocate a kept finding, so same-file overlap is judged on resolved anchors, not the candidates' original locations.
+const locationOf = (a: Anchor, idx: DiffIndex): { file: string; range: { start: number; end: number } | null } => {
+  const file = a.file ? normalizeFindingPath(a.file, [...idx.byFile.keys()]) : ''
+  return { file: idx.byFile.has(file) ? file : '', range: isNumericLines(a.lines) ? parseLineRange(a.lines!) : null }
+}
+
+// A duplicate only means something when the clearer twin is itself kept, in the same file and location; judged against the final kept set so decision order cannot matter.
+function demoteInvalidDuplicates(entries: Entry[], candidates: readonly ReviewFinding[], index: Map<string, number>, idx: DiffIndex, policy: JudgePolicy, anomalies: JudgeAnomalies): void {
+  const retained = new Set<number>()
+  for (const e of entries) {
+    if (e && e.r.reason_category !== 'duplicate' && (e.r.action === 'keep' || e.r.action === 'downgrade')) retained.add(e.i)
+  }
+  for (const e of entries) {
+    if (!e || e.r.reason_category !== 'duplicate') continue
+    const target = index.get(normalizeId(String(e.d.duplicate_of ?? '')))
+    const here = locationOf(e.r.anchor, idx)
+    const there = target === undefined ? null : (entries[target] ? locationOf(entries[target]!.r.anchor, idx) : null)
+    if (target !== undefined && there && target !== e.i && retained.has(target)
+      && here.file && here.file === there.file && here.range && there.range
+      && here.range.start <= there.range.end && there.range.start <= here.range.end) {
+      e.r.duplicate_of = candidateId(target)
+      continue
+    }
+    const { action, severity } = policyAction('unverifiable', e.candidate.severity, policy)
+    const kept = action === 'keep' || action === 'downgrade'
+    Object.assign(e.r, {
+      reason_category: 'unverifiable', action, final_severity: severity,
+      score: kept ? Math.min(e.r.score ?? 0, UNVERIFIED_SCORE_CAP) : e.r.score,
+      invalid_duplicate: true, duplicate_of: String(e.d.duplicate_of ?? '').trim() || undefined,
+    })
+    anomalies.invalid_duplicate = (anomalies.invalid_duplicate ?? 0) + 1
+  }
+}
+
+const cleanQuote = (q: string): string => q.trim().replace(/^\d+\s+/, '').replace(/^\+/, '').trim()
+
+// A path/basename at a filename boundary, so "b.ts" matches "src/b.ts" or "the b.ts" but not "old-b.ts" or "b.tsx".
+function namesFile(text: string, token: string): boolean {
+  const esc = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new RegExp(`(^|[^\\w.\\-])${esc}(?![\\w\\-]|\\.\\w)`).test(text)
+}
+
+// Only files the candidate itself already names get a row, each proven against an added line, so the judge cannot widen scope or invent locations.
+function expandLocations(candidate: ReviewFinding, locations: readonly AdditionalLocation[], parent: Anchor, idx: DiffIndex): { accepted: Array<{ file: string; lines: string; body: string }>; log: Array<{ file: string; accepted: boolean }> } {
+  const accepted: Array<{ file: string; lines: string; body: string }> = []
+  const log: Array<{ file: string; accepted: boolean }> = []
+  const keys = [...idx.byFile.keys()]
+  const used = new Set<string>(parent.file ? [normalizeFindingPath(parent.file, keys)] : [])
+  const haystack = `${candidate.title}\n${candidate.body}`
+
+  for (const loc of locations) {
+    if (!loc || typeof loc !== 'object') continue
+    const file = normalizeFindingPath(String(loc.file ?? ''), keys)
+    if (!file || used.has(file)) continue
+    const base = file.split('/').pop()!
+    const uniqueBase = keys.filter(k => k.split('/').pop() === base).length === 1
+    const excerpt = String(loc.candidate_excerpt ?? '').trim()
+    const quote = cleanQuote(String(loc.anchor_quote ?? ''))
+    const range = isNumericLines(loc.lines) ? parseLineRange(loc.lines) : null
+    const hits = !range || quote.length < MIN_QUOTE_LEN ? [] : (idx.byFile.get(file) ?? []).filter(a => a.line >= range.start && a.line <= range.end && a.text.trim().includes(quote))
+    const body = String(loc.body ?? '').trim().slice(0, REWRITE_CAP)
+    const ok = idx.byFile.has(file) && excerpt.length > 0 && haystack.includes(excerpt)
+      && (namesFile(excerpt, file) || (uniqueBase && namesFile(excerpt, base)))
+      && hits.length === 1 && body.length > 0
+    log.push({ file, accepted: ok })
+    if (!ok) continue
+    used.add(file)
+    accepted.push({ file, lines: String(hits[0].line), body })
+  }
+  return { accepted, log }
 }
 
 // Must stay byte-compatible with what the judge used to write: Findings bullets and the Merge Confidence line are re-parsed downstream.
