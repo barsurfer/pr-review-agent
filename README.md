@@ -337,6 +337,7 @@ bundle build on every push to `main` and every PR — the gate that keeps `main`
 | `--validate-prompt` | No | Validate prompt and exit — local via `--prompt`, or repo via `--pr-id` |
 | `--model <id>` | No | Claude model ID (overrides `CLAUDE_MODEL` env var) |
 | `--judge-model <id>` | No | Judge model ID (overrides `JUDGING_MODEL` env var) |
+| `--reply-model <id>` | No | Model ID for developer replies (overrides `REPLY_MODEL`; empty = reviewer model) |
 | `--min-changed-files <n>` | No | Skip review if PR has fewer changed files (overrides `MIN_CHANGED_FILES`) |
 | `--max-changed-files <n>` | No | Skip review if PR has more changed files (overrides `MAX_CHANGED_FILES`) |
 | `--min-changed-lines <n>` | No | Skip review if PR has fewer changed lines (overrides `MIN_CHANGED_LINES`) |
@@ -345,6 +346,9 @@ bundle build on every push to `main` and every PR — the gate that keeps `main`
 | `--max-output-tokens <n>` | No | Max output tokens for reviewer + judge (overrides `MAX_OUTPUT_TOKENS`) |
 | `--effort <level>` | No | Reviewer thinking effort `low`\|`medium`\|`high`\|`xhigh`\|`max` (overrides `REVIEW_EFFORT`) |
 | `--judge-effort <level>` | No | Judge thinking effort (overrides `JUDGE_EFFORT`) |
+| `--skip-directed-replies` | No | Skip replying to dev comments @-directed at someone else (Bitbucket only; overrides `SKIP_DIRECTED_REPLIES`) |
+| `--second-look` | No | Second reviewer pass over already-flagged files to lift recall (overrides `ENABLE_SECOND_LOOK`; requires a judge) |
+| `--proposals` | No | Add a concise fix proposal to each kept finding in `results.jsonl` `anchored_findings` (overrides `ENABLE_JUDGE_PROPOSALS`; requires a judge) |
 | `--benchmark` | No | ReviewBench mode — read the PR from `RB_*` env + mounted files, write findings JSON to `RB_OUT`, never post |
 
 \* Not required when using `--validate-prompt --prompt <path>` (local file validation).

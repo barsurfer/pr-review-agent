@@ -131,7 +131,7 @@ The record is also printed to stdout at the end of every run regardless of the f
 | `breadth_model` / `breadth_prompt_hash` | `string \| null` | Model and system-prompt hash of the breadth call, when it ran |
 | `breadth_tokens` / `breadth_cost_usd` | `object \| null` / `number \| null` | Breadth usage, priced at the breadth model and included in `cost_usd` |
 | `untouched_files` | `object \| null` | `{ count, paths (≤40, diff order), cut }` — reviewable files without a reviewer finding, when the trigger was evaluated |
-| `anchored_findings` | `array \| null` | Compact kept-finding rows `{ anchor, severity, type, description }` resolved to a real line; judge-run only |
+| `anchored_findings` | `array \| null` | Compact kept-finding rows `{ anchor, severity, type, description, proposal?, quality_action? }` resolved to a real line; `proposal?` only with `ENABLE_JUDGE_PROPOSALS`, `quality_action?` only with `ENABLE_JUDGE_QUALITY`; judge-run only |
 | `touch_rate` | `number \| null` | Re-review only: `resolved / (resolved + still_open) × 100` — percentage of previous findings addressed by the developer |
 | `delta` | `object \| null` | Re-review only: `{ developer_replies, resolved, still_open, new_findings }` |
 | `jenkins` | `object \| null` | `{ job, build, url }` from Jenkins env (`JOB_NAME`/`BUILD_NUMBER`/`BUILD_URL`), or null off-CI — maps a run to its build/artifact |
