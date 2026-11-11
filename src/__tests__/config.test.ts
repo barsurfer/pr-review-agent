@@ -100,6 +100,12 @@ describe('recall-lever flags', () => {
     expect([c.judge.quality, c.judge.shownAnchors, c.review.secondLookBreadthTargets, c.breadth.priorityTargets]).toEqual([false, false, false, false])
   })
 
+  it('ENABLE_JUDGE_PROPOSALS defaults off and turns on only from the exact string true', async () => {
+    expect((await load({})).judge.proposals).toBe(false)
+    expect((await load({ ENABLE_JUDGE_PROPOSALS: 'true' })).judge.proposals).toBe(true)
+    expect((await load({ ENABLE_JUDGE_PROPOSALS: '1' })).judge.proposals).toBe(false)
+  })
+
   it('each turns on only from the exact string true, independently', async () => {
     expect((await load({ ENABLE_JUDGE_QUALITY: 'true' })).judge).toMatchObject({ quality: true, shownAnchors: false })
     expect((await load({ ENABLE_JUDGE_SHOWN_CONTEXT_ANCHORS: 'true' })).judge).toMatchObject({ quality: false, shownAnchors: true })

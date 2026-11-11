@@ -9,7 +9,7 @@ import {
   REASON_CATEGORIES, DEFAULT_JUDGE_POLICY, applyJudgeDecisions, renderCandidatesForJudge, summarizeDecisions,
   type JudgeOutput, type JudgePolicy, type JudgeOptions, type AppliedDecision, type JudgeAnomalies,
 } from './judge-decisions.js'
-import { composeJudgePrompt, QUALITY_DECISION_PROPERTIES, SHOWN_ANCHOR_DESCRIPTIONS } from './judge-quality.js'
+import { composeJudgePrompt, QUALITY_DECISION_PROPERTIES, PROPOSAL_DECISION_PROPERTIES, SHOWN_ANCHOR_DESCRIPTIONS } from './judge-quality.js'
 import { numberDiffLines, numberFileLines } from './parsers.js'
 import type { PRInfo, ReviewComment, CommentReply } from '../vcs/adapter.js'
 import type { FileContext } from '../context/fetcher.js'
@@ -74,9 +74,9 @@ export const JUDGE_OUTPUT_SCHEMA = {
 const schemaVariants = new Map<string, Record<string, unknown>>()
 
 // Flag-off returns the shared constant itself, so the model-facing schema (and any identity check on it) is unchanged.
-export function judgeOutputSchema(quality: boolean, shownAnchors: boolean): Record<string, unknown> {
-  if (!quality && !shownAnchors) return JUDGE_OUTPUT_SCHEMA
-  const key = `${quality}:${shownAnchors}`
+export function judgeOutputSchema(quality: boolean, shownAnchors: boolean, proposals = false): Record<string, unknown> {
+  if (!quality && !shownAnchors && !proposals) return JUDGE_OUTPUT_SCHEMA
+  const key = `${quality}:${shownAnchors}:${proposals}`
   const cached = schemaVariants.get(key)
   if (cached) return cached
   const schema = structuredClone(JUDGE_OUTPUT_SCHEMA) as unknown as { properties: { decisions: { items: { properties: Record<string, unknown> } } } }
@@ -86,6 +86,7 @@ export function judgeOutputSchema(quality: boolean, shownAnchors: boolean): Reco
     props.anchor_lines.description = SHOWN_ANCHOR_DESCRIPTIONS.anchor_lines
   }
   if (quality) Object.assign(props, structuredClone(QUALITY_DECISION_PROPERTIES))
+  if (proposals) Object.assign(props, structuredClone(PROPOSAL_DECISION_PROPERTIES))
   schemaVariants.set(key, schema)
   return schema
 }
@@ -284,8 +285,9 @@ export async function runJudge(
 
   const quality = !!options?.quality
   const shownAnchors = !!options?.shownAnchors
-  const judgePrompt = quality || shownAnchors ? composeJudgePrompt(getJudgePrompt(), { quality, shownAnchors }) : getJudgePrompt()
-  const schema = judgeOutputSchema(quality, shownAnchors)
+  const proposals = !!options?.proposals
+  const judgePrompt = quality || shownAnchors || proposals ? composeJudgePrompt(getJudgePrompt(), { quality, shownAnchors, proposals }) : getJudgePrompt()
+  const schema = judgeOutputSchema(quality, shownAnchors, proposals)
   const callOpts = { model, maxTokens, maxRetries, effort: effort || undefined }
   console.log(`Sending to judge (${model}, maxRetries: ${maxRetries}${fileContexts.length ? `, ${fileContexts.length} context file(s)` : ''})...`)
   const { object, usage } = await createProvider(apiKey).completeStructured<JudgeOutput>(judgePrompt, userMessage, schema, callOpts)

@@ -631,9 +631,10 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       const judgeInput = extra ? { ...ctx.reviewObject!, findings: [...firstPass, ...breadth, ...secondLook] } : ctx.reviewObject!
 
       ctx.reviewTextBeforeJudge = ctx.reviewText
-      const judgeOptions: JudgeOptions | undefined = config.judge.quality || config.judge.shownAnchors
+      const judgeOptions: JudgeOptions | undefined = config.judge.quality || config.judge.shownAnchors || config.judge.proposals
         ? {
             quality: config.judge.quality,
+            proposals: config.judge.proposals,
             shownAnchors: config.judge.shownAnchors
               ? { judge: buildShownSource(ctx.filteredDiff!, config.judge.fileContext ? ctx.fileContexts ?? [] : []), breadth: ctx.shownBreadth, secondLook: ctx.shownSecondLook, secondLookFrom: firstPass.length + breadth.length }
               : undefined,

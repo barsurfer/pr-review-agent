@@ -108,13 +108,13 @@ function fixture(opts: { diff?: string | null; prJson?: unknown } = {}): Record<
 const readOut = (env: Record<string, string>) => JSON.parse(readFileSync(env.RB_OUT, 'utf-8'))
 
 // The same checks scripts/try-agent.sh applies before accepting a findings file.
-function expectAccepted(out: any) {
+function expectAccepted(out: any, withProposal = false) {
   expect(Object.keys(out).sort()).toEqual(['agent', 'findings', 'pr'])
   expect(out.pr).toEqual({ repo: expect.any(String), pr_number: 1938, base: BASE, head: HEAD })
   expect(out.agent).toBe('my-agent')
   expect(Array.isArray(out.findings)).toBe(true)
   for (const f of out.findings) {
-    expect(Object.keys(f).sort()).toEqual(['end_line', 'file', 'message', 'producer', 'start_line'])
+    expect(Object.keys(f).sort()).toEqual(withProposal ? ['end_line', 'file', 'message', 'producer', 'proposal', 'start_line'] : ['end_line', 'file', 'message', 'producer', 'start_line'])
     expect(typeof f.file).toBe('string')
     expect(f.file.startsWith('./') || f.file.startsWith('/')).toBe(false)
     expect(Number.isInteger(f.start_line) && Number.isInteger(f.end_line)).toBe(true)
@@ -291,6 +291,56 @@ describe('benchmark mode end-to-end (model + judge mocked)', () => {
     expect(one.calls).not.toBe(absent.calls)
     expect(one.calls).toContain('LOW_VALUE EVIDENCE CHECK')
     expect(absent.calls).not.toContain('LOW_VALUE EVIDENCE CHECK')
+  })
+
+  it('J_PROPOSAL=1 adds a proposal key to kept findings only; absent and =0 leave findings byte-identical to the 5-key shape', async () => {
+    const withFix: JudgeOutput = { ...JUDGED, decisions: [{ ...JUDGED.decisions[0], proposal: 'Guard conns with a lock.' }, ...JUDGED.decisions.slice(1)] }
+    const run = async (labels: Record<string, string>) => {
+      completeStructured.mockReset()
+      mockModel(REVIEW, withFix)
+      const env = { ...fixture(), ...labels }
+      await runBenchmark(env)
+      return { env, raw: readFileSync(env.RB_OUT, 'utf-8'), calls: JSON.stringify(completeStructured.mock.calls) }
+    }
+    const absent = await run({})
+    const zero = await run({ RB_CONFIG_J_PROPOSAL: '0' })
+    const one = await run({ RB_CONFIG_J_PROPOSAL: '1' })
+
+    expectAccepted(JSON.parse(absent.raw))
+    expect(absent.raw).not.toContain('proposal')
+    expect(zero.raw).toBe(absent.raw)
+    expect(zero.calls).toBe(absent.calls)
+    const on = readOut(one.env)
+    expectAccepted({ ...on, findings: on.findings.slice(0, 1) }, true)
+    expect(on.findings[0].proposal).toBe('Guard conns with a lock.')
+    expect('proposal' in on.findings[1]).toBe(false)
+    expect(one.calls).toContain('## PROPOSAL')
+    expect(absent.calls).not.toContain('## PROPOSAL')
+    expect(logSpy.mock.calls.map(c => c.join(' ')).join('\n')).toContain('j_proposal=1')
+  })
+
+  it('J_PROPOSAL rejects non-0/1 values and warns when the judge is off', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await runBenchmark({ ...fixture(), RB_CONFIG_J_PROPOSAL: 'x' })
+    expect(cfg.judge.proposals).toBeFalsy()
+    expect(warnSpy.mock.calls.map(c => c.join(' ')).join('\n')).toContain('RB_CONFIG_J_PROPOSAL=x: expected 0 or 1')
+
+    warnSpy.mockClear()
+    cfg.judge.model = ''
+    await runBenchmark({ ...fixture(), RB_CONFIG_J_PROPOSAL: '1' })
+    expect(cfg.judge.proposals).toBe(true)
+    expect(warnSpy.mock.calls.map(c => c.join(' ')).join('\n')).toContain('judge is off')
+    warnSpy.mockRestore()
+  })
+
+  it('J_PROPOSAL label is authoritative: =0 overrides an already-enabled flag, absent leaves it', async () => {
+    cfg.judge.model = 'claude-haiku-5-5'
+    cfg.judge.proposals = true
+    await runBenchmark({ ...fixture(), RB_CONFIG_J_PROPOSAL: '0' })
+    expect(cfg.judge.proposals).toBe(false)
+    cfg.judge.proposals = true
+    await runBenchmark({ ...fixture() })
+    expect(cfg.judge.proposals).toBe(true)
   })
 
   it('LNUM=1 numbers the diff the reviewer sees and is echoed', async () => {

@@ -42,6 +42,7 @@ program
   .option('--judge-effort <level>', 'Judge thinking effort (overrides JUDGE_EFFORT)')
   .option('--skip-directed-replies', 'Skip replying to dev comments @-directed at someone else (Bitbucket only; overrides SKIP_DIRECTED_REPLIES)')
   .option('--second-look', 'Second reviewer pass over already-flagged files to lift recall (overrides ENABLE_SECOND_LOOK; requires a judge)')
+  .option('--proposals', 'Add a concise fix proposal to each kept finding in results.jsonl anchored_findings (overrides ENABLE_JUDGE_PROPOSALS; requires a judge)')
   .option('--benchmark', 'ReviewBench mode: read the PR from RB_* env + mounted files, write findings JSON to RB_OUT instead of posting; always exits 0')
   .parse(process.argv)
 
@@ -68,10 +69,13 @@ const opts = program.opts<{
   judgeEffort?: string
   skipDirectedReplies?: boolean
   secondLook?: boolean
+  proposals?: boolean
   benchmark?: boolean
 }>()
 
 async function main(): Promise<void> {
+  // Applied before the benchmark dispatch, which returns early.
+  if (opts.proposals) config.judge.proposals = true
   if (opts.benchmark) {
     await runBenchmark()
     return
@@ -189,6 +193,7 @@ async function main(): Promise<void> {
   if (opts.judgeEffort) config.judge.effort = opts.judgeEffort
   if (opts.skipDirectedReplies) config.reply.skipDirectedElsewhere = true
   if (opts.secondLook) config.review.secondLook = true
+  if (config.judge.proposals && !config.judge.model) console.warn('Warning: proposals requested but the judge is disabled (JUDGING_MODEL empty) - no proposals will be produced.')
   if (opts.repoSlug) config.repoSlug = opts.repoSlug
 
   // --force with no value defaults to 're-review'; --force clean or --force re-review explicit

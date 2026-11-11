@@ -210,6 +210,16 @@ describe('buildUsageRecord anchored_findings', () => {
     ])
   })
 
+  it('adds proposal to a row only when the kept finding has one, and never touches recall_levers', () => {
+    const withFix: KeptFinding[] = [{ ...judgedFindings[0], proposal: 'Lock get/put.' }, judgedFindings[2]]
+    const ctx = baseCtx({ judgedFindings: withFix, changedFiles: [{ path: 'src/pool.ts', status: 'modified' }] } as Partial<ReviewContext>)
+    const r = buildUsageRecord(ctx, 1, null)
+    expect(r.anchored_findings![0]).toEqual({ anchor: 'src/pool.ts:2-3', severity: 'HIGH', type: 'correctness', description: 'get/put race.', proposal: 'Lock get/put.' })
+    expect('proposal' in r.anchored_findings![1]).toBe(false)
+    expect(Object.keys(r.recall_levers)).toEqual(['j_quality', 'sl_breadth', 'j_shown_anchor', 'b_priority'])
+    expect(JSON.stringify(buildUsageRecord(baseCtx({ judgedFindings, changedFiles: [{ path: 'src/pool.ts', status: 'modified' }] } as Partial<ReviewContext>), 1, null))).not.toContain('proposal')
+  })
+
   it('is null when the structured judge produced no kept findings (bundled or no judge)', () => {
     expect(buildUsageRecord(baseCtx(), 1, null).anchored_findings).toBeNull()
   })

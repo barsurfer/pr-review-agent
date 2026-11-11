@@ -14,6 +14,7 @@ export interface ReportFinding {
   end_line: number
   message: string
   producer: string
+  proposal?: string
 }
 
 /** The judge's kept findings reconciled with their anchors — the canonical kept set any consumer
@@ -28,6 +29,7 @@ export interface KeptFinding {
   score?: number
   type?: IssueType   // carried from the reviewer finding; analytics only
   anchorSource?: 'reviewer' | 'judge' | 'diff' | 'file' | 'none'   // where file/lines came from, so a consumer can trust only what it wants
+  proposal?: string
 }
 
 export interface FindingsReport {
@@ -263,7 +265,7 @@ export function keptToReportFindings(kept: readonly KeptFinding[], producer: str
     const key = `${file}:${range.start}-${range.end}:${k.title}`
     if (seen.has(key)) continue
     seen.add(key)
-    out.push({ file, start_line: range.start, end_line: range.end, message: k.body ? `${k.title}: ${k.body}` : k.title, producer })
+    out.push({ file, start_line: range.start, end_line: range.end, message: k.body ? `${k.title}: ${k.body}` : k.title, producer, ...(k.proposal ? { proposal: k.proposal } : {}) })
   }
   return out
 }

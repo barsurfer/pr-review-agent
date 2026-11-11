@@ -28,6 +28,7 @@ export interface JudgeDecision {
   anchor_quote?: string
   duplicate_of?: string
   additional_locations?: AdditionalLocation[]
+  proposal?: unknown
 }
 
 export interface JudgeOutput {
@@ -70,6 +71,7 @@ export interface AppliedDecision {
   duplicate_of?: string
   invalid_duplicate?: boolean
   expansions?: Array<{ file: string; accepted: boolean }>
+  proposal?: string
 }
 
 export interface JudgeAnomalies {
@@ -83,6 +85,7 @@ export interface JudgeAnomalies {
 export interface JudgeOptions {
   quality?: boolean
   shownAnchors?: ShownAnchors
+  proposals?: boolean
 }
 
 export interface JudgedReview {
@@ -97,6 +100,18 @@ export const candidateId = (index: number): string => `c${index}`
 
 // Over this a rewrite is no longer a terse clarification, so the reviewer's own body is safer.
 export const REWRITE_CAP = 600
+export const PROPOSAL_CAP = 500
+
+const PROPOSAL_MAX_LINES = 7
+// Bound total size (chars + non-blank lines) instead of parsing fences: a size cap keeps proposals terse and can't be gamed by fence or whitespace tricks.
+export function sanitizeProposal(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined
+  const s = raw.trim()
+  if (!s || s.length > PROPOSAL_CAP) return undefined
+  const lines = s.split(/\r\n|\r|\n/).filter(l => l.trim())
+  if (lines.length > PROPOSAL_MAX_LINES) return undefined
+  return s
+}
 const UNVERIFIED_SCORE_CAP = 5
 const NEEDS_EVIDENCE: ReadonlySet<ReasonCategory> = new Set(['incorrect', 'already_handled'])
 const SEVERITY_RANK: Record<Severity, number> = { LOW: 0, MEDIUM: 1, HIGH: 2 }
@@ -274,6 +289,7 @@ export function applyJudgeDecisions(candidates: readonly ReviewFinding[], output
     byCandidate.set(i, [...(byCandidate.get(i) ?? []), d])
   }
 
+  const proposals = !!options?.proposals
   const sa = options?.shownAnchors
   const shownFor = (i: number): ShownContext => !sa ? {} : {
     judge: sa.judge,
@@ -288,7 +304,11 @@ export function applyJudgeDecisions(candidates: readonly ReviewFinding[], output
       return null
     }
     if (given.length > 1) anomalies.duplicate_ids++
-    const resolved = given.map(d => ({ r: resolve(d, candidate, policy, idx, i >= breadthFrom, shownFor(i)), d }))
+    const resolved = given.map(d => {
+      const r = resolve(d, candidate, policy, idx, i >= breadthFrom, shownFor(i))
+      const proposal = proposals ? sanitizeProposal(d.proposal) : undefined
+      return { r: proposal ? { ...r, proposal } : r, d }
+    })
     const chosen = resolved.find(x => x.r.action === 'drop') ?? resolved[0]
     if (chosen.r.reclassified_from) anomalies.drop_without_evidence++
     return { i, candidate, r: chosen.r, d: chosen.d }
@@ -309,18 +329,19 @@ export function applyJudgeDecisions(candidates: readonly ReviewFinding[], output
       })
       return
     }
-    const { question, body, anchor, ...applied } = entry.r
+    const { question, body, anchor, proposal, ...applied } = entry.r
     const isKept = entry.r.action === 'keep' || entry.r.action === 'downgrade'
+    const keptProposal = proposals && isKept && proposal ? { proposal } : {}
     const expansion = options?.quality && isKept && entry.d.additional_locations?.length
       ? expandLocations(candidate, entry.d.additional_locations, anchor, idx)
       : null
-    decisions.push({ ...applied, candidate_id: id, ...(expansion ? { expansions: expansion.log } : {}) })
+    decisions.push({ ...applied, candidate_id: id, ...(expansion ? { expansions: expansion.log } : {}), ...keptProposal })
 
     if (entry.r.action === 'move_to_unresolved') moved.push(question ?? candidate.title)
     if (isKept) {
       kept.push({
         severity: entry.r.final_severity!, title: candidate.title, body, file: anchor.file, lines: anchor.lines,
-        score: entry.r.score!, type: candidate.type, anchorSource: anchor.source,
+        score: entry.r.score!, type: candidate.type, anchorSource: anchor.source, ...keptProposal,
       })
       for (const x of expansion?.accepted ?? []) {
         kept.push({ severity: entry.r.final_severity!, title: candidate.title, body: x.body, file: x.file, lines: x.lines, score: entry.r.score!, type: candidate.type, anchorSource: 'diff' })

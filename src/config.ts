@@ -128,6 +128,8 @@ export const config = {
     quality: optional('ENABLE_JUDGE_QUALITY', 'false') === 'true',
     // Off by default: lets breadth/second-look/judge anchors land on unchanged lines the model was actually shown.
     shownAnchors: optional('ENABLE_JUDGE_SHOWN_CONTEXT_ANCHORS', 'false') === 'true',
+    // Off by default: extra judge output tokens per kept finding.
+    proposals: optional('ENABLE_JUDGE_PROPOSALS', 'false') === 'true',
   },
 
   // Off by default: a second reviewer-sized call. The model is resolved at run time (empty → the judge model) so benchmark labels apply.

@@ -36,6 +36,7 @@ const CONFIG_LABELS: Record<string, (value: string, name: string) => void> = {
   SL_BREADTH: flag(on => { config.review.secondLookBreadthTargets = on }),
   J_SHOWN_ANCHOR: flag(on => { config.judge.shownAnchors = on }),
   B_PRIORITY: flag(on => { config.breadth.priorityTargets = on }),
+  J_PROPOSAL: flag(on => { config.judge.proposals = on }),
 }
 
 const bit = (on: boolean): string => (on ? '1' : '0')
@@ -61,7 +62,8 @@ function applyBenchmarkConfig(env: NodeJS.ProcessEnv): void {
   applyConfigLabels(env)
   // The harness flags any config label whose value never appears in the agent's output.
   // Flags print under their label keys and 0/1 values, so a label set in the UI and a baked ENABLE_* value both show up here.
-  console.log(`Benchmark settings: model=${config.anthropic.model} effort=${config.review.effort || 'default'} judge_model=${config.judge.model || 'off'} judge_effort=${config.judge.effort || 'default'} nits=${bit(config.review.enableNitpicks)} j_minor=${bit(config.judge.policy.keepMinor)} j_unver=${bit(config.judge.policy.keepUnverified)} j_ctx=${bit(config.judge.fileContext)} lnum=${bit(config.review.lineNumbers)} breadth=${bit(config.breadth.enabled)} b_files=${config.breadth.minFiles} b_untch=${config.breadth.minUntouched} second_look=${bit(config.review.secondLook)} j_quality=${bit(config.judge.quality)} sl_breadth=${bit(config.review.secondLookBreadthTargets)} j_shown_anchor=${bit(config.judge.shownAnchors)} b_priority=${bit(config.breadth.priorityTargets)}`)
+  console.log(`Benchmark settings: model=${config.anthropic.model} effort=${config.review.effort || 'default'} judge_model=${config.judge.model || 'off'} judge_effort=${config.judge.effort || 'default'} nits=${bit(config.review.enableNitpicks)} j_minor=${bit(config.judge.policy.keepMinor)} j_unver=${bit(config.judge.policy.keepUnverified)} j_ctx=${bit(config.judge.fileContext)} lnum=${bit(config.review.lineNumbers)} breadth=${bit(config.breadth.enabled)} b_files=${config.breadth.minFiles} b_untch=${config.breadth.minUntouched} second_look=${bit(config.review.secondLook)} j_quality=${bit(config.judge.quality)} sl_breadth=${bit(config.review.secondLookBreadthTargets)} j_shown_anchor=${bit(config.judge.shownAnchors)} b_priority=${bit(config.breadth.priorityTargets)} j_proposal=${bit(config.judge.proposals)}`)
+  if (config.judge.proposals && !config.judge.model) console.warn('  J_PROPOSAL=1 but the judge is off - no proposals will be produced.')
   // Nitpicks emit but the default policy drops minor, so without keepMinor nothing new posts.
   if (config.review.enableNitpicks && !config.judge.policy.keepMinor) {
     console.warn('  NITS=1 but J_MINOR=0 — nitpicks are logged for offline scoring only; set J_MINOR=1 to post them.')

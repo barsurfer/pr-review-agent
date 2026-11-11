@@ -51,6 +51,7 @@ credentials in source code or commit them to version control.**
 | `JUDGE_EFFORT` | *(unset)* | Judge thinking effort — same scale and fallback behavior as `REVIEW_EFFORT`. |
 | `ENABLE_JUDGE_KEEP_MINOR` | `false` | Post candidates the judge classifies `minor` (real problem, no runtime impact: stale docs/comments, misleading names, duplication, weak tests in the diff) as LOW instead of dropping them. More LOW comments. See [prompt/judge.md](../context/prompt/judge.md). |
 | `ENABLE_JUDGE_KEEP_UNVERIFIED` | `false` | Post candidates the judge classifies `unverifiable` or `framework_uncertainty` (score capped at 5) instead of dropping / moving them to Unresolved Questions. |
+| `ENABLE_JUDGE_PROPOSALS` | `false` | Judge adds a concise fix `proposal` to each kept finding, emitted in `results.jsonl` `anchored_findings[]` and `--benchmark` findings JSON (never the posted comment). Extra judge output tokens; needs a judge. CLI: `--proposals`. |
 | `ENABLE_JUDGE_FILE_CONTEXT` | `false` | Send the judge the same full-file context the reviewer got, not just the diff. Roughly doubles judge input tokens. |
 | `MAX_REPLY_COMMENTS` | `5` | Max agent reply comments per PR (0 = unlimited). Prevents runaway token usage on extended conversations. Default: `5` |
 | `SKIP_DIRECTED_REPLIES` | `false` | Skip replying to a dev comment `@`-directed solely at someone else (a human/team, not the agent). Bitbucket only; fail-safe keeps all on any uncertainty. CLI: `--skip-directed-replies`. |
