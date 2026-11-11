@@ -36329,7 +36329,9 @@ var config = {
     // Off by default: narrow low_value evidence check, same-file duplicate validation and guarded per-file expansion; still one judge call.
     quality: optional("ENABLE_JUDGE_QUALITY", "false") === "true",
     // Off by default: lets breadth/second-look/judge anchors land on unchanged lines the model was actually shown.
-    shownAnchors: optional("ENABLE_JUDGE_SHOWN_CONTEXT_ANCHORS", "false") === "true"
+    shownAnchors: optional("ENABLE_JUDGE_SHOWN_CONTEXT_ANCHORS", "false") === "true",
+    // Off by default: extra judge output tokens per kept finding.
+    proposals: optional("ENABLE_JUDGE_PROPOSALS", "false") === "true"
   },
   // Off by default: a second reviewer-sized call. The model is resolved at run time (empty → the judge model) so benchmark labels apply.
   breadth: {
@@ -44510,7 +44512,7 @@ function keptToReportFindings(kept, producer, changedPaths = []) {
     const key = `${file}:${range.start}-${range.end}:${k.title}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    out.push({ file, start_line: range.start, end_line: range.end, message: k.body ? `${k.title}: ${k.body}` : k.title, producer });
+    out.push({ file, start_line: range.start, end_line: range.end, message: k.body ? `${k.title}: ${k.body}` : k.title, producer, ...k.proposal ? { proposal: k.proposal } : {} });
   }
   return out;
 }
@@ -44656,6 +44658,16 @@ var REASON_CATEGORIES = [
 var DEFAULT_JUDGE_POLICY = { keepMinor: false, keepUnverified: false };
 var candidateId = (index) => `c${index}`;
 var REWRITE_CAP = 600;
+var PROPOSAL_CAP = 500;
+var PROPOSAL_MAX_LINES = 7;
+function sanitizeProposal(raw) {
+  if (typeof raw !== "string") return void 0;
+  const s = raw.trim();
+  if (!s || s.length > PROPOSAL_CAP) return void 0;
+  const lines = s.split(/\r\n|\r|\n/).filter((l) => l.trim());
+  if (lines.length > PROPOSAL_MAX_LINES) return void 0;
+  return s;
+}
 var UNVERIFIED_SCORE_CAP = 5;
 var NEEDS_EVIDENCE = /* @__PURE__ */ new Set(["incorrect", "already_handled"]);
 var SEVERITY_RANK = { LOW: 0, MEDIUM: 1, HIGH: 2 };
@@ -44802,6 +44814,7 @@ function applyJudgeDecisions(candidates, output, policy = DEFAULT_JUDGE_POLICY, 
     }
     byCandidate.set(i, [...byCandidate.get(i) ?? [], d]);
   }
+  const proposals = !!options?.proposals;
   const sa = options?.shownAnchors;
   const shownFor = (i) => !sa ? {} : {
     judge: sa.judge,
@@ -44814,7 +44827,11 @@ function applyJudgeDecisions(candidates, output, policy = DEFAULT_JUDGE_POLICY, 
       return null;
     }
     if (given.length > 1) anomalies.duplicate_ids++;
-    const resolved = given.map((d) => ({ r: resolve2(d, candidate, policy, idx, i >= breadthFrom, shownFor(i)), d }));
+    const resolved = given.map((d) => {
+      const r = resolve2(d, candidate, policy, idx, i >= breadthFrom, shownFor(i));
+      const proposal = proposals ? sanitizeProposal(d.proposal) : void 0;
+      return { r: proposal ? { ...r, proposal } : r, d };
+    });
     const chosen = resolved.find((x) => x.r.action === "drop") ?? resolved[0];
     if (chosen.r.reclassified_from) anomalies.drop_without_evidence++;
     return { i, candidate, r: chosen.r, d: chosen.d };
@@ -44844,10 +44861,11 @@ function applyJudgeDecisions(candidates, output, policy = DEFAULT_JUDGE_POLICY, 
       });
       return;
     }
-    const { question, body, anchor, ...applied } = entry.r;
+    const { question, body, anchor, proposal, ...applied } = entry.r;
     const isKept = entry.r.action === "keep" || entry.r.action === "downgrade";
+    const keptProposal = proposals && isKept && proposal ? { proposal } : {};
     const expansion = options?.quality && isKept && entry.d.additional_locations?.length ? expandLocations(candidate, entry.d.additional_locations, anchor, idx) : null;
-    decisions.push({ ...applied, candidate_id: id, ...expansion ? { expansions: expansion.log } : {} });
+    decisions.push({ ...applied, candidate_id: id, ...expansion ? { expansions: expansion.log } : {}, ...keptProposal });
     if (entry.r.action === "move_to_unresolved") moved.push(question ?? candidate.title);
     if (isKept) {
       kept.push({
@@ -44858,7 +44876,8 @@ function applyJudgeDecisions(candidates, output, policy = DEFAULT_JUDGE_POLICY, 
         lines: anchor.lines,
         score: entry.r.score,
         type: candidate.type,
-        anchorSource: anchor.source
+        anchorSource: anchor.source,
+        ...keptProposal
       });
       for (const x of expansion?.accepted ?? []) {
         kept.push({ severity: entry.r.final_severity, title: candidate.title, body: x.body, file: x.file, lines: x.lines, score: entry.r.score, type: candidate.type, anchorSource: "diff" });
@@ -44987,6 +45006,9 @@ var MULTI_FILE = `## MULTI-FILE FINDINGS
 When a candidate you keep explicitly alleges the same defect in additional changed files, list each additional file in \`additional_locations\`: its \`file\`, numeric \`lines\`, a verbatim \`anchor_quote\` of the added line, a \`candidate_excerpt\` copied verbatim from the candidate that names that file, and a one-sentence \`body\` for that file's consequence. Do not list files mentioned only as callers, dependencies, examples, or fix locations, and do not discover new defects.`;
 var ANCHOR_SENTENCE = "Omit both anchor fields when the candidate already shows a numeric line, and omit all three";
 var ANCHOR_SHOWN = "If the candidate's numeric line cannot be confirmed from the code you were shown, give a replacement `anchor_file`, `anchor_lines` and `anchor_quote`; an unchanged line of the new file that you were shown is allowed, but prefer added or modified lines when equally accurate. Omit all three";
+var PROPOSAL = `## PROPOSAL
+
+For each candidate you keep, give \`proposal\`: the specific code change that resolves it, written as an instruction to the person or agent who will make the edit ("Wrap X in try/finally and release the client in finally."). It must be standalone - understandable without the finding text - and must not repeat the problem or why it matters (that is \`body\`/\`rewritten_body\`). At most 2 sentences plus one optional fenced snippet of up to 4 lines, under ~500 characters total. If you cannot name a concrete change from the code you were shown, omit \`proposal\`; never write "consider", "verify" or "ensure". Dropped candidates get no proposal.`;
 function composeJudgePrompt(base, opts2) {
   let out = base;
   if (opts2.shownAnchors) {
@@ -45002,6 +45024,10 @@ ${LOW_VALUE_EVIDENCE}
 ${MULTI_FILE}
 `;
   }
+  if (opts2.proposals) out = `${out.trimEnd()}
+
+${PROPOSAL}
+`;
   return out;
 }
 var SHOWN_ANCHOR_DESCRIPTIONS = {
@@ -45026,6 +45052,9 @@ var QUALITY_DECISION_PROPERTIES = {
       additionalProperties: false
     }
   }
+};
+var PROPOSAL_DECISION_PROPERTIES = {
+  proposal: { type: "string", description: "Only for a candidate you keep: the concrete change that fixes it, as an imperative instruction a developer or coding agent can apply without re-reading the finding. 1-2 sentences, optionally one minimal fenced snippet of at most 4 lines. Name the exact function/symbol to change. Do not restate the problem or its impact. Keep it under ~500 characters; omit when no concrete fix can be determined from the code you were shown." }
 };
 
 // src/review/client.ts
@@ -45065,9 +45094,9 @@ var JUDGE_OUTPUT_SCHEMA = {
   additionalProperties: false
 };
 var schemaVariants = /* @__PURE__ */ new Map();
-function judgeOutputSchema(quality, shownAnchors) {
-  if (!quality && !shownAnchors) return JUDGE_OUTPUT_SCHEMA;
-  const key = `${quality}:${shownAnchors}`;
+function judgeOutputSchema(quality, shownAnchors, proposals = false) {
+  if (!quality && !shownAnchors && !proposals) return JUDGE_OUTPUT_SCHEMA;
+  const key = `${quality}:${shownAnchors}:${proposals}`;
   const cached = schemaVariants.get(key);
   if (cached) return cached;
   const schema = structuredClone(JUDGE_OUTPUT_SCHEMA);
@@ -45077,6 +45106,7 @@ function judgeOutputSchema(quality, shownAnchors) {
     props.anchor_lines.description = SHOWN_ANCHOR_DESCRIPTIONS.anchor_lines;
   }
   if (quality) Object.assign(props, structuredClone(QUALITY_DECISION_PROPERTIES));
+  if (proposals) Object.assign(props, structuredClone(PROPOSAL_DECISION_PROPERTIES));
   schemaVariants.set(key, schema);
   return schema;
 }
@@ -45223,8 +45253,9 @@ ${renderCandidatesForJudge(review2)}`);
   const userMessage = parts.join("\n\n");
   const quality = !!options?.quality;
   const shownAnchors = !!options?.shownAnchors;
-  const judgePrompt = quality || shownAnchors ? composeJudgePrompt(getJudgePrompt(), { quality, shownAnchors }) : getJudgePrompt();
-  const schema = judgeOutputSchema(quality, shownAnchors);
+  const proposals = !!options?.proposals;
+  const judgePrompt = quality || shownAnchors || proposals ? composeJudgePrompt(getJudgePrompt(), { quality, shownAnchors, proposals }) : getJudgePrompt();
+  const schema = judgeOutputSchema(quality, shownAnchors, proposals);
   const callOpts = { model, maxTokens, maxRetries, effort: effort || void 0 };
   console.log(`Sending to judge (${model}, maxRetries: ${maxRetries}${fileContexts.length ? `, ${fileContexts.length} context file(s)` : ""})...`);
   const { object, usage } = await createProvider(apiKey).completeStructured(judgePrompt, userMessage, schema, callOpts);
@@ -45844,7 +45875,7 @@ function getAgentVersion() {
     const pkg = JSON.parse((0, import_fs4.readFileSync)(pkgPath, "utf-8"));
     return pkg.version;
   } catch {
-    if (true) return "0.0.37";
+    if (true) return "0.0.38";
     return "unknown";
   }
 }
@@ -45856,7 +45887,7 @@ function getBuildCommit() {
     const dirty = (0, import_child_process.execSync)("git status --porcelain", opts2).toString().trim() ? "-dirty" : "";
     return hash + dirty;
   } catch {
-    if (true) return "db34525";
+    if (true) return "d479030";
     return "unknown";
   }
 }
@@ -45961,7 +45992,8 @@ function buildUsageRecord(ctx, durationMs, error) {
         anchor: r.start === r.end ? `${file}:${r.start}` : `${file}:${r.start}-${r.end}`,
         severity: k.severity,
         type: normalizeIssueType(k.type),
-        description: firstSentence(k.body)
+        description: firstSentence(k.body),
+        ...k.proposal ? { proposal: k.proposal } : {}
       };
     }) : null,
     review_candidates: ctx.judgeDecisions && ctx.reviewObject ? (ctx.judgeCandidates ?? ctx.reviewObject.findings.map((f) => ({ ...f, origin: "review" }))).map((f, i) => ({ id: candidateId(i), origin: f.origin, severity: f.severity, title: f.title, file: f.file ?? null, lines: f.lines ?? null, body: f.body })) : null,
@@ -46567,8 +46599,9 @@ If this PR spans multiple independent themes that could each be a separate, inde
       const extra = breadth.length > 0 || secondLook.length > 0;
       const judgeInput = extra ? { ...ctx.reviewObject, findings: [...firstPass, ...breadth, ...secondLook] } : ctx.reviewObject;
       ctx.reviewTextBeforeJudge = ctx.reviewText;
-      const judgeOptions = config.judge.quality || config.judge.shownAnchors ? {
+      const judgeOptions = config.judge.quality || config.judge.shownAnchors || config.judge.proposals ? {
         quality: config.judge.quality,
+        proposals: config.judge.proposals,
         shownAnchors: config.judge.shownAnchors ? { judge: buildShownSource(ctx.filteredDiff, config.judge.fileContext ? ctx.fileContexts ?? [] : []), breadth: ctx.shownBreadth, secondLook: ctx.shownSecondLook, secondLookFrom: firstPass.length + breadth.length } : void 0
       } : void 0;
       const judgeTail = judgeOptions ? [judgeOptions] : [];
@@ -46918,6 +46951,9 @@ var CONFIG_LABELS = {
   }),
   B_PRIORITY: flag((on) => {
     config.breadth.priorityTargets = on;
+  }),
+  J_PROPOSAL: flag((on) => {
+    config.judge.proposals = on;
   })
 };
 var bit = (on) => on ? "1" : "0";
@@ -46938,7 +46974,8 @@ function applyBenchmarkConfig(env) {
   if (!env.MAX_CHANGED_LINES) config.thresholds.maxChangedLines = 0;
   config.review.splitCheck = false;
   applyConfigLabels(env);
-  console.log(`Benchmark settings: model=${config.anthropic.model} effort=${config.review.effort || "default"} judge_model=${config.judge.model || "off"} judge_effort=${config.judge.effort || "default"} nits=${bit(config.review.enableNitpicks)} j_minor=${bit(config.judge.policy.keepMinor)} j_unver=${bit(config.judge.policy.keepUnverified)} j_ctx=${bit(config.judge.fileContext)} lnum=${bit(config.review.lineNumbers)} breadth=${bit(config.breadth.enabled)} b_files=${config.breadth.minFiles} b_untch=${config.breadth.minUntouched} second_look=${bit(config.review.secondLook)} j_quality=${bit(config.judge.quality)} sl_breadth=${bit(config.review.secondLookBreadthTargets)} j_shown_anchor=${bit(config.judge.shownAnchors)} b_priority=${bit(config.breadth.priorityTargets)}`);
+  console.log(`Benchmark settings: model=${config.anthropic.model} effort=${config.review.effort || "default"} judge_model=${config.judge.model || "off"} judge_effort=${config.judge.effort || "default"} nits=${bit(config.review.enableNitpicks)} j_minor=${bit(config.judge.policy.keepMinor)} j_unver=${bit(config.judge.policy.keepUnverified)} j_ctx=${bit(config.judge.fileContext)} lnum=${bit(config.review.lineNumbers)} breadth=${bit(config.breadth.enabled)} b_files=${config.breadth.minFiles} b_untch=${config.breadth.minUntouched} second_look=${bit(config.review.secondLook)} j_quality=${bit(config.judge.quality)} sl_breadth=${bit(config.review.secondLookBreadthTargets)} j_shown_anchor=${bit(config.judge.shownAnchors)} b_priority=${bit(config.breadth.priorityTargets)} j_proposal=${bit(config.judge.proposals)}`);
+  if (config.judge.proposals && !config.judge.model) console.warn("  J_PROPOSAL=1 but the judge is off - no proposals will be produced.");
   if (config.review.enableNitpicks && !config.judge.policy.keepMinor) {
     console.warn("  NITS=1 but J_MINOR=0 \u2014 nitpicks are logged for offline scoring only; set J_MINOR=1 to post them.");
   }
@@ -47009,9 +47046,10 @@ if (major < 22) {
   process.exit(1);
 }
 var program2 = new Command();
-program2.name("pr-review-agent").description("Automated PR code review powered by Claude").option("--pr-id <id>", "Pull request ID").option("--workspace <workspace>", "VCS workspace / org (overrides BITBUCKET_WORKSPACE)").option("--repo-slug <slug>", "Repository slug").option("--vcs <provider>", "VCS provider: bitbucket | azure (WIP) | github | gitlab (overrides VCS_PROVIDER)").option("--dry-run", "Print the review to stdout without posting to the PR").option("--force [mode]", 'Force review: "clean" (no prior context) or "re-review" (keep context, bypass dedup)').option("--log-usage [bool]", "Log usage data to results.jsonl (default: true)", (v) => v !== "false", true).option("--prompt <path>", "Path to a local prompt file (overrides repo .agent-review-instructions.md)").option("--validate-prompt", "Validate prompt and exit (local via --prompt, or repo via --pr-id)").option("--model <id>", "Claude model ID (overrides CLAUDE_MODEL)").option("--judge-model <id>", "Judge model ID (overrides JUDGING_MODEL)").option("--reply-model <id>", "Model ID for developer replies (overrides REPLY_MODEL; empty = reviewer model)").option("--min-changed-files <n>", "Skip review if fewer files changed (overrides MIN_CHANGED_FILES)").option("--max-changed-files <n>", "Skip review if more files changed (overrides MAX_CHANGED_FILES)").option("--min-changed-lines <n>", "Skip review if fewer lines changed (overrides MIN_CHANGED_LINES)").option("--max-changed-lines <n>", "Skip review if more lines changed (overrides MAX_CHANGED_LINES)").option("--max-input-tokens <n>", "Max estimated input tokens before degrade/skip (overrides MAX_INPUT_TOKENS)").option("--max-output-tokens <n>", "Max output tokens for reviewer + judge (overrides MAX_OUTPUT_TOKENS)").option("--effort <level>", "Reviewer thinking effort: low|medium|high|xhigh|max (overrides REVIEW_EFFORT; ignored by models without effort)").option("--judge-effort <level>", "Judge thinking effort (overrides JUDGE_EFFORT)").option("--skip-directed-replies", "Skip replying to dev comments @-directed at someone else (Bitbucket only; overrides SKIP_DIRECTED_REPLIES)").option("--second-look", "Second reviewer pass over already-flagged files to lift recall (overrides ENABLE_SECOND_LOOK; requires a judge)").option("--benchmark", "ReviewBench mode: read the PR from RB_* env + mounted files, write findings JSON to RB_OUT instead of posting; always exits 0").parse(process.argv);
+program2.name("pr-review-agent").description("Automated PR code review powered by Claude").option("--pr-id <id>", "Pull request ID").option("--workspace <workspace>", "VCS workspace / org (overrides BITBUCKET_WORKSPACE)").option("--repo-slug <slug>", "Repository slug").option("--vcs <provider>", "VCS provider: bitbucket | azure (WIP) | github | gitlab (overrides VCS_PROVIDER)").option("--dry-run", "Print the review to stdout without posting to the PR").option("--force [mode]", 'Force review: "clean" (no prior context) or "re-review" (keep context, bypass dedup)').option("--log-usage [bool]", "Log usage data to results.jsonl (default: true)", (v) => v !== "false", true).option("--prompt <path>", "Path to a local prompt file (overrides repo .agent-review-instructions.md)").option("--validate-prompt", "Validate prompt and exit (local via --prompt, or repo via --pr-id)").option("--model <id>", "Claude model ID (overrides CLAUDE_MODEL)").option("--judge-model <id>", "Judge model ID (overrides JUDGING_MODEL)").option("--reply-model <id>", "Model ID for developer replies (overrides REPLY_MODEL; empty = reviewer model)").option("--min-changed-files <n>", "Skip review if fewer files changed (overrides MIN_CHANGED_FILES)").option("--max-changed-files <n>", "Skip review if more files changed (overrides MAX_CHANGED_FILES)").option("--min-changed-lines <n>", "Skip review if fewer lines changed (overrides MIN_CHANGED_LINES)").option("--max-changed-lines <n>", "Skip review if more lines changed (overrides MAX_CHANGED_LINES)").option("--max-input-tokens <n>", "Max estimated input tokens before degrade/skip (overrides MAX_INPUT_TOKENS)").option("--max-output-tokens <n>", "Max output tokens for reviewer + judge (overrides MAX_OUTPUT_TOKENS)").option("--effort <level>", "Reviewer thinking effort: low|medium|high|xhigh|max (overrides REVIEW_EFFORT; ignored by models without effort)").option("--judge-effort <level>", "Judge thinking effort (overrides JUDGE_EFFORT)").option("--skip-directed-replies", "Skip replying to dev comments @-directed at someone else (Bitbucket only; overrides SKIP_DIRECTED_REPLIES)").option("--second-look", "Second reviewer pass over already-flagged files to lift recall (overrides ENABLE_SECOND_LOOK; requires a judge)").option("--proposals", "Add a concise fix proposal to each kept finding in results.jsonl anchored_findings (overrides ENABLE_JUDGE_PROPOSALS; requires a judge)").option("--benchmark", "ReviewBench mode: read the PR from RB_* env + mounted files, write findings JSON to RB_OUT instead of posting; always exits 0").parse(process.argv);
 var opts = program2.opts();
 async function main() {
+  if (opts.proposals) config.judge.proposals = true;
   if (opts.benchmark) {
     await runBenchmark();
     return;
@@ -47102,6 +47140,7 @@ Filled prompt length: ${result.content.length} chars (~${Math.ceil(result.conten
   if (opts.judgeEffort) config.judge.effort = opts.judgeEffort;
   if (opts.skipDirectedReplies) config.reply.skipDirectedElsewhere = true;
   if (opts.secondLook) config.review.secondLook = true;
+  if (config.judge.proposals && !config.judge.model) console.warn("Warning: proposals requested but the judge is disabled (JUDGING_MODEL empty) - no proposals will be produced.");
   if (opts.repoSlug) config.repoSlug = opts.repoSlug;
   const forceMode = opts.force === true ? "re-review" : typeof opts.force === "string" ? opts.force : "off";
   await review(adapter2, opts.prId, opts.dryRun ?? false, opts.prompt, forceMode, opts.logUsage ?? true, opts.repoSlug ?? "");
