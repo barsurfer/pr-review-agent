@@ -44391,6 +44391,13 @@ function mapFindings(findings, producer, changedPaths = []) {
 var STOPWORDS = /* @__PURE__ */ new Set(["a", "an", "the", "in", "on", "of", "to", "for", "and", "or", "is", "are", "be", "not", "no", "with", "without", "that", "this", "it", "its", "as", "at", "by", "from", "when", "if"]);
 var normTitle = (s) => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 var titleWords = (s) => normTitle(s).split(" ").filter((w) => w && !STOPWORDS.has(w));
+function titlesOverlap(a, b) {
+  const sa = new Set(titleWords(a)), sb = new Set(titleWords(b));
+  if (!sa.size || !sb.size) return false;
+  let inter = 0;
+  for (const w of sa) if (sb.has(w)) inter++;
+  return inter >= 2 && inter / Math.min(sa.size, sb.size) >= 0.5;
+}
 function cleanFile(f) {
   if (!f) return void 0;
   const s = f.trim().replace(/^`+|`+$/g, "").replace(/\\/g, "/").replace(/:\d+(?:-\d+)?$/, "");
@@ -44840,6 +44847,7 @@ function applyJudgeDecisions(candidates, output, policy = DEFAULT_JUDGE_POLICY, 
   const decisions = [];
   const kept = [];
   const moved = [];
+  const rows = [];
   candidates.forEach((candidate, i) => {
     const id = candidateId(i);
     const entry = entries[i];
@@ -44877,13 +44885,17 @@ function applyJudgeDecisions(candidates, output, policy = DEFAULT_JUDGE_POLICY, 
         score: entry.r.score,
         type: candidate.type,
         anchorSource: anchor.source,
-        ...keptProposal
+        ...keptProposal,
+        ...entry.r.quality_action ? { quality_action: entry.r.quality_action } : {}
       });
+      rows.push({ candidate: i, expansion: false, validated: entry.r.reason_category === "validated", evidenced: !!entry.r.evidence, rescueOf: entry.r.invalid_duplicate ? index.get(normalizeId(String(entry.r.duplicate_of ?? ""))) : void 0 });
       for (const x of expansion?.accepted ?? []) {
-        kept.push({ severity: entry.r.final_severity, title: candidate.title, body: x.body, file: x.file, lines: x.lines, score: entry.r.score, type: candidate.type, anchorSource: "diff" });
+        kept.push({ severity: entry.r.final_severity, title: candidate.title, body: x.body, file: x.file, lines: x.lines, score: entry.r.score, type: candidate.type, anchorSource: "diff", ...options?.quality ? { quality_action: "expansion" } : {} });
+        rows.push({ candidate: i, expansion: true, validated: entry.r.reason_category === "validated", evidenced: !!entry.r.evidence });
       }
     }
   });
+  if (options?.quality) dedupKept(kept, rows, decisions, idx);
   const scores = kept.map((k) => ({ title: k.title, severity: k.severity, score: k.score, file: k.file, lines: k.lines }));
   return { kept, decisions, anomalies, scores, markdown: renderJudgedReview(kept, output, moved, canBeSplit) };
 }
@@ -44913,10 +44925,54 @@ function demoteInvalidDuplicates(entries, candidates, index, idx, policy, anomal
       final_severity: severity,
       score: kept ? Math.min(e.r.score ?? 0, UNVERIFIED_SCORE_CAP) : e.r.score,
       invalid_duplicate: true,
-      duplicate_of: String(e.d.duplicate_of ?? "").trim() || void 0
+      duplicate_of: String(e.d.duplicate_of ?? "").trim() || void 0,
+      ...kept ? { quality_action: "dup_rescue" } : {}
     });
     anomalies.invalid_duplicate = (anomalies.invalid_duplicate ?? 0) + 1;
   }
+}
+function dedupKept(kept, rows, decisions, idx) {
+  const keys = [...idx.byFile.keys()];
+  const place = kept.map((k) => ({
+    file: k.file ? normalizeFindingPath(k.file, keys) : "",
+    range: isNumericLines(k.lines) ? parseLineRange(k.lines) : null
+  }));
+  const normBody = (s) => (s ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+  const sameIssue2 = (a, b) => {
+    const pa = place[a], pb = place[b];
+    if (!pa.file || pa.file !== pb.file || !pa.range || !pb.range) return false;
+    if (pa.range.start > pb.range.end || pb.range.start > pa.range.end) return false;
+    const ra = rows[a], rb = rows[b];
+    const provenance = ra.rescueOf !== void 0 && rb.expansion && rb.candidate === ra.rescueOf || rb.rescueOf !== void 0 && ra.expansion && ra.candidate === rb.rescueOf;
+    if (provenance) return true;
+    const nb = normBody(kept[a].body);
+    if (!nb || nb !== normBody(kept[b].body)) return false;
+    return titlesOverlap(kept[a].title, kept[b].title) || normTitle(kept[a].title) === normTitle(kept[b].title);
+  };
+  const order = kept.map((_, n) => n).sort((a, b) => {
+    const ra = rows[a], rb = rows[b];
+    return Number(rb.validated) - Number(ra.validated) || Number(rb.evidenced) - Number(ra.evidenced) || (kept[b].score ?? 0) - (kept[a].score ?? 0) || Number(ra.expansion) - Number(rb.expansion) || ra.candidate - rb.candidate || a - b;
+  });
+  const survivors = [];
+  const dropped = /* @__PURE__ */ new Set();
+  for (const n of order) {
+    const winner = survivors.find((s) => sameIssue2(n, s));
+    if (winner === void 0) {
+      survivors.push(n);
+      continue;
+    }
+    dropped.add(n);
+    const loser = rows[n], retained = candidateId(rows[winner].candidate);
+    const d = decisions[loser.candidate];
+    if (loser.expansion) {
+      const log = d.expansions?.find((e) => e.accepted && e.file === place[n].file && !e.suppressed_by);
+      if (log) log.suppressed_by = retained;
+    } else {
+      d.quality_action = "dedup_suppressed";
+      d.retained_candidate_id = retained;
+    }
+  }
+  if (dropped.size) kept.splice(0, kept.length, ...kept.filter((_, n) => !dropped.has(n)));
 }
 var cleanQuote = (q) => q.trim().replace(/^\d+\s+/, "").replace(/^\+/, "").trim();
 function namesFile(text, token) {
@@ -45875,7 +45931,7 @@ function getAgentVersion() {
     const pkg = JSON.parse((0, import_fs4.readFileSync)(pkgPath, "utf-8"));
     return pkg.version;
   } catch {
-    if (true) return "0.0.38";
+    if (true) return "0.0.39";
     return "unknown";
   }
 }
@@ -45887,7 +45943,7 @@ function getBuildCommit() {
     const dirty = (0, import_child_process.execSync)("git status --porcelain", opts2).toString().trim() ? "-dirty" : "";
     return hash + dirty;
   } catch {
-    if (true) return "d479030";
+    if (true) return "ca6beff";
     return "unknown";
   }
 }
@@ -45993,7 +46049,8 @@ function buildUsageRecord(ctx, durationMs, error) {
         severity: k.severity,
         type: normalizeIssueType(k.type),
         description: firstSentence(k.body),
-        ...k.proposal ? { proposal: k.proposal } : {}
+        ...k.proposal ? { proposal: k.proposal } : {},
+        ...k.quality_action ? { quality_action: k.quality_action } : {}
       };
     }) : null,
     review_candidates: ctx.judgeDecisions && ctx.reviewObject ? (ctx.judgeCandidates ?? ctx.reviewObject.findings.map((f) => ({ ...f, origin: "review" }))).map((f, i) => ({ id: candidateId(i), origin: f.origin, severity: f.severity, title: f.title, file: f.file ?? null, lines: f.lines ?? null, body: f.body })) : null,
