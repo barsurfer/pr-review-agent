@@ -1,7 +1,7 @@
 // The judge only classifies; policy lives here so one judged run can be re-scored offline under any flag combination.
 
 import { renderReview, type ReviewFinding, type ReviewObject, type FindingScore } from './formatter.js'
-import { normalizeFindingPath, parseLineRange, type KeptFinding } from './findings-output.js'
+import { normalizeFindingPath, parseLineRange, titlesOverlap, normTitle, type KeptFinding } from './findings-output.js'
 import { addedLines, type AddedLine } from './parsers.js'
 import { coversRange, shownFile, type ShownAnchors, type ShownSource } from './shown-anchors.js'
 import type { AdditionalLocation } from './judge-quality.js'
@@ -70,8 +70,10 @@ export interface AppliedDecision {
   anchor_basis?: AnchorBasis
   duplicate_of?: string
   invalid_duplicate?: boolean
-  expansions?: Array<{ file: string; accepted: boolean }>
+  expansions?: Array<{ file: string; accepted: boolean; suppressed_by?: string }>
   proposal?: string
+  quality_action?: string
+  retained_candidate_id?: string
 }
 
 export interface JudgeAnomalies {
@@ -319,6 +321,7 @@ export function applyJudgeDecisions(candidates: readonly ReviewFinding[], output
   const decisions: AppliedDecision[] = []
   const kept: KeptFinding[] = []
   const moved: string[] = []
+  const rows: KeptRow[] = []
   candidates.forEach((candidate, i) => {
     const id = candidateId(i)
     const entry = entries[i]
@@ -342,12 +345,17 @@ export function applyJudgeDecisions(candidates: readonly ReviewFinding[], output
       kept.push({
         severity: entry.r.final_severity!, title: candidate.title, body, file: anchor.file, lines: anchor.lines,
         score: entry.r.score!, type: candidate.type, anchorSource: anchor.source, ...keptProposal,
+        ...(entry.r.quality_action ? { quality_action: entry.r.quality_action } : {}),
       })
+      rows.push({ candidate: i, expansion: false, validated: entry.r.reason_category === 'validated', evidenced: !!entry.r.evidence, rescueOf: entry.r.invalid_duplicate ? index.get(normalizeId(String(entry.r.duplicate_of ?? ''))) : undefined })
       for (const x of expansion?.accepted ?? []) {
-        kept.push({ severity: entry.r.final_severity!, title: candidate.title, body: x.body, file: x.file, lines: x.lines, score: entry.r.score!, type: candidate.type, anchorSource: 'diff' })
+        kept.push({ severity: entry.r.final_severity!, title: candidate.title, body: x.body, file: x.file, lines: x.lines, score: entry.r.score!, type: candidate.type, anchorSource: 'diff', ...(options?.quality ? { quality_action: 'expansion' } : {}) })
+        rows.push({ candidate: i, expansion: true, validated: entry.r.reason_category === 'validated', evidenced: !!entry.r.evidence })
       }
     }
   })
+
+  if (options?.quality) dedupKept(kept, rows, decisions, idx)
 
   const scores: FindingScore[] = kept.map(k => ({ title: k.title, severity: k.severity, score: k.score!, file: k.file, lines: k.lines }))
   return { kept, decisions, anomalies, scores, markdown: renderJudgedReview(kept, output, moved, canBeSplit) }
@@ -384,9 +392,59 @@ function demoteInvalidDuplicates(entries: Entry[], candidates: readonly ReviewFi
       reason_category: 'unverifiable', action, final_severity: severity,
       score: kept ? Math.min(e.r.score ?? 0, UNVERIFIED_SCORE_CAP) : e.r.score,
       invalid_duplicate: true, duplicate_of: String(e.d.duplicate_of ?? '').trim() || undefined,
+      ...(kept ? { quality_action: 'dup_rescue' } : {}),
     })
     anomalies.invalid_duplicate = (anomalies.invalid_duplicate ?? 0) + 1
   }
+}
+
+interface KeptRow { candidate: number; expansion: boolean; validated: boolean; evidenced: boolean; rescueOf?: number }
+
+// Expansion and duplicate rescue can post the same issue twice; collapse on location plus title or explicit rescue provenance, never on a shared line alone.
+function dedupKept(kept: KeptFinding[], rows: readonly KeptRow[], decisions: AppliedDecision[], idx: DiffIndex): void {
+  const keys = [...idx.byFile.keys()]
+  const place = kept.map(k => ({
+    file: k.file ? normalizeFindingPath(k.file, keys) : '',
+    range: isNumericLines(k.lines) ? parseLineRange(k.lines!) : null,
+  }))
+  const normBody = (s: string | undefined): string => (s ?? '').toLowerCase().replace(/\s+/g, ' ').trim()
+  const sameIssue = (a: number, b: number): boolean => {
+    const pa = place[a], pb = place[b]
+    if (!pa.file || pa.file !== pb.file || !pa.range || !pb.range) return false
+    if (pa.range.start > pb.range.end || pb.range.start > pa.range.end) return false
+    const ra = rows[a], rb = rows[b]
+    const provenance = (ra.rescueOf !== undefined && rb.expansion && rb.candidate === ra.rescueOf)
+      || (rb.rescueOf !== undefined && ra.expansion && ra.candidate === rb.rescueOf)
+    if (provenance) return true
+    // Shared title words can bind two distinct same-line findings; require the bodies to corroborate it is one issue.
+    const nb = normBody(kept[a].body)
+    if (!nb || nb !== normBody(kept[b].body)) return false
+    return titlesOverlap(kept[a].title, kept[b].title) || normTitle(kept[a].title) === normTitle(kept[b].title)
+  }
+
+  const order = kept.map((_, n) => n).sort((a, b) => {
+    const ra = rows[a], rb = rows[b]
+    return Number(rb.validated) - Number(ra.validated) || Number(rb.evidenced) - Number(ra.evidenced)
+      || (kept[b].score ?? 0) - (kept[a].score ?? 0) || Number(ra.expansion) - Number(rb.expansion)
+      || ra.candidate - rb.candidate || a - b
+  })
+  const survivors: number[] = []
+  const dropped = new Set<number>()
+  for (const n of order) {
+    const winner = survivors.find(s => sameIssue(n, s))
+    if (winner === undefined) { survivors.push(n); continue }
+    dropped.add(n)
+    const loser = rows[n], retained = candidateId(rows[winner].candidate)
+    const d = decisions[loser.candidate]
+    if (loser.expansion) {
+      const log = d.expansions?.find(e => e.accepted && e.file === place[n].file && !e.suppressed_by)
+      if (log) log.suppressed_by = retained
+    } else {
+      d.quality_action = 'dedup_suppressed'
+      d.retained_candidate_id = retained
+    }
+  }
+  if (dropped.size) kept.splice(0, kept.length, ...kept.filter((_, n) => !dropped.has(n)))
 }
 
 const cleanQuote = (q: string): string => q.trim().replace(/^\d+\s+/, '').replace(/^\+/, '').trim()

@@ -30,6 +30,7 @@ export interface KeptFinding {
   type?: IssueType   // carried from the reviewer finding; analytics only
   anchorSource?: 'reviewer' | 'judge' | 'diff' | 'file' | 'none'   // where file/lines came from, so a consumer can trust only what it wants
   proposal?: string
+  quality_action?: string
 }
 
 export interface FindingsReport {
@@ -140,8 +141,17 @@ export function mapFindings(findings: ReviewFinding[], producer: string, changed
 // or "in" can't bind two unrelated findings.
 const STOPWORDS = new Set(['a', 'an', 'the', 'in', 'on', 'of', 'to', 'for', 'and', 'or', 'is', 'are', 'be', 'not', 'no', 'with', 'without', 'that', 'this', 'it', 'its', 'as', 'at', 'by', 'from', 'when', 'if'])
 // Unicode-aware so a non-ASCII title doesn't collapse to an empty string (which would falsely match).
-const normTitle = (s: string): string => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim()
+export const normTitle = (s: string): string => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim()
 const titleWords = (s: string): string[] => normTitle(s).split(' ').filter(w => w && !STOPWORDS.has(w))
+
+// Same bar as bestLooseMatch (≥ 2 shared non-stopword words at ≥ 0.5 of the shorter title), exposed for the quality-mode final dedup.
+export function titlesOverlap(a: string, b: string): boolean {
+  const sa = new Set(titleWords(a)), sb = new Set(titleWords(b))
+  if (!sa.size || !sb.size) return false
+  let inter = 0
+  for (const w of sa) if (sb.has(w)) inter++
+  return inter >= 2 && inter / Math.min(sa.size, sb.size) >= 0.5
+}
 
 // Strip a model's decoration (backticks, backslashes, a trailing ":line" the judge sometimes welds
 // onto the path) so a judge-supplied file can be compared and used as an anchor.

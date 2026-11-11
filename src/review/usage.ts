@@ -77,7 +77,7 @@ export interface UsageRecord {
   finding_scores: FindingScore[] | null
   min_finding_score: number | null
   // One compact read-only row per anchored kept finding; null when the structured judge didn't run.
-  anchored_findings: Array<{ anchor: string; severity: ReviewFinding['severity']; type: IssueType; description: string; proposal?: string }> | null
+  anchored_findings: Array<{ anchor: string; severity: ReviewFinding['severity']; type: IssueType; description: string; proposal?: string; quality_action?: string }> | null
   // Candidates are stored once; judge_decisions join to them by candidate_id.
   review_candidates: Array<{ id: string; origin: CandidateOrigin; severity: ReviewFinding['severity']; title: string; file: string | null; lines: string | null; body: string }> | null
   judge_decisions: AppliedDecision[] | null
@@ -299,6 +299,7 @@ export function buildUsageRecord(
             anchor: r.start === r.end ? `${file}:${r.start}` : `${file}:${r.start}-${r.end}`,
             severity: k.severity, type: normalizeIssueType(k.type), description: firstSentence(k.body),
             ...(k.proposal ? { proposal: k.proposal } : {}),
+            ...(k.quality_action ? { quality_action: k.quality_action } : {}),
           }
         })
       : null,

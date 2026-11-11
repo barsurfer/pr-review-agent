@@ -527,3 +527,72 @@ describe('LOW_VALUE evidence check — classification fixtures', () => {
     if (kept) expect(res.kept![0].severity).toBe(finding.severity)
   })
 })
+
+describe('applyJudgeDecisions — final dedup and action markers (quality)', () => {
+  const KEEP_UNVERIFIED = { keepMinor: false, keepUnverified: true }
+  const B = '.github/workflows/publish-b.yml'
+  const parent = cand({ body: 'Token leaks in publish-a.yml and also in publish-b.yml where the same step runs.' })
+  const rescued = cand({ title: 'Publish step leaks secret credential', file: B, lines: '2', body: 'Secret leaks on publish.' })
+  const pivot = cand({ title: 'Unrelated pivot cast', file: B, lines: '3', body: 'Cast hides a type error.' })
+  const sameLine = cand({ title: 'Missing provenance flag', file: B, lines: '2', body: 'Publish lacks provenance.' })
+  const loc = { file: B, lines: '2', anchor_quote: 'run: npm publish --token $NPM_TOKEN', candidate_excerpt: 'also in publish-b.yml', body: 'Token is exposed in this workflow too.' }
+  const decisions = [
+    dec({ additional_locations: [loc] }),
+    dec({ candidate_id: 'c1', reason_category: 'duplicate', duplicate_of: 'c0', score: 7 }),
+    dec({ candidate_id: 'c2' }),
+    dec({ candidate_id: 'c3' }),
+  ]
+  const run = (cands: ReviewFinding[], decs: JudgeDecision[], opts?: { quality: boolean }) =>
+    applyJudgeDecisions(cands, out(decs), KEEP_UNVERIFIED, [], DIFF, Infinity, opts)
+
+  it('collapses an expansion row and a rescued duplicate on the same line via rescue provenance, keeping the evidenced expansion', () => {
+    const res = run([parent, rescued, pivot, sameLine], decisions, ON)
+    expect(res.kept.filter(k => k.file === B && k.lines === '2').map(k => k.title)).toEqual(['Token exposed', 'Missing provenance flag'])
+    expect(res.kept.find(k => k.title === 'Unrelated pivot cast')).toBeDefined()
+    expect(res.scores).toHaveLength(res.kept.length)
+    expect(res.markdown).not.toContain('Publish step leaks secret credential')
+    expect(res.decisions[1]).toMatchObject({ action: 'keep', invalid_duplicate: true, quality_action: 'dedup_suppressed', retained_candidate_id: 'c0' })
+  })
+
+  it('tags only the expansion row when the colliding rescue is suppressed', () => {
+    const res = run([parent, rescued], decisions.slice(0, 2), ON)
+    expect(res.kept.map(k => k.quality_action)).toEqual([undefined, 'expansion'])
+  })
+
+  it('tags dup_rescue on a rescued row that does not collide', () => {
+    const res = run([parent, { ...rescued, lines: '3' }], decisions.slice(0, 2), ON)
+    expect(res.kept.find(k => k.title === rescued.title)).toMatchObject({ quality_action: 'dup_rescue' })
+    expect(res.decisions[1].quality_action).toBe('dup_rescue')
+  })
+
+  it('merges on title overlap WITH matching body at a shared line, but not on a shared line alone', () => {
+    const twin = cand({ title: 'Token exposed in workflow', file: B, lines: '2', body: 'Same.' })
+    const a = run([sameLine, twin], [dec({ score: 6 }), dec({ candidate_id: 'c1', score: 9 })], ON)
+    expect(a.kept.map(k => k.title)).toEqual(['Missing provenance flag', 'Token exposed in workflow'])
+    const sameTitleish = cand({ title: 'Token exposed workflow publish', file: B, lines: '2', body: 'Same.' })
+    const b = run([twin, sameTitleish], [dec({ score: 6 }), dec({ candidate_id: 'c1', score: 9 })], ON)
+    expect(b.kept.map(k => k.title)).toEqual(['Token exposed workflow publish'])
+    expect(b.decisions[0]).toMatchObject({ quality_action: 'dedup_suppressed', retained_candidate_id: 'c1' })
+  })
+
+  it('keeps distinct same-line findings that share title words but differ in body', () => {
+    const authz = cand({ title: 'Missing user authorization check', file: B, lines: '2', body: 'No ownership check before mutating.' })
+    const valid = cand({ title: 'Missing user validation check', file: B, lines: '2', body: 'Malformed fields are accepted.' })
+    const res = run([authz, valid], [dec({ score: 8 }), dec({ candidate_id: 'c1', score: 8 })], ON)
+    expect(res.kept.map(k => k.title)).toEqual(['Missing user authorization check', 'Missing user validation check'])
+  })
+
+  it('collapses two identical one-word-title findings on the same line', () => {
+    const body = 'Lock order inversion on shutdown.'
+    const d1 = cand({ title: 'Deadlock', file: B, lines: '2', body })
+    const d2 = cand({ title: 'Deadlock', file: B, lines: '2', body })
+    const res = run([d1, d2], [dec({ score: 6 }), dec({ candidate_id: 'c1', score: 9 })], ON)
+    expect(res.kept).toHaveLength(1)
+  })
+
+  it('emits no markers and no dedup when quality is off', () => {
+    const res = run([parent, rescued, pivot, sameLine], decisions)
+    expect(JSON.stringify(res)).not.toMatch(/quality_action|retained_candidate_id|suppressed_by/)
+    expect(res.kept.filter(k => k.file === B && k.lines === '2')).toHaveLength(1)
+  })
+})
