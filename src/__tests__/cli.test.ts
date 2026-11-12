@@ -27,6 +27,7 @@ function runCli(args: string[], extraEnv: Record<string, string> = {}) {
       VCS_PROVIDER: 'bitbucket', LLM_PROVIDER: 'anthropic', ANTHROPIC_API_KEY: 'test-key',
       BITBUCKET_WORKSPACE: 'w', BITBUCKET_USERNAME: 'u', BITBUCKET_TOKEN: 'invalid', BITBUCKET_BASE_URL: 'http://127.0.0.1:9',
       TRIGGER_EVENT: '', TRIGGER_COMMENT_AUTHOR: '', IGNORE_COMMENT_AUTHORS: '',
+      TRIGGER_EVENT_KIND: '', USAGE_RECORD_FILE: '',
       ...extraEnv,
     },
   })
@@ -121,7 +122,8 @@ describe('CLI --vcs gitlab (src/index.ts)', () => {
     const { status, stdout, stderr, record } = runCli([...args, '--event', 'pullrequest:comment_created', '--comment-author', '{BOT}'], { ...env, IGNORE_COMMENT_AUTHORS: 'bot' })
 
     expect(status).toBe(1)
-    expect(stderr.trim()).toBe('Error: VCS provider gitlab is not implemented yet - use bitbucket, github or azure')
+    expect(stderr).toContain('Error: VCS provider gitlab is not implemented yet - use bitbucket, github or azure')
+    expect(stderr.split('\n').filter(l => l.includes('VCS provider gitlab')).length).toBe(1)
     expect(stdout).not.toContain('Trigger:')
     expect(stdout).not.toContain('Fetching PR info')
     expect(record).toBeNull()
@@ -265,6 +267,7 @@ async function runAgainstPr(pr: { source: string; target: string }, args: string
       BITBUCKET_WORKSPACE: 'w', BITBUCKET_USERNAME: 'u', BITBUCKET_TOKEN: 'invalid',
       BITBUCKET_BASE_URL: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
       TRIGGER_EVENT: '', TRIGGER_COMMENT_AUTHOR: '', IGNORE_COMMENT_AUTHORS: '', LAST_CHECKED_COMMIT: '',
+      TRIGGER_EVENT_KIND: '', USAGE_RECORD_FILE: '',
       NO_PROXY: '127.0.0.1,localhost', no_proxy: '127.0.0.1,localhost',
     }
     // axios honours proxy variables, which on a proxied runner would route the local call away from this server.

@@ -6,7 +6,8 @@ const UNNAMED_COMMENT_EVENTS = /^(note|note hook|pull_request_review)$/i
 
 // Bitbucket sends an actor with every PR event (the pusher on pullrequest:updated), so only a comment event proves the author commented.
 export function isCommentEvent(event: string): boolean {
-  return /comment/i.test(event) || UNNAMED_COMMENT_EVENTS.test(event)
+  // Env values reach here untrimmed; trim only for the exact-name match so the recorded event stays as given.
+  return /comment/i.test(event) || UNNAMED_COMMENT_EVENTS.test(event.trim())
 }
 
 // An explicit kind lets CI classify events a relay renamed or a provider names without "comment".

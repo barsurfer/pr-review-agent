@@ -132,6 +132,14 @@ describe('isCommentEvent: provider event names', () => {
       if (changed) expect(legacy(event), event).toBe(false)
     }
   })
+
+  it('surrounding whitespace (an untrimmed env value) changes no class: exact names still match, every other name keeps the substring rule', () => {
+    for (const [, event, expected] of TABLE) {
+      for (const padded of [` ${event}`, `${event} `, `\t${event}\n`]) {
+        expect(isCommentEvent(padded), JSON.stringify(padded)).toBe(expected)
+      }
+    }
+  })
 })
 
 describe('event kind override (--event-kind / TRIGGER_EVENT_KIND)', () => {
