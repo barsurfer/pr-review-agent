@@ -13,7 +13,7 @@ import { activeLenses, parseLensList, lensSystemPrompt, lensBriefing } from './l
 import { splitDiffByFile } from './bundler.js'
 import { normalizeFindingPath } from './findings-output.js'
 import { filterDiff, countChangedLines, parseVerdictScore, isPathExcluded, scanTodos, isContextLengthError, shownLength } from './parsers.js'
-import { buildReviewFooter, buildReplyFooter, stripPreviousFooter, stripDeltaStats, stripJudgeNotes, stripJenkinsMeta, stripPreamble, isNoChange, extractCommitHash, countFindings, markdownHasFindings, hasReplyFooter } from './formatter.js'
+import { buildReviewFooter, buildReplyFooter, stripPreviousFooter, stripDeltaStats, stripJudgeNotes, stripJenkinsMeta, stripPreamble, isNoChange, extractCommitHash, legacyCommitHash, countFindings, markdownHasFindings, hasReplyFooter } from './formatter.js'
 import { runBundledReview, addUsage } from './bundled.js'
 import { buildUsageRecord, logUsageRecord, getBuildCommit, getJobUrl } from './usage.js'
 import { ignoredCommentAuthor } from './trigger.js'
@@ -53,6 +53,12 @@ const forced = (ctx: ReviewContext): boolean => ctx.force === 'clean' || ctx.for
 function markHeadChecked(ctx: ReviewContext): void {
   if (forced(ctx) || ctx.dryRun || ctx.outcomeSink || ctx.bundleUncertain || ctx.deltaFetchFailed) return
   ctx.headChecked = true
+}
+
+// Temporary signal: shows whether the footer-anchored hash ever differs from the old first-match reading on real PRs.
+function warnOnHashDisagreement(prId: string, body: string, footerHash: string | null): void {
+  const legacy = legacyCommitHash(body)
+  if (legacy !== footerHash) console.warn(`  Footer commit ${footerHash} differs from legacy first match ${legacy} (PR ${prId})`)
 }
 
 // The stage is entered only with at least one known lens, so a lens-off run never reaches it.
@@ -209,6 +215,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
 
         const lastReview = ctx.previousReviews[ctx.previousReviews.length - 1]
         const commitHash = extractCommitHash(lastReview.body)
+        warnOnHashDisagreement(ctx.prId, lastReview.body, commitHash)
 
         if (ctx.force === 're-review') {
           console.log('  Bypassing dedup check (--force re-review) — will re-review with full context')
@@ -933,7 +940,11 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         // Pre-post dedup: re-fetch reviews to catch concurrent runs that posted while we were working
         if (ctx.force === 'off') {
           const freshReviews = await ctx.adapter.getPreviousReviewComments(ctx.prId)
-          const alreadyReviewed = freshReviews.some(r => extractCommitHash(r.body) === commitShort)
+          const alreadyReviewed = freshReviews.some(r => {
+            const footerHash = extractCommitHash(r.body)
+            warnOnHashDisagreement(ctx.prId, r.body, footerHash)
+            return footerHash === commitShort
+          })
           if (alreadyReviewed) {
             console.log(`  Commit ${commitShort} already reviewed by another run — skipping post`)
             ctx.action = 'DEDUP_SKIP'

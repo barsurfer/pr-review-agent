@@ -60,8 +60,17 @@ export function stripPreamble(text: string): string {
   return text.slice(match.index)
 }
 
-/** Extract the short commit hash from a review comment footer. */
+// Source string, not a RegExp: a shared g/y regex keeps lastIndex between calls and alternates results.
+export const REVIEW_FOOTER_SOURCE = String.raw`^\*Reviewed by .+ \(.+\) \| Prompt: .+ \| (?:Review #\d+|\[Review #\d+\]\([^)]+\)) \| Commit: ([0-9a-f]+)( \| Build: [\w.-]+)?\*$`
+
+/** Commit hash from the LAST review-footer line: finding text above it may also contain "Commit: <hex>". */
 export function extractCommitHash(body: string): string | null {
+  const matches = [...body.matchAll(new RegExp(REVIEW_FOOTER_SOURCE, 'gm'))]
+  return matches.length ? matches[matches.length - 1][1] : null
+}
+
+// Pre-anchoring reading, kept only to detect where it disagrees with the footer reading on real PRs.
+export function legacyCommitHash(body: string): string | null {
   const match = body.match(/Commit: ([a-f0-9]+)/)
   return match ? match[1] : null
 }

@@ -23,6 +23,8 @@ of a hidden comment. Off-CI it's plain `Review #N`.
 Detection (`hasReviewFooter`) accepts footers with or without `Build:` **and** with or without
 the `Review #N` link — older and non-CI footers still dedup correctly.
 
+The hash is read from the **last** footer-pattern line of the comment (`extractCommitHash`, same pattern as `hasReviewFooter`), never from the first `Commit: <hex>` anywhere in the body: finding text above the footer can contain one (`Commit: fix bug` reads as `f`), which made dedup miss and the delta base bogus. While the old and new readings are compared on real PRs, a disagreement logs a `Footer commit … differs from legacy first match …` warning; the footer value is used.
+
 On re-trigger, `CHECK_PREVIOUS_REVIEWS` parses this footer and compares the commit hash against the current PR source commit (`PRInfo.sourceCommit`). If they match: same commit, no new code → fall through to `CHECK_REPLIES` instead of calling Claude. The footer only moves when a review is posted; a head checked without a post can be recognised through the checked commit CI passes back (§8).
 
 **Invariant:** The footer regex must remain stable. Changing the format silently breaks dedup for all PRs reviewed before the change.

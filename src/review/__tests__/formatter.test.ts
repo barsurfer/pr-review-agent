@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildReviewFooter, buildReplyFooter, stripPreviousFooter, stripDeltaStats, stripJudgeNotes, stripJenkinsMeta, stripPreamble, isNoChange, extractCommitHash, hasReviewFooter, hasReplyFooter, renderReview, countFindings, markdownHasFindings, type ReviewObject } from '../formatter.js'
+import { buildReviewFooter, buildReplyFooter, stripPreviousFooter, stripDeltaStats, stripJudgeNotes, stripJenkinsMeta, stripPreamble, isNoChange, extractCommitHash, legacyCommitHash, REVIEW_FOOTER_SOURCE, hasReviewFooter, hasReplyFooter, renderReview, countFindings, markdownHasFindings, type ReviewObject } from '../formatter.js'
 import { parseFindings } from '../parsers.js'
 
 // ---------------------------------------------------------------------------
@@ -274,6 +274,82 @@ describe('extractCommitHash', () => {
 
   it('returns null when no commit hash', () => {
     expect(extractCommitHash('No footer here')).toBeNull()
+  })
+
+  const FOOT = (review: string, build: string) =>
+    `*Reviewed by dev@example.com (claude-sonnet-4-6) | Prompt: repo | ${review} | Commit: 0123456789ab${build}*`
+  const REVIEWS = ['Review #2', '[Review #2](https://ci.example/job/7)']
+  const BUILDS = ['', ' | Build: 919a10b']
+
+  for (const review of REVIEWS) {
+    for (const build of BUILDS) {
+      it(`reads the footer hash (${review.startsWith('[') ? 'linked' : 'plain'}${build ? ', Build' : ', no Build'})`, () => {
+        expect(extractCommitHash(`### Summary\n\n${FOOT(review, build)}`)).toBe('0123456789ab')
+      })
+    }
+  }
+
+  it('ignores a Commit: hex quoted in a finding above the footer', () => {
+    const body = `Regressed since Commit: abc123def456 landed.\n\n---\n${FOOT(REVIEWS[0], '')}`
+    expect(legacyCommitHash(body)).toBe('abc123def456')
+    expect(extractCommitHash(body)).toBe('0123456789ab')
+  })
+
+  it('ignores prose like "Commit: fix bug" above the footer', () => {
+    const body = `Commit: fix bug is misleading.\n\n---\n${FOOT(REVIEWS[0], '')}`
+    expect(legacyCommitHash(body)).toBe('f')
+    expect(extractCommitHash(body)).toBe('0123456789ab')
+  })
+
+  it('takes the last of two footer-matching lines', () => {
+    const first = FOOT(REVIEWS[0], '').replace('0123456789ab', 'aaaaaaaaaaaa')
+    expect(extractCommitHash(`${first}\n\nquoted above\n\n${FOOT(REVIEWS[0], '')}`)).toBe('0123456789ab')
+  })
+
+  it('returns null without a footer line, even when Commit: text is present', () => {
+    expect(extractCommitHash('See Commit: abcdef for details')).toBeNull()
+  })
+
+  it('handles CRLF bodies', () => {
+    const body = `Commit: abc123def456 quoted\r\n\r\n---\r\n${FOOT(REVIEWS[1], BUILDS[1])}\r\n`
+    expect(extractCommitHash(body)).toBe('0123456789ab')
+  })
+
+  it('is stateless across repeated calls', () => {
+    const body = `x\n${FOOT(REVIEWS[0], '')}`
+    expect(extractCommitHash(body)).toBe('0123456789ab')
+    expect(extractCommitHash(body)).toBe('0123456789ab')
+    for (const h of ['111111111111', '222222222222', '333333333333']) {
+      expect(extractCommitHash(FOOT(REVIEWS[0], '').replace('0123456789ab', h))).toBe(h)
+    }
+  })
+})
+
+describe('REVIEW_FOOTER_SOURCE vs hasReviewFooter', () => {
+  const literal = /^\*Reviewed by .+ \(.+\) \| Prompt: .+ \| (?:Review #\d+|\[Review #\d+\]\([^)]+\)) \| Commit: [0-9a-f]+( \| Build: [\w.-]+)?\*$/m
+  const f = (mid: string) => `*Reviewed by a (m) | Prompt: p | ${mid}*`
+  const bodies = [
+    f('Review #1 | Commit: abc123def456'),
+    f('Review #1 | Commit: abc123def456 | Build: 919a10b-dirty'),
+    f('[Review #1](http://x/y) | Commit: abc123def456'),
+    f('[Review #1](http://x/y) | Commit: abc123def456 | Build: 1.2_x'),
+    `intro\r\n${f('Review #3 | Commit: abc123def456')}\r\n`,
+    `text\n${f('Review #3 | Commit: abc123def456')}\n<!-- jenkins: x -->`,
+    f('Review # | Commit: abc123def456'),
+    f('Review #1 | Commit: ABC123'),
+    f('Review #1 | Commit: '),
+    f('Review #1 | Commit: abc | Build: '),
+    `x ${f('Review #1 | Commit: abc123def456')}`,
+    `${f('Review #1 | Commit: abc123def456')} trailing`,
+    'Reviewed by the team',
+    'Commit: abcdef',
+    '',
+  ]
+  it('accepts and rejects the same bodies', () => {
+    for (const b of bodies) {
+      expect(new RegExp(REVIEW_FOOTER_SOURCE, 'm').test(b)).toBe(literal.test(b))
+      expect(hasReviewFooter(b)).toBe(literal.test(b))
+    }
   })
 })
 
