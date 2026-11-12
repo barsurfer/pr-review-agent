@@ -106,6 +106,8 @@ With `ENABLE_LINE_NUMBERS` (on by default; `false` or label `LNUM=0` turns it of
 
 **Only the most recent review** is included (not the full history). Developer discussion includes all replies across all reviews so the model sees what it already conceded as false positives.
 
+**Suggested-fix blocks are stripped** (`stripOwnSuggestedFixes` in `buildUserMessage`, so every reviewer caller — single pass and each bundle — gets it; breadth, second-look and lens passes see no history at all). The prior review loses its `suggested-fix-v1` blocks when its review footer is its last non-empty line; a discussion entry loses them when the reply footer is its last non-empty line; a human comment is never touched, even one quoting a footer inside a fence. Only exact, bounded blocks outside any open fence are removed, and a body without the marker is passed through as the same string, so runs without blocks send byte-identical input. Not gated by `ENABLE_SUGGESTED_FIXES`. The token estimate and the bundle history size keep the raw lengths (a small overestimate). Rule details: [prompt/judge.md](../prompt/judge.md#suggested-fixes-in-the-posted-review-enable_suggested_fixes).
+
 On re-reviews, a **"Changes Since Your Last Review"** section carries the delta diff since the last-reviewed commit — the same diff computed for the skip-gate ([review/skip-logic.md](../review/skip-logic.md)), retained instead of discarded. The full PR diff is the whole PR vs target and does **not** mark which lines are new since the last review, so this delta lets the model ground "resolved vs new" in concrete changed lines rather than the previous review's prose.
 
 ---
@@ -127,4 +129,4 @@ On re-reviews, a **"Changes Since Your Last Review"** section carries the delta 
 > Can you explain why this is HIGH severity?
 ```
 
-See [review/replies.md](../review/replies.md) for how unanswered replies are detected.
+The reply payload carries the review body and replies raw, suggested-fix blocks included, so the reply model can answer "your fix doesn't compile". See [review/replies.md](../review/replies.md) for how unanswered replies are detected.

@@ -26,6 +26,8 @@ See [review/fsm.md](review/fsm.md).
 
 The commit hash is embedded in the review comment footer and parsed on re-trigger. No external store is needed to avoid duplicate reviews. The format must be stable — changing the footer regex breaks dedup for all in-flight PRs.
 
+The same rule holds for the `suggested-fix-v1` marker (the info string of a posted suggested-fix block, `ENABLE_SUGGESTED_FIXES`): posted comments outlive the code that wrote them, and the reviewer-input strip finds old blocks by it. A format change ships `suggested-fix-v2`; the strip keeps every earlier version, and a version is never repurposed. See [prompt/judge.md](prompt/judge.md#suggested-fixes-in-the-posted-review-enable_suggested_fixes).
+
 See [review/skip-logic.md](review/skip-logic.md).
 
 ## Two-Form Diff
