@@ -224,8 +224,8 @@ async function main(): Promise<void> {
   if (!trigger && config.trigger.ignoreCommentAuthors.length) console.warn('Warning: IGNORE_COMMENT_AUTHORS is set but no --event/--comment-author (TRIGGER_EVENT/TRIGGER_COMMENT_AUTHOR) was given - the ignore list is inactive.')
   const checkedCommit = resolveCheckedCommit(opts.checkedCommit, config.lastCheckedCommit)
 
-  // --force with no value defaults to 're-review'; --force clean or --force re-review explicit
-  const forceMode = opts.force === true ? 're-review' : typeof opts.force === 'string' ? opts.force as 'clean' | 're-review' : 'off'
+  // A bare --force means re-review; an empty value (how CI passes an unset parameter) must run exactly like an absent flag, pre-post race check included.
+  const forceMode = opts.force === true ? 're-review' : typeof opts.force === 'string' && opts.force.trim() ? opts.force as 'clean' | 're-review' : 'off'
   await review(adapter, opts.prId!, opts.dryRun ?? false, opts.prompt, forceMode, opts.logUsage ?? true, opts.repoSlug ?? '', undefined, trigger, checkedCommit)
 }
 

@@ -1,4 +1,5 @@
 import 'dotenv/config'
+import { baseModelId } from './llm/model-id.js'
 
 function required(name: string): string {
   const value = process.env[name]
@@ -20,7 +21,7 @@ function positiveOr(value: number, fallback: number): number {
   return Number.isFinite(value) && value > 0 ? value : fallback
 }
 
-// Shared by the branch-list env vars and their CLI overrides, so both parse a value identically.
+// Shared by the comma-list env vars and the branch-list CLI overrides, so all parse a value identically.
 export function parseBranchList(value: string): string[] {
   return value.split(',').map(p => p.trim()).filter(Boolean)
 }
@@ -41,8 +42,11 @@ const MODEL_CONTEXT_WINDOWS: readonly [string, number][] = [
   ['claude-mythos-5', 1_000_000],
 ]
 
+const windowByPrefix = (model: string) => MODEL_CONTEXT_WINDOWS.find(([prefix]) => model.startsWith(prefix))?.[1]
+
+// The raw id first, so every id that already resolved keeps its window; only misses are normalized.
 export function modelContextWindow(model: string): number {
-  return MODEL_CONTEXT_WINDOWS.find(([prefix]) => model.startsWith(prefix))?.[1] ?? 200_000
+  return windowByPrefix(model) ?? windowByPrefix(baseModelId(model)) ?? 200_000
 }
 
 // Which LLM backend the reviewer/judge use; the seam (src/llm/provider.ts) makes a second provider
@@ -172,7 +176,7 @@ export const config = {
   trigger: {
     event: optional('TRIGGER_EVENT', '').trim(),
     commentAuthor: optional('TRIGGER_COMMENT_AUTHOR', '').trim(),
-    ignoreCommentAuthors: optional('IGNORE_COMMENT_AUTHORS', '').split(',').map(p => p.trim()).filter(Boolean),
+    ignoreCommentAuthors: parseBranchList(optional('IGNORE_COMMENT_AUTHORS', '')),
   },
 
   review: {

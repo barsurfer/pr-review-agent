@@ -194,7 +194,7 @@ The footer only moves when a review is posted. After a no-post ending (`NO_NEW_F
 
 CLI wins over env; an empty or whitespace CLI value falls back to the env value. In CI use the env var (rollout rule below). If you do use the flag, write it as `--checked-commit="$X"`: an unquoted empty variable vanishes in the shell, and the flag then swallows the next argument as its value. The same applies to `--event` / `--comment-author`.
 
-**Where it is read:** only in `CHECK_PREVIOUS_REVIEWS`, when previous reviews exist, the run is not forced and the footer same-commit check missed. `--force clean` / `--force re-review` are forced; CI's empty `--force ''` is not.
+**Where it is read:** only in `CHECK_PREVIOUS_REVIEWS`, when previous reviews exist, the run is not forced and the footer same-commit check missed. `--force clean` / `--force re-review` are forced; CI's empty `--force ''` is not (the CLI runs it as `off`).
 - **Match** → `CHECK_REPLIES`, exactly like the same-commit path: a pending reply is answered (`REPLY`), the reply limit applies (its own `skip_reason`), else `DEDUP_SKIP` with `skip_reason: head already checked by an earlier run and no unanswered questions`. The record gets `dedup_source: checked_commit`. One log line: `Source commit <head12> already checked by an earlier run (checked commit) — checking for unanswered replies...`.
 - **Matching** is a prefix rule, because the stored value's length depends on the VCS: the shorter of value and head (at least 12 characters) must prefix the longer.
 - **No match** (stale value, a newer push) → one log line (`Checked commit <value12> is not the current head <head12> — ignoring it`) and today's path.
@@ -204,7 +204,7 @@ CLI wins over env; an empty or whitespace CLI value falls back to the env value.
 
 | Marked (present) | Never marked (absent) |
 |---|---|
-| Review posted (`REVIEW` / `RE_REVIEW`) | Any `SKIP` or `ERROR` run, including an error after a mark (reply fetch, reply generation, reply post) |
+| Review posted (`REVIEW` / `RE_REVIEW`) | Any `SKIP` or `ERROR` run, including an error after a mark (reply fetch, reply generation, reply post) and a reviewer response whose `findings` is null or not a list (it errors like a missing key) |
 | Footer same-commit, zero-reviewable delta or checked-commit match, ending `DEDUP_SKIP` or `REPLY` | `--dry-run`, `--benchmark`, `--force clean` / `--force re-review` |
 | Coherent structured `NO_CHANGE` (`no_change: true`, zero findings), with or without a reply | A regex-only or self-contradicting `NO_CHANGE` (`no_change` plus findings, a bare `NO_CHANGE` line inside a finding) |
 | `NO_NEW_FINDINGS`, single-pass or bundled | `POST_REVIEW`'s "empty or NO_CHANGE after cleanup" skip |

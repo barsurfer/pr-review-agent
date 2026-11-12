@@ -8,6 +8,7 @@ import { createHash } from 'crypto'
 import { dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { config } from '../config.js'
+import { baseModelId } from '../llm/model-id.js'
 import { parseVerdictScore, parseFindings, countDiffLines } from './parsers.js'
 import { countFindings, normalizeIssueType } from './formatter.js'
 import type { FindingScore, ReviewFinding, IssueType } from './formatter.js'
@@ -134,13 +135,8 @@ function haiku55Pricing(inputTokens: number): { input: number; output: number } 
   return inputTokens > 100_000 ? { input: 0.5, output: 2.5 } : { input: 0.1, output: 0.5 }
 }
 
-// Dated ids price as their alias; OpenRouter names the same models anthropic/claude-sonnet-5.5[:variant].
-function pricingBase(model: string): string {
-  return model.replace(/^anthropic\//, '').replace(/:[\w-]+$/, '').replace(/\./g, '-').replace(/-\d{8}$/, '')
-}
-
 export function estimateCost(tokens: { input: number; output: number }, model: string): number {
-  const base = pricingBase(model)
+  const base = baseModelId(model)
   let p = base === 'claude-haiku-5-5' ? haiku55Pricing(tokens.input) : (MODEL_PRICING[model] ?? MODEL_PRICING[base])
   if (!p) {
     console.warn(`No pricing entry for model "${model}" — estimating with claude-sonnet-4-6 rates`)
@@ -216,7 +212,8 @@ export function buildUsageRecord(
   // source. Reviewer-side metrics below read the typed object instead of regex.
   const verdictScore = reviewText ? parseVerdictScore(reviewText) : null
   const findings = reviewText ? parseFindings(reviewText) : null
-  const reviewFindings = ctx.reviewObject ? countFindings(ctx.reviewObject) : null
+  // This runs outside review()'s try, so a malformed object must not throw and lose the record of the run's real error.
+  const reviewFindings = ctx.reviewObject && Array.isArray(ctx.reviewObject.findings) ? countFindings(ctx.reviewObject) : null
   const deltaStats = ctx.reviewObject?.delta_stats ?? null
   const judgeScores = ctx.judgeScores ?? null
   const judgeModel = config.judge.model || null

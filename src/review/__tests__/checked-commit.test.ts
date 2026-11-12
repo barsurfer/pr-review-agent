@@ -51,6 +51,20 @@ describe('resolveCheckedCommit', () => {
     expect(String(warn.mock.calls[0][0])).toContain(`"${'x'.repeat(64)}"`)
     expect(String(warn.mock.calls[0][0])).not.toContain('x'.repeat(65))
   })
+
+  it('CC6 resolves every CLI/env pair exactly as the former inline fallback, warnings included', () => {
+    const legacy = (cli: string | undefined, env: string) => {
+      const value = (cli?.trim() || env).toLowerCase()
+      return value && /^[0-9a-f]{12,64}$/.test(value) ? value : undefined
+    }
+    for (const cli of [undefined, '', ' ', '\t', H12, ` ${H40.toUpperCase()} `, 'garbage', ' x ']) {
+      for (const env of ['', H40, H12.toUpperCase(), 'garbage', ' ']) {
+        warn.mockClear()
+        expect(resolveCheckedCommit(cli, env), JSON.stringify([cli, env])).toBe(legacy(cli, env))
+        expect(warn.mock.calls.length, JSON.stringify([cli, env])).toBe((cli?.trim() || env) && !legacy(cli, env) ? 1 : 0)
+      }
+    }
+  })
 })
 
 describe('headMatches', () => {

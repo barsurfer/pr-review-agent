@@ -49,6 +49,9 @@ vi.mock('../usage.js', async (importOriginal) => {
   return { ...actual, logUsageRecord: vi.fn() }
 })
 
+// Reached only by tests that route runReview to the real client, to feed it a raw provider object.
+vi.mock('../../llm/provider.js', () => ({ createProvider: vi.fn() }))
+
 // Import after mocks
 import { review } from '../index.js'
 import { config, modelContextWindow } from '../../config.js'
@@ -59,6 +62,7 @@ import { fetchContext } from '../../context/fetcher.js'
 import { logUsageRecord } from '../usage.js'
 import { applyJudgeDecisions } from '../judge-decisions.js'
 import { renderReview, buildReplyFooter, hasReplyFooter, extractCommitHash, markdownHasFindings, type ReviewObject } from '../formatter.js'
+import { createProvider } from '../../llm/provider.js'
 
 const mockRunReview = vi.mocked(runReview)
 const mockRunCommentResponse = vi.mocked(runCommentResponse)
@@ -2159,6 +2163,33 @@ describe('input budget from context window', () => {
     expect(record!.action).toBe('REVIEW')
     expect(mockRunReview).toHaveBeenCalledTimes(1)
   })
+
+  it('OpenRouter prod pair (anthropic/claude-sonnet-5.5 + anthropic/claude-haiku-5.5) at defaults budgets 250,000, not a 200K-window 168,000', async () => {
+    vi.stubEnv('ANTHROPIC_API_KEY', 'test-key')
+    const actual = await vi.importActual<typeof import('../../config.js')>('../../config.js')
+    vi.unstubAllEnvs()
+    vi.mocked(modelContextWindow).mockImplementation(actual.modelContextWindow)
+    const diffOf = (lines: number, width: number) => 'diff --git a/x.ts b/x.ts\n--- a/x.ts\n+++ b/x.ts\n@@ -1 +1,' + lines + ' @@\n' + Array(lines).fill('+' + 'a'.repeat(width)).join('\n') + '\n'
+    const reviewerModel = cfg.anthropic.model
+    cfg.anthropic.model = 'anthropic/claude-sonnet-5.5'
+    cfg.judge.model = 'anthropic/claude-haiku-5.5'
+    cfg.anthropic.maxInputTokens = 250_000
+    cfg.anthropic.maxTokens = 32_000
+    cfg.anthropic.modelContextTokens = 0
+    try {
+      setupModelMocks()
+      const fits = await review(makeAdapter({ getDiff: vi.fn().mockResolvedValue(diffOf(100, 8_000)) }), '100', true)   // ~200K tokens
+      expect(fits!.skip_reason).toBeNull()
+      expect(fits!.action).toBe('REVIEW')
+
+      vi.clearAllMocks(); setupModelMocks()
+      const over = await review(makeAdapter({ getDiff: vi.fn().mockResolvedValue(diffOf(105, 10_000)) }), '100', true)   // ~263K tokens
+      expect(over!.action).toBe('SKIP')
+      expect(over!.skip_reason).toContain(`input budget (${(250_000).toLocaleString()};`)
+    } finally {
+      cfg.anthropic.model = reviewerModel
+    }
+  })
 })
 
 describe('context-length overflow (estimate under-counted)', () => {
@@ -3272,6 +3303,77 @@ describe('checked commit from CI', () => {
       expect(adapter.getPreviousReviewComments).toHaveBeenCalledTimes(1)
       expect(adapter.postComment).toHaveBeenCalledTimes(1)
       expect(h9.record.checked_commit).toBe(COMMIT_A)
+    })
+  })
+
+  describe('reviewer findings null or not a list (strict:false provider), through the real runReview: ERROR with its record, nothing posted, never marked', () => {
+    const MISSING = 'Structured output missing required field(s): findings'
+    const malformed = (extra: Record<string, unknown> = {}) => ({ summary: '', findings: null, behavioral_diff: [], production_risk: [], unresolved_questions: [], ...extra })
+    const realReviewer = async (completeStructured: ReturnType<typeof vi.fn>) => {
+      setupModelMocks()
+      const actual = await vi.importActual<typeof import('../client.js')>('../client.js')
+      vi.mocked(createProvider).mockReturnValue({ complete: vi.fn(), completeStructured } as never)
+      mockRunReview.mockImplementation(actual.runReview)
+    }
+    const returning = (object: Record<string, unknown>) => realReviewer(vi.fn().mockResolvedValue({ object, usage: { input_tokens: 1000, output_tokens: 200 } }))
+    const expectMissingFindingsError = (record: Awaited<ReturnType<typeof failWith>>, name: string) => {
+      expect(record.action, name).toBe('ERROR')
+      expect(record.error, name).toEqual({ type: 'Error', message: MISSING, status: null })
+      expect(record.tokens, name).toMatchObject({ input: 1000, output: 200 })
+      expect(record.review_findings, name).toBeNull()
+      expect('checked_commit' in record, name).toBe(false)
+    }
+
+    it('M1 re-review: no_change + findings null, or findings null with a pending dev reply → ERROR, no review or reply posted', async () => {
+      const cases: Array<[string, Record<string, unknown>, () => VCSAdapter]> = [
+        ['no_change', malformed({ no_change: true }), () => reReviewAdapter(CLEAN_PRIOR)],
+        ['no_change + reply', malformed({ no_change: true }), () => reReviewAdapter(CLEAN_PRIOR, [devReply('2026-03-09T12:00:00Z')])],
+        ['quiet + reply', malformed(), () => reReviewAdapter(CLEAN_PRIOR, [devReply('2026-03-09T12:00:00Z')])],
+      ]
+      for (const [name, object, make] of cases) {
+        vi.clearAllMocks(); await returning(object)
+        const adapter = make()
+        expectMissingFindingsError(await failWith(adapter, undefined, MISSING), name)
+        expect(adapter.postComment, name).not.toHaveBeenCalled()
+        expect(adapter.postReply, name).not.toHaveBeenCalled()
+        expect(mockRunCommentResponse, name).not.toHaveBeenCalled()
+      }
+    })
+
+    it('M2 first review: findings null, an object or a string → ERROR with the paid tokens, no review posted', async () => {
+      for (const findings of [null, {}, 'none']) {
+        vi.clearAllMocks(); await returning(malformed({ summary: 'S', findings }))
+        const adapter = makeAdapter()
+        expectMissingFindingsError(await failWith(adapter, undefined, MISSING), JSON.stringify(findings))
+        expect(adapter.postComment).not.toHaveBeenCalled()
+      }
+    })
+
+    it('M3 the same record a missing findings key gets from the providers, except that the paid tokens are kept', async () => {
+      await realReviewer(vi.fn().mockRejectedValue(new Error(MISSING)))
+      const missing = await failWith(makeAdapter(), undefined, MISSING)
+      vi.clearAllMocks(); await returning(malformed({ summary: 'S' }))
+      const nulled = await failWith(makeAdapter(), undefined, MISSING)
+
+      const comparable = (r: typeof missing) => ({ ...r, timestamp: '', duration_ms: 0, tokens: null, cost_usd: 0 })
+      expect(comparable(nulled)).toEqual(comparable(missing))
+      expect(missing.tokens.input).toBe(0)
+      expect(nulled.tokens).toMatchObject({ input: 1000, output: 200 })
+    })
+
+    it('M4 a malformed object that still reaches the FSM cannot hide the run\'s real error or outcome: the record is written', async () => {
+      const raw = { ...reviewWith(), summary: '', findings: null as never, no_change: true }
+      setupModelMocks('NO_CHANGE', raw)
+      const first = await failWith(makeAdapter(), undefined, 'Reviewer returned NO_CHANGE on a first review')
+      expect(first.action).toBe('ERROR')
+      expect(first.error!.message).toBe('Reviewer returned NO_CHANGE on a first review — refusing to silently skip')
+      expect(first.review_findings).toBeNull()
+
+      vi.clearAllMocks(); setupModelMocks('NO_CHANGE', raw)
+      const again = await runWith(reReviewAdapter(CLEAN_PRIOR), undefined)
+      expect(again.record.action).toBe('NO_CHANGE')
+      expect(again.record.review_findings).toBeNull()
+      expect('checked_commit' in again.record).toBe(false)
     })
   })
 })

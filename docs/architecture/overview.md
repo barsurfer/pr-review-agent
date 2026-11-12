@@ -37,6 +37,7 @@ pr-review-agent/
 │   │   ├── shown-anchors.ts      # What each pass was shown, for ENABLE_JUDGE_SHOWN_CONTEXT_ANCHORS
 │   │   ├── trigger.ts            # Trigger context (--event/--comment-author) and IGNORE_COMMENT_AUTHORS matching
 │   │   ├── checked-commit.ts     # Checked commit from CI (--checked-commit/LAST_CHECKED_COMMIT): validation, head match
+│   │   ├── cli-value.ts          # cliOrEnv: trimmed CLI value, else the env value (CI passes unset parameters as '')
 │   │   ├── aggregate.ts          # Merge/dedupe findings across bundles
 │   │   ├── bundler.ts            # Split an over-budget PR into directory bundles
 │   │   ├── bundled.ts            # Per-bundle reviewer+judge orchestration
@@ -44,6 +45,7 @@ pr-review-agent/
 │   ├── llm/
 │   │   ├── provider.ts           # Stable facade + createProvider factory (LLM_PROVIDER); re-exports shared surface
 │   │   ├── shared.ts             # LLMProvider/LLMUsage/LLMOptions contracts, TruncatedResponseError, missingRequired
+│   │   ├── model-id.ts           # baseModelId: OpenRouter/dated id → bare id, for pricing and context-window lookup
 │   │   ├── anthropic-provider.ts # AnthropicProvider: Anthropic SDK, streamed
 │   │   └── openrouter-provider.ts # OpenRouterProvider: OpenAI-compatible via axios
 │   ├── vcs/

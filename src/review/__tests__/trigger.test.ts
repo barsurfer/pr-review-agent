@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { isCommentEvent, normalizeAuthorId, resolveTrigger, ignoredCommentAuthor } from '../trigger.js'
+import { cliOrEnv } from '../cli-value.js'
 
 const comment = (commentAuthor: string) => ({ event: 'pullrequest:comment_created', commentAuthor })
 
@@ -47,6 +48,27 @@ describe('resolveTrigger', () => {
   it('keeps a lone event or a lone author', () => {
     expect(resolveTrigger({ event: 'pullrequest:updated' }, { event: '', commentAuthor: '' })).toEqual({ event: 'pullrequest:updated', commentAuthor: '' })
     expect(resolveTrigger({ commentAuthor: '{a}' }, { event: '', commentAuthor: '' })).toEqual({ event: '', commentAuthor: '{a}' })
+  })
+
+  it('resolves every CLI/env combination exactly as the former inline fallback', () => {
+    const values = [undefined, '', ' ', '\t\n', 'x', ' x ', '{X}']
+    const envs = ['', 'e', ' e ']
+    for (const event of values) for (const commentAuthor of values) for (const envEvent of envs) for (const envAuthor of envs) {
+      const e = event?.trim() || envEvent
+      const a = commentAuthor?.trim() || envAuthor
+      const legacy = e || a ? { event: e, commentAuthor: a } : undefined
+      expect(resolveTrigger({ event, commentAuthor }, { event: envEvent, commentAuthor: envAuthor }), JSON.stringify([event, commentAuthor, envEvent, envAuthor])).toEqual(legacy)
+    }
+  })
+})
+
+describe('cliOrEnv (shared CLI-over-env fallback)', () => {
+  it('is the trimmed CLI value when non-empty, else the env value untouched', () => {
+    for (const cli of [undefined, '', ' ', '\t\n', 'x', ' x ', '0']) {
+      for (const env of ['', 'e', ' e ']) expect(cliOrEnv(cli, env), JSON.stringify([cli, env])).toBe(cli?.trim() || env)
+    }
+    expect(cliOrEnv(' a ', 'e')).toBe('a')
+    expect(cliOrEnv('  ', ' e ')).toBe(' e ')
   })
 })
 

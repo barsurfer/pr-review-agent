@@ -26,6 +26,8 @@ vi.mock('../client.js', () => ({ runReview: vi.fn(), runCommentResponse: vi.fn()
 vi.mock('../../prompt/loader.js', () => ({ loadPrompt: vi.fn() }))
 vi.mock('../../context/fetcher.js', () => ({ fetchContext: vi.fn() }))
 vi.mock('../usage.js', async (importOriginal) => ({ ...(await importOriginal() as any), logUsageRecord: vi.fn() }))
+// Reached only by the test that routes runReview to the real client, to feed it a raw provider object.
+vi.mock('../../llm/provider.js', () => ({ createProvider: vi.fn() }))
 
 import { review } from '../index.js'
 import { config } from '../../config.js'
@@ -34,6 +36,8 @@ import { loadPrompt } from '../../prompt/loader.js'
 import { fetchContext } from '../../context/fetcher.js'
 import { renderReview, type ReviewObject } from '../formatter.js'
 import { applyJudgeDecisions } from '../judge-decisions.js'
+import { createProvider } from '../../llm/provider.js'
+import { logUsageRecord } from '../usage.js'
 
 const mockRunReview = vi.mocked(runReview)
 const mockRunJudge = vi.mocked(runJudge)
@@ -382,5 +386,30 @@ describe('bundled review: checked_commit mark', () => {
     const certain = await review(full, '1', false)
     expect(full.postComment).toHaveBeenCalledTimes(1)
     expect(certain!.checked_commit).toBe(pr.sourceCommit)
+  }))
+
+  it('BR5 a later bundle whose findings come back null (real runReview) → ERROR with every bundle\'s tokens, nothing posted, absent', quietRun(async () => {
+    const MISSING = 'Structured output missing required field(s): findings'
+    const actual = await vi.importActual<typeof import('../client.js')>('../client.js')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      for (const [name, make] of [['first review', () => adapter(BIG_DIFF, FILES)], ['re-review', () => reReview(BIG_DIFF, FILES)]] as const) {
+        vi.clearAllMocks(); mockRunReview.mockReset().mockImplementation(actual.runReview)
+        vi.mocked(createProvider).mockReturnValue({ complete: vi.fn(), completeStructured: vi.fn()
+          .mockResolvedValueOnce({ object: quiet(), usage })
+          .mockResolvedValue({ object: { ...quiet(), findings: null }, usage }) })
+        const a = make()
+        await expect(review(a, '1', false, undefined, 'off', true), name).rejects.toThrow(MISSING)
+        const record = vi.mocked(logUsageRecord).mock.calls[0][0]
+        expect(mockRunReview.mock.calls.length, name).toBe(2)
+        expect(record.action, name).toBe('ERROR')
+        expect(record.error, name).toEqual({ type: 'Error', message: MISSING, status: null })
+        expect(record.tokens, name).toMatchObject({ input: 200, output: 20 })
+        expect(a.postComment, name).not.toHaveBeenCalled()
+        expect('checked_commit' in record, name).toBe(false)
+      }
+    } finally {
+      warn.mockRestore()
+    }
   }))
 })

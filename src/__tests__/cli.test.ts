@@ -116,6 +116,32 @@ describe('CLI checked-commit wiring (src/index.ts)', () => {
   }, TIMEOUT)
 })
 
+describe('CLI --force normalisation (src/index.ts)', () => {
+  const forceOf = (args: string[]) => runCli(args).record.force
+
+  it('absent → off; bare --force → re-review; clean and re-review pass through', () => {
+    expect(forceOf([])).toBe('off')
+    expect(forceOf(['--force'])).toBe('re-review')
+    expect(forceOf(['--force', 'clean'])).toBe('clean')
+    expect(forceOf(['--force', 're-review'])).toBe('re-review')
+  }, TIMEOUT * 2)
+
+  it("an empty or whitespace value (CI's unset parameter) runs as off, like an absent flag", () => {
+    expect(forceOf(['--force', ''])).toBe('off')
+    expect(forceOf(['--force='])).toBe('off')
+    expect(forceOf(['--force', '  '])).toBe('off')
+  }, TIMEOUT * 2)
+
+  it('an unknown value is not rejected: the run proceeds with the value passed through', () => {
+    const { status, stdout, stderr, record } = runCli(['--force', 'somethingelse'])
+
+    expect(stderr).not.toMatch(/^error:/m)
+    expect(stdout).toContain('Fetching PR info...')
+    expect(status).toBe(1)
+    expect(record.force).toBe('somethingelse')
+  }, TIMEOUT)
+})
+
 const CHILD_TIMEOUT = TIMEOUT - 10_000
 
 // The unroutable-URL harness fails before CHECK_BRANCHES, so these runs get a local server that answers only the PR-info call: a branch skip exits 0, a pass reaches FETCH_DIFF and errors on the 500.

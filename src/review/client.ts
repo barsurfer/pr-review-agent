@@ -189,8 +189,10 @@ export async function runReview(
     // A log-only field must never cost a review, so a model that omits it still yields the review.
     lensRecommendation ? { ...callOpts, tolerateMissing: ['lens_recommendations'] } : callOpts,
   )
+  // missingRequired passes a null key and strict:false (OpenRouter) can send one; null findings is no verdict, so fail as a missing key does, keeping the paid usage.
+  if (!Array.isArray(raw.findings)) throw Object.assign(new Error('Structured output missing required field(s): findings'), { usage })
   const { lens_recommendations: recommended, ...stripped } = raw
-  const object: ReviewObject = lensRecommendation ? stripped : raw
+  const object = coerceTextLists(lensRecommendation ? stripped : raw)
   const text = renderReview(object)
 
   console.log(`Review received (${usage.input_tokens} in / ${usage.output_tokens} out tokens, ${object.no_change ? 'NO_CHANGE' : `${object.findings.length} findings`})`)
@@ -198,6 +200,19 @@ export async function runReview(
   return lensRecommendation
     ? { text, usage, review: object, lensRecommendations: sanitizeLensRecommendations(recommended) }
     : { text, usage, review: object }
+}
+
+const REQUIRED_TEXT_LISTS = ['behavioral_diff', 'production_risk', 'unresolved_questions'] as const
+
+// These lists only feed the rendered text, so a null one from a strict:false provider is safely empty.
+function coerceTextLists(review: ReviewObject): ReviewObject {
+  const coerced: string[] = REQUIRED_TEXT_LISTS.filter(k => !Array.isArray(review[k]))
+  if (review.can_be_split !== undefined && !Array.isArray(review.can_be_split)) coerced.push('can_be_split')
+  if (!coerced.length) return review
+  console.warn(`  Reviewer returned ${coerced.join(', ')} as a non-list — treated as empty`)
+  const fixed: Record<string, unknown> = { ...review }
+  for (const k of coerced) fixed[k] = []
+  return fixed as unknown as ReviewObject
 }
 
 // Findings only, with the reviewer's item schema so the two can't drift; a distinct object because tests dispatch their mocks on schema identity.

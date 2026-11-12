@@ -58,6 +58,53 @@ describe('runReview (structured output)', () => {
   })
 })
 
+describe('runReview: null or non-array lists from a strict:false provider', () => {
+  beforeEach(() => { complete.mockReset(); completeStructured.mockReset() })
+  const run = async (object: Record<string, unknown>, lensRecommendation = false) => {
+    completeStructured.mockResolvedValue({ object, usage })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const res = await runReview('key', 'model', 3, 16000, '', prInfo, 'DIFF', [], prompt, [], [], '', false, lensRecommendation)
+      return { res, warns: warn.mock.calls.map(c => String(c[0])) }
+    } finally {
+      warn.mockRestore()
+    }
+  }
+  const empty = { summary: 'S', findings: [], behavioral_diff: [], production_risk: [], unresolved_questions: [] }
+
+  it('null or non-array findings throws the providers\' missing-required-field error, carrying the paid usage (with or without no_change, either schema variant)', async () => {
+    const cases: Array<[Record<string, unknown>, boolean]> = [
+      [{ ...empty, findings: null }, false], [{ ...empty, summary: '', findings: null, no_change: true }, false],
+      [{ ...empty, findings: {} }, false], [{ ...empty, findings: 'none' }, false], [{ ...empty, findings: undefined }, false],
+      [{ ...empty, findings: null, lens_recommendations: [] }, true],
+    ]
+    for (const [object, lensRecommendation] of cases) {
+      const err = await run(object, lensRecommendation).then(() => null, (e: Error & { usage?: unknown }) => e)
+      expect(err, JSON.stringify(object)).toBeInstanceOf(Error)
+      expect(err!.constructor).toBe(Error)
+      expect(err!.message).toBe('Structured output missing required field(s): findings')
+      expect(err!.usage).toEqual(usage)
+    }
+  })
+
+  it('null or non-array text lists are coerced to [] with one warning; findings are kept', async () => {
+    const finding: ReviewFinding = { severity: 'LOW', title: 't', body: 'b' }
+    const { res, warns } = await run({ ...empty, findings: [finding], behavioral_diff: null, production_risk: 'none', unresolved_questions: null, can_be_split: null })
+    expect(res.review).toEqual({ ...empty, findings: [finding], can_be_split: [] })
+    expect(res.text).toBe(renderReview({ ...empty, findings: [finding] }))
+    expect(warns).toEqual(['  Reviewer returned behavioral_diff, production_risk, unresolved_questions, can_be_split as a non-list — treated as empty'])
+  })
+
+  it('well-formed: the same object back, no warning (absent can_be_split stays absent)', async () => {
+    for (const object of [empty, { ...empty, can_be_split: ['a'] }, { ...empty, summary: '', no_change: true }]) {
+      const { res, warns } = await run(object)
+      expect(res.review).toBe(object)
+      expect(warns).toEqual([])
+    }
+    expect('can_be_split' in (await run(empty)).res.review!).toBe(false)
+  })
+})
+
 describe('reviewOutputSchema (lens recommendation variant)', () => {
   type Variant = { properties: Record<string, any>; required: string[] }
 

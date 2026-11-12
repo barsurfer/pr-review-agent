@@ -28,6 +28,52 @@ describe('modelContextWindow', () => {
   })
 })
 
+describe('modelContextWindow — provider-prefixed, dot-versioned, :variant and dated ids', () => {
+  // The window table as of this change, enumerated so a resolution change for any entry fails here.
+  const TABLE: Array<[string, number]> = [
+    ['claude-haiku-4-5', 200_000], ['claude-sonnet-4-5', 200_000], ['claude-opus-4-5', 200_000],
+    ['claude-haiku-5', 1_000_000], ['claude-sonnet-4-6', 1_000_000], ['claude-sonnet-5', 1_000_000],
+    ['claude-opus-4-6', 1_000_000], ['claude-opus-4-7', 1_000_000], ['claude-opus-4-8', 1_000_000],
+    ['claude-opus-5', 1_000_000], ['claude-fable-5', 1_000_000], ['claude-mythos-5', 1_000_000],
+  ]
+  const legacy = (m: string) => TABLE.find(([p]) => m.startsWith(p))?.[1]
+  const dotted = (p: string) => p.replace(/-(\d+)-(\d+)$/, '-$1.$2')
+
+  it('resolves the OpenRouter prod pair to the 1M window of its bare id', () => {
+    expect(modelContextWindow('anthropic/claude-sonnet-5.5')).toBe(1_000_000)
+    expect(modelContextWindow('anthropic/claude-haiku-5.5')).toBe(1_000_000)
+  })
+
+  it('every table entry: ids that resolve today keep their window, and their aliases resolve to it', () => {
+    for (const [prefix, window] of TABLE) {
+      const forms = [
+        prefix, `${prefix}-20251001`, `${prefix}-5`, `${prefix}-5-20260101`, dotted(prefix), `${dotted(prefix)}-20251001`,
+        `anthropic/${prefix}`, `anthropic/${dotted(prefix)}`, `anthropic/${dotted(prefix)}:thinking`, `anthropic/${prefix}.5:beta`, `anthropic/${dotted(prefix)}-20251001`,
+      ]
+      for (const id of forms) {
+        const today = legacy(id)
+        if (today !== undefined) expect(modelContextWindow(id), id).toBe(today)
+        expect(modelContextWindow(id), id).toBe(window)
+      }
+    }
+    for (const id of ['claude-haiku-4-5-20251001', 'claude-sonnet-4-5-20250929', 'claude-opus-4-5-20251101']) expect(modelContextWindow(id), id).toBe(200_000)
+    for (const id of ['anthropic/claude-opus-5.5', 'anthropic/claude-opus-4.8', 'anthropic/claude-fable-5.2', 'anthropic/claude-mythos-5.1:thinking', 'claude-sonnet-5.5']) {
+      expect(modelContextWindow(id), id).toBe(1_000_000)
+    }
+  })
+
+  it('non-Claude and unmapped slugs keep the 200K fallback; dot→dash creates no false match', () => {
+    for (const id of [
+      'openai/gpt-5', 'openai/gpt-4.1', 'openai/gpt-5.1-codex', 'google/gemini-2.5-pro', 'meta-llama/llama-3.1-405b-instruct',
+      'deepseek/deepseek-chat-v3.1', 'x-ai/grok-4', 'openai/claude-sonnet-5.5', 'anthropic/claude-3.7-sonnet', 'anthropic/claude-3.5-haiku',
+      'anthropic/claude-opus-4.1', 'anthropic/claude-sonnet-4', 'anthropic/claude-something-7.5', 'claude-something-7', '',
+    ]) {
+      expect(legacy(id), id).toBeUndefined()
+      expect(modelContextWindow(id), id).toBe(200_000)
+    }
+  })
+})
+
 describe('breadth settings', () => {
   afterEach(() => { vi.unstubAllEnvs() })
 
@@ -134,6 +180,33 @@ describe('parseBranchList (branch-list env vars and their CLI overrides)', () =>
       expect(config.onlyTargetBranches).toEqual(parseBranchList('main,'))
     } finally {
       vi.unstubAllEnvs()
+    }
+  })
+})
+
+describe('IGNORE_COMMENT_AUTHORS parses with the shared list parser', () => {
+  afterEach(() => { vi.unstubAllEnvs() })
+  const inline = (v: string) => v.split(',').map(p => p.trim()).filter(Boolean)
+
+  it('the env value parses exactly as the former inline split/trim/filter did', async () => {
+    for (const value of [undefined, '', ' ', ',', ' , , ', '{a}', ' {A} ,, b ,', 'a,b', '\ta\t,\nb\n', 'a,,b,,', ' x ,y', 'a b,c', '{bot},{Bot}']) {
+      vi.unstubAllEnvs()
+      vi.stubEnv('IGNORE_COMMENT_AUTHORS', value as string)
+      vi.resetModules()
+      const { config, parseBranchList } = await import('../config.js')
+      expect(config.trigger.ignoreCommentAuthors, JSON.stringify(value)).toEqual(inline(value ?? ''))
+      expect(config.trigger.ignoreCommentAuthors, JSON.stringify(value)).toEqual(parseBranchList(value ?? ''))
+    }
+  })
+
+  it('parseBranchList equals the inline parse on random inputs', async () => {
+    const { parseBranchList } = await import('../config.js')
+    const alphabet = [',', ' ', '\t', '\n', ' ', 'a', 'B', '{', '}', '-', '*']
+    let seed = 42
+    const next = () => (seed = (seed * 1103515245 + 12345) % 2 ** 31)
+    for (let i = 0; i < 500; i++) {
+      const value = Array.from({ length: next() % 12 }, () => alphabet[next() % alphabet.length]).join('')
+      expect(parseBranchList(value), JSON.stringify(value)).toEqual(inline(value))
     }
   })
 })

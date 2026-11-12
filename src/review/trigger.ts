@@ -1,4 +1,5 @@
 import type { TriggerInfo } from './types.js'
+import { cliOrEnv } from './cli-value.js'
 
 // Bitbucket sends an actor with every PR event (the pusher on pullrequest:updated), so only a comment event proves the author commented.
 export function isCommentEvent(event: string): boolean {
@@ -10,10 +11,9 @@ export function normalizeAuthorId(id: string): string {
   return id.trim().replace(/^\{(.*)\}$/, '$1').trim().toLowerCase()
 }
 
-// CI passes unset parameters as empty strings, so an empty CLI value falls back to the env value.
 export function resolveTrigger(cli: { event?: string; commentAuthor?: string }, env: TriggerInfo): TriggerInfo | undefined {
-  const event = cli.event?.trim() || env.event
-  const commentAuthor = cli.commentAuthor?.trim() || env.commentAuthor
+  const event = cliOrEnv(cli.event, env.event)
+  const commentAuthor = cliOrEnv(cli.commentAuthor, env.commentAuthor)
   return event || commentAuthor ? { event, commentAuthor } : undefined
 }
 

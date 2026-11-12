@@ -112,7 +112,7 @@ The record is also printed to stdout at the end of every run regardless of the f
 | `judge_cost_usd` | `number \| null` | Judge call cost, or null if no judge |
 | `duration_ms` | `number` | Wall-clock time for the full run |
 | `dry_run` | `boolean` | Whether `--dry-run` was used |
-| `force` | `string` | Force mode: `"off"`, `"clean"` (no prior context), or `"re-review"` (bypass dedup, keep context) |
+| `force` | `string` | Force mode: `"off"`, `"clean"` (no prior context), or `"re-review"` (bypass dedup, keep context). An empty or whitespace `--force` value is recorded as `"off"`; any other value is recorded as given |
 | `prompt_source` | `string` | `repo`, a `--prompt` path, `stack:<bases+overlays>`, or `default` |
 | `agent_commit` | `string` | Deploy commit of the agent (`getBuildCommit()`) — config attribution |
 | `prompt_hash` | `string \| null` | sha256-12 of the resolved reviewer prompt; null if no prompt loaded |
@@ -145,7 +145,7 @@ The record is also printed to stdout at the end of every run regardless of the f
 | `dedup_source` | `"checked_commit"` \| absent | Present when the run matched the head against the checked commit CI passed (`LAST_CHECKED_COMMIT`), kept even if the run then errored |
 | `jenkins` | `object \| null` | `{ job, build, url }` from Jenkins env (`JOB_NAME`/`BUILD_NUMBER`/`BUILD_URL`), or null off-CI — maps a run to its build/artifact |
 | `trigger` | `object` \| absent | `{ event, comment_author }` — raw trimmed values from `--event`/`--comment-author` (or `TRIGGER_EVENT`/`TRIGGER_COMMENT_AUTHOR`), null for the one not given. The key is absent when neither was given, so those records serialize as before. See [review/skip-logic.md §7](../context/review/skip-logic.md) |
-| `error` | `object \| null` | `{ type, message, status }` on failure. On a max-tokens truncation, `type` is `TruncatedResponseError` and `tokens.*` still hold the real spend (not zeros) |
+| `error` | `object \| null` | `{ type, message, status }` on failure. On a max-tokens truncation, `type` is `TruncatedResponseError` and `tokens.*` still hold the real spend (not zeros). A reviewer response whose `findings` is null or not a list gives `Structured output missing required field(s): findings` (`type` `Error`, the same as a missing key) and also keeps the spend |
 
 ### Action Values
 

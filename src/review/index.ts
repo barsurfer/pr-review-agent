@@ -46,7 +46,7 @@ async function dropRepliesDirectedElsewhere(ctx: ReviewContext, replies: Comment
   }
 }
 
-// '' is how CI passes an unset --force, so only the two real modes count as forced.
+// The CLI maps an empty --force to 'off', but review() is also called directly, so '' or an unknown mode must not count as forced.
 const forced = (ctx: ReviewContext): boolean => ctx.force === 'clean' || ctx.force === 're-review'
 
 // CI stores checked_commit from this, so only points where the head's reviewable content was really checked may set it.
@@ -80,7 +80,6 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       console.log(`Trigger: ${event || 'unknown event'}${commentAuthor ? ` by ${commentAuthor}` : ''}`)
       if (commentAuthor && !event && ignoreList.length) console.warn('  Comment author given without an event - IGNORE_COMMENT_AUTHORS not applied (every PR event carries an actor)')
       if (!ignoredCommentAuthor(ctx.trigger, ignoreList)) return State.FETCH_PR_INFO
-      // An empty --force from CI arrives as '' rather than 'off', and must not bypass the list.
       if (forced(ctx)) {
         console.log(`  ${commentAuthor} matches IGNORE_COMMENT_AUTHORS - running anyway (--force)`)
         return State.FETCH_PR_INFO
