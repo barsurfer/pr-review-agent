@@ -36221,6 +36221,12 @@ init_define_STACK_PROMPTS();
   );
 })();
 
+// src/llm/model-id.ts
+init_define_STACK_PROMPTS();
+function baseModelId(model) {
+  return model.replace(/^anthropic\//, "").replace(/:[\w-]+$/, "").replace(/\./g, "-").replace(/-\d{8}$/, "");
+}
+
 // src/config.ts
 function required(name) {
   const value = process.env[name];
@@ -36236,6 +36242,9 @@ function finiteOr(value, fallback) {
 function positiveOr(value, fallback) {
   return Number.isFinite(value) && value > 0 ? value : fallback;
 }
+function parseBranchList(value) {
+  return value.split(",").map((p) => p.trim()).filter(Boolean);
+}
 var MODEL_CONTEXT_WINDOWS = [
   ["claude-haiku-4-5", 2e5],
   ["claude-sonnet-4-5", 2e5],
@@ -36250,8 +36259,9 @@ var MODEL_CONTEXT_WINDOWS = [
   ["claude-fable-5", 1e6],
   ["claude-mythos-5", 1e6]
 ];
+var windowByPrefix = (model) => MODEL_CONTEXT_WINDOWS.find(([prefix]) => model.startsWith(prefix))?.[1];
 function modelContextWindow(model) {
-  return MODEL_CONTEXT_WINDOWS.find(([prefix]) => model.startsWith(prefix))?.[1] ?? 2e5;
+  return windowByPrefix(model) ?? windowByPrefix(baseModelId(model)) ?? 2e5;
 }
 var llmProvider = optional("LLM_PROVIDER", "anthropic");
 function resolveLlmApiKey(provider) {
@@ -36361,6 +36371,11 @@ var config = {
     // Off by default (Bitbucket only): skip replying to a dev comment @-directed solely at someone else.
     skipDirectedElsewhere: optional("SKIP_DIRECTED_REPLIES", "false") === "true"
   },
+  trigger: {
+    event: optional("TRIGGER_EVENT", "").trim(),
+    commentAuthor: optional("TRIGGER_COMMENT_AUTHOR", "").trim(),
+    ignoreCommentAuthors: parseBranchList(optional("IGNORE_COMMENT_AUTHORS", ""))
+  },
   review: {
     maxFindings: parseInt(optional("MAX_FINDINGS", "0"), 10),
     // 0 = unlimited
@@ -36385,8 +36400,11 @@ var config = {
     maxFiles: parseInt(optional("MAX_CONTEXT_FILES", "20"), 10),
     maxFileLines: parseInt(optional("MAX_FILE_LINES", "500"), 10)
   },
-  skipSourceBranches: optional("SKIP_SOURCE_BRANCHES", "main,master,release/*,hotfix/*").split(",").map((p) => p.trim()).filter(Boolean),
-  skipTargetBranches: optional("SKIP_TARGET_BRANCHES", "main,master").split(",").map((p) => p.trim()).filter(Boolean),
+  skipSourceBranches: parseBranchList(optional("SKIP_SOURCE_BRANCHES", "main,master,release/*,hotfix/*")),
+  skipTargetBranches: parseBranchList(optional("SKIP_TARGET_BRANCHES", "main,master")),
+  // Skipping stacked PRs until they are retargeted gives them one review instead of one per push.
+  onlyTargetBranches: parseBranchList(optional("ONLY_TARGET_BRANCHES", "")),
+  lastCheckedCommit: optional("LAST_CHECKED_COMMIT", "").trim(),
   diffExcludePatterns: optional("DIFF_EXCLUDE_PATTERNS", "*.lock,package-lock.json,yarn.lock,pnpm-lock.yaml,*.json,*.spec.ts").split(",").map((p) => p.trim()).filter(Boolean),
   thresholds: {
     minChangedFiles: parseInt(optional("MIN_CHANGED_FILES", "0"), 10),
@@ -45564,11 +45582,22 @@ async function runReview(apiKey, model, maxRetries, maxTokens, effort, prInfo, d
     // A log-only field must never cost a review, so a model that omits it still yields the review.
     lensRecommendation ? { ...callOpts, tolerateMissing: ["lens_recommendations"] } : callOpts
   );
+  if (!Array.isArray(raw.findings)) throw Object.assign(new Error("Structured output missing required field(s): findings"), { usage });
   const { lens_recommendations: recommended, ...stripped } = raw;
-  const object = lensRecommendation ? stripped : raw;
+  const object = coerceTextLists(lensRecommendation ? stripped : raw);
   const text = renderReview(object);
   console.log(`Review received (${usage.input_tokens} in / ${usage.output_tokens} out tokens, ${object.no_change ? "NO_CHANGE" : `${object.findings.length} findings`})`);
   return lensRecommendation ? { text, usage, review: object, lensRecommendations: sanitizeLensRecommendations(recommended) } : { text, usage, review: object };
+}
+var REQUIRED_TEXT_LISTS = ["behavioral_diff", "production_risk", "unresolved_questions"];
+function coerceTextLists(review2) {
+  const coerced = REQUIRED_TEXT_LISTS.filter((k) => !Array.isArray(review2[k]));
+  if (review2.can_be_split !== void 0 && !Array.isArray(review2.can_be_split)) coerced.push("can_be_split");
+  if (!coerced.length) return review2;
+  console.warn(`  Reviewer returned ${coerced.join(", ")} as a non-list \u2014 treated as empty`);
+  const fixed = { ...review2 };
+  for (const k of coerced) fixed[k] = [];
+  return fixed;
 }
 var BREADTH_OUTPUT_SCHEMA = {
   type: "object",
@@ -45871,6 +45900,7 @@ async function runBundledReview(ctx, maxInputTokens) {
   const reviews = [];
   const unreviewed = plan.oversized.map((u) => u.path);
   let anyOverflow = false;
+  let incoherent = false;
   const judgeScores = [];
   const judgeUsage = { input_tokens: 0, output_tokens: 0 };
   let judged = false;
@@ -45939,6 +45969,7 @@ This PR is too large for one pass. You are reviewing bundle ${i + 1} of ${plan.b
     }
     addUsage(ctx, result.usage);
     if (result.review?.no_change || isNoChange(result.text)) {
+      if (result.review?.no_change !== true || (result.review?.findings?.length ?? 0) > 0) incoherent = true;
       console.log("  Reviewer: NO_CHANGE for this bundle");
       continue;
     }
@@ -45987,6 +46018,7 @@ This PR is too large for one pass. You are reviewing bundle ${i + 1} of ${plan.b
   if (!reviews.length) {
     if (anyOverflow) return { ok: false, reason: `A bundle exceeded the model context \u2014 ${unreviewed.length} file(s) left unreviewed` };
     ctx.reviewText = "NO_CHANGE";
+    ctx.bundleUncertain = unreviewed.length > 0 || incoherent;
     return { ok: true };
   }
   const merged = mergeReviews(reviews, unreviewed);
@@ -45999,6 +46031,7 @@ This PR is too large for one pass. You are reviewing bundle ${i + 1} of ${plan.b
   }
   console.log(`
 Merged ${reviews.length} bundle review(s): ${merged.object.findings.length} finding(s) after dedupe`);
+  ctx.bundleUncertain = unreviewed.length > 0 || incoherent;
   return { ok: true };
 }
 function addUsage(ctx, u) {
@@ -46045,7 +46078,7 @@ function haiku55Pricing(inputTokens) {
   return inputTokens > 1e5 ? { input: 0.5, output: 2.5 } : { input: 0.1, output: 0.5 };
 }
 function estimateCost(tokens2, model) {
-  const base = model.replace(/-\d{8}$/, "");
+  const base = baseModelId(model);
   let p = base === "claude-haiku-5-5" ? haiku55Pricing(tokens2.input) : MODEL_PRICING[model] ?? MODEL_PRICING[base];
   if (!p) {
     console.warn(`No pricing entry for model "${model}" \u2014 estimating with claude-sonnet-4-6 rates`);
@@ -46060,7 +46093,7 @@ function getAgentVersion() {
     const pkg = JSON.parse((0, import_fs4.readFileSync)(pkgPath, "utf-8"));
     return pkg.version;
   } catch {
-    if (true) return "0.0.42";
+    if (true) return "0.0.43";
     return "unknown";
   }
 }
@@ -46072,7 +46105,7 @@ function getBuildCommit() {
     const dirty = (0, import_child_process.execSync)("git status --porcelain", opts2).toString().trim() ? "-dirty" : "";
     return hash + dirty;
   } catch {
-    if (true) return "18e5dce";
+    if (true) return "3f089bb";
     return "unknown";
   }
 }
@@ -46091,7 +46124,7 @@ function buildUsageRecord(ctx, durationMs, error) {
   const reviewText = ctx.reviewText ?? "";
   const verdictScore = reviewText ? parseVerdictScore(reviewText) : null;
   const findings = reviewText ? parseFindings(reviewText) : null;
-  const reviewFindings = ctx.reviewObject ? countFindings(ctx.reviewObject) : null;
+  const reviewFindings = ctx.reviewObject && Array.isArray(ctx.reviewObject.findings) ? countFindings(ctx.reviewObject) : null;
   const deltaStats = ctx.reviewObject?.delta_stats ?? null;
   const judgeScores = ctx.judgeScores ?? null;
   const judgeModel = config.judge.model || null;
@@ -46222,13 +46255,61 @@ function buildUsageRecord(ctx, durationMs, error) {
       still_open: deltaStats?.still_open ?? 0,
       new_findings: deltaStats?.new_findings ?? 0
     } : null,
+    // Present only when the head was really checked and the run did not fail afterwards; CI stores exactly this value.
+    ...ctx.headChecked && !error ? { checked_commit: ctx.prInfo.sourceCommit } : {},
+    ...ctx.dedupHit === "checked_commit" ? { dedup_source: "checked_commit" } : {},
     jenkins: getJenkinsMeta(),
+    // Absent when CI passed no trigger, so those records serialize exactly as before.
+    ...ctx.trigger ? { trigger: { event: ctx.trigger.event || null, comment_author: ctx.trigger.commentAuthor || null } } : {},
     error
   };
 }
 function logUsageRecord(record) {
   (0, import_fs4.appendFileSync)("results.jsonl", JSON.stringify(record) + "\n");
   console.log("Usage appended to results.jsonl");
+}
+
+// src/review/trigger.ts
+init_define_STACK_PROMPTS();
+
+// src/review/cli-value.ts
+init_define_STACK_PROMPTS();
+function cliOrEnv(cli, env) {
+  return cli?.trim() || env;
+}
+
+// src/review/trigger.ts
+function isCommentEvent(event) {
+  return /comment/i.test(event);
+}
+function normalizeAuthorId(id) {
+  return id.trim().replace(/^\{(.*)\}$/, "$1").trim().toLowerCase();
+}
+function resolveTrigger(cli, env) {
+  const event = cliOrEnv(cli.event, env.event);
+  const commentAuthor = cliOrEnv(cli.commentAuthor, env.commentAuthor);
+  return event || commentAuthor ? { event, commentAuthor } : void 0;
+}
+function ignoredCommentAuthor(trigger, ignoreList) {
+  const author = normalizeAuthorId(trigger.commentAuthor);
+  if (!author || !isCommentEvent(trigger.event)) return null;
+  return ignoreList.find((entry) => normalizeAuthorId(entry) === author) ?? null;
+}
+
+// src/review/checked-commit.ts
+init_define_STACK_PROMPTS();
+var HASH = /^[0-9a-f]{12,64}$/;
+function resolveCheckedCommit(cli, env) {
+  const value = cliOrEnv(cli, env).toLowerCase();
+  if (!value) return void 0;
+  if (HASH.test(value)) return value;
+  console.warn(`Warning: ignoring the checked commit "${value.slice(0, 64)}" (--checked-commit/LAST_CHECKED_COMMIT) - expected 12 to 64 hex characters`);
+  return void 0;
+}
+function headMatches(checked, sourceCommit) {
+  const head = sourceCommit.toLowerCase();
+  const [short, long] = checked.length <= head.length ? [checked, head] : [head, checked];
+  return short.length >= 12 && long.startsWith(short);
 }
 
 // src/review/types.ts
@@ -46252,37 +46333,65 @@ async function dropRepliesDirectedElsewhere(ctx, replies) {
     return replies;
   }
 }
+var forced = (ctx) => ctx.force === "clean" || ctx.force === "re-review";
+function markHeadChecked(ctx) {
+  if (forced(ctx) || ctx.dryRun || ctx.outcomeSink || ctx.bundleUncertain || ctx.deltaFetchFailed) return;
+  ctx.headChecked = true;
+}
 function stageAfterSecondLook() {
-  if (!config.lenses.enabled) return 15 /* JUDGE_REVIEW */;
+  if (!config.lenses.enabled) return 16 /* JUDGE_REVIEW */;
   const { lenses, unknown } = parseLensList(config.lenses.list);
   if (unknown.length) console.warn(`  Ignoring unknown lens name(s): ${unknown.join(", ")}`);
-  return lenses.length ? 14 /* LENS_REVIEW */ : 15 /* JUDGE_REVIEW */;
+  return lenses.length ? 15 /* LENS_REVIEW */ : 16 /* JUDGE_REVIEW */;
 }
 async function transition(state, ctx) {
   switch (state) {
-    case 0 /* FETCH_PR_INFO */: {
+    case 0 /* CHECK_TRIGGER */: {
+      if (!ctx.trigger) return 1 /* FETCH_PR_INFO */;
+      const { event, commentAuthor } = ctx.trigger;
+      const ignoreList = config.trigger.ignoreCommentAuthors;
+      console.log(`Trigger: ${event || "unknown event"}${commentAuthor ? ` by ${commentAuthor}` : ""}`);
+      if (commentAuthor && !event && ignoreList.length) console.warn("  Comment author given without an event - IGNORE_COMMENT_AUTHORS not applied (every PR event carries an actor)");
+      if (!ignoredCommentAuthor(ctx.trigger, ignoreList)) return 1 /* FETCH_PR_INFO */;
+      if (forced(ctx)) {
+        console.log(`  ${commentAuthor} matches IGNORE_COMMENT_AUTHORS - running anyway (--force)`);
+        return 1 /* FETCH_PR_INFO */;
+      }
+      ctx.action = "SKIP";
+      ctx.skipReason = `${event} by "${commentAuthor}" matches IGNORE_COMMENT_AUTHORS`;
+      return 19 /* SKIP */;
+    }
+    case 1 /* FETCH_PR_INFO */: {
       console.log("Fetching PR info...");
       ctx.prInfo = await ctx.adapter.getPullRequestInfo(ctx.prId);
       console.log(`  "${ctx.prInfo.title}" (${ctx.prInfo.sourceBranch} \u2192 ${ctx.prInfo.targetBranch})`);
-      return 1 /* CHECK_BRANCHES */;
+      return 2 /* CHECK_BRANCHES */;
     }
-    case 1 /* CHECK_BRANCHES */: {
+    case 2 /* CHECK_BRANCHES */: {
       const src = ctx.prInfo.sourceBranch;
       const tgt = ctx.prInfo.targetBranch;
       const matchesPattern = (branch, patterns) => patterns.some((p) => p.includes("*") ? new RegExp("^" + p.replace(/\*/g, ".*") + "$").test(branch) : p === branch);
       if (config.skipSourceBranches.length > 0 && matchesPattern(src, config.skipSourceBranches)) {
         ctx.action = "SKIP";
         ctx.skipReason = `source branch "${src}" matches SKIP_SOURCE_BRANCHES`;
-        return 18 /* SKIP */;
+        return 19 /* SKIP */;
       }
       if (config.skipTargetBranches.length > 0 && matchesPattern(tgt, config.skipTargetBranches)) {
+        if (config.onlyTargetBranches.length > 0 && matchesPattern(tgt, config.onlyTargetBranches)) {
+          console.warn(`  "${tgt}" is in both SKIP_TARGET_BRANCHES and ONLY_TARGET_BRANCHES - the skip list wins; set SKIP_TARGET_BRANCHES= to review it`);
+        }
         ctx.action = "SKIP";
         ctx.skipReason = `target branch "${tgt}" matches SKIP_TARGET_BRANCHES`;
-        return 18 /* SKIP */;
+        return 19 /* SKIP */;
       }
-      return 2 /* FETCH_DIFF */;
+      if (config.onlyTargetBranches.length > 0 && !matchesPattern(tgt, config.onlyTargetBranches)) {
+        ctx.action = "SKIP";
+        ctx.skipReason = `target branch "${tgt}" is not in ONLY_TARGET_BRANCHES (${config.onlyTargetBranches.join(",")})`;
+        return 19 /* SKIP */;
+      }
+      return 3 /* FETCH_DIFF */;
     }
-    case 2 /* FETCH_DIFF */: {
+    case 3 /* FETCH_DIFF */: {
       console.log("Fetching diff...");
       try {
         ctx.diff = await ctx.adapter.getDiff(ctx.prId);
@@ -46290,7 +46399,7 @@ async function transition(state, ctx) {
         if (err instanceof PrTooLargeError) {
           ctx.action = "SKIP";
           ctx.skipReason = err.message;
-          return 18 /* SKIP */;
+          return 19 /* SKIP */;
         }
         throw err;
       }
@@ -46309,43 +46418,43 @@ async function transition(state, ctx) {
       if (ctx.reviewableLineCount === 0) {
         ctx.action = "SKIP";
         ctx.skipReason = "no reviewable changes after exclusions";
-        return 18 /* SKIP */;
+        return 19 /* SKIP */;
       }
-      return 3 /* CHECK_THRESHOLDS */;
+      return 4 /* CHECK_THRESHOLDS */;
     }
-    case 3 /* CHECK_THRESHOLDS */: {
+    case 4 /* CHECK_THRESHOLDS */: {
       const { minChangedFiles, maxChangedFiles, minChangedLines, maxChangedLines } = config.thresholds;
       const fileCount = ctx.reviewableFileCount;
       const lineCount = ctx.reviewableLineCount;
       if (minChangedFiles > 0 && fileCount < minChangedFiles) {
         ctx.action = "SKIP";
         ctx.skipReason = `PR has ${fileCount} reviewable file(s), minimum is ${minChangedFiles}`;
-        return 18 /* SKIP */;
+        return 19 /* SKIP */;
       }
       const bundling = config.review.bundledReview;
       if (!bundling && maxChangedFiles > 0 && fileCount > maxChangedFiles) {
         ctx.action = "SKIP";
         ctx.skipReason = `PR has ${fileCount} reviewable file(s), maximum is ${maxChangedFiles}`;
-        return 18 /* SKIP */;
+        return 19 /* SKIP */;
       }
       if (minChangedLines > 0 && lineCount < minChangedLines) {
         ctx.action = "SKIP";
         ctx.skipReason = `PR has ${lineCount} reviewable line(s), minimum is ${minChangedLines}`;
-        return 18 /* SKIP */;
+        return 19 /* SKIP */;
       }
       if (!bundling && maxChangedLines > 0 && lineCount > maxChangedLines) {
         ctx.action = "SKIP";
         ctx.skipReason = `PR has ${lineCount} reviewable line(s), maximum is ${maxChangedLines}`;
-        return 18 /* SKIP */;
+        return 19 /* SKIP */;
       }
-      return 4 /* CHECK_PREVIOUS_REVIEWS */;
+      return 5 /* CHECK_PREVIOUS_REVIEWS */;
     }
-    case 4 /* CHECK_PREVIOUS_REVIEWS */: {
+    case 5 /* CHECK_PREVIOUS_REVIEWS */: {
       if (ctx.force === "clean") {
         console.log("Skipping previous review check (--force clean)");
         ctx.previousReviews = [];
         ctx.reviewNumber = 1;
-        return 7 /* LOAD_PROMPT */;
+        return 8 /* LOAD_PROMPT */;
       }
       console.log("Checking for previous reviews...");
       ctx.previousReviews = await ctx.adapter.getPreviousReviewComments(ctx.prId);
@@ -46358,8 +46467,20 @@ async function transition(state, ctx) {
         } else {
           if (commitHash && commitHash === ctx.prInfo.sourceCommit.slice(0, 12)) {
             console.log(`  Source commit ${ctx.prInfo.sourceCommit.slice(0, 12)} already reviewed \u2014 checking for unanswered replies...`);
+            markHeadChecked(ctx);
             ctx.reviewNumber = ctx.previousReviews.length;
-            return 5 /* CHECK_REPLIES */;
+            return 6 /* CHECK_REPLIES */;
+          }
+          if (ctx.checkedCommit) {
+            const head12 = ctx.prInfo.sourceCommit.slice(0, 12);
+            if (headMatches(ctx.checkedCommit, ctx.prInfo.sourceCommit)) {
+              console.log(`  Source commit ${head12} already checked by an earlier run (checked commit) \u2014 checking for unanswered replies...`);
+              ctx.dedupHit = "checked_commit";
+              markHeadChecked(ctx);
+              ctx.reviewNumber = ctx.previousReviews.length;
+              return 6 /* CHECK_REPLIES */;
+            }
+            console.log(`  Checked commit ${ctx.checkedCommit.slice(0, 12)} is not the current head ${head12} \u2014 ignoring it`);
           }
           if (commitHash) {
             console.log(`  Fetching delta diff (${commitHash}..${ctx.prInfo.sourceCommit.slice(0, 12)})...`);
@@ -46370,12 +46491,14 @@ async function transition(state, ctx) {
               console.log(`  Delta: ${countChangedLines(deltaDiff)} lines total, ${removedCount} file(s) filtered, ${deltaLines} lines remain`);
               if (deltaLines === 0) {
                 console.log("  No reviewable changes in delta \u2014 checking for unanswered replies...");
+                markHeadChecked(ctx);
                 ctx.reviewNumber = ctx.previousReviews.length;
-                return 5 /* CHECK_REPLIES */;
+                return 6 /* CHECK_REPLIES */;
               }
               ctx.deltaDiff = filtered;
             } catch (err) {
               console.log(`  Delta diff fetch failed (${err.message}) \u2014 falling back to full PR diff`);
+              ctx.deltaFetchFailed = true;
             }
           }
         }
@@ -46389,9 +46512,9 @@ async function transition(state, ctx) {
         console.log("  No previous reviews \u2014 first review for this PR");
       }
       ctx.reviewNumber = (ctx.previousReviews?.length ?? 0) + 1;
-      return 7 /* LOAD_PROMPT */;
+      return 8 /* LOAD_PROMPT */;
     }
-    case 5 /* CHECK_REPLIES */: {
+    case 6 /* CHECK_REPLIES */: {
       const reviewIds = ctx.previousReviews.map((r) => r.id);
       const { replies, agentReplyCount } = await ctx.adapter.getRepliesToReviewComments(ctx.prId, reviewIds);
       const latestReviewDate = supersedeBoundary(ctx.previousReviews).createdOn;
@@ -46405,18 +46528,18 @@ async function transition(state, ctx) {
           console.log(`  Found ${ctx.replies.length} unanswered reply(s), but agent already posted ${agentReplyCount}/${config.reply.maxComments} replies \u2014 skipping`);
           ctx.action = "DEDUP_SKIP";
           ctx.skipReason = `reply limit reached (${agentReplyCount}/${config.reply.maxComments})`;
-          return 18 /* SKIP */;
+          return 19 /* SKIP */;
         }
         console.log(`  Found ${ctx.replies.length} unanswered reply(s) \u2014 responding... (${agentReplyCount}/${config.reply.maxComments || "\u221E"} replies used)`);
-        return 6 /* RESPOND_TO_REPLIES */;
+        return 7 /* RESPOND_TO_REPLIES */;
       }
       if (ctx.action !== "NO_CHANGE") {
         ctx.action = "DEDUP_SKIP";
-        ctx.skipReason = "no new commits and no unanswered questions";
+        ctx.skipReason = ctx.dedupHit === "checked_commit" ? "head already checked by an earlier run and no unanswered questions" : "no new commits and no unanswered questions";
       }
-      return 18 /* SKIP */;
+      return 19 /* SKIP */;
     }
-    case 6 /* RESPOND_TO_REPLIES */: {
+    case 7 /* RESPOND_TO_REPLIES */: {
       const lastReview = ctx.previousReviews[ctx.previousReviews.length - 1];
       const replyModel = config.reply.model || config.anthropic.model;
       const result = await runCommentResponse(
@@ -46444,15 +46567,15 @@ async function transition(state, ctx) {
       }
       ctx.action = "REPLY";
       ctx.skipReason = void 0;
-      return 19 /* DONE */;
+      return 20 /* DONE */;
     }
-    case 7 /* LOAD_PROMPT */: {
+    case 8 /* LOAD_PROMPT */: {
       console.log("Loading prompt...");
       ctx.prompt = await loadPrompt(ctx.adapter, ctx.prInfo, ctx.promptPath, ctx.changedFiles, ctx.diff);
       console.log(`  Prompt source: ${ctx.prompt.source}`);
-      return 8 /* FETCH_CONTEXT */;
+      return 9 /* FETCH_CONTEXT */;
     }
-    case 8 /* FETCH_CONTEXT */: {
+    case 9 /* FETCH_CONTEXT */: {
       console.log("Fetching file context...");
       ctx.fileContexts = await fetchContext(
         ctx.adapter,
@@ -46463,9 +46586,9 @@ async function transition(state, ctx) {
         config.context.maxFileLines
       );
       console.log(`  Fetched full content for ${ctx.fileContexts.length} file(s)`);
-      return 9 /* ESTIMATE_TOKENS */;
+      return 10 /* ESTIMATE_TOKENS */;
     }
-    case 9 /* ESTIMATE_TOKENS */: {
+    case 10 /* ESTIMATE_TOKENS */: {
       const tok = (chars) => Math.ceil(chars / 4);
       const shown = (s2) => shownLength(s2, config.review.lineNumbers);
       const sizes = () => {
@@ -46513,16 +46636,16 @@ async function transition(state, ctx) {
       if (max > 0 && s.total > max && config.review.bundledReview) {
         console.log("  Still over budget \u2014 switching to bundled review");
         ctx.inputBudget = max;
-        return 16 /* BUNDLED_REVIEW */;
+        return 17 /* BUNDLED_REVIEW */;
       }
       if (max > 0 && s.total > max) {
         ctx.action = "SKIP";
         ctx.skipReason = `Estimated input ~${s.total.toLocaleString()} tokens exceeds the input budget (${max.toLocaleString()}; min of MAX_INPUT_TOKENS and model context) even without file context \u2014 ${fmt(s)}`;
-        return 18 /* SKIP */;
+        return 19 /* SKIP */;
       }
-      return 10 /* CALL_MODEL */;
+      return 11 /* CALL_MODEL */;
     }
-    case 10 /* CALL_MODEL */: {
+    case 11 /* CALL_MODEL */: {
       let content = ctx.prompt.content;
       if (config.review.maxFindings > 0) {
         content += `
@@ -46571,7 +46694,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
       if (!result) {
         ctx.action = "SKIP";
         ctx.skipReason = "Diff exceeds the model context window";
-        return 18 /* SKIP */;
+        return 19 /* SKIP */;
       }
       ctx.reviewText = result.text;
       ctx.reviewObject = result.review;
@@ -46585,9 +46708,9 @@ If this PR spans multiple independent themes that could each be a separate, inde
       ctx.usage.cache_read += result.usage.cache_read_input_tokens ?? 0;
       ctx.usage.cache_write += result.usage.cache_creation_input_tokens ?? 0;
       if (result.usage.cost_usd !== void 0) ctx.usage.cost_usd = (ctx.usage.cost_usd ?? 0) + result.usage.cost_usd;
-      return 11 /* CHECK_NO_CHANGE */;
+      return 12 /* CHECK_NO_CHANGE */;
     }
-    case 11 /* CHECK_NO_CHANGE */: {
+    case 12 /* CHECK_NO_CHANGE */: {
       if (isNoChange(ctx.reviewText)) {
         if ((ctx.previousReviews?.length ?? 0) === 0) {
           throw new Error("Reviewer returned NO_CHANGE on a first review \u2014 refusing to silently skip");
@@ -46595,38 +46718,39 @@ If this PR spans multiple independent themes that could each be a separate, inde
         console.log("  Reviewer: NO_CHANGE");
         ctx.action = "NO_CHANGE";
         ctx.skipReason = "No changes since last review";
-        return 5 /* CHECK_REPLIES */;
+        if (ctx.reviewObject ? ctx.reviewObject.no_change === true && ctx.reviewObject.findings?.length === 0 : ctx.reviewText === "NO_CHANGE") markHeadChecked(ctx);
+        return 6 /* CHECK_REPLIES */;
       }
-      return 12 /* BREADTH_REVIEW */;
+      return 13 /* BREADTH_REVIEW */;
     }
-    case 12 /* BREADTH_REVIEW */: {
+    case 13 /* BREADTH_REVIEW */: {
       if (!config.breadth.enabled) {
         ctx.breadthStatus = "disabled";
-        return 13 /* SECOND_LOOK */;
+        return 14 /* SECOND_LOOK */;
       }
       if (!config.judge.model) {
         ctx.breadthStatus = "skipped_no_judge";
-        return 13 /* SECOND_LOOK */;
+        return 14 /* SECOND_LOOK */;
       }
       if (ctx.reviewNumber > 1) {
         ctx.breadthStatus = "skipped_rereview";
-        return 13 /* SECOND_LOOK */;
+        return 14 /* SECOND_LOOK */;
       }
       const firstPass = ctx.reviewObject?.findings ?? [];
       const coverage = fileCoverage(ctx.filteredDiff, firstPass);
       ctx.untouchedFiles = coverage.untouched;
       if (coverage.reviewable.length < config.breadth.minFiles) {
         ctx.breadthStatus = "skipped_small";
-        return 13 /* SECOND_LOOK */;
+        return 14 /* SECOND_LOOK */;
       }
       if (coverage.untouched.length < config.breadth.minUntouched) {
         ctx.breadthStatus = "skipped_few_untouched";
-        return 13 /* SECOND_LOOK */;
+        return 14 /* SECOND_LOOK */;
       }
       const remaining = config.review.maxFindings > 0 ? config.review.maxFindings - firstPass.length : 0;
       if (config.review.maxFindings > 0 && remaining <= 0) {
         ctx.breadthStatus = "skipped_limit";
-        return 13 /* SECOND_LOOK */;
+        return 14 /* SECOND_LOOK */;
       }
       const model = config.breadth.model || config.judge.model;
       const effort = config.breadth.effort || (config.breadth.model ? "" : config.judge.effort);
@@ -46639,13 +46763,13 @@ If this PR spans multiple independent themes that could each be a separate, inde
       if (estimate > budget) {
         ctx.breadthStatus = "skipped_budget";
         console.log(`  Breadth review skipped: ~${estimate.toLocaleString()} tokens exceeds the ${model} budget (${budget.toLocaleString()})`);
-        return 13 /* SECOND_LOOK */;
+        return 14 /* SECOND_LOOK */;
       }
       const elapsedSeconds = (Date.now() - ctx.startTime) / 1e3;
       if (ctx.outcomeSink && elapsedSeconds > config.breadth.benchmarkDeadlineSeconds / 2) {
         ctx.breadthStatus = "skipped_time";
         console.log(`  Breadth review skipped: ${Math.round(elapsedSeconds)}s elapsed, over half the ${config.breadth.benchmarkDeadlineSeconds}s benchmark deadline`);
-        return 13 /* SECOND_LOOK */;
+        return 14 /* SECOND_LOOK */;
       }
       ctx.breadthModel = model;
       if (config.judge.shownAnchors) ctx.shownBreadth = buildShownSource(ctx.filteredDiff, ctx.fileContexts ?? []);
@@ -46679,9 +46803,9 @@ If this PR spans multiple independent themes that could each be a separate, inde
         ctx.breadthStatus = "failed";
         console.warn(`  Breadth review FAILED (${isContextLengthError(err) ? "context length" : e.message}) \u2014 continuing with first-pass findings only`);
       }
-      return 13 /* SECOND_LOOK */;
+      return 14 /* SECOND_LOOK */;
     }
-    case 13 /* SECOND_LOOK */: {
+    case 14 /* SECOND_LOOK */: {
       const next = stageAfterSecondLook();
       if (!config.review.secondLook) {
         ctx.secondLookStatus = "disabled";
@@ -46764,7 +46888,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
       }
       return next;
     }
-    case 14 /* LENS_REVIEW */: {
+    case 15 /* LENS_REVIEW */: {
       const lenses = activeLenses(config.lenses);
       const model = config.lenses.model || config.anthropic.model;
       const runs = [];
@@ -46772,7 +46896,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
       const stageSkip = !config.judge.model ? "skipped_no_judge" : ctx.reviewNumber > 1 ? "skipped_rereview" : void 0;
       if (stageSkip) {
         for (const lens of lenses) runs.push({ name: lens.name, status: stageSkip, model, findings: [] });
-        return 15 /* JUDGE_REVIEW */;
+        return 16 /* JUDGE_REVIEW */;
       }
       const effort = config.lenses.model ? "" : config.review.effort;
       const earlier = [...ctx.reviewObject?.findings ?? [], ...ctx.breadthFindings ?? [], ...ctx.secondLookFindings ?? []];
@@ -46838,9 +46962,9 @@ If this PR spans multiple independent themes that could each be a separate, inde
           console.warn(`  Lens ${lens.name} FAILED (${isContextLengthError(err) ? "context length" : e.message}) \u2014 continuing without its findings`);
         }
       }
-      return 15 /* JUDGE_REVIEW */;
+      return 16 /* JUDGE_REVIEW */;
     }
-    case 15 /* JUDGE_REVIEW */: {
+    case 16 /* JUDGE_REVIEW */: {
       const reviewFindings = ctx.reviewObject ? countFindings(ctx.reviewObject) : { high: 0, medium: 0, low: 0 };
       console.log(`  Reviewer findings: ${reviewFindings.high}H / ${reviewFindings.medium}M / ${reviewFindings.low}L`);
       const noFindings = reviewFindings.high === 0 && reviewFindings.medium === 0 && reviewFindings.low === 0;
@@ -46849,31 +46973,34 @@ If this PR spans multiple independent themes that could each be a separate, inde
         const replies = ctx.replies ?? [];
         const lastAgentReplyAt = replies.filter((r) => hasReplyFooter(r.body)).reduce((max, r) => r.createdOn > max ? r.createdOn : max, "");
         const unanswered = await dropRepliesDirectedElsewhere(ctx, replies.filter((r) => !hasReplyFooter(r.body) && !!lastReview && r.createdOn > lastReview.createdOn && r.createdOn > lastAgentReplyAt));
+        const priorHadFindings = !!lastReview && markdownHasFindings(lastReview.body);
+        const stillOpen = (ctx.reviewObject?.delta_stats?.still_open ?? 0) > 0;
         if (unanswered.length > 0) {
           const agentReplies = replies.filter((r) => hasReplyFooter(r.body)).length;
           if (config.reply.maxComments > 0 && agentReplies >= config.reply.maxComments) {
             console.log(`  Unanswered dev reply, but reply limit reached (${agentReplies}/${config.reply.maxComments}) \u2014 skipping`);
             ctx.action = "DEDUP_SKIP";
             ctx.skipReason = `reply limit reached (${agentReplies}/${config.reply.maxComments})`;
-            return 18 /* SKIP */;
+            markHeadChecked(ctx);
+            return 19 /* SKIP */;
           }
           ctx.replies = unanswered;
           console.log("  Re-review found nothing new, but a developer reply is unanswered \u2014 answering it in-thread");
-          return 6 /* RESPOND_TO_REPLIES */;
+          if (!priorHadFindings && !stillOpen) markHeadChecked(ctx);
+          return 7 /* RESPOND_TO_REPLIES */;
         }
-        const priorHadFindings = !!lastReview && markdownHasFindings(lastReview.body);
-        const stillOpen = (ctx.reviewObject?.delta_stats?.still_open ?? 0) > 0;
         if (!priorHadFindings && !stillOpen) {
           console.log("  Re-review: no findings, prior clean, nothing open, no discussion \u2014 nothing to post, skipping");
           ctx.action = "NO_NEW_FINDINGS";
           ctx.skipReason = "Re-review found no new findings (prior review already clean)";
-          return 18 /* SKIP */;
+          markHeadChecked(ctx);
+          return 19 /* SKIP */;
         }
         console.log(`  Re-review with no new findings \u2014 posting (${stillOpen ? "findings still open" : "prior review had findings"})`);
       }
       if (!config.judge.model) {
         ctx.judgeStatus = "disabled";
-        return 17 /* POST_REVIEW */;
+        return 18 /* POST_REVIEW */;
       }
       const breadth = ctx.breadthFindings ?? [];
       const secondLook = ctx.secondLookFindings ?? [];
@@ -46881,7 +47008,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
       if (noFindings && breadth.length === 0 && secondLook.length === 0 && lens.length === 0) {
         ctx.judgeStatus = "skipped_no_findings";
         console.log("  Skipping judge \u2014 no findings to validate");
-        return 17 /* POST_REVIEW */;
+        return 18 /* POST_REVIEW */;
       }
       const firstPass = ctx.reviewObject?.findings ?? [];
       ctx.judgeCandidates = [
@@ -46948,16 +47075,16 @@ If this PR spans multiple independent themes that could each be a separate, inde
         if (!ctx.outcomeSink && !noFindings) throw err;
         console.warn(`  Judge failed (${err.message}) \u2014 proceeding with unjudged reviewer findings`);
       }
-      return 17 /* POST_REVIEW */;
+      return 18 /* POST_REVIEW */;
     }
-    case 16 /* BUNDLED_REVIEW */: {
+    case 17 /* BUNDLED_REVIEW */: {
       const outcome = await runBundledReview(ctx, ctx.inputBudget);
       if (!outcome.ok) {
         ctx.action = "SKIP";
         ctx.skipReason = `Bundled review not possible: ${outcome.reason}`;
-        return 18 /* SKIP */;
+        return 19 /* SKIP */;
       }
-      if (isNoChange(ctx.reviewText)) return 11 /* CHECK_NO_CHANGE */;
+      if (isNoChange(ctx.reviewText)) return 12 /* CHECK_NO_CHANGE */;
       const merged = ctx.reviewObject;
       if (merged.findings.length === 0 && ctx.reviewNumber > 1 && ctx.force !== "re-review") {
         const lastReview = supersedeBoundary(ctx.previousReviews ?? []);
@@ -46965,12 +47092,13 @@ If this PR spans multiple independent themes that could each be a separate, inde
         if (!priorHadFindings && (merged.delta_stats?.still_open ?? 0) === 0) {
           ctx.action = "NO_NEW_FINDINGS";
           ctx.skipReason = "Re-review found no new findings (prior review already clean)";
-          return 18 /* SKIP */;
+          markHeadChecked(ctx);
+          return 19 /* SKIP */;
         }
       }
-      return 17 /* POST_REVIEW */;
+      return 18 /* POST_REVIEW */;
     }
-    case 17 /* POST_REVIEW */: {
+    case 18 /* POST_REVIEW */: {
       if (ctx.outcomeSink) {
         await ctx.outcomeSink({
           review: ctx.reviewObject,
@@ -46983,7 +47111,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
           ...ctx.lensRuns ? { lensFindings: ctx.lensRuns.flatMap((r) => r.findings) } : {}
         });
         ctx.action = "REVIEW";
-        return 19 /* DONE */;
+        return 20 /* DONE */;
       }
       const judgeNotes = ctx.reviewText.match(/<!--\s*JUDGE_NOTES:([\s\S]*?)-->/);
       if (judgeNotes) {
@@ -47009,7 +47137,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
         console.log("  Review text empty or NO_CHANGE after cleanup \u2014 skipping post");
         ctx.action = "NO_CHANGE";
         ctx.skipReason = "Review text empty or NO_CHANGE after cleanup";
-        return 18 /* SKIP */;
+        return 19 /* SKIP */;
       }
       const judged = ctx.judgeUsage !== void 0;
       const tailOk = judged ? parseVerdictScore(cleaned) !== null : /^#{1,4}\s*Unresolved Questions\b/im.test(cleaned);
@@ -47037,26 +47165,28 @@ If this PR spans multiple independent themes that could each be a separate, inde
             console.log(`  Commit ${commitShort} already reviewed by another run \u2014 skipping post`);
             ctx.action = "DEDUP_SKIP";
             ctx.skipReason = "Another agent run already reviewed this commit (race condition avoided)";
-            return 18 /* SKIP */;
+            markHeadChecked(ctx);
+            return 19 /* SKIP */;
           }
         }
         console.log("Posting review comment...");
         await ctx.adapter.postComment(ctx.prId, comment);
+        markHeadChecked(ctx);
         console.log("Done. Review posted to PR.\n");
       }
       ctx.action = ctx.reviewNumber > 1 ? "RE_REVIEW" : "REVIEW";
-      return 19 /* DONE */;
+      return 20 /* DONE */;
     }
-    case 18 /* SKIP */: {
+    case 19 /* SKIP */: {
       console.log(`
 Skipping: ${ctx.skipReason}`);
-      return 19 /* DONE */;
+      return 20 /* DONE */;
     }
     default:
-      return 19 /* DONE */;
+      return 20 /* DONE */;
   }
 }
-async function review(adapter2, prId, dryRun = false, promptPath, force = "off", logUsage = false, repoSlug = "", outcomeSink) {
+async function review(adapter2, prId, dryRun = false, promptPath, force = "off", logUsage = false, repoSlug = "", outcomeSink, trigger, checkedCommit) {
   console.log(`
 Starting review for PR #${prId}`);
   const startTime = Date.now();
@@ -47069,6 +47199,8 @@ Starting review for PR #${prId}`);
     logUsage,
     repoSlug,
     outcomeSink,
+    trigger,
+    checkedCommit,
     startTime,
     usage: { input_tokens: 0, output_tokens: 0, cache_read: 0, cache_write: 0 },
     estimatedInputTokens: 0,
@@ -47077,8 +47209,8 @@ Starting review for PR #${prId}`);
   };
   let error = null;
   try {
-    let state = 0 /* FETCH_PR_INFO */;
-    while (state !== 19 /* DONE */) {
+    let state = 0 /* CHECK_TRIGGER */;
+    while (state !== 20 /* DONE */) {
       state = await transition(state, ctx);
     }
   } catch (err) {
@@ -47289,6 +47421,7 @@ function applyBenchmarkConfig(env) {
   config.vcsProvider = "reviewbench";
   config.skipSourceBranches = [];
   config.skipTargetBranches = [];
+  config.onlyTargetBranches = [];
   if (!env.MAX_CHANGED_FILES) config.thresholds.maxChangedFiles = 0;
   if (!env.MAX_CHANGED_LINES) config.thresholds.maxChangedLines = 0;
   config.review.splitCheck = false;
@@ -47365,7 +47498,7 @@ if (major < 22) {
   process.exit(1);
 }
 var program2 = new Command();
-program2.name("pr-review-agent").description("Automated PR code review powered by Claude").option("--pr-id <id>", "Pull request ID").option("--workspace <workspace>", "VCS workspace / org (overrides BITBUCKET_WORKSPACE)").option("--repo-slug <slug>", "Repository slug").option("--vcs <provider>", "VCS provider: bitbucket | azure (WIP) | github | gitlab (overrides VCS_PROVIDER)").option("--dry-run", "Print the review to stdout without posting to the PR").option("--force [mode]", 'Force review: "clean" (no prior context) or "re-review" (keep context, bypass dedup)').option("--log-usage [bool]", "Log usage data to results.jsonl (default: true)", (v) => v !== "false", true).option("--prompt <path>", "Path to a local prompt file (overrides repo .agent-review-instructions.md)").option("--validate-prompt", "Validate prompt and exit (local via --prompt, or repo via --pr-id)").option("--model <id>", "Claude model ID (overrides CLAUDE_MODEL)").option("--judge-model <id>", "Judge model ID (overrides JUDGING_MODEL)").option("--reply-model <id>", "Model ID for developer replies (overrides REPLY_MODEL; empty = reviewer model)").option("--min-changed-files <n>", "Skip review if fewer files changed (overrides MIN_CHANGED_FILES)").option("--max-changed-files <n>", "Skip review if more files changed (overrides MAX_CHANGED_FILES)").option("--min-changed-lines <n>", "Skip review if fewer lines changed (overrides MIN_CHANGED_LINES)").option("--max-changed-lines <n>", "Skip review if more lines changed (overrides MAX_CHANGED_LINES)").option("--max-input-tokens <n>", "Max estimated input tokens before degrade/skip (overrides MAX_INPUT_TOKENS)").option("--max-output-tokens <n>", "Max output tokens for reviewer + judge (overrides MAX_OUTPUT_TOKENS)").option("--effort <level>", "Reviewer thinking effort: low|medium|high|xhigh|max (overrides REVIEW_EFFORT; ignored by models without effort)").option("--judge-effort <level>", "Judge thinking effort (overrides JUDGE_EFFORT)").option("--skip-directed-replies", "Skip replying to dev comments @-directed at someone else (Bitbucket only; overrides SKIP_DIRECTED_REPLIES)").option("--second-look", "Second reviewer pass over already-flagged files to lift recall (overrides ENABLE_SECOND_LOOK; requires a judge)").option("--lenses <list>", "Concern-specific reviewer passes, e.g. reliability+security (overrides ENABLE_LENSES/LENSES; requires a judge)").option("--lens-recommendation", "Log which lenses the first-pass reviewer recommends for this PR; never gates a lens (overrides ENABLE_LENS_RECOMMENDATION)").option("--proposals", "Add a concise fix proposal to each kept finding in results.jsonl anchored_findings (overrides ENABLE_JUDGE_PROPOSALS; requires a judge)").option("--benchmark", "ReviewBench mode: read the PR from RB_* env + mounted files, write findings JSON to RB_OUT instead of posting; always exits 0").parse(process.argv);
+program2.name("pr-review-agent").description("Automated PR code review powered by Claude").option("--pr-id <id>", "Pull request ID").option("--workspace <workspace>", "VCS workspace / org (overrides BITBUCKET_WORKSPACE)").option("--repo-slug <slug>", "Repository slug").option("--vcs <provider>", "VCS provider: bitbucket | azure (WIP) | github | gitlab (overrides VCS_PROVIDER)").option("--dry-run", "Print the review to stdout without posting to the PR").option("--force [mode]", 'Force review: "clean" (no prior context) or "re-review" (keep context, bypass dedup)').option("--log-usage [bool]", "Log usage data to results.jsonl (default: true)", (v) => v !== "false", true).option("--prompt <path>", "Path to a local prompt file (overrides repo .agent-review-instructions.md)").option("--validate-prompt", "Validate prompt and exit (local via --prompt, or repo via --pr-id)").option("--model <id>", "Claude model ID (overrides CLAUDE_MODEL)").option("--judge-model <id>", "Judge model ID (overrides JUDGING_MODEL)").option("--reply-model <id>", "Model ID for developer replies (overrides REPLY_MODEL; empty = reviewer model)").option("--min-changed-files <n>", "Skip review if fewer files changed (overrides MIN_CHANGED_FILES)").option("--max-changed-files <n>", "Skip review if more files changed (overrides MAX_CHANGED_FILES)").option("--min-changed-lines <n>", "Skip review if fewer lines changed (overrides MIN_CHANGED_LINES)").option("--max-changed-lines <n>", "Skip review if more lines changed (overrides MAX_CHANGED_LINES)").option("--skip-source-branches <list>", "Comma list of source-branch globs to skip (overrides SKIP_SOURCE_BRANCHES); an empty value (--skip-source-branches=) disables the check").option("--skip-target-branches <list>", "Comma list of target-branch globs to skip (overrides SKIP_TARGET_BRANCHES); an empty value (--skip-target-branches=) disables the check").option("--only-target-branches <list>", "Comma list of target-branch globs to review, skipping all others (overrides ONLY_TARGET_BRANCHES); an empty value (--only-target-branches=) disables the check").option("--max-input-tokens <n>", "Max estimated input tokens before degrade/skip (overrides MAX_INPUT_TOKENS)").option("--max-output-tokens <n>", "Max output tokens for reviewer + judge (overrides MAX_OUTPUT_TOKENS)").option("--effort <level>", "Reviewer thinking effort: low|medium|high|xhigh|max (overrides REVIEW_EFFORT; ignored by models without effort)").option("--judge-effort <level>", "Judge thinking effort (overrides JUDGE_EFFORT)").option("--skip-directed-replies", "Skip replying to dev comments @-directed at someone else (Bitbucket only; overrides SKIP_DIRECTED_REPLIES)").option("--second-look", "Second reviewer pass over already-flagged files to lift recall (overrides ENABLE_SECOND_LOOK; requires a judge)").option("--lenses <list>", "Concern-specific reviewer passes, e.g. reliability+security (overrides ENABLE_LENSES/LENSES; requires a judge)").option("--lens-recommendation", "Log which lenses the first-pass reviewer recommends for this PR; never gates a lens (overrides ENABLE_LENS_RECOMMENDATION)").option("--proposals", "Add a concise fix proposal to each kept finding in results.jsonl anchored_findings (overrides ENABLE_JUDGE_PROPOSALS; requires a judge)").option("--event <name>", "What started this run, e.g. pullrequest:comment_created (overrides TRIGGER_EVENT); logged, and enables IGNORE_COMMENT_AUTHORS on comment events").option("--comment-author <id>", "Account id of the event actor, e.g. the Bitbucket actor uuid (overrides TRIGGER_COMMENT_AUTHOR)").option("--checked-commit <hash>", "Head an earlier run reported as checked_commit for this PR; a run on that same head skips the re-review (overrides LAST_CHECKED_COMMIT)").option("--benchmark", "ReviewBench mode: read the PR from RB_* env + mounted files, write findings JSON to RB_OUT instead of posting; always exits 0").parse(process.argv);
 var opts = program2.opts();
 async function main() {
   if (opts.proposals) config.judge.proposals = true;
@@ -47453,6 +47586,9 @@ Filled prompt length: ${result.content.length} chars (~${Math.ceil(result.conten
   if (opts.maxChangedFiles) config.thresholds.maxChangedFiles = parseInt(opts.maxChangedFiles, 10);
   if (opts.minChangedLines) config.thresholds.minChangedLines = parseInt(opts.minChangedLines, 10);
   if (opts.maxChangedLines) config.thresholds.maxChangedLines = parseInt(opts.maxChangedLines, 10);
+  if (opts.skipSourceBranches !== void 0) config.skipSourceBranches = parseBranchList(opts.skipSourceBranches);
+  if (opts.skipTargetBranches !== void 0) config.skipTargetBranches = parseBranchList(opts.skipTargetBranches);
+  if (opts.onlyTargetBranches !== void 0) config.onlyTargetBranches = parseBranchList(opts.onlyTargetBranches);
   if (opts.maxInputTokens) config.anthropic.maxInputTokens = parseInt(opts.maxInputTokens, 10);
   if (opts.maxOutputTokens) config.anthropic.maxTokens = parseInt(opts.maxOutputTokens, 10);
   if (opts.effort) config.review.effort = opts.effort;
@@ -47466,8 +47602,11 @@ Filled prompt length: ${result.content.length} chars (~${Math.ceil(result.conten
   if (opts.lensRecommendation) config.lenses.recommend = true;
   if (config.judge.proposals && !config.judge.model) console.warn("Warning: proposals requested but the judge is disabled (JUDGING_MODEL empty) - no proposals will be produced.");
   if (opts.repoSlug) config.repoSlug = opts.repoSlug;
-  const forceMode = opts.force === true ? "re-review" : typeof opts.force === "string" ? opts.force : "off";
-  await review(adapter2, opts.prId, opts.dryRun ?? false, opts.prompt, forceMode, opts.logUsage ?? true, opts.repoSlug ?? "");
+  const trigger = resolveTrigger(opts, config.trigger);
+  if (!trigger && config.trigger.ignoreCommentAuthors.length) console.warn("Warning: IGNORE_COMMENT_AUTHORS is set but no --event/--comment-author (TRIGGER_EVENT/TRIGGER_COMMENT_AUTHOR) was given - the ignore list is inactive.");
+  const checkedCommit = resolveCheckedCommit(opts.checkedCommit, config.lastCheckedCommit);
+  const forceMode = opts.force === true ? "re-review" : typeof opts.force === "string" && opts.force.trim() ? opts.force : "off";
+  await review(adapter2, opts.prId, opts.dryRun ?? false, opts.prompt, forceMode, opts.logUsage ?? true, opts.repoSlug ?? "", void 0, trigger, checkedCommit);
 }
 main().catch((err) => {
   console.error("Fatal error:", err.message);
