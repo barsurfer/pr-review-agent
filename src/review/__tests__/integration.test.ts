@@ -2538,6 +2538,47 @@ describe('dedup round-trip: posted footer → next run skips', () => {
   })
 })
 
+describe('footer-anchored commit hash in dedup', () => {
+  const quoting = '### Review\n\nIt regressed since Commit: deadbeef0000 landed.' + footer(1, COMMIT_A)
+
+  it('dedups on the footer hash when the body quotes another Commit: line, warning once', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const adapter = makeAdapter({
+        getPreviousReviewComments: vi.fn().mockResolvedValue([{ id: '200', body: quoting, createdOn: '2026-03-10T10:00:00Z' }]),
+        getRepliesToReviewComments: vi.fn().mockResolvedValue({ replies: [], agentReplyCount: 0 }),
+      })
+      const record = await review(adapter, '100', true)
+
+      expect(record!.action).toBe('DEDUP_SKIP')
+      expect(mockRunReview).not.toHaveBeenCalled()
+      expect(adapter.getCommitDiff).not.toHaveBeenCalled()
+      const lines = warnSpy.mock.calls.map(c => String(c[0])).filter(l => l.includes('legacy first match'))
+      expect(lines).toHaveLength(1)
+      expect(lines[0]).toContain(COMMIT_A)
+      expect(lines[0]).toContain('deadbeef0000')
+      expect(lines[0]).toContain('100')
+    } finally {
+      warnSpy.mockRestore()
+    }
+  })
+
+  it('prints no warn line for a normal previous review', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const adapter = makeAdapter({
+        getPreviousReviewComments: vi.fn().mockResolvedValue([{ id: '200', body: '### Review' + footer(1, COMMIT_A), createdOn: '2026-03-10T10:00:00Z' }]),
+        getRepliesToReviewComments: vi.fn().mockResolvedValue({ replies: [], agentReplyCount: 0 }),
+      })
+      await review(adapter, '100', true)
+
+      expect(warnSpy.mock.calls.some(c => String(c[0]).includes('legacy first match'))).toBe(false)
+    } finally {
+      warnSpy.mockRestore()
+    }
+  })
+})
+
 // ===========================================================================
 // Scenario 16: Any thrown error → action=ERROR, still logged, rethrown for CI
 // ===========================================================================
