@@ -327,6 +327,41 @@ describe('blob 404 on a file the change list says exists', () => {
   })
 })
 
+describe('combined change types are matched as whole tokens', () => {
+  function routeChanges(changes: any[]) {
+    return (url: string, cfg: any = {}): Promise<any> =>
+      url.includes('/diffs/commits') ? Promise.resolve({ data: { ...COMMIT_DIFF, changes } }) : routeGet(url, cfg)
+  }
+
+  it('edit+rename is a rename; delete+sourceRename and a lone sourceRename are deletes', async () => {
+    clientMock.get.mockImplementation(routeChanges([
+      { item: { path: '/src/b.ts', gitObjectType: 'blob', originalPath: '/src/a.ts' }, changeType: 'edit, rename' },
+      { item: { path: '/src/a.ts', gitObjectType: 'blob' }, changeType: 'delete, sourceRename' },
+      { item: { path: '/src/old.ts', gitObjectType: 'blob' }, changeType: 'sourceRename' },
+    ]))
+
+    const files = await makeAdapter().getChangedFiles('42')
+
+    expect(files).toEqual([
+      { path: 'src/b.ts', status: 'renamed' },
+      { path: 'src/a.ts', status: 'deleted' },
+      { path: 'src/old.ts', status: 'deleted' },
+    ])
+  })
+
+  it('a "delete, sourceRename" entry beside its rename keeps the delta instead of 404ing on the old path', async () => {
+    clientMock.get.mockImplementation(routeChanges([
+      { item: { path: '/src/a.ts', gitObjectType: 'blob' }, changeType: 'delete, sourceRename' },
+      { item: { path: '/src/b.ts', gitObjectType: 'blob', originalPath: '/src/a.ts' }, changeType: 'rename' },
+    ]))
+
+    const diff = await makeAdapter().getCommitDiff('BASE', 'HEAD')
+
+    expect(diff).toContain('diff --git a/src/a.ts b/src/a.ts\n--- a/src/a.ts\n+++ /dev/null')
+    expect(diff).toContain('diff --git a/src/a.ts b/src/b.ts')
+  })
+})
+
 // --- File content ----------------------------------------------------------
 
 describe('getFileContent / getRepoFileContent', () => {

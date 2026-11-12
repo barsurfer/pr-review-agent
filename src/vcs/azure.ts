@@ -403,11 +403,12 @@ function isBinary(content: string): boolean {
 
 /** Map Azure VersionControlChangeType (may be comma-combined, e.g. "edit, rename"). */
 function mapChangeType(ct: string): AzureChangeType | null {
-  const s = ct.toLowerCase()
-  if (s.includes('rename')) return 'rename'   // captures "edit, rename" too — content diff still computed
-  if (s.includes('delete')) return 'delete'
-  if (s.includes('add')) return 'add'
-  if (s.includes('edit')) return 'edit'
+  const t = ct.toLowerCase().split(',').map(s => s.trim())
+  if (t.includes('rename')) return 'rename'   // captures "edit, rename" too — content diff still computed
+  // A rename's vacated old path ("delete, sourceRename") must not become a rename that fetches the old path at the new commit.
+  if (t.includes('delete') || t.includes('sourcerename')) return 'delete'
+  if (t.includes('add')) return 'add'
+  if (t.includes('edit')) return 'edit'
   return null
 }
 
