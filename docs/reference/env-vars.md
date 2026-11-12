@@ -116,6 +116,8 @@ Controls dedup bypass behavior. The flag is optional-value — its behavior depe
 | `--force ""` / `--force=` / whitespace | `off` | Same as not passed, including the pre-post race check — CI passes an unset parameter as an empty value |
 | `--force <anything else>` | passed through | Not rejected: dedups and marks `checked_commit` like `off`, but skips the pre-post race check (only `off` runs it); recorded as given in `force` |
 
+> In CI write `--force="$FORCE"` (or `--force=$FORCE`): an unquoted empty value vanishes in the shell and leaves a bare `--force`, which means re-review on every event.
+>
 > Note: prior to the fix, Commander's default value caused `--force` to behave as `re-review`
 > even when the flag was not passed at all, effectively disabling dedup on every run.
 

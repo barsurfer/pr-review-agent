@@ -339,7 +339,7 @@ bundle build on every push to `main` and every PR — the gate that keeps `main`
 | `--workspace <workspace>` | No | Overrides `BITBUCKET_WORKSPACE` (or `AZURE_ORG` when `--vcs azure`, `GITHUB_OWNER` when `--vcs github`) |
 | `--vcs <provider>` | No | `bitbucket` \| `azure` (WIP) \| `github` (experimental) \| `gitlab` (stub) — overrides `VCS_PROVIDER` env var (default: `bitbucket`) |
 | `--dry-run` | No | Print the review to stdout instead of posting to the PR |
-| `--force [mode]` | No | Bypass dedup. Bare or `re-review`: keep prior context; `clean`: drop prior context |
+| `--force [mode]` | No | Bypass dedup. Bare or `re-review`: keep prior context; `clean`: drop prior context; an empty value (`--force=`) means not forced |
 | `--log-usage [bool]` | No | Log usage record to `results.jsonl` (default: `true`, use `--log-usage false` to disable). See [docs/reference/usage-logging.md](docs/reference/usage-logging.md) for schema. |
 | `--prompt <path>` | No | Path to a local prompt file (overrides repo `.agent-review-instructions.md`) |
 | `--validate-prompt` | No | Validate prompt and exit — local via `--prompt`, or repo via `--pr-id` |

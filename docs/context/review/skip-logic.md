@@ -28,7 +28,8 @@ On re-trigger, `CHECK_PREVIOUS_REVIEWS` parses this footer and compares the comm
 **Invariant:** The footer regex must remain stable. Changing the format silently breaks dedup for all PRs reviewed before the change.
 
 `--force` (no value) = `re-review` mode: bypasses dedup, keeps prior review context.  
-`--force clean` = strips prior review from context before calling Claude.
+`--force clean` = strips prior review from context before calling Claude.  
+In CI write `--force="$FORCE"` (or `--force=$FORCE`): an unquoted empty value vanishes in the shell and leaves a bare `--force`, which means re-review on every event.
 
 ---
 
