@@ -74,6 +74,10 @@ pr-review-agent
 | `REPO_SLUG` | `$.repository.name` | JSONPath |
 | `PR_ID` | `$.pullrequest.id` | JSONPath |
 
+The reference pipeline also reads `WORKSPACE_SLUG`, `PROJECT_KEY`, `TRIGGER_COMMENT_AUTHOR`,
+`ACTOR_TYPE` and `COMMENT_AUTHOR`, and filters bot comments at the trigger; the full table and
+filter are in [reference/jenkins.md](../reference/jenkins.md#webhook-variables).
+
 **Request header** (optional — for logging/filtering by event type):
 
 | Variable | Header name |
@@ -98,12 +102,16 @@ rejected immediately (no build queued).
 Copy the contents of [`jenkins/pipeline.groovy`](../../jenkins/pipeline.groovy) into
 **Pipeline → Definition → Pipeline script**.
 
+It is a sanitised working job; adapt its placeholders, shared library, credentials and settings
+maps. How it runs (per-PR lock, checked-commit store, build status) is described in
+[reference/jenkins.md](../reference/jenkins.md).
+
 The pipeline includes:
-- **Quiet period** (30s) — coalesces rapid triggers into one build
-- **`lock(skipIfLocked: true)`** — only one review per repo+PR at a time (requires Lockable Resources plugin)
-- **Build display name** — `#42-my-app-709` instead of just `#42`
+- **Quiet period** (30s) — delays each build by 30 seconds
+- **Per-PR `lock`** — one review per workspace+repo+PR at a time; every event waits, none is dropped (requires Lockable Resources plugin)
+- **Build display name** — `#42-my-workspace-my-app-709` instead of just `#42`
 - **`archiveArtifacts`** — saves `results.jsonl` per build
-- **Plot plugin** — visualizes cost, tokens, duration, and touch rate across builds (see [Metrics & Plots](#metrics--plots))
+- **Plot plugin** — visualizes cost, tokens and duration across builds (see [Metrics & Plots](#metrics--plots))
 
 > **Important:** Model IDs must NOT be stored as Jenkins credentials. Jenkins
 > masks all credential values in logs and API calls, which corrupts the model ID
@@ -129,11 +137,14 @@ trigger the job (filtered by the optional regex in step 2).
 
 | Credential ID | Maps to env var | Type | Description |
 |---------------|-----------------|------|-------------|
-| `anthropic-api-key` | `ANTHROPIC_API_KEY` | Secret text | Anthropic API key |
-| `bitbucket-token` | `BITBUCKET_TOKEN` | Secret text | Atlassian API token |
-| `bitbucket-username` | `BITBUCKET_USERNAME` | Secret text | Atlassian account email |
+| `review-agent-anthropic-api-key` | `ANTHROPIC_API_KEY` | Secret text | Anthropic API key (with `LLM_PROVIDER=openrouter`, the OpenRouter key) |
+| `review-agent-bitbucket-token` | `BITBUCKET_TOKEN` | Secret text | Atlassian API token |
+| `review-agent-bitbucket-username` | `BITBUCKET_USERNAME` | Secret text | Atlassian account email |
 
-All must be **Secret text** with masking enabled.
+All must be **Secret text** with masking enabled. The IDs are the ones
+[`jenkins/pipeline.groovy`](../../jenkins/pipeline.groovy) uses; the Option B snippets below use
+shorter ones. Posting the build status needs repository write access on the token (see
+[reference/jenkins.md](../reference/jenkins.md#build-status)).
 
 ---
 
@@ -261,7 +272,7 @@ the `post` block.
 | Cost per Review (USD) | `plot-cost.properties` | `cost_usd` | Every build |
 | Input Tokens | `plot-tokens.properties` | `tokens.input` | Every build |
 | Duration (ms) | `plot-duration.properties` | `duration_ms` | Every build |
-| Finding Touch Rate (%) | `plot-touchrate.properties` | `touch_rate` | Re-reviews only |
+| Finding Touch Rate (%) | `plot-touchrate.properties` | `touch_rate` | Re-reviews only; not written by the reference pipeline |
 
 ### Prerequisites
 
@@ -279,9 +290,9 @@ when re-reviews happen, so it will be sparser than the other 3 charts.
 ### `fileExists` Guards
 
 - The 3 core plots (`cost`, `tokens`, `duration`) are guarded by `fileExists('plot-cost.properties')` —
-  if the lock was skipped or the agent errored before writing results, no plot data is written
-- The touch rate plot has its own `fileExists('plot-touchrate.properties')` guard since it's
-  only generated on re-reviews
+  if the agent failed or wrote no results, no plot data is written
+- A touch rate plot, if a pipeline writes `plot-touchrate.properties`, needs its own
+  `fileExists` guard since it's only generated on re-reviews
 - `archiveArtifacts` uses `allowEmptyArchive: true` for the same reason
 
 ---

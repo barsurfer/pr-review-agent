@@ -656,18 +656,22 @@ its own pipeline. Triggered by the repo's existing multibranch pipeline on PR ev
 
 ### Pipeline Script
 
-A ready-to-use pipeline script is at [`jenkins/pipeline.groovy`](jenkins/pipeline.groovy).
-Copy it into **Job → Pipeline → Definition → Pipeline script**.
+A reference pipeline script, taken from a working job and sanitised, is at
+[`jenkins/pipeline.groovy`](jenkins/pipeline.groovy). Adapt its placeholders, shared library,
+credentials and settings maps, then put it into **Job → Pipeline → Definition → Pipeline script**.
 
 Key features:
 - **`catchError`** — agent failures never break the build
-- **`quietPeriod(30)`** — coalesces rapid triggers into one build
-- **`lock(skipIfLocked: true)`** — one review per PR at a time, duplicates dropped
-- **Build display name** — `#42-my-app-709` for easy identification
-- **`archiveArtifacts`** — saves `results.jsonl` per build + appends to persistent file
+- **`quietPeriod(30)`** — delays each build by 30 seconds
+- **Per-PR `lock`** — one review per PR at a time; every event waits, so no push is dropped
+- **Bot-comment filter** at the webhook trigger, matching access-token bots by `$.actor.type`
+- **Checked-commit store** — `checked_commit` kept on the build and passed back as `LAST_CHECKED_COMMIT`
+- **`SUCCESSFUL`-only build status** — one per run, describing what the run did; never gates a merge
+- **Build display name** — `#42-my-workspace-my-app-709` for easy identification
+- **`archiveArtifacts`** — saves `results.jsonl` per build
 - **Model IDs via `--model`/`--judge-model` flags** — do NOT store as Jenkins credentials (masking corrupts the value)
 
-See [docs/phases/phase-2-jenkins.md](docs/phases/phase-2-jenkins.md) for full setup guide, webhook configuration, and repo allowlist
+See [docs/phases/phase-2-jenkins.md](docs/phases/phase-2-jenkins.md) for the setup guide, webhook configuration, and repo allowlist, and [docs/reference/jenkins.md](docs/reference/jenkins.md) for how the job runs, its settings and troubleshooting.
 
 ---
 

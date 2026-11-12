@@ -43,6 +43,7 @@ structured review as a PR comment.
 | [reference/usage-logging.md](reference/usage-logging.md) | Usage logging, record schema, cost estimates, and analytics queries |
 | [reference/copilot-integration.md](reference/copilot-integration.md) | Sharing prompt files with GitHub Copilot |
 | [reference/azure-devops.md](reference/azure-devops.md) | Azure DevOps CI wiring and the reply-flow trigger (experimental) |
+| [reference/jenkins.md](reference/jenkins.md) | Jenkins + Bitbucket Cloud wiring: webhook variables, bot-comment filter, per-PR lock, checked-commit store, build status, troubleshooting |
 
 ---
 

@@ -148,7 +148,7 @@ CLI wins over env; an empty or whitespace CLI value (how Jenkins passes an unset
 **Matching:** exact, after trim → strip one surrounding `{…}` → trim → lowercase on both sides. No wildcard, no substring (`bot` does not match `bot2`).
 
 **Which id to pass:** the event **actor**, never the PR author (`pullrequest.author`) and never `comment.user`. With the PR author, listing a bot would silence humans' comments on that bot's PRs. On `comment_resolved` / `comment_reopened` the actor is the person acting, which is the intent ("ignore events caused by this account").
-- Bitbucket: `$.actor.uuid` from the webhook body (`account_id` works equally well; the matcher handles both). Not `display_name` (mutable, not unique, may contain commas) or `nickname` (mutable). Whether access-token bot users and app users expose `actor.uuid` is unverified — check one payload per bot before listing it.
+- Bitbucket: `$.actor.uuid` from the webhook body (`account_id` works equally well; the matcher handles both). Not `display_name` (mutable, not unique, may contain commas) or `nickname` (mutable). A repository access token acts as an `app_user` with a different uuid in every repository, so no id list covers it; filter such bots in CI by `$.actor.type` instead (see [jenkins.md](../../reference/jenkins.md#bot-comment-filter)).
 - The event: the `X-Event-Key` header.
 - GitHub / Azure: the check is adapter-agnostic; wiring is out of scope (the shipped GitHub workflow already drops `Bot` commenters in its `if:`).
 
@@ -164,6 +164,7 @@ In CI prefer the env form (`TRIGGER_EVENT="$x_event_key"`, `TRIGGER_COMMENT_AUTH
 - List an author only when CI **queues** rather than drops `pullrequest:updated`.
 - Prefer listing bots that never comment in response to a push.
 - Do not list the agent's own id under a dropping lock: its own comment event, fired when a long run posts, is often the event that catches up a push dropped during that run. The same applies to other review bots that comment on pushes, and to filtering these events in CI before the agent runs.
+- Once bot comments are ignored or filtered, queue comment events too: a developer reply dropped by the lock otherwise waits for the next push or human comment. The reference Jenkins pipeline queues every event (see [jenkins.md](../../reference/jenkins.md#per-pr-lock)).
 
 **Other cases:**
 
@@ -218,12 +219,12 @@ Why a field and not `action`: `NO_CHANGE`, `REPLY` and `DEDUP_SKIP` each mix tru
 **CI contract** (the agent cannot check any of it):
 1. **Key:** `vcs` + `workspace` + `repo_slug` + `pr_id` from the record. A head hash alone is shared by PRs from one source branch.
 2. **This build's record:** `results.jsonl` appends and a crashed run writes nothing, so the last line can belong to an earlier build. Use the record whose `jenkins.job` / `jenkins.build` equal `$JOB_NAME` / `$BUILD_NUMBER`, or this build's `=== Usage ===` stdout dump.
-3. **Store:** if that record has `checked_commit`, overwrite the PR's value with it; otherwise store nothing. Ignore `action` and the exit code. Never take the head from the webhook payload.
+3. **Store:** if that record has `checked_commit`, overwrite the PR's value with it; otherwise store nothing. Ignore `action` and the exit code. Never take the head from the webhook payload. Store inside the per-PR lock: a Jenkins declarative `post` section runs after a `lock` inside `steps` has released, so a queued build of the same PR could read before the write.
 4. **Read:** at run start, inside the per-PR lock, not when the webhook is queued. Pass it as `LAST_CHECKED_COMMIT`. **Fail open:** if the value is missing, the read fails or the value is malformed, pass nothing (today's behaviour).
 5. **Concurrency:** an older run finishing last is harmless. Its head was genuinely checked for this PR, and a newer head won't match it (at most one extra review). `checked_commit` is never newer than the reviewed content: PR info is read once, before the diff, and the delta and file contexts are pinned to that head.
 6. **Optional hardening (retarget):** store the record's `target_branch` alongside, and withhold the value when the PR's current destination differs.
 7. **Rollback:** stop passing the value. If the CLI flag is used, stop before rolling back the bundle.
-8. **Store choice is CI's:** a Jenkins per-PR file, or a Bitbucket commit build status with a per-PR key. A build status must be `SUCCESSFUL` only: it can count toward "minimum successful builds", and the AI review must never gate a merge.
+8. **Store choice is CI's:** build variables on the Jenkins build (for ephemeral agents such as a fresh pod per build; read by a bounded walk back through previous builds), a per-PR file on persistent storage, or a Bitbucket commit build status with a per-PR key. A build status must be `SUCCESSFUL` only: it can count toward "minimum successful builds", and the AI review must never gate a merge. Trade-offs and snippets: [jenkins.md](../../reference/jenkins.md#checked-commit-state).
 
 The input is VCS-agnostic: it compares with `PRInfo.sourceCommit`, which every adapter fills.
 
