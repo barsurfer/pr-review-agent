@@ -55,7 +55,7 @@ pr-review-agent/
 │   │   ├── reviewbench.ts        # Filesystem adapter for --benchmark
 │   │   ├── github.ts             # GitHub implementation (experimental, same-repo PRs via Actions)
 │   │   ├── mention-filter.ts     # Drop rule for replies @-directed at someone else (SKIP_DIRECTED_REPLIES)
-│   │   └── gitlab.ts             # GitLab stub (backlog)
+│   │   └── gitlab.ts             # GitLab stub (backlog; --vcs gitlab exits 1)
 │   ├── prompt/
 │   │   ├── loader.ts             # Loads base template, parses repo sections, composes stacks, fills placeholders
 │   │   ├── stack.ts              # Tech-stack detection (base-by-extension + framework overlays)
