@@ -213,6 +213,13 @@ PR and passes it back as `LAST_CHECKED_COMMIT` (needs `AGENT_TAG` ≥ v0.0.43). 
   review posted. From v0.0.46 the adapter also looks the hash up in the PR's iterations. If Azure
   still refuses to diff that commit (unverified), the run falls back to the full diff and
   withholds `checked_commit`, as before.
+- **Rebase limit (from v0.0.46).** The delta from an iteration head is two-dot (old head → new
+  head), so it shows what the developer changed, not how the PR diff changed. After a rebase onto a
+  moved target it can be empty while the PR diff did change: if the target deleted a line and the
+  rebase kept it, the new head's tree equals the reviewed one, so the run ends as `DEDUP_SKIP` and
+  reports `checked_commit`, although the PR diff now adds that line. Merging the target into the
+  source branch can hide such a line the same way on every provider. `--force` re-reviews such a
+  head.
 
 Illustrative, **untested** replacement for the `node agent.cjs …` line of the reply pipeline
 (needs `jq`, preinstalled on Microsoft-hosted Ubuntu images). In build validation use
@@ -407,5 +414,10 @@ Nothing below has been run against a live Azure org:
 9. Whether "Pull request commented on" also fires on comment edits, deletions, reactions or
    thread status changes, and whether its Service Hook can filter by target branch.
 10. Whether the Items API returns 404 for a symlink or other special blob listed in
-    `diffs/commits`. If it does, every delta touching one now fails and falls back to the full
-    diff (extra cost, no missed review).
+    `diffs/commits`. If it does, every delta touching one now fails and falls back to a paid full
+    review, repeated on every event (each build-validation re-queue, each comment) until a review
+    posts and moves the footer; no review is missed.
+11. That an active PR always carries `lastMergeSourceCommit`. Microsoft's sample response for
+    creating a PR already has it (and `lastMergeTargetCommit`) with `mergeStatus: queued`, i.e.
+    before the merge is computed. If a PR lacks it, the run fails with `ERROR` and is retried on the
+    next event; the PR diff reads both fields, so it could not be built without them anyway.

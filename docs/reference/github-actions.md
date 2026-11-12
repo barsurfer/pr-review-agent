@@ -37,30 +37,44 @@ unreviewed commits produces a delta review, and a push on an already reviewed he
 
 | Event | Runs when | Why |
 |---|---|---|
-| `pull_request` `opened` / `synchronize` / `reopened` | Head branch is in this repository and the actor is not `dependabot[bot]` | Fork PR runs and Dependabot runs get a read-only token and no Actions secrets, so the agent would fail at startup with a red check |
+| `pull_request` `opened` / `synchronize` / `reopened` | Head branch is in this repository, the PR author is not `dependabot[bot]` and the PR author's `author_association` is `OWNER`, `MEMBER` or `COLLABORATOR` | Fork PR runs get a read-only token and no Actions secrets, so the agent would fail at startup with a red check; any account with read access can open a PR between two existing branches; Dependabot PRs are never reviewed (below) |
 | `pull_request` `edited` | As above, and the base branch changed (`github.event.changes.base` present) | Delivers retargets; title and body edits never start a runner |
-| `issue_comment` `created` | On a PR, the PR is open, the commenter is not a `Bot` account and their `author_association` is `OWNER`, `MEMBER` or `COLLABORATOR`; then the API confirms the head is in this repository | Anyone can comment on a public repository's PRs; without these checks any account could start paid runs, including on closed or fork PRs |
+| `issue_comment` `created` | On a PR, the PR is open and not opened by `dependabot[bot]`, the commenter is not a `Bot` account and their `author_association` is `OWNER`, `MEMBER` or `COLLABORATOR`; then the API confirms the head is in this repository | Anyone can comment on a public repository's PRs; without these checks any account could start paid runs, including on closed or fork PRs |
 
-- **No PR-author check on `pull_request`.** GitHub requires write access to the head branch (or
-  organisation membership) to open a PR in a public repository, so a same-repo head already implies
-  a trusted author.
+- **PR-author check on `pull_request`.** GitHub's "Creating a pull request" page says anyone with
+  read access can open a PR, so a same-repo head does not imply a trusted author: on a public
+  repository any account could open a PR between two existing branches and start a paid run with
+  its own title and description in the prompt. The job therefore also requires the PR author's
+  `author_association` (`github.event.pull_request.author_association`, set by GitHub) to be
+  `OWNER`, `MEMBER` or `COLLABORATOR`. The association is the PR author's, not the pusher's, so a
+  trusted person pushing to such a PR does not start a review either. **PRs opened by Apps or bots
+  (Renovate, other workflows) or by non-collaborators are not reviewed until a trusted person
+  comments** on them; that comment run reviews the PR as usual.
 - **Same-repo check for comments.** The `issue_comment` payload has no head repository, so a step
   reads `GET /repos/{repo}/pulls/{n}` with the job token, before checkout and before the LLM key
   reaches any step. It fails
   closed: a fork head, a deleted fork or a failed lookup sets no output and every later step is
   skipped, leaving a notice in the log and a green job.
 - **Private organisation membership.** Reports say a member whose organisation membership is
-  private can appear as `CONTRIBUTOR` in event payloads. That fails closed (the comment starts no
-  run). Make the membership public, add the person as a collaborator, or replace the check with a
-  `GET /repos/{repo}/collaborators/{login}/permission` step.
+  private can appear as `CONTRIBUTOR` in event payloads. That fails closed (their comment or PR
+  starts no run). Make the membership public, add the person as a collaborator, or replace the
+  check with a `GET /repos/{repo}/collaborators/{login}/permission` step.
 - **The agent's own comments** start no run: a comment posted with `GITHUB_TOKEN` creates no
   workflow run (GitHub's rule for `GITHUB_TOKEN` events; only `workflow_dispatch` and
   `repository_dispatch` are exempt). The `Bot` filter additionally covers an agent posting through a
   GitHub App token. With a PAT the agent posts as a `User`; if that user is a collaborator its
   comments start a run, which is a `DEDUP_SKIP` when the footer names the head and otherwise re-pays
   a delta review (a stored checked commit prevents that).
-- **Dependabot-triggered runs are skipped.** They would have no LLM key. A trusted human's comment on
-  a Dependabot PR still runs as that human and reviews it.
+- **Dependabot PRs are never reviewed.** Both paths test the PR author, not the actor
+  (`github.event.pull_request.user.login`, and `github.event.issue.user.login` on comments). A run
+  triggered by Dependabot itself gets no Actions secrets, but a human who pushes to or retargets a
+  Dependabot PR is the actor: keyed on the actor, that run would get the LLM key and `npm ci` the
+  Dependabot branch, running the new dependency versions' install scripts and bundling their code
+  into the agent. Comments are excluded too: maintainers drive Dependabot with `@dependabot …`
+  comments, and each would start a paid run that answers the command as a developer reply. (A
+  comment run checks out the default branch, not the PR, so it never installs the PR's
+  dependencies.) The actor is no longer checked, so a Dependabot push to a PR a trusted person
+  opened from a `dependabot/*` branch runs without secrets and fails with a red check.
 
 ## Concurrency
 
@@ -273,7 +287,8 @@ exit 1 and writes no record.
   the workflow does not subscribe to `pull_request_review` or `pull_request_review_comment`. A
   question asked in a review or on a diff line is not answered.
 - **Same-head retarget** (see [Retargets](#retargets)).
-- **Fork PRs** are not reviewed. **Dependabot PRs** are reviewed only when a trusted human comments.
+- **Fork PRs** and **Dependabot PRs** are not reviewed. PRs opened by Apps or bots or by
+  non-collaborators are not reviewed until a trusted person comments.
 
 ## Unverified
 
@@ -283,7 +298,9 @@ exit 1 and writes no record.
 - The `issue_comment` path end to end, including posting replies with `pull-requests: write`.
 - The same-repo check against the real API (`gh api --jq` output for a fork, and for a deleted
   fork where `head.repo` is null).
-- `author_association` values for private organisation members.
+- `author_association` values for private organisation members, on comments and on PRs.
+- The PR-author check on a live `pull_request` run (the field is in GitHub's documented payload
+  schema; not yet run here).
 - Whether GitHub's automatic retarget, after a merged base branch is deleted, sends `edited` with
   `changes.base`, and whether that starts a run when a `GITHUB_TOKEN` workflow deleted the branch.
 - `queue: max` at job level, and on GitHub Enterprise Server.

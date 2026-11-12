@@ -514,9 +514,11 @@ replies on `issue_comment` (created), building and running the agent against the
 
 Key points:
 
-- **Guards (job `if:`)** — `pull_request` only for same-repo heads and not for `dependabot[bot]`;
-  `issue_comment` only on an open PR, from a non-`Bot` commenter who is `OWNER` / `MEMBER` /
-  `COLLABORATOR`, then an API check that the head is in this repo (fork PRs are skipped).
+- **Guards (job `if:`)** — `pull_request` only for same-repo heads whose PR author is `OWNER` /
+  `MEMBER` / `COLLABORATOR`; `issue_comment` only on an open PR, from a non-`Bot` commenter who is
+  `OWNER` / `MEMBER` / `COLLABORATOR`, then an API check that the head is in this repo (fork PRs are
+  skipped). PRs opened by `dependabot[bot]` are never reviewed; PRs opened by other bots or
+  non-collaborators wait for a trusted person's comment.
 - **Own comments** — a comment posted with `GITHUB_TOKEN` starts no workflow run, so the agent does
   not re-trigger itself; the `Bot` guard also covers an agent posting through an App token.
 - **Permissions** — `pull-requests: write` + `contents: read`; job-level `concurrency` per PR
