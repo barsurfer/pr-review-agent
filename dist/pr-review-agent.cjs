@@ -45396,11 +45396,13 @@ var LENSES = [
   ], "Report a mismatch with callers, consumers or implementations only when both sides are visible in what you were shown. Design preferences and refactoring suggestions are not findings.")
 ];
 var LENS_REGISTRY = Object.freeze(Object.fromEntries(LENSES.map((l) => [l.name, l])));
+var LENS_ALIASES = Object.freeze({ rel: "reliability", sec: "security", test: "testing", perf: "performance", arch: "architecture" });
 function activeLenses(settings) {
   return settings.enabled ? parseLensList(settings.list).lenses : [];
 }
 function parseLensList(value) {
-  const names = [...new Set(value.split(/[,+]/).map((s) => s.trim().toLowerCase()).filter(Boolean))];
+  const canonical = (n) => Object.hasOwn(LENS_ALIASES, n) ? LENS_ALIASES[n] : n;
+  const names = [...new Set(value.split(/[,+]/).map((s) => canonical(s.trim().toLowerCase())).filter(Boolean))];
   return {
     lenses: names.filter((n) => Object.hasOwn(LENS_REGISTRY, n)).map((n) => LENS_REGISTRY[n]),
     unknown: names.filter((n) => !Object.hasOwn(LENS_REGISTRY, n))
@@ -46058,7 +46060,7 @@ function getAgentVersion() {
     const pkg = JSON.parse((0, import_fs4.readFileSync)(pkgPath, "utf-8"));
     return pkg.version;
   } catch {
-    if (true) return "0.0.40";
+    if (true) return "0.0.41";
     return "unknown";
   }
 }
@@ -46070,7 +46072,7 @@ function getBuildCommit() {
     const dirty = (0, import_child_process.execSync)("git status --porcelain", opts2).toString().trim() ? "-dirty" : "";
     return hash + dirty;
   } catch {
-    if (true) return "074fa11";
+    if (true) return "13f86dd";
     return "unknown";
   }
 }
