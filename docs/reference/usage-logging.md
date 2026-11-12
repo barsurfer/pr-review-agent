@@ -104,7 +104,7 @@ The record is also printed to stdout at the end of every run regardless of the f
 | `tokens.estimated_input` | `number` | Pre-call estimate (`chars / 4`) — compare with `tokens.input` for accuracy |
 | `tokens.cache_read` | `number` | Cache read tokens (reserved for prompt caching) |
 | `tokens.cache_write` | `number` | Cache write tokens (reserved for prompt caching) |
-| `cost_usd` | `number` | Total estimated cost (review + breadth + judge) from hardcoded per-model pricing table |
+| `cost_usd` | `number` | Total estimated cost (review + breadth + second-look + lenses + judge) from hardcoded per-model pricing table |
 | `judge_model` | `string \| null` | Judge model ID, or null if no judge pass |
 | `judge_effort` | `string \| null` | Judge thinking effort (`JUDGE_EFFORT`); null = model default |
 | `judge_tokens` | `object \| null` | `{ input, output }`, or null if no judge pass |
@@ -123,13 +123,15 @@ The record is also printed to stdout at the end of every run regardless of the f
 | `findings` | `object \| null` | `{ high, medium, low }` — final findings (from judge if used, from reviewer otherwise) |
 | `finding_scores` | `array \| null` | Judge per-finding `{ title, severity, score, file?, lines? }`; null if no judge |
 | `min_finding_score` | `number \| null` | Lowest kept finding score |
-| `review_candidates` | `array \| null` | Judge candidates stored once with ids (`c0…`): `{ id, origin, severity, title, file, lines, body }`, `origin` = `review` \| `breadth`; judge-run only |
+| `review_candidates` | `array \| null` | Judge candidates stored once with ids (`c0…`): `{ id, origin, severity, title, file, lines, body }`, `origin` = `review` \| `breadth` \| `second_look` \| `lens:<name>`; judge-run only |
 | `judge_decisions` | `array \| null` | One per candidate: `{ candidate_id, reason_category, reclassified_from, action, original_severity, final_severity, score, evidence, note, rewritten, anchor_source, anchor_file, anchor_lines }`; the resolved anchor is logged for **every decided candidate** (kept or dropped) so an offline re-score can place a finding a different policy would keep; judge-run only |
 | `judge_anomalies` | `object \| null` | `{ unknown_ids, undecided, duplicate_ids, drop_without_evidence }`; judge-run only |
 | `judge_policy` | `object \| null` | `{ keep_minor, keep_unverified, file_context }` flags in effect; only when the judge ran |
 | `breadth_status` | `string \| null` | `disabled` \| `skipped_no_judge` \| `skipped_rereview` \| `skipped_bundled` \| `skipped_small` \| `skipped_few_untouched` \| `skipped_limit` (first pass already used the whole `MAX_FINDINGS`) \| `skipped_budget` \| `skipped_time` (benchmark only: over half of `BENCHMARK_DEADLINE_SECONDS` elapsed) \| `succeeded` \| `failed`; null when the stage wasn't reached |
 | `breadth_model` / `breadth_prompt_hash` | `string \| null` | Model and system-prompt hash of the breadth call, when it ran |
 | `breadth_tokens` / `breadth_cost_usd` | `object \| null` / `number \| null` | Breadth usage, priced at the breadth model and included in `cost_usd` |
+| `lens_runs` | `array \| null` \| absent | One `{ name, status, model, prompt_hash, tokens, cost_usd, findings }` per listed lens, in `LENSES` order; `status` = `skipped_no_judge` \| `skipped_rereview` \| `skipped_bundled` \| `skipped_limit` \| `skipped_budget` \| `skipped_time` \| `succeeded` \| `failed`; `findings` is a count; `cost_usd` (actual, else priced at the lens model) is included in `cost_usd`. Null when `LENS_REVIEW` wasn't reached; the key is absent when lenses are off (`ENABLE_LENSES` off or no known name in `LENSES`) |
+| `lens_recommendations` | `array \| null` \| absent | `ENABLE_LENS_RECOMMENDATION` only: the first-pass reviewer's `{ lens, reason }` picks (known lens names, one per lens, `reason` ≤200 chars); `[]` when it recommended none. Log-only — nothing acts on it, so compare it offline with `lens_runs`. Null on a re-review or bundled run, when the model did not return the field, or when no reviewer result was produced; the key is absent when the flag is off |
 | `untouched_files` | `object \| null` | `{ count, paths (≤40, diff order), cut }` — reviewable files without a reviewer finding, when the trigger was evaluated |
 | `anchored_findings` | `array \| null` | Compact kept-finding rows `{ anchor, severity, type, description, proposal?, quality_action? }` resolved to a real line; `proposal?` only with `ENABLE_JUDGE_PROPOSALS`, `quality_action?` only with `ENABLE_JUDGE_QUALITY`; judge-run only |
 | `touch_rate` | `number \| null` | Re-review only: `resolved / (resolved + still_open) × 100` — percentage of previous findings addressed by the developer |

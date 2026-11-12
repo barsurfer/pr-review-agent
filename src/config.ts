@@ -144,6 +144,14 @@ export const config = {
     priorityTargets: optional('ENABLE_BREADTH_PRIORITY_TARGETS', 'false') === 'true',
   },
 
+  // Off by default (each lens is another reviewer-sized call); the list stays raw so a benchmark label can overwrite it after load.
+  lenses: {
+    enabled: optional('ENABLE_LENSES', 'false') === 'true',
+    list: optional('LENSES', ''),
+    model: optional('LENS_MODEL', ''),
+    recommend: optional('ENABLE_LENS_RECOMMENDATION', 'false') === 'true',
+  },
+
   agentIdentity: process.env.AGENT_IDENTITY || process.env.BITBUCKET_USERNAME || 'Claude',
   // Reviewed repo slug — set from --repo-slug at runtime; sent as OpenRouter's `user` for segmentation.
   repoSlug: optional('REPO_SLUG', ''),

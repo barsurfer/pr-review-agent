@@ -67,4 +67,18 @@ describe('missingRequired', () => {
     expect(missingRequired({ findings: [{ severity: 'LOW', body: 'x' }, { severity: 'LOW' }] }, s, true)).toEqual(['findings[1].body'])
     expect(missingRequired({ findings: [{ severity: 'LOW' }] }, s)).toEqual([])
   })
+
+  it('tolerate skips the named root key and its item check; every other required key is still enforced', () => {
+    const s = {
+      required: ['findings', 'lens_recommendations'],
+      properties: { findings: { items: { required: ['severity'] } }, lens_recommendations: { items: { required: ['lens', 'reason'] } } },
+    } as Record<string, unknown>
+    const tolerate = ['lens_recommendations']
+    expect(missingRequired({ findings: [] }, s, true, tolerate)).toEqual([])
+    expect(missingRequired({ findings: [], lens_recommendations: [{ lens: 'security' }] }, s, true, tolerate)).toEqual([])
+    expect(missingRequired({ lens_recommendations: [] }, s, true, tolerate)).toEqual(['findings'])
+    expect(missingRequired({ findings: [{}], lens_recommendations: [{}] }, s, true, tolerate)).toEqual(['findings[0].severity'])
+    expect(missingRequired({ findings: [], lens_recommendations: [{ lens: 'security' }] }, s, true)).toEqual(['lens_recommendations[0].reason'])
+    expect(missingRequired({ findings: [] }, s)).toEqual(['lens_recommendations'])
+  })
 })

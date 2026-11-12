@@ -9,6 +9,8 @@ export interface ShownAnchors {
   breadth?: ShownSource
   secondLook?: ShownSource
   secondLookFrom?: number
+  lens?: ShownSource
+  lensFrom?: number
 }
 
 // A range wider than this is a fabricated span, not a location.

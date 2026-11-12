@@ -6,6 +6,7 @@ vi.mock('../../config.js', () => ({
     anthropic: { apiKey: 'k', model: 'claude-haiku-4-5-20251001', maxRetries: 1, maxInputTokens: 2000, maxTokens: 32000 },
     judge: { model: 'judge-model', maxRetries: 1, effort: '', policy: { keepMinor: false, keepUnverified: false }, fileContext: false },
     breadth: { enabled: false, model: '', effort: '', minFiles: 5, minUntouched: 3 },
+    lenses: { enabled: false, list: '', model: '', recommend: false },
     agentIdentity: 'test-bot',
     reply: { maxComments: 3 },
     review: { maxFindings: 0, splitCheck: false, todoScan: false, effort: '', bundledReview: true, maxBundles: 8, enableNitpicks: false },
@@ -91,6 +92,22 @@ describe('bundled review', () => {
       expect(mockRunJudge.mock.calls.every(c => c[9] === true)).toBe(true)
     } finally {
       cfg.review.lineNumbers = false
+    }
+  })
+
+  it('never requests a lens recommendation from a bundle reviewer, and records null when the flag is on', async () => {
+    mockRunReview.mockImplementation(async (...args) => {
+      const o = obj('Alpha problem', (args[6] as string).includes('a/one.ts') ? 'a/one.ts' : 'b/one.ts')
+      return { text: renderReview(o), usage, review: o }
+    })
+    cfg.lenses.recommend = true
+    try {
+      const record = await review(adapter(BIG_DIFF, ['a/one.ts', 'a/two.ts', 'b/one.ts', 'b/two.ts']), '1', false)
+      expect(mockRunReview.mock.calls.length).toBeGreaterThan(1)
+      expect(mockRunReview.mock.calls.every(c => c.length === 13)).toBe(true)
+      expect(record!.lens_recommendations).toBeNull()
+    } finally {
+      cfg.lenses.recommend = false
     }
   })
 

@@ -13,8 +13,9 @@ import { countFindings, normalizeIssueType } from './formatter.js'
 import type { FindingScore, ReviewFinding, IssueType } from './formatter.js'
 import { isAnchored, parseLineRange, normalizeFindingPath } from './findings-output.js'
 import { candidateId, type AppliedDecision, type JudgeAnomalies } from './judge-decisions.js'
-import { MAX_UNTOUCHED_LISTED, type BreadthStatus, type SecondLookStatus, type CandidateOrigin } from './breadth.js'
-import type { ReviewContext } from './types.js'
+import { MAX_UNTOUCHED_LISTED, type BreadthStatus, type SecondLookStatus, type LensStatus, type CandidateOrigin } from './breadth.js'
+import { activeLenses, type LensRecommendation } from './lenses.js'
+import type { ReviewContext, LensRun } from './types.js'
 
 // 12 hex chars of sha256 — enough to tell prompt/code versions apart across runs without bloating the record.
 function hash12(s: string): string {
@@ -92,6 +93,8 @@ export interface UsageRecord {
   second_look_prompt_hash: string | null
   second_look_tokens: { input: number; output: number } | null
   second_look_cost_usd: number | null
+  lens_runs?: Array<{ name: string; status: LensStatus; model: string; prompt_hash: string | null; tokens: { input: number; output: number } | null; cost_usd: number | null; findings: number }> | null
+  lens_recommendations?: LensRecommendation[] | null
   untouched_files: { count: number; paths: string[]; cut: number; deprioritized?: number } | null
   recall_levers: { j_quality: boolean; sl_breadth: boolean; j_shown_anchor: boolean; b_priority: boolean }
   touch_rate: number | null
@@ -218,16 +221,29 @@ export function buildUsageRecord(
   // Second-look runs on the reviewer model, so its missing-actual cost is estimated at that model.
   const secondLookTokens = ctx.secondLookUsage ? { input: ctx.secondLookUsage.input_tokens, output: ctx.secondLookUsage.output_tokens } : null
   const secondLookCost = ctx.secondLookUsage?.cost_usd ?? (secondLookTokens ? estimateCost(secondLookTokens, config.anthropic.model) : null)
+  const lenses = activeLenses(config.lenses)
+  // The bundled path never enters LENS_REVIEW, so its runs are inferred here, as breadth/second-look statuses are.
+  const lensSource: LensRun[] | undefined = ctx.lensRuns ?? (ctx.bundleCount && lenses.length
+    ? lenses.map(l => ({ name: l.name, status: 'skipped_bundled' as const, model: config.lenses.model || config.anthropic.model, findings: [] }))
+    : undefined)
+  const lensRuns = lensSource?.map(r => {
+    const tokens = r.usage ? { input: r.usage.input_tokens, output: r.usage.output_tokens } : null
+    return { name: r.name, status: r.status, model: r.model, prompt_hash: r.promptHash ?? null, tokens, cost_usd: r.usage?.cost_usd ?? (tokens ? estimateCost(tokens, r.model) : null), findings: r.findings.length }
+  }) ?? null
+  const lensUsage = (ctx.lensRuns ?? []).reduce((sum, r) => ({
+    input: sum.input + (r.usage?.input_tokens ?? 0), output: sum.output + (r.usage?.output_tokens ?? 0), cost: sum.cost + (r.usage?.cost_usd ?? 0),
+  }), { input: 0, output: 0, cost: 0 })
+  const lensCost = (lensRuns ?? []).reduce((sum, r) => sum + (r.cost_usd ?? 0), 0)
   // A reply-only run uses the reply model (REPLY_MODEL), so log + cost it at that model, not the reviewer's.
   const recordModel = ctx.action === 'REPLY' && config.reply.model ? config.reply.model : config.anthropic.model
   // Reviewer-only cost: subtract the per-stage actuals from the all-calls actual aggregate when present,
   // else estimate from the reviewer's own tokens. Summing the stages keeps the total consistent
   // with the per-stage columns even when only some calls reported an actual cost (mixed-vendor runs).
   const reviewerCost = ctx.usage.cost_usd !== undefined
-    ? ctx.usage.cost_usd - (ctx.judgeUsage?.cost_usd ?? 0) - (ctx.breadthUsage?.cost_usd ?? 0) - (ctx.secondLookUsage?.cost_usd ?? 0)
+    ? ctx.usage.cost_usd - (ctx.judgeUsage?.cost_usd ?? 0) - (ctx.breadthUsage?.cost_usd ?? 0) - (ctx.secondLookUsage?.cost_usd ?? 0) - lensUsage.cost
     : estimateCost({
-        input: ctx.usage.input_tokens - (judgeTokens?.input ?? 0) - (breadthTokens?.input ?? 0) - (secondLookTokens?.input ?? 0),
-        output: ctx.usage.output_tokens - (judgeTokens?.output ?? 0) - (breadthTokens?.output ?? 0) - (secondLookTokens?.output ?? 0),
+        input: ctx.usage.input_tokens - (judgeTokens?.input ?? 0) - (breadthTokens?.input ?? 0) - (secondLookTokens?.input ?? 0) - lensUsage.input,
+        output: ctx.usage.output_tokens - (judgeTokens?.output ?? 0) - (breadthTokens?.output ?? 0) - (secondLookTokens?.output ?? 0) - lensUsage.output,
       }, recordModel)
   // The bundled path never enters BREADTH_REVIEW, so its status is inferred here.
   const breadthStatus = ctx.breadthStatus ?? (ctx.bundleCount ? (config.breadth.enabled ? 'skipped_bundled' : 'disabled') : null)
@@ -272,7 +288,7 @@ export function buildUsageRecord(
       cache_write: ctx.usage.cache_write,
       estimated_input: ctx.estimatedInputTokens,
     },
-    cost_usd: reviewerCost + (judgeCost ?? 0) + (breadthCost ?? 0) + (secondLookCost ?? 0),
+    cost_usd: reviewerCost + (judgeCost ?? 0) + (breadthCost ?? 0) + (secondLookCost ?? 0) + lensCost,
     judge_model: judgeModel,
     judge_effort: config.judge.effort || null,
     judge_tokens: judgeTokens,
@@ -321,6 +337,9 @@ export function buildUsageRecord(
     second_look_prompt_hash: ctx.secondLookPromptHash ?? null,
     second_look_tokens: secondLookTokens,
     second_look_cost_usd: secondLookCost,
+    // Absent, not null, when lenses are off, so a lens-off record serializes byte-identical to one from before lenses existed.
+    ...(lenses.length ? { lens_runs: lensRuns } : {}),
+    ...(config.lenses.recommend ? { lens_recommendations: ctx.lensRecommendations ?? null } : {}),
     untouched_files: ctx.untouchedFiles
       ? ctx.breadthPlan
         ? { count: ctx.untouchedFiles.length, paths: ctx.breadthPlan.selected, cut: ctx.breadthPlan.omitted, deprioritized: ctx.breadthPlan.deprioritizedReleaseEntries }

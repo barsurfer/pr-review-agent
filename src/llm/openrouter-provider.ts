@@ -27,7 +27,7 @@ export class OpenRouterProvider implements LLMProvider {
     } catch {
       throw new Error('Model returned invalid JSON despite structured output')
     }
-    const missing = missingRequired(object, schema, true)
+    const missing = missingRequired(object, schema, true, opts.tolerateMissing)
     if (missing.length) throw new Error(`Structured output missing required field(s): ${missing.join(', ')}`)
     return { object, usage: mapOpenRouterUsage(data.usage) }
   }

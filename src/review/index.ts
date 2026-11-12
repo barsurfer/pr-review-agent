@@ -5,10 +5,11 @@
 import { config, modelContextWindow } from '../config.js'
 import { loadPrompt } from '../prompt/loader.js'
 import { fetchContext } from '../context/fetcher.js'
-import { runReview, runCommentResponse, runJudge, runBreadth } from './client.js'
+import { runReview, runCommentResponse, runJudge, runBreadth, runLens } from './client.js'
 import { buildShownSource } from './shown-anchors.js'
 import type { JudgeOptions } from './judge-decisions.js'
-import { fileCoverage, prioritizeUntouched, breadthSystemPrompt, breadthBriefing, flaggedFiles, findingsInFiles, secondLookSystemPrompt, secondLookBriefing } from './breadth.js'
+import { fileCoverage, prioritizeUntouched, breadthSystemPrompt, breadthBriefing, flaggedFiles, findingsInFiles, secondLookSystemPrompt, secondLookBriefing, type LensStatus } from './breadth.js'
+import { activeLenses, parseLensList, lensSystemPrompt, lensBriefing } from './lenses.js'
 import { splitDiffByFile } from './bundler.js'
 import { normalizeFindingPath } from './findings-output.js'
 import { filterDiff, countChangedLines, parseVerdictScore, isPathExcluded, scanTodos, isContextLengthError, shownLength } from './parsers.js'
@@ -24,7 +25,7 @@ function supersedeBoundary<T extends { resolved?: boolean }>(reviews: T[]): T | 
   return pool[pool.length - 1]
 }
 
-import type { ReviewContext, OutcomeSink } from './types.js'
+import type { ReviewContext, OutcomeSink, LensRun } from './types.js'
 import { PrTooLargeError } from '../vcs/adapter.js'
 import type { VCSAdapter, CommentReply } from '../vcs/adapter.js'
 
@@ -41,6 +42,14 @@ async function dropRepliesDirectedElsewhere(ctx: ReviewContext, replies: Comment
     console.warn(`  Directed-reply filter failed (${(err as Error).message}) — keeping all replies`)
     return replies
   }
+}
+
+// The stage is entered only with at least one known lens, so a lens-off run never reaches it.
+function stageAfterSecondLook(): State {
+  if (!config.lenses.enabled) return State.JUDGE_REVIEW
+  const { lenses, unknown } = parseLensList(config.lenses.list)
+  if (unknown.length) console.warn(`  Ignoring unknown lens name(s): ${unknown.join(', ')}`)
+  return lenses.length ? State.LENS_REVIEW : State.JUDGE_REVIEW
 }
 
 import type { UsageRecord } from './usage.js'
@@ -374,6 +383,8 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         content += `\n\n## SPLIT CHECK\nIf this PR spans multiple independent themes that could each be a separate, independently-reviewable PR, populate the \`can_be_split\` array — one entry per theme. If the PR is cohesive, leave it empty.`
       }
       const reviewPrompt = { ...ctx.prompt!, content }
+      const recommend = config.lenses.recommend && ctx.reviewNumber === 1
+      const recommendTail: [boolean?] = recommend ? [true] : []
 
       const call = () => runReview(
         config.llmApiKey,
@@ -388,7 +399,8 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         ctx.previousReviews ?? [],
         ctx.replies ?? [],
         ctx.deltaDiff ?? '',
-        config.review.lineNumbers
+        config.review.lineNumbers,
+        ...recommendTail,
       )
       // Backstop for an under-counted estimate: on a context-length rejection, drop file contexts
       // and retry diff-only; if the diff alone won't fit, skip rather than let the API error.
@@ -411,6 +423,11 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       }
       ctx.reviewText = result.text
       ctx.reviewObject = result.review
+      if (recommend) {
+        const recs = result.lensRecommendations ?? null
+        ctx.lensRecommendations = recs
+        console.log(`  Lens recommendations: ${recs ? recs.map(r => `${r.lens} (${r.reason})`).join(', ') || 'none' : 'unavailable'}`)
+      }
       ctx.usage.input_tokens += result.usage.input_tokens
       ctx.usage.output_tokens += result.usage.output_tokens
       ctx.usage.cache_read += result.usage.cache_read_input_tokens ?? 0
@@ -501,18 +518,19 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
     }
 
     case State.SECOND_LOOK: {
+      const next = stageAfterSecondLook()
       // Second-look candidates are only ever posted after judging (same as breadth); a re-review targets the delta, not a full re-read.
-      if (!config.review.secondLook) { ctx.secondLookStatus = 'disabled'; return State.JUDGE_REVIEW }
-      if (!config.judge.model) { ctx.secondLookStatus = 'skipped_no_judge'; return State.JUDGE_REVIEW }
-      if (ctx.reviewNumber > 1) { ctx.secondLookStatus = 'skipped_rereview'; return State.JUDGE_REVIEW }
+      if (!config.review.secondLook) { ctx.secondLookStatus = 'disabled'; return next }
+      if (!config.judge.model) { ctx.secondLookStatus = 'skipped_no_judge'; return next }
+      if (ctx.reviewNumber > 1) { ctx.secondLookStatus = 'skipped_rereview'; return next }
 
       const firstPass = ctx.reviewObject?.findings ?? []
       const breadth = ctx.breadthFindings ?? []
       const flagged = flaggedFiles(ctx.filteredDiff!, config.review.secondLookBreadthTargets ? [...firstPass, ...breadth] : firstPass)
-      if (flagged.length === 0) { ctx.secondLookStatus = 'skipped_no_findings'; return State.JUDGE_REVIEW }
+      if (flagged.length === 0) { ctx.secondLookStatus = 'skipped_no_findings'; return next }
 
       const remaining = config.review.maxFindings > 0 ? config.review.maxFindings - firstPass.length - breadth.length : 0
-      if (config.review.maxFindings > 0 && remaining <= 0) { ctx.secondLookStatus = 'skipped_limit'; return State.JUDGE_REVIEW }
+      if (config.review.maxFindings > 0 && remaining <= 0) { ctx.secondLookStatus = 'skipped_limit'; return next }
 
       const sections = splitDiffByFile(ctx.filteredDiff!)
       const restrictedDiff = flagged.map(p => sections.get(p) ?? '').join('')
@@ -532,14 +550,14 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       if (estimate > budget) {
         ctx.secondLookStatus = 'skipped_budget'
         console.log(`  Second-look skipped: ~${estimate.toLocaleString()} tokens exceeds the ${model} budget (${budget.toLocaleString()})`)
-        return State.JUDGE_REVIEW
+        return next
       }
       // Same deadline guard as breadth: a killed benchmark run scores nothing, so leave the judge the second half.
       const elapsedSeconds = (Date.now() - ctx.startTime) / 1000
       if (ctx.outcomeSink && elapsedSeconds > config.breadth.benchmarkDeadlineSeconds / 2) {
         ctx.secondLookStatus = 'skipped_time'
         console.log(`  Second-look skipped: ${Math.round(elapsedSeconds)}s elapsed, over half the ${config.breadth.benchmarkDeadlineSeconds}s benchmark deadline`)
-        return State.JUDGE_REVIEW
+        return next
       }
 
       if (config.judge.shownAnchors) ctx.shownSecondLook = buildShownSource(restrictedDiff, contexts)
@@ -563,6 +581,73 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         }
         ctx.secondLookStatus = 'failed'
         console.warn(`  Second-look FAILED (${isContextLengthError(err) ? 'context length' : e.message}) — continuing with first-pass and breadth findings only`)
+      }
+      return next
+    }
+
+    case State.LENS_REVIEW: {
+      // Same stage skips as second-look: lens candidates only post after judging, and a re-review targets the delta.
+      const lenses = activeLenses(config.lenses)
+      const model = config.lenses.model || config.anthropic.model
+      const runs: LensRun[] = []
+      ctx.lensRuns = runs
+      const stageSkip: LensStatus | undefined = !config.judge.model ? 'skipped_no_judge' : ctx.reviewNumber > 1 ? 'skipped_rereview' : undefined
+      if (stageSkip) {
+        for (const lens of lenses) runs.push({ name: lens.name, status: stageSkip, model, findings: [] })
+        return State.JUDGE_REVIEW
+      }
+
+      const effort = config.lenses.model ? '' : config.review.effort
+      const earlier = [...(ctx.reviewObject?.findings ?? []), ...(ctx.breadthFindings ?? []), ...(ctx.secondLookFindings ?? [])]
+      const limits = [config.anthropic.maxInputTokens, modelContextWindow(model) - config.anthropic.maxTokens].filter(n => n > 0)
+      const budget = limits.length ? Math.min(...limits) : Infinity
+      let halt: LensStatus | undefined
+      for (const lens of lenses) {
+        const run: LensRun = { name: lens.name, status: 'failed', model, findings: [] }
+        runs.push(run)
+        if (halt) { run.status = halt; continue }
+
+        const known = [...earlier, ...runs.flatMap(r => r.findings)]
+        const remaining = config.review.maxFindings > 0 ? config.review.maxFindings - known.length : 0
+        if (config.review.maxFindings > 0 && remaining <= 0) { run.status = halt = 'skipped_limit'; continue }
+
+        const system = lensSystemPrompt(ctx.prompt!.content, lens, remaining, config.judge.shownAnchors)
+        const briefing = lensBriefing(known)
+        const estimate = ctx.estimatedInputTokens + Math.ceil((system.length - ctx.prompt!.content.length + briefing.length) / 4)
+        if (estimate > budget) {
+          run.status = 'skipped_budget'
+          console.log(`  Lens ${lens.name} skipped: ~${estimate.toLocaleString()} tokens exceeds the ${model} budget (${budget.toLocaleString()})`)
+          continue
+        }
+        // Re-checked per lens: each is a reviewer-sized call, and a killed benchmark run scores nothing.
+        const elapsedSeconds = (Date.now() - ctx.startTime) / 1000
+        if (ctx.outcomeSink && elapsedSeconds > config.breadth.benchmarkDeadlineSeconds / 2) {
+          run.status = halt = 'skipped_time'
+          console.log(`  Lens review stopped at ${lens.name}: ${Math.round(elapsedSeconds)}s elapsed, over half the ${config.breadth.benchmarkDeadlineSeconds}s benchmark deadline`)
+          continue
+        }
+
+        if (config.judge.shownAnchors && !ctx.shownLens) ctx.shownLens = buildShownSource(ctx.filteredDiff!, ctx.fileContexts ?? [])
+        console.log(`  Lens ${lens.name}: full-PR pass, excluding ${known.length} known finding(s)`)
+        try {
+          const result = await runLens(
+            config.llmApiKey, model, config.anthropic.maxRetries, config.anthropic.maxTokens, effort,
+            ctx.prInfo!, ctx.filteredDiff!, ctx.fileContexts ?? [], system, briefing, config.review.lineNumbers, `lens:${lens.name}`,
+          )
+          run.findings = result.findings
+          run.promptHash = result.promptHash
+          run.usage = { input_tokens: result.usage.input_tokens, output_tokens: result.usage.output_tokens, cost_usd: result.usage.cost_usd }
+          addUsage(ctx, result.usage)
+          run.status = 'succeeded'
+          console.log(`  Lens ${lens.name}: ${result.findings.length} finding(s)`)
+        } catch (err: unknown) {
+          const e = err as Error & { usage?: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number; cost_usd?: number } }
+          if (e.usage) {
+            run.usage = { input_tokens: e.usage.input_tokens, output_tokens: e.usage.output_tokens, cost_usd: e.usage.cost_usd }
+            addUsage(ctx, e.usage)
+          }
+          console.warn(`  Lens ${lens.name} FAILED (${isContextLengthError(err) ? 'context length' : e.message}) — continuing without its findings`)
+        }
       }
       return State.JUDGE_REVIEW
     }
@@ -614,21 +699,23 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       // The re-review gate above stays on reviewer findings; the judge runs whenever there is anything to validate.
       const breadth = ctx.breadthFindings ?? []
       const secondLook = ctx.secondLookFindings ?? []
-      if (noFindings && breadth.length === 0 && secondLook.length === 0) {
+      const lens = (ctx.lensRuns ?? []).flatMap(r => r.findings)
+      if (noFindings && breadth.length === 0 && secondLook.length === 0 && lens.length === 0) {
         ctx.judgeStatus = 'skipped_no_findings'
         console.log('  Skipping judge — no findings to validate')
         return State.POST_REVIEW
       }
 
       const firstPass = ctx.reviewObject?.findings ?? []
-      // Order is load-bearing: the boundary arg (firstPass.length) keeps review as trusted-anchor, breadth+second_look changed-line-only.
+      // Order is load-bearing: the boundary arg (firstPass.length) keeps review as trusted-anchor, breadth+second_look+lens changed-line-only.
       ctx.judgeCandidates = [
         ...firstPass.map(f => ({ ...f, origin: 'review' as const })),
         ...breadth.map(f => ({ ...f, origin: 'breadth' as const })),
         ...secondLook.map(f => ({ ...f, origin: 'second_look' as const })),
+        ...(ctx.lensRuns ?? []).flatMap(r => r.findings.map(f => ({ ...f, origin: `lens:${r.name}` as const }))),
       ]
-      const extra = breadth.length > 0 || secondLook.length > 0
-      const judgeInput = extra ? { ...ctx.reviewObject!, findings: [...firstPass, ...breadth, ...secondLook] } : ctx.reviewObject!
+      const extra = breadth.length > 0 || secondLook.length > 0 || lens.length > 0
+      const judgeInput = extra ? { ...ctx.reviewObject!, findings: [...firstPass, ...breadth, ...secondLook, ...lens] } : ctx.reviewObject!
 
       ctx.reviewTextBeforeJudge = ctx.reviewText
       const judgeOptions: JudgeOptions | undefined = config.judge.quality || config.judge.shownAnchors || config.judge.proposals
@@ -636,7 +723,10 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
             quality: config.judge.quality,
             proposals: config.judge.proposals,
             shownAnchors: config.judge.shownAnchors
-              ? { judge: buildShownSource(ctx.filteredDiff!, config.judge.fileContext ? ctx.fileContexts ?? [] : []), breadth: ctx.shownBreadth, secondLook: ctx.shownSecondLook, secondLookFrom: firstPass.length + breadth.length }
+              ? {
+                  judge: buildShownSource(ctx.filteredDiff!, config.judge.fileContext ? ctx.fileContexts ?? [] : []), breadth: ctx.shownBreadth, secondLook: ctx.shownSecondLook, secondLookFrom: firstPass.length + breadth.length,
+                  ...(lens.length ? { lens: ctx.shownLens, lensFrom: firstPass.length + breadth.length + secondLook.length } : {}),
+                }
               : undefined,
           }
         : undefined
@@ -715,7 +805,10 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
     case State.POST_REVIEW: {
       // The sink takes the structured review instead of a posted comment, so cleanup, cut guard and footer don't apply.
       if (ctx.outcomeSink) {
-        await ctx.outcomeSink({ review: ctx.reviewObject!, reviewText: ctx.reviewText!, judged: ctx.judgeUsage !== undefined, judgeScores: ctx.judgeScores, judgedFindings: ctx.judgedFindings, breadthFindings: ctx.breadthFindings, secondLookFindings: ctx.secondLookFindings })
+        await ctx.outcomeSink({
+          review: ctx.reviewObject!, reviewText: ctx.reviewText!, judged: ctx.judgeUsage !== undefined, judgeScores: ctx.judgeScores, judgedFindings: ctx.judgedFindings, breadthFindings: ctx.breadthFindings, secondLookFindings: ctx.secondLookFindings,
+          ...(ctx.lensRuns ? { lensFindings: ctx.lensRuns.flatMap(r => r.findings) } : {}),
+        })
         ctx.action = 'REVIEW'
         return State.DONE
       }

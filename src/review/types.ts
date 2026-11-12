@@ -8,8 +8,9 @@ import type { FileContext } from '../context/fetcher.js'
 import type { ReviewObject, ReviewFinding, FindingScore } from './formatter.js'
 import type { KeptFinding } from './findings-output.js'
 import type { AppliedDecision, JudgeAnomalies } from './judge-decisions.js'
-import type { BreadthStatus, SecondLookStatus, CandidateOrigin, BreadthPlan } from './breadth.js'
+import type { BreadthStatus, SecondLookStatus, LensStatus, CandidateOrigin, BreadthPlan } from './breadth.js'
 import type { ShownSource } from './shown-anchors.js'
+import type { LensRecommendation } from './lenses.js'
 
 /** Every node in the review flow. */
 export enum State {
@@ -27,6 +28,7 @@ export enum State {
   CHECK_NO_CHANGE,
   BREADTH_REVIEW,
   SECOND_LOOK,
+  LENS_REVIEW,
   JUDGE_REVIEW,
   BUNDLED_REVIEW,
   POST_REVIEW,
@@ -43,6 +45,16 @@ export interface ReviewOutcome {
   judgedFindings?: KeptFinding[]   // set only by the single-pass structured judge; bundled review leaves it unset
   breadthFindings?: ReviewFinding[]
   secondLookFindings?: ReviewFinding[]
+  lensFindings?: ReviewFinding[]
+}
+
+export interface LensRun {
+  name: string
+  status: LensStatus
+  model: string
+  findings: ReviewFinding[]
+  promptHash?: string
+  usage?: { input_tokens: number; output_tokens: number; cost_usd?: number }
 }
 
 export type OutcomeSink = (outcome: ReviewOutcome) => void | Promise<void>
@@ -96,11 +108,14 @@ export interface ReviewContext {
   secondLookStatus?: SecondLookStatus
   secondLookPromptHash?: string
   secondLookUsage?: { input_tokens: number; output_tokens: number; cost_usd?: number }
+  lensRuns?: LensRun[]
+  lensRecommendations?: LensRecommendation[] | null
   untouchedFiles?: string[]
   breadthPlan?: BreadthPlan
   // What each discovery pass was actually shown, so a judge anchor on an unchanged line is only accepted for code that pass saw.
   shownBreadth?: ShownSource
   shownSecondLook?: ShownSource
+  shownLens?: ShownSource
   judgeCandidates?: Array<ReviewFinding & { origin: CandidateOrigin }>
   estimatedInputTokens: number
 

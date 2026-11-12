@@ -5,7 +5,7 @@ import { splitDiffByFile } from './bundler.js'
 import { normalizeFindingPath } from './findings-output.js'
 import type { ReviewFinding } from './formatter.js'
 
-const SHOWN_LINE_CLAUSE = 'a numeric line on an added or modified line.'
+export const SHOWN_LINE_CLAUSE = 'a numeric line on an added or modified line.'
 
 // Not the fetcher's context-exclusion list: migrations are real review targets, while lockfiles and generated code only pad the trigger counts.
 const GENERATED_OR_LOCK = [
@@ -18,11 +18,15 @@ export type BreadthStatus =
   | 'disabled' | 'skipped_no_judge' | 'skipped_rereview' | 'skipped_bundled'
   | 'skipped_small' | 'skipped_few_untouched' | 'skipped_limit' | 'skipped_budget' | 'skipped_time' | 'succeeded' | 'failed'
 
-export type CandidateOrigin = 'review' | 'breadth' | 'second_look'
+export type CandidateOrigin = 'review' | 'breadth' | 'second_look' | `lens:${string}`
 
 export type SecondLookStatus =
   | 'disabled' | 'skipped_no_judge' | 'skipped_rereview' | 'skipped_bundled'
   | 'skipped_no_findings' | 'skipped_limit' | 'skipped_budget' | 'skipped_time' | 'succeeded' | 'failed'
+
+export type LensStatus =
+  | 'skipped_no_judge' | 'skipped_rereview' | 'skipped_bundled'
+  | 'skipped_limit' | 'skipped_budget' | 'skipped_time' | 'succeeded' | 'failed'
 
 export const MAX_UNTOUCHED_LISTED = 40
 
@@ -63,7 +67,7 @@ Do not repeat a first-pass finding (same root cause at the same place). Every fi
 
 // `limit` is what MAX_FINDINGS leaves after the first pass; the breadth pass is only told this remaining budget, as the reviewer is told the cap.
 // Lets a pass cite an unchanged line it was shown while the introduced-by-change requirement stays.
-function allowShownContext(lens: string): string {
+export function allowShownContext(lens: string): string {
   if (!lens.includes(SHOWN_LINE_CLAUSE)) throw new Error('Lens anchor clause not found')
   return lens.replace(SHOWN_LINE_CLAUSE, () => 'a numeric line on an added or modified line, or on an unchanged line you were shown when it explains a defect this change introduces.')
 }

@@ -142,7 +142,7 @@ const isNumericLines = (lines: string | undefined): boolean => NUMERIC_LINES.tes
 
 interface Anchor { file?: string; lines?: string; source: AnchorSource; basis?: AnchorBasis }
 
-// Sources actually shown: `origin` to the pass that produced the candidate (breadth/second-look), `judge` to the judge; absent unless the opt-in flag is on.
+// Sources actually shown: `origin` to the pass that produced the candidate (breadth/second-look/lens), `judge` to the judge; absent unless the opt-in flag is on.
 interface ShownContext { origin?: ShownSource; judge?: ShownSource }
 
 // Below this a quote is too short to locate a unique line without guessing ("}", "return null").
@@ -295,7 +295,7 @@ export function applyJudgeDecisions(candidates: readonly ReviewFinding[], output
   const sa = options?.shownAnchors
   const shownFor = (i: number): ShownContext => !sa ? {} : {
     judge: sa.judge,
-    origin: i >= (sa.secondLookFrom ?? Infinity) ? sa.secondLook : i >= breadthFrom ? sa.breadth : undefined,
+    origin: i >= (sa.lensFrom ?? Infinity) ? sa.lens : i >= (sa.secondLookFrom ?? Infinity) ? sa.secondLook : i >= breadthFrom ? sa.breadth : undefined,
   }
 
   const entries: Entry[] = candidates.map((candidate, i) => {

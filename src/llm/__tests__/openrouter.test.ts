@@ -119,6 +119,35 @@ describe('OpenRouterProvider.completeStructured', () => {
     post.mockResolvedValue(okText(JSON.stringify({ other: 1 }), {}))
     await expect(createProvider('k').completeStructured('s', 'u', schema, opts)).rejects.toThrow(/missing required field/)
   })
+
+  describe('tolerateMissing', () => {
+    const recSchema = {
+      required: ['verdict', 'lens_recommendations'],
+      properties: { lens_recommendations: { items: { required: ['lens', 'reason'] } } },
+    } as Record<string, unknown>
+    const tolerant = { ...opts, tolerateMissing: ['lens_recommendations'] }
+    const answer = (object: unknown) => post.mockResolvedValue(okText(JSON.stringify(object), {}))
+
+    it('does not throw when a tolerated root key is omitted or one of its items drops a required key', async () => {
+      answer({ verdict: 'ok' })
+      await expect(createProvider('k').completeStructured('s', 'u', recSchema, tolerant)).resolves.toMatchObject({ object: { verdict: 'ok' } })
+      answer({ verdict: 'ok', lens_recommendations: [{ lens: 'security' }] })
+      await expect(createProvider('k').completeStructured('s', 'u', recSchema, tolerant)).resolves.toMatchObject({ object: { lens_recommendations: [{ lens: 'security' }] } })
+    })
+
+    it('still throws for both when the key is not tolerated', async () => {
+      answer({ verdict: 'ok' })
+      await expect(createProvider('k').completeStructured('s', 'u', recSchema, opts)).rejects.toThrow(/missing required field\(s\): lens_recommendations$/)
+      answer({ verdict: 'ok', lens_recommendations: [{ lens: 'security' }] })
+      await expect(createProvider('k').completeStructured('s', 'u', recSchema, opts)).rejects.toThrow(/lens_recommendations\[0\]\.reason/)
+    })
+
+    it('still enforces every other required key, and never sends the option upstream', async () => {
+      answer({ lens_recommendations: [] })
+      await expect(createProvider('k').completeStructured('s', 'u', recSchema, tolerant)).rejects.toThrow(/missing required field\(s\): verdict$/)
+      expect(JSON.stringify(post.mock.calls[0][1])).not.toContain('tolerate')
+    })
+  })
 })
 
 describe('OpenRouterProvider error normalization', () => {

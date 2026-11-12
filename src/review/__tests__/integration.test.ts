@@ -11,6 +11,7 @@ vi.mock('../../config.js', () => ({
     anthropic: { apiKey: 'test-key', model: 'claude-haiku-4-5-20251001', maxRetries: 1, maxInputTokens: 150000, maxTokens: 32000 },
     judge: { model: '', maxRetries: 1, effort: '', policy: { keepMinor: false, keepUnverified: false }, fileContext: false },
     breadth: { enabled: false, model: '', effort: '', minFiles: 5, minUntouched: 3, benchmarkDeadlineSeconds: 840 },
+    lenses: { enabled: false, list: '', model: '', recommend: false },
     agentIdentity: 'test-bot',
     reply: { maxComments: 3 },
     review: { maxFindings: 0, splitCheck: false, todoScan: true, effort: '', enableNitpicks: false, secondLook: false },
@@ -30,6 +31,7 @@ vi.mock('../client.js', () => ({
   runCommentResponse: vi.fn(),
   runJudge: vi.fn(),
   runBreadth: vi.fn(),
+  runLens: vi.fn(),
 }))
 
 vi.mock('../../prompt/loader.js', () => ({
@@ -48,7 +50,8 @@ vi.mock('../usage.js', async (importOriginal) => {
 // Import after mocks
 import { review } from '../index.js'
 import { config, modelContextWindow } from '../../config.js'
-import { runReview, runCommentResponse, runJudge, runBreadth } from '../client.js'
+import { runReview, runCommentResponse, runJudge, runBreadth, runLens } from '../client.js'
+import { LENS_REGISTRY, lensSystemPrompt, lensBriefing } from '../lenses.js'
 import { loadPrompt } from '../../prompt/loader.js'
 import { fetchContext } from '../../context/fetcher.js'
 import { logUsageRecord } from '../usage.js'
@@ -1601,6 +1604,443 @@ describe('second-look review and the judge in normal mode', () => {
       expect(vi.mocked(runBreadth).mock.calls.find(c => !isSecondLook(c))![9]).not.toContain('prioritized targets')
       expect(off!.untouched_files).toEqual({ count: 4, paths: ['src/b.ts', 'src/c.ts', 'src/d.ts', 'src/e.ts'], cut: 0 })
     })
+  })
+})
+
+describe('lens review and the judge in normal mode', () => {
+  const NAMES = ['a', 'b', 'c', 'd', 'e']
+  const MULTI_DIFF = NAMES.map(n => `diff --git a/src/${n}.ts b/src/${n}.ts\nnew file mode 100644\n--- /dev/null\n+++ b/src/${n}.ts\n@@ -0,0 +1,2 @@\n+export const ${n} = 1\n+export const ${n}2 = 2\n`).join('')
+  const CHANGED = NAMES.map(n => ({ path: `src/${n}.ts`, status: 'added' as const }))
+  const CONTEXTS = NAMES.map(n => ({ path: `src/${n}.ts`, content: `export const ${n} = 1\nexport const ${n}2 = 2` }))
+  const bigAdapter = () => makeAdapter({ getDiff: vi.fn().mockResolvedValue(MULTI_DIFF), getChangedFiles: vi.fn().mockResolvedValue(CHANGED) })
+  const A_BUG: ReviewObject['findings'][number] = { severity: 'MEDIUM', title: 'A bug', file: 'src/a.ts', lines: '1', body: 'a is wrong.' }
+  const A_BUG2: ReviewObject['findings'][number] = { severity: 'MEDIUM', title: 'Second bug in a', file: 'src/a.ts', lines: '2', body: 'a2 is also wrong.' }
+  const B_BUG: ReviewObject['findings'][number] = { severity: 'MEDIUM', title: 'Same bug in b', file: 'src/b.ts', lines: '1', body: 'b repeats a.' }
+  const C_LEAK: ReviewObject['findings'][number] = { severity: 'HIGH', title: 'Leak in c', file: 'src/c.ts', lines: '2', body: 'c never closes.' }
+  const D_INJECT: ReviewObject['findings'][number] = { severity: 'HIGH', title: 'Injection in d', file: 'src/d.ts', lines: '1', body: 'd builds SQL from input.' }
+  const posted = (adapter: VCSAdapter) => vi.mocked(adapter.postComment).mock.calls[0][1] as string
+  const mockRunLens = vi.mocked(runLens)
+  const lensLabels = () => mockRunLens.mock.calls.map(c => c[11])
+
+  const reviewWithContexts = (obj: ReviewObject) => { mockReviewer(obj); mockFetchContext.mockResolvedValue(CONTEXTS) }
+  const mockLenses = (byName: Record<string, ReviewObject['findings'] | Error>) =>
+    mockRunLens.mockImplementation(async (...args) => {
+      const out = byName[String(args[11]).replace(/^lens:/, '')] ?? []
+      if (out instanceof Error) throw out
+      return { findings: out, usage: { input_tokens: 400, output_tokens: 120 }, promptHash: `hash-${args[11]}` }
+    })
+  const mockPasses = (opts: { breadth?: ReviewObject['findings']; secondLook?: ReviewObject['findings'] }) =>
+    vi.mocked(runBreadth).mockImplementation(async (...args) => ({
+      findings: args[11] === 'second-look' ? (opts.secondLook ?? []) : (opts.breadth ?? []),
+      usage: { input_tokens: 300, output_tokens: 100 }, promptHash: 'passhash',
+    }))
+  const mockJudgeKeepsAll = () => mockRunJudge.mockImplementation(async (_k, _m, _r, _t, _e, diff, judgeInput, _f, policy, _l, boundary, options) => {
+    const judged = applyJudgeDecisions(judgeInput.findings, {
+      decisions: judgeInput.findings.map((_, i) => ({ candidate_id: `c${i}`, reason_category: 'validated' as const, evidence: 'src/a.ts:1', note: 'n', score: 8 })),
+      summary: 'ok', behavioral_diff: [], production_risk: [], unresolved_questions: [], merge_confidence: 80,
+    }, policy, judgeInput.can_be_split, diff, boundary, options)
+    return { text: judged.markdown, usage: { input_tokens: 800, output_tokens: 300 }, scores: judged.scores, promptHash: 'judgehash', decisions: judged.decisions, anomalies: judged.anomalies, kept: judged.kept }
+  })
+
+  beforeEach(() => {
+    cfg.judge.model = 'judge-model'
+    cfg.lenses = { enabled: true, list: 'reliability+security', model: '' }
+  })
+  afterEach(() => {
+    cfg.lenses = { enabled: false, list: '', model: '' }
+    cfg.breadth.enabled = false
+    cfg.judge.shownAnchors = false
+    vi.useRealTimers()
+  })
+
+  it('runs each lens once, in list order, on the full PR with base prompt + overlay; a later lens is briefed on earlier lens findings', async () => {
+    reviewWithContexts(reviewWith([A_BUG]))
+    mockLenses({ reliability: [C_LEAK], security: [D_INJECT] })
+    mockJudgeKeepsAll()
+
+    await review(bigAdapter(), '100', false)
+
+    expect(lensLabels()).toEqual(['lens:reliability', 'lens:security'])
+    const reviewerCall = mockRunReview.mock.calls[0]
+    for (const [i, name] of ['reliability', 'security'].entries()) {
+      const call = mockRunLens.mock.calls[i]
+      expect(call.slice(1, 5)).toEqual([cfg.anthropic.model, cfg.anthropic.maxRetries, cfg.anthropic.maxTokens, ''])
+      expect(call[6]).toBe(reviewerCall[6])
+      expect(call[7]).toEqual(CONTEXTS)
+      expect(call[8]).toBe(`System prompt here\n\n${LENS_REGISTRY[name].overlay}`)
+    }
+    expect(mockRunLens.mock.calls[0][9]).toBe(lensBriefing([A_BUG]))
+    expect(mockRunLens.mock.calls[1][9]).toBe(lensBriefing([A_BUG, C_LEAK]))
+  })
+
+  it('unions lens candidates after second-look into the one judge call: origin logged, never shown to the judge', async () => {
+    cfg.breadth.enabled = true
+    cfg.review.secondLook = true
+    reviewWithContexts(reviewWith([A_BUG]))
+    mockPasses({ breadth: [B_BUG], secondLook: [A_BUG2] })
+    mockLenses({ reliability: [C_LEAK], security: [D_INJECT] })
+    mockJudgeKeepsAll()
+
+    const adapter = bigAdapter()
+    const record = await review(adapter, '100', false)
+
+    expect(mockRunJudge).toHaveBeenCalledTimes(1)
+    const judgeInput = mockRunJudge.mock.calls[0][6]
+    expect(judgeInput.findings.map(f => f.title)).toEqual(['A bug', 'Same bug in b', 'Second bug in a', 'Leak in c', 'Injection in d'])
+    expect(judgeInput.findings.some(f => 'origin' in f)).toBe(false)
+    expect(mockRunJudge.mock.calls[0][10]).toBe(1)
+    expect(mockRunJudge.mock.calls[0]).toHaveLength(11)
+    expect(record!.review_candidates!.map(c => c.origin)).toEqual(['review', 'breadth', 'second_look', 'lens:reliability', 'lens:security'])
+    expect(posted(adapter)).toContain('**HIGH – Injection in d** (`src/d.ts:1`)')
+  })
+
+  it('runs the judge when the reviewer was clean but a lens found something', async () => {
+    reviewWithContexts(reviewWith([]))
+    mockLenses({ security: [D_INJECT] })
+    mockJudgeKeepsAll()
+
+    const adapter = bigAdapter()
+    const record = await review(adapter, '100', false)
+
+    expect(mockRunJudge).toHaveBeenCalledTimes(1)
+    expect(record!.judge_status).toBe('succeeded')
+    expect(posted(adapter)).toContain('Injection in d')
+  })
+
+  it('records lens_runs with model, prompt hash, tokens, cost and finding count', async () => {
+    cfg.lenses.model = 'claude-haiku-5-5'
+    reviewWithContexts(reviewWith([A_BUG]))
+    mockLenses({ reliability: [C_LEAK, D_INJECT] })
+    mockJudgeKeepsAll()
+
+    const record = await review(bigAdapter(), '100', false)
+
+    expect(mockRunLens.mock.calls[0].slice(1, 5)).toEqual(['claude-haiku-5-5', cfg.anthropic.maxRetries, cfg.anthropic.maxTokens, ''])
+    expect(record!.lens_runs).toEqual([
+      { name: 'reliability', status: 'succeeded', model: 'claude-haiku-5-5', prompt_hash: 'hash-lens:reliability', tokens: { input: 400, output: 120 }, cost_usd: expect.any(Number), findings: 2 },
+      { name: 'security', status: 'succeeded', model: 'claude-haiku-5-5', prompt_hash: 'hash-lens:security', tokens: { input: 400, output: 120 }, cost_usd: expect.any(Number), findings: 0 },
+    ])
+    expect(record!.tokens).toMatchObject({ input: 1000 + 400 + 400 + 800, output: 200 + 120 + 120 + 300 })
+  })
+
+  it.each([
+    ['skipped_no_judge', () => { cfg.judge.model = '' }],
+    ['skipped_rereview', () => {}],
+  ] as const)('records %s for every lens and makes no lens call', async (status, setup) => {
+    setup()
+    const adapter = status === 'skipped_rereview'
+      ? reReviewAdapter(FLAGGED_PRIOR, [], { getDiff: vi.fn().mockResolvedValue(MULTI_DIFF), getChangedFiles: vi.fn().mockResolvedValue(CHANGED) })
+      : bigAdapter()
+    mockReviewer(reviewWith([A_BUG], status === 'skipped_rereview' ? { delta_stats: { resolved: 0, still_open: 1, new_findings: 1 } } : {}))
+    mockLenses({ reliability: [C_LEAK] })
+    mockJudgeKeepsAll()
+
+    const record = await review(adapter, '100', false)
+
+    expect(mockRunLens).not.toHaveBeenCalled()
+    expect(record!.lens_runs!.map(r => [r.name, r.status])).toEqual([['reliability', status], ['security', status]])
+  })
+
+  it('MAX_FINDINGS: a lens gets what is left after every earlier pass, and the rest are skipped once it runs out', async () => {
+    cfg.review.maxFindings = 2
+    cfg.lenses.list = 'reliability+security+testing'
+    reviewWithContexts(reviewWith([A_BUG]))
+    mockLenses({ reliability: [C_LEAK] })
+    mockJudgeKeepsAll()
+
+    const record = await review(bigAdapter(), '100', false)
+
+    expect(lensLabels()).toEqual(['lens:reliability'])
+    expect(mockRunLens.mock.calls[0][8]).toContain('Report at most 1 findings')
+    expect(record!.lens_runs!.map(r => r.status)).toEqual(['succeeded', 'skipped_limit', 'skipped_limit'])
+  })
+
+  it('skips only the lens whose input would exceed the budget, and still runs the next one', async () => {
+    reviewWithContexts(reviewWith([A_BUG]))
+    mockLenses({})
+    mockJudgeKeepsAll()
+    cfg.lenses.enabled = false
+    const estimated = (await review(bigAdapter(), '100', true))!.tokens.estimated_input
+    const estimate = (name: string) => estimated + Math.ceil((lensSystemPrompt('System prompt here', LENS_REGISTRY[name], 0).length - 'System prompt here'.length + lensBriefing([A_BUG]).length) / 4)
+    const [big, small] = Object.keys(LENS_REGISTRY).sort((x, y) => estimate(y) - estimate(x)).filter((_, i, a) => i === 0 || i === a.length - 1)
+    expect(estimate(small)).toBeLessThan(estimate(big))
+
+    cfg.lenses = { enabled: true, list: `${big}+${small}`, model: '' }
+    cfg.anthropic.maxInputTokens = estimate(big) - 1
+    reviewWithContexts(reviewWith([A_BUG]))
+    mockJudgeKeepsAll()
+    const record = await review(bigAdapter(), '100', false)
+
+    expect(lensLabels()).toEqual([`lens:${small}`])
+    expect(record!.lens_runs!.map(r => [r.name, r.status])).toEqual([[big, 'skipped_budget'], [small, 'succeeded']])
+  })
+
+  it('benchmark deadline: once over half has elapsed, this lens and every remaining one is skipped', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    cfg.lenses.list = 'reliability+security+testing'
+    reviewWithContexts(reviewWith([A_BUG]))
+    mockRunLens.mockImplementation(async () => {
+      vi.advanceTimersByTime((cfg.breadth.benchmarkDeadlineSeconds / 2 + 1) * 1000)
+      return { findings: [C_LEAK], usage: { input_tokens: 400, output_tokens: 120 }, promptHash: 'h' }
+    })
+    mockJudgeKeepsAll()
+    const outcomes: unknown[] = []
+
+    const record = await review(bigAdapter(), '100', false, undefined, 'off', false, '', o => { outcomes.push(o) })
+
+    expect(lensLabels()).toEqual(['lens:reliability'])
+    expect(record!.lens_runs!.map(r => r.status)).toEqual(['succeeded', 'skipped_time', 'skipped_time'])
+    expect(mockRunJudge).toHaveBeenCalledTimes(1)
+    expect(outcomes[0]).toMatchObject({ lensFindings: [C_LEAK] })
+  })
+
+  it('a lens failure never fails the review: later lenses still run and a truncated call is still costed', async () => {
+    cfg.lenses.list = 'reliability+security+testing'
+    reviewWithContexts(reviewWith([A_BUG]))
+    mockLenses({
+      reliability: new Error('lens boom'),
+      security: Object.assign(new Error('max_tokens cut-off'), { usage: { input_tokens: 5000, output_tokens: 2000 } }),
+      testing: [B_BUG],
+    })
+    mockJudgeKeepsAll()
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const adapter = bigAdapter()
+    const record = await review(adapter, '100', false)
+
+    expect(lensLabels()).toEqual(['lens:reliability', 'lens:security', 'lens:testing'])
+    expect(record!.action).toBe('REVIEW')
+    expect(record!.lens_runs!.map(r => [r.status, r.tokens])).toEqual([
+      ['failed', null], ['failed', { input: 5000, output: 2000 }], ['succeeded', { input: 400, output: 120 }],
+    ])
+    expect(record!.tokens).toMatchObject({ input: 1000 + 5000 + 400 + 800, output: 200 + 2000 + 120 + 300 })
+    expect(record!.review_candidates!.map(c => c.origin)).toEqual(['review', 'lens:testing'])
+    expect(posted(adapter)).toContain('Same bug in b')
+    expect(warnSpy.mock.calls.map(c => c.join(' ')).join('\n')).toContain('Lens reliability FAILED (lens boom)')
+    warnSpy.mockRestore()
+  })
+
+  it('ignores unknown lens names with one warning', async () => {
+    cfg.lenses.list = 'reliability+bogus'
+    reviewWithContexts(reviewWith([A_BUG]))
+    mockLenses({})
+    mockJudgeKeepsAll()
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const record = await review(bigAdapter(), '100', false)
+
+    expect(lensLabels()).toEqual(['lens:reliability'])
+    expect(record!.lens_runs!.map(r => r.name)).toEqual(['reliability'])
+    expect(warnSpy.mock.calls.filter(c => c.join(' ').includes('bogus'))).toHaveLength(1)
+    warnSpy.mockRestore()
+  })
+
+  it('J_SHOWN_ANCHOR on: hands the judge one full-PR lens source with lensFrom; no lens findings leaves the options unchanged', async () => {
+    cfg.judge.shownAnchors = true
+    reviewWithContexts(reviewWith([A_BUG]))
+    mockLenses({ security: [D_INJECT] })
+    mockJudgeKeepsAll()
+    await review(bigAdapter(), '100', false)
+
+    const shown = mockRunJudge.mock.calls[0][11]!.shownAnchors!
+    expect(shown.lensFrom).toBe(1)
+    expect([...shown.lens!.keys()].sort()).toEqual(CHANGED.map(f => f.path))
+    expect(mockRunLens.mock.calls[0][8]).toContain('unchanged line you were shown')
+
+    mockRunJudge.mockClear()
+    mockLenses({})
+    mockJudgeKeepsAll()
+    await review(bigAdapter(), '100', false)
+    expect(Object.keys(mockRunJudge.mock.calls[0][11]!.shownAnchors!)).toEqual(['judge', 'breadth', 'secondLook', 'secondLookFrom'])
+  })
+
+  it('flag-off pin: no lens call, no lens log, no lens_runs key, and judge args as before; ENABLE_LENSES with an empty list is off', async () => {
+    const run = async (lenses: { enabled: boolean; list: string; model: string }) => {
+      vi.clearAllMocks()
+      cfg.lenses = lenses
+      const reviewer = reviewWith([A_BUG])
+      reviewWithContexts(reviewer)
+      mockLenses({ reliability: [C_LEAK] })
+      mockJudgeKeepsAll()
+      const logSpy = vi.spyOn(console, 'log')
+      const warnSpy = vi.spyOn(console, 'warn')
+      const record = await review(bigAdapter(), '100', false)
+      const logs = [...logSpy.mock.calls, ...warnSpy.mock.calls].map(c => c.join(' ')).join('\n')
+      logSpy.mockRestore(); warnSpy.mockRestore()
+      return { reviewer, record: record!, logs, lensCalls: mockRunLens.mock.calls.length, judgeArgs: mockRunJudge.mock.calls[0], diff: mockRunReview.mock.calls[0][6] }
+    }
+    const strip = ({ timestamp: _t, duration_ms: _d, ...rest }: Record<string, unknown>) => JSON.stringify(rest)
+
+    const runs = [
+      await run({ enabled: false, list: '', model: '' }),
+      await run({ enabled: false, list: 'reliability+security', model: '' }),
+      await run({ enabled: true, list: '', model: '' }),
+      await run({ enabled: true, list: ' + , ', model: '' }),
+    ]
+    for (const r of runs) {
+      expect(r.lensCalls).toBe(0)
+      expect(r.judgeArgs).toHaveLength(11)
+      expect(r.judgeArgs).toEqual([cfg.llmApiKey, 'judge-model', cfg.judge.maxRetries, cfg.anthropic.maxTokens, cfg.judge.effort, r.diff, r.reviewer, [], cfg.judge.policy, cfg.review.lineNumbers, undefined])
+      expect(r.judgeArgs[6]).toBe(r.reviewer)
+      expect('lens_runs' in r.record).toBe(false)
+      expect(r.logs).not.toMatch(/lens/i)
+      expect(strip(r.record as unknown as Record<string, unknown>)).toBe(strip(runs[0].record as unknown as Record<string, unknown>))
+    }
+  })
+
+  it('flag-off pin (benchmark sink): ENABLE_LENSES with an empty or unknown-only list hands over an outcome with no lensFindings key', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    for (const list of ['', 'bogus+nope']) {
+      vi.clearAllMocks()
+      cfg.lenses = { enabled: true, list, model: '' }
+      reviewWithContexts(reviewWith([A_BUG]))
+      mockLenses({ reliability: [C_LEAK] })
+      mockJudgeKeepsAll()
+      const outcomes: object[] = []
+
+      const record = await review(bigAdapter(), '100', false, undefined, 'off', false, '', o => { outcomes.push(o) })
+
+      expect(mockRunLens).not.toHaveBeenCalled()
+      expect(outcomes).toHaveLength(1)
+      expect('lensFindings' in outcomes[0]).toBe(false)
+      expect('lens_runs' in record!).toBe(false)
+    }
+    warnSpy.mockRestore()
+  })
+})
+
+describe('lens recommendation (log-only)', () => {
+  const RECS = [{ lens: 'security', reason: 'new /login endpoint' }, { lens: 'reliability', reason: 'retry loop' }]
+  const mockRunLens = vi.mocked(runLens)
+  const posted = (adapter: VCSAdapter) => vi.mocked(adapter.postComment).mock.calls[0][1] as string
+  const mockReviewerRecommending = (obj: ReviewObject, recs: typeof RECS | null = RECS) => {
+    mockReviewer(obj)
+    mockRunReview.mockImplementation(async (...args) => ({
+      text: renderReview(obj), usage: { input_tokens: 1000, output_tokens: 200 }, review: obj,
+      ...(args[13] === true ? { lensRecommendations: recs } : {}),
+    }))
+  }
+  const mockJudgeKeepsAll = () => mockRunJudge.mockImplementation(async (_k, _m, _r, _t, _e, diff, judgeInput, _f, policy, _l, boundary, options) => {
+    const judged = applyJudgeDecisions(judgeInput.findings, {
+      decisions: judgeInput.findings.map((_, i) => ({ candidate_id: `c${i}`, reason_category: 'validated' as const, evidence: 'src/app.ts:11', note: 'n', score: 8 })),
+      summary: 'ok', behavioral_diff: [], production_risk: [], unresolved_questions: [], merge_confidence: 80,
+    }, policy, judgeInput.can_be_split, diff, boundary, options)
+    return { text: judged.markdown, usage: { input_tokens: 800, output_tokens: 300 }, scores: judged.scores, promptHash: 'judgehash', decisions: judged.decisions, anomalies: judged.anomalies, kept: judged.kept }
+  })
+  const captureLogs = async <T>(fn: () => Promise<T>) => {
+    const logSpy = vi.spyOn(console, 'log')
+    try { return { value: await fn(), logs: logSpy.mock.calls.map(c => c.join(' ')).join('\n') } } finally { logSpy.mockRestore() }
+  }
+
+  beforeEach(() => {
+    cfg.judge.model = 'judge-model'
+    cfg.lenses = { enabled: false, list: '', model: '', recommend: true }
+  })
+  afterEach(() => {
+    cfg.lenses = { enabled: false, list: '', model: '', recommend: false }
+  })
+
+  it('first review: requests it as one trailing arg, logs and records it, and keeps it out of the judge input and the posted review', async () => {
+    mockReviewerRecommending(reviewWith([NEW_FINDING]))
+    mockJudgeKeepsAll()
+    const adapter = makeAdapter()
+
+    const { value: record, logs } = await captureLogs(() => review(adapter, '100', false))
+
+    expect(mockRunReview).toHaveBeenCalledTimes(1)
+    const args = mockRunReview.mock.calls[0]
+    expect(args).toHaveLength(14)
+    expect(args[13]).toBe(true)
+    expect(logs).toContain('  Lens recommendations: security (new /login endpoint), reliability (retry loop)')
+    expect(record!.lens_recommendations).toEqual(RECS)
+    const judgeInput = mockRunJudge.mock.calls[0][6]
+    expect('lens_recommendations' in judgeInput).toBe(false)
+    expect(JSON.stringify(mockRunJudge.mock.calls[0])).not.toMatch(/login endpoint|retry loop/)
+    expect(posted(adapter)).not.toMatch(/login endpoint|retry loop|recommend/i)
+  })
+
+  it('records an empty list and logs none when the reviewer recommends nothing', async () => {
+    mockReviewerRecommending(reviewWith([NEW_FINDING]), [])
+    mockJudgeKeepsAll()
+
+    const { value: record, logs } = await captureLogs(() => review(makeAdapter(), '100', true))
+
+    expect(logs).toContain('  Lens recommendations: none')
+    expect(record!.lens_recommendations).toEqual([])
+  })
+
+  it('records null and logs unavailable when the reviewer did not answer, and the review still posts', async () => {
+    mockReviewerRecommending(reviewWith([NEW_FINDING]), null)
+    mockJudgeKeepsAll()
+    const adapter = makeAdapter()
+
+    const { value: record, logs } = await captureLogs(() => review(adapter, '100', false))
+
+    expect(logs).toContain('  Lens recommendations: unavailable')
+    expect(record!.lens_recommendations).toBeNull()
+    expect(record!.action).toBe('REVIEW')
+    expect(posted(adapter)).toContain('New issue')
+  })
+
+  it('re-review: not requested (today\'s 13 args), null in the record, nothing logged', async () => {
+    mockReviewerRecommending(reviewWith([NEW_FINDING], { delta_stats: { resolved: 0, still_open: 1, new_findings: 1 } }))
+    mockJudgeKeepsAll()
+
+    const { value: record, logs } = await captureLogs(() => review(reReviewAdapter(FLAGGED_PRIOR), '100', true))
+
+    expect(record!.review_number).toBe(2)
+    expect(mockRunReview.mock.calls[0]).toHaveLength(13)
+    expect(record!.lens_recommendations).toBeNull()
+    expect(logs).not.toContain('Lens recommendations')
+  })
+
+  it('skipped before CALL_MODEL: null in the record', async () => {
+    const adapter = makeAdapter({
+      getPreviousReviewComments: vi.fn().mockResolvedValue([{ id: '200', body: '### Review' + footer(1, COMMIT_A), createdOn: '2026-03-10T10:00:00Z' }]),
+    })
+
+    const record = await review(adapter, '100', true)
+
+    expect(record!.action).toBe('DEDUP_SKIP')
+    expect(mockRunReview).not.toHaveBeenCalled()
+    expect(record!.lens_recommendations).toBeNull()
+  })
+
+  it('with lenses on, every listed lens still runs whatever the reviewer recommended', async () => {
+    cfg.lenses = { enabled: true, list: 'reliability+security+testing', model: '', recommend: true }
+    mockReviewerRecommending(reviewWith([NEW_FINDING]), [{ lens: 'security', reason: 'new /login endpoint' }])
+    mockRunLens.mockResolvedValue({ findings: [], usage: { input_tokens: 400, output_tokens: 120 }, promptHash: 'h' })
+    mockJudgeKeepsAll()
+
+    const record = await review(makeAdapter(), '100', false)
+
+    expect(mockRunLens.mock.calls.map(c => c[11])).toEqual(['lens:reliability', 'lens:security', 'lens:testing'])
+    expect(record!.lens_runs!.map(r => [r.name, r.status])).toEqual([['reliability', 'succeeded'], ['security', 'succeeded'], ['testing', 'succeeded']])
+    expect(record!.lens_recommendations).toEqual([{ lens: 'security', reason: 'new /login endpoint' }])
+  })
+
+  it('flag-off pin: absent or false makes the same 13-arg reviewer call, logs nothing and adds no record key', async () => {
+    const run = async (lenses: Record<string, unknown>) => {
+      vi.clearAllMocks()
+      cfg.lenses = lenses
+      mockReviewerRecommending(reviewWith([NEW_FINDING]))
+      mockJudgeKeepsAll()
+      const { value: record, logs } = await captureLogs(() => review(makeAdapter(), '100', false))
+      return { record: record!, logs, args: mockRunReview.mock.calls[0], judgeArgs: mockRunJudge.mock.calls[0] }
+    }
+    const strip = ({ timestamp: _t, duration_ms: _d, ...rest }: Record<string, unknown>) => JSON.stringify(rest)
+
+    const absent = await run({ enabled: false, list: '', model: '' })
+    const off = await run({ enabled: false, list: '', model: '', recommend: false })
+    for (const r of [absent, off]) {
+      expect(r.args).toHaveLength(13)
+      expect(r.args[12]).toBe(cfg.review.lineNumbers)
+      expect('lens_recommendations' in r.record).toBe(false)
+      expect(r.logs).not.toContain('Lens recommendations')
+      expect(r.judgeArgs).toHaveLength(11)
+    }
+    expect(off.args).toEqual(absent.args)
+    expect(strip(off.record as unknown as Record<string, unknown>)).toBe(strip(absent.record as unknown as Record<string, unknown>))
   })
 })
 

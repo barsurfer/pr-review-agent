@@ -11,6 +11,7 @@ import {
 } from './judge-decisions.js'
 import { composeJudgePrompt, QUALITY_DECISION_PROPERTIES, PROPOSAL_DECISION_PROPERTIES, SHOWN_ANCHOR_DESCRIPTIONS } from './judge-quality.js'
 import { numberDiffLines, numberFileLines } from './parsers.js'
+import { LENS_REGISTRY, sanitizeLensRecommendations, type LensRecommendation } from './lenses.js'
 import type { PRInfo, ReviewComment, CommentReply } from '../vcs/adapter.js'
 import type { FileContext } from '../context/fetcher.js'
 import type { LoadedPrompt } from '../prompt/loader.js'
@@ -22,6 +23,7 @@ export interface ModelResult {
   usage: LLMUsage
   /** Reviewer's structured output — typed source for findings/delta metrics. Review runs only. */
   review?: ReviewObject
+  lensRecommendations?: LensRecommendation[] | null
 }
 
 export interface JudgeResult extends ModelResult {
@@ -136,6 +138,32 @@ export const REVIEW_OUTPUT_SCHEMA = {
   additionalProperties: false,
 } as const
 
+let lensRecommendationSchema: Record<string, unknown> | undefined
+
+// Log-only, so lens gating can be checked offline against golden hits before any lens is skipped on the reviewer's word.
+export function reviewOutputSchema(lensRecommendation: boolean): Record<string, unknown> {
+  if (!lensRecommendation) return REVIEW_OUTPUT_SCHEMA
+  if (lensRecommendationSchema) return lensRecommendationSchema
+  const schema = structuredClone(REVIEW_OUTPUT_SCHEMA) as unknown as { properties: Record<string, unknown>; required: string[] }
+  const triggers = Object.values(LENS_REGISTRY).map(l => `${l.name} (${l.when})`).join('; ')
+  schema.properties.lens_recommendations = {
+    type: 'array',
+    description: `A focused follow-up review pass exists for each of these concerns: ${triggers}. List a lens only when THIS diff has substantive changed code for that concern in which a dedicated pass could plausibly find a real defect the change introduces. Return an empty array for small, cosmetic, or unrelated changes. This does not affect the review itself and is not shown to the developer.`,
+    items: {
+      type: 'object',
+      properties: {
+        lens: { type: 'string', enum: Object.keys(LENS_REGISTRY) },
+        reason: { type: 'string', description: 'One short clause naming the changed code that gives this concern real surface.' },
+      },
+      required: ['lens', 'reason'],
+      additionalProperties: false,
+    },
+  }
+  schema.required.push('lens_recommendations')
+  lensRecommendationSchema = schema
+  return schema
+}
+
 export async function runReview(
   apiKey: string,
   model: string,
@@ -150,18 +178,26 @@ export async function runReview(
   developerReplies: CommentReply[] = [],
   changesSinceLastReview = '',
   lineNumbers = false,
+  lensRecommendation = false,
 ): Promise<ModelResult> {
   const userMessage = buildUserMessage(prInfo, diff, fileContexts, previousReviews, developerReplies, changesSinceLastReview, lineNumbers)
 
   console.log(`Sending request to the model (${model}, maxRetries: ${maxRetries})...`)
-  const { object, usage } = await createProvider(apiKey).completeStructured<ReviewObject>(
-    prompt.content, userMessage, REVIEW_OUTPUT_SCHEMA, { model, maxTokens, maxRetries, effort: effort || undefined },
+  const callOpts = { model, maxTokens, maxRetries, effort: effort || undefined }
+  const { object: raw, usage } = await createProvider(apiKey).completeStructured<ReviewObject & { lens_recommendations?: unknown }>(
+    prompt.content, userMessage, reviewOutputSchema(lensRecommendation),
+    // A log-only field must never cost a review, so a model that omits it still yields the review.
+    lensRecommendation ? { ...callOpts, tolerateMissing: ['lens_recommendations'] } : callOpts,
   )
+  const { lens_recommendations: recommended, ...stripped } = raw
+  const object: ReviewObject = lensRecommendation ? stripped : raw
   const text = renderReview(object)
 
   console.log(`Review received (${usage.input_tokens} in / ${usage.output_tokens} out tokens, ${object.no_change ? 'NO_CHANGE' : `${object.findings.length} findings`})`)
 
-  return { text, usage, review: object }
+  return lensRecommendation
+    ? { text, usage, review: object, lensRecommendations: sanitizeLensRecommendations(recommended) }
+    : { text, usage, review: object }
 }
 
 // Findings only, with the reviewer's item schema so the two can't drift; a distinct object because tests dispatch their mocks on schema identity.
@@ -171,6 +207,31 @@ export const BREADTH_OUTPUT_SCHEMA = {
   required: ['findings'],
   additionalProperties: false,
 } as const
+
+export async function runLens(
+  apiKey: string,
+  model: string,
+  maxRetries: number,
+  maxTokens: number,
+  effort: string,
+  prInfo: PRInfo,
+  diff: string,
+  fileContexts: FileContext[],
+  systemPrompt: string,
+  briefing: string,
+  lineNumbers = false,
+  label = 'lens',
+): Promise<{ findings: ReviewFinding[]; usage: LLMUsage; promptHash: string }> {
+  const userMessage = `${buildUserMessage(prInfo, diff, fileContexts, [], [], '', lineNumbers)}\n\n${briefing}`
+  console.log(`Sending to ${label} reviewer (${model}, maxRetries: ${maxRetries})...`)
+  const { object, usage } = await createProvider(apiKey).completeStructured<{ findings: ReviewFinding[] }>(
+    systemPrompt, userMessage, BREADTH_OUTPUT_SCHEMA, { model, maxTokens, maxRetries, effort: effort || undefined },
+  )
+  console.log(`${label[0].toUpperCase()}${label.slice(1)} received (${usage.input_tokens} in / ${usage.output_tokens} out tokens, ${object.findings?.length ?? 0} findings)`)
+  // A strict:false provider can return a non-array findings; coerce so candidate assembly's .map never throws.
+  const findings = Array.isArray(object.findings) ? object.findings : []
+  return { findings, usage, promptHash: createHash('sha256').update(systemPrompt).digest('hex').slice(0, 12) }
+}
 
 export async function runBreadth(
   apiKey: string,
@@ -186,13 +247,7 @@ export async function runBreadth(
   lineNumbers = false,
   label = 'breadth',
 ): Promise<{ findings: ReviewFinding[]; usage: LLMUsage; promptHash: string }> {
-  const userMessage = `${buildUserMessage(prInfo, diff, fileContexts, [], [], '', lineNumbers)}\n\n${briefing}`
-  console.log(`Sending to ${label} reviewer (${model}, maxRetries: ${maxRetries})...`)
-  const { object, usage } = await createProvider(apiKey).completeStructured<{ findings: ReviewFinding[] }>(
-    systemPrompt, userMessage, BREADTH_OUTPUT_SCHEMA, { model, maxTokens, maxRetries, effort: effort || undefined },
-  )
-  console.log(`${label[0].toUpperCase()}${label.slice(1)} received (${usage.input_tokens} in / ${usage.output_tokens} out tokens, ${object.findings?.length ?? 0} findings)`)
-  return { findings: object.findings ?? [], usage, promptHash: createHash('sha256').update(systemPrompt).digest('hex').slice(0, 12) }
+  return runLens(apiKey, model, maxRetries, maxTokens, effort, prInfo, diff, fileContexts, systemPrompt, briefing, lineNumbers, label)
 }
 
 function buildUserMessage(

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest'
-import type { ReviewContext } from '../types.js'
+import type { ReviewContext, LensRun } from '../types.js'
 import type { KeptFinding } from '../findings-output.js'
 
 // usage.ts pulls in config (required ANTHROPIC_API_KEY) at import — set it before the dynamic import.
@@ -258,6 +258,122 @@ describe('buildUsageRecord breadth fields', () => {
     cfg.breadth.enabled = false
     expect(buildUsageRecord(baseCtx({ bundleCount: 2 }), 1, null).breadth_status).toBe('disabled')
     expect(buildUsageRecord(baseCtx(), 1, null).breadth_status).toBeNull()
+  })
+})
+
+describe('buildUsageRecord lens fields', () => {
+  const baseCtx = (over: Partial<ReviewContext> = {}): ReviewContext => ({
+    adapter: {}, prId: '7', dryRun: false, force: 'off', logUsage: false, repoSlug: 'repo',
+    usage: { input_tokens: 3_000, output_tokens: 1_000, cache_read: 0, cache_write: 0 },
+    estimatedInputTokens: 10, action: 'REVIEW', reviewNumber: 1,
+    ...over,
+  } as unknown as ReviewContext)
+  type Lenses = { enabled: boolean; list: string; model: string }
+  let cfg: { anthropic: { model: string }; judge: { model: string }; lenses: Lenses }
+  let saved: { model: string; judge: string; lenses: Lenses }
+  beforeAll(async () => { cfg = (await import('../../config.js')).config as unknown as typeof cfg })
+  beforeEach(() => {
+    saved = { model: cfg.anthropic.model, judge: cfg.judge.model, lenses: { ...cfg.lenses } }
+    cfg.anthropic.model = 'claude-sonnet-5-5'; cfg.judge.model = 'claude-haiku-5-5'
+    vi.useFakeTimers(); vi.setSystemTime(new Date('2026-01-01T00:00:00Z'))
+  })
+  afterEach(() => {
+    cfg.anthropic.model = saved.model; cfg.judge.model = saved.judge; cfg.lenses = saved.lenses
+    vi.useRealTimers()
+  })
+
+  const finding = { severity: 'LOW' as const, title: 't', body: 'b' }
+  const runs: LensRun[] = [
+    { name: 'reliability', status: 'succeeded', model: 'claude-sonnet-5-5', findings: [finding, finding], promptHash: 'aaa111bbb222', usage: { input_tokens: 1_000, output_tokens: 200 } },
+    { name: 'security', status: 'failed', model: 'claude-sonnet-5-5', findings: [], usage: { input_tokens: 500, output_tokens: 100 } },
+    { name: 'testing', status: 'skipped_time', model: 'claude-sonnet-5-5', findings: [] },
+  ]
+
+  it('logs one row per lens and prices lens tokens at the lens model, outside the reviewer bucket', () => {
+    cfg.lenses = { enabled: true, list: 'reliability+security+testing', model: '' }
+    const r = buildUsageRecord(baseCtx({ judgeUsage: { input_tokens: 1_000, output_tokens: 200 }, lensRuns: runs }), 1, null)
+
+    const relCost = estimateCost({ input: 1_000, output: 200 }, 'claude-sonnet-5-5')
+    const secCost = estimateCost({ input: 500, output: 100 }, 'claude-sonnet-5-5')
+    expect(r.lens_runs).toEqual([
+      { name: 'reliability', status: 'succeeded', model: 'claude-sonnet-5-5', prompt_hash: 'aaa111bbb222', tokens: { input: 1_000, output: 200 }, cost_usd: relCost, findings: 2 },
+      { name: 'security', status: 'failed', model: 'claude-sonnet-5-5', prompt_hash: null, tokens: { input: 500, output: 100 }, cost_usd: secCost, findings: 0 },
+      { name: 'testing', status: 'skipped_time', model: 'claude-sonnet-5-5', prompt_hash: null, tokens: null, cost_usd: null, findings: 0 },
+    ])
+    const reviewer = estimateCost({ input: 3_000 - 1_000 - 1_000 - 500, output: 1_000 - 200 - 200 - 100 }, 'claude-sonnet-5-5')
+    expect(r.cost_usd).toBeCloseTo(reviewer + r.judge_cost_usd! + relCost + secCost, 6)
+  })
+
+  it('subtracts a provider-reported lens cost from the all-calls actual, keeping the total equal to it', () => {
+    cfg.lenses = { enabled: true, list: 'reliability', model: 'openai/gpt-x' }
+    const r = buildUsageRecord(baseCtx({
+      usage: { input_tokens: 100, output_tokens: 50, cache_read: 0, cache_write: 0, cost_usd: 1.5 },
+      judgeUsage: { input_tokens: 10, output_tokens: 5, cost_usd: 0.3 },
+      lensRuns: [{ name: 'reliability', status: 'succeeded', model: 'openai/gpt-x', findings: [], usage: { input_tokens: 20, output_tokens: 10, cost_usd: 0.2 } }],
+    }), 1, null)
+    expect(r.lens_runs![0].cost_usd).toBe(0.2)
+    expect(r.cost_usd).toBeCloseTo(1.5, 10)
+  })
+
+  it('infers skipped_bundled per lens for a bundled run, and is null when the stage was never reached', () => {
+    cfg.lenses = { enabled: true, list: 'security+reliability', model: 'claude-haiku-5-5' }
+    const skipped = (name: string) => ({ name, status: 'skipped_bundled', model: 'claude-haiku-5-5', prompt_hash: null, tokens: null, cost_usd: null, findings: 0 })
+    expect(buildUsageRecord(baseCtx({ bundleCount: 2 }), 1, null).lens_runs).toEqual([skipped('security'), skipped('reliability')])
+    expect(buildUsageRecord(baseCtx(), 1, null).lens_runs).toBeNull()
+  })
+
+  it('flag-off pin: no lens_runs key, pre-lens cost math, and lens fields are purely additive', () => {
+    const ctx = baseCtx({
+      judgeUsage: { input_tokens: 400, output_tokens: 100 }, judgeStatus: 'succeeded',
+      breadthUsage: { input_tokens: 300, output_tokens: 90 }, breadthModel: 'claude-haiku-5-5', breadthStatus: 'succeeded',
+      secondLookUsage: { input_tokens: 200, output_tokens: 80 }, secondLookStatus: 'succeeded',
+    })
+    for (const lenses of [{ enabled: false, list: '', model: '' }, { enabled: false, list: 'reliability', model: '' }, { enabled: true, list: '', model: '' }]) {
+      cfg.lenses = lenses
+      const off = buildUsageRecord(ctx, 1, null)
+      expect('lens_runs' in off).toBe(false)
+      expect(JSON.stringify(off)).not.toMatch(/lens/i)
+      const reviewer = estimateCost({ input: 3_000 - 400 - 300 - 200, output: 1_000 - 100 - 90 - 80 }, 'claude-sonnet-5-5')
+      expect(off.cost_usd).toBe(reviewer + off.judge_cost_usd! + off.breadth_cost_usd! + off.second_look_cost_usd!)
+    }
+
+    cfg.lenses = { enabled: true, list: 'reliability', model: '' }
+    const { lens_runs, ...on } = buildUsageRecord(baseCtx({ ...ctx, lensRuns: [] }), 1, null)
+    expect(lens_runs).toEqual([])
+    cfg.lenses = { enabled: false, list: '', model: '' }
+    expect(JSON.stringify(buildUsageRecord(ctx, 1, null))).toBe(JSON.stringify(on))
+  })
+})
+
+describe('buildUsageRecord lens_recommendations', () => {
+  const baseCtx = (over: Partial<ReviewContext> = {}): ReviewContext => ({
+    adapter: {}, prId: '7', dryRun: false, force: 'off', logUsage: false, repoSlug: 'repo',
+    usage: { input_tokens: 3_000, output_tokens: 1_000, cache_read: 0, cache_write: 0 },
+    estimatedInputTokens: 10, action: 'REVIEW', reviewNumber: 1,
+    ...over,
+  } as unknown as ReviewContext)
+  let saved: typeof config.lenses
+  const setLenses = (recommend: boolean) => { config.lenses = { enabled: false, list: '', model: '', recommend } }
+  beforeEach(() => { saved = config.lenses; vi.useFakeTimers(); vi.setSystemTime(new Date('2026-01-01T00:00:00Z')) })
+  afterEach(() => { config.lenses = saved; vi.useRealTimers() })
+  const recs = [{ lens: 'security', reason: 'new /login endpoint' }]
+
+  it('flag off: no key, even when the context carries recommendations', () => {
+    setLenses(false)
+    const r = buildUsageRecord(baseCtx({ lensRecommendations: recs }), 1, null)
+    expect('lens_recommendations' in r).toBe(false)
+    expect(JSON.stringify(r)).not.toContain('recommend')
+  })
+
+  it('flag on: null when not requested, [] when none recommended, else the list; the rest of the record is unchanged', () => {
+    setLenses(false)
+    const off = buildUsageRecord(baseCtx(), 1, null)
+    setLenses(true)
+    expect(buildUsageRecord(baseCtx(), 1, null).lens_recommendations).toBeNull()
+    expect(buildUsageRecord(baseCtx({ lensRecommendations: [] }), 1, null).lens_recommendations).toEqual([])
+    const { lens_recommendations, ...rest } = buildUsageRecord(baseCtx({ lensRecommendations: recs }), 1, null)
+    expect(lens_recommendations).toEqual(recs)
+    expect(JSON.stringify(rest)).toBe(JSON.stringify(off))
   })
 })
 

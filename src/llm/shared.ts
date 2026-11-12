@@ -13,6 +13,7 @@ export interface LLMOptions {
   maxTokens: number
   maxRetries: number
   effort?: string   // output_config.effort (low|medium|high|xhigh|max); unset = model default
+  tolerateMissing?: string[]
 }
 
 export interface LLMProvider {
@@ -32,15 +33,15 @@ export class TruncatedResponseError extends Error {
 // Required root keys the object is missing ([] from a schema-honoring provider). `deep` also flags
 // dropped array-item required keys (findings[].severity) a strict:false provider can omit while
 // satisfying the root — countFindings/applyJudgeDecisions assume those exist.
-export function missingRequired(object: unknown, schema: Record<string, unknown>, deep = false): string[] {
+export function missingRequired(object: unknown, schema: Record<string, unknown>, deep = false, tolerate: readonly string[] = []): string[] {
   const required = (schema.required as string[] | undefined) ?? []
   const obj = (object ?? {}) as Record<string, unknown>
-  const missing = required.filter(k => obj[k] === undefined)
+  const missing = required.filter(k => obj[k] === undefined && !tolerate.includes(k))
   if (!deep) return missing
   const props = (schema.properties ?? {}) as Record<string, { items?: { required?: string[] } }>
   for (const [key, prop] of Object.entries(props)) {
     const itemRequired = prop?.items?.required
-    if (!itemRequired || !Array.isArray(obj[key])) continue
+    if (!itemRequired || tolerate.includes(key) || !Array.isArray(obj[key])) continue
     ;(obj[key] as unknown[]).forEach((el, i) => {
       const elObj = (el ?? {}) as Record<string, unknown>
       for (const rk of itemRequired) if (elObj[rk] === undefined) missing.push(`${key}[${i}].${rk}`)

@@ -12,6 +12,7 @@ vi.mock('../config.js', () => ({
     anthropic: { apiKey: 'test-key', model: 'claude-haiku-4-5-20251001', baseUrl: '', maxRetries: 1, maxInputTokens: 250000, maxTokens: 32000 },
     judge: { model: 'claude-sonnet-5', maxRetries: 1, effort: '', policy: { keepMinor: false, keepUnverified: false }, fileContext: false },
     breadth: { enabled: false, model: '', effort: '', minFiles: 5, minUntouched: 3, benchmarkDeadlineSeconds: 840 },
+    lenses: { enabled: false, list: '', model: '', recommend: false },
     agentIdentity: 'test-bot',
     reply: { maxComments: 5 },
     review: { maxFindings: 0, splitCheck: true, todoScan: true, effort: '', enableNitpicks: false },
@@ -136,6 +137,7 @@ beforeEach(() => {
   cfg.judge ={ model: 'claude-sonnet-5', maxRetries: 1, effort: '', policy: { keepMinor: false, keepUnverified: false }, fileContext: false }
   cfg.review = { maxFindings: 0, splitCheck: true, todoScan: true, effort: '' }
   cfg.breadth = { enabled: false, model: '', effort: '', minFiles: 5, minUntouched: 3, benchmarkDeadlineSeconds: 840 }
+  cfg.lenses = { enabled: false, list: '', model: '', recommend: false }
   cfg.skipSourceBranches = ['main', 'master', 'release/*', 'hotfix/*']
   cfg.skipTargetBranches = ['main', 'master']
   cfg.thresholds = { minChangedFiles: 0, maxChangedFiles: 200, minChangedLines: 0, maxChangedLines: 3000 }
@@ -745,6 +747,124 @@ describe('breadth review (end-to-end)', () => {
 
     expect(cfg.breadth.enabled).toBe(true)
     expect(logSpy.mock.calls.map(c => c.join(' ')).join('\n')).toContain('breadth=1')
+  })
+})
+
+describe('lenses (end-to-end)', () => {
+  const UNCHECKED = { severity: 'MEDIUM', title: 'Unchecked pop', file: 'src/pool.ts', lines: '3', body: 'pop() can return undefined.' }
+  const usageRecord = () => {
+    const out = logSpy.mock.calls.map(c => c.join(' ')).find(l => l.startsWith('\n=== Usage ==='))!
+    return JSON.parse(out.slice(out.indexOf('{')))
+  }
+  const stdout = () => logSpy.mock.calls.map(c => c.join(' ')).join('\n')
+  const lensCalls = () => completeStructured.mock.calls.filter(c => c[2] === BREADTH_OUTPUT_SCHEMA)
+  const respond = () => completeStructured.mockImplementation(async (system: string, _u: string, schema: unknown) => {
+    if (schema === REVIEW_OUTPUT_SCHEMA) return { object: REVIEW, usage }
+    if (schema === BREADTH_OUTPUT_SCHEMA) return { object: { findings: system.includes('## RELIABILITY LENS') ? [UNCHECKED] : [] }, usage }
+    const lensDecision = { candidate_id: 'c4', reason_category: 'validated' as const, evidence: 'src/pool.ts:3 `this.conns.pop()`', note: 'n', score: 7 }
+    return { object: { ...JUDGED, decisions: [...JUDGED.decisions, lensDecision] }, usage }
+  })
+
+  it('RB_CONFIG_LENSES=reliability+security enables both, echoes the list, and judges lens candidates with the rest', async () => {
+    respond()
+    const env = { ...fixture(), RB_CONFIG_LENSES: 'reliability+security' }
+
+    await runBenchmark(env)
+
+    expect(cfg.lenses).toMatchObject({ enabled: true, list: 'reliability+security' })
+    expect(lensCalls().map(c => (c[0] as string).match(/## (\w+) LENS/)![1])).toEqual(['RELIABILITY', 'SECURITY'])
+    const judgeUser = completeStructured.mock.calls.at(-1)![1] as string
+    expect(judgeUser).toContain('[c4] **MEDIUM – Unchecked pop**')
+    expect(judgeUser).not.toMatch(/origin|lens:/)
+    expect(stdout()).toContain('j_proposal=0 lenses=reliability+security')
+    expect(stdout()).toContain('second-look 0, lens 1, judge kept 4')
+    expect(usageRecord().lens_runs.map((r: any) => [r.name, r.status, r.findings])).toEqual([['reliability', 'succeeded', 1], ['security', 'succeeded', 0]])
+    expect(readOut(env).findings.map((f: any) => f.message.split(':')[0])).toEqual(['Race on conns', 'Cited by basename', 'Unchecked pop'])
+  })
+
+  it('RB_CONFIG_LENSES=0 leaves lenses off: provider calls and findings match no label, and nothing lens-related is printed', async () => {
+    const warnSpy = vi.spyOn(console, 'warn')
+    const run = async (labels: Record<string, string>) => {
+      completeStructured.mockReset()
+      respond()
+      logSpy.mockClear()
+      const env = { ...fixture(), ...labels }
+      await runBenchmark(env)
+      return { calls: JSON.stringify(completeStructured.mock.calls), findings: readOut(env).findings, out: stdout(), record: usageRecord() }
+    }
+    const absent = await run({})
+    const zero = await run({ RB_CONFIG_LENSES: '0' })
+
+    expect(cfg.lenses.enabled).toBe(false)
+    expect(zero.calls).toBe(absent.calls)
+    expect(zero.findings).toEqual(absent.findings)
+    for (const r of [absent, zero]) {
+      expect(r.out).not.toMatch(/lenses=|, lens /)
+      expect('lens_runs' in r.record).toBe(false)
+    }
+    expect(warnSpy.mock.calls.map(c => c.join(' ')).join('\n')).not.toContain('LENSES')
+    warnSpy.mockRestore()
+  })
+
+  it('an unknown-only list warns and leaves lenses off', async () => {
+    respond()
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await runBenchmark({ ...fixture(), RB_CONFIG_LENSES: 'relability' })
+
+    expect(cfg.lenses.enabled).toBe(false)
+    expect(lensCalls()).toHaveLength(0)
+    expect(warnSpy.mock.calls.map(c => c.join(' ')).join('\n')).toContain('RB_CONFIG_LENSES=relability names no known lens')
+    warnSpy.mockRestore()
+  })
+})
+
+describe('lens recommendation (end-to-end)', () => {
+  const usageRecord = () => {
+    const out = logSpy.mock.calls.map(c => c.join(' ')).find(l => l.startsWith('\n=== Usage ==='))!
+    return JSON.parse(out.slice(out.indexOf('{')))
+  }
+  const stdout = () => logSpy.mock.calls.map(c => c.join(' ')).join('\n')
+  const settingsLine = () => stdout().split('\n').find(l => l.startsWith('Benchmark settings:'))!
+  const RECS = [{ lens: 'security', reason: 'pool exposed to request handlers' }, { lens: 'reliability', reason: 'pop() on an empty pool' }]
+  const respond = () => completeStructured.mockImplementation(async (_s: string, _u: string, schema: any) =>
+    schema.properties.lens_recommendations ? { object: { ...REVIEW, lens_recommendations: RECS }, usage } : { object: schema === REVIEW_OUTPUT_SCHEMA ? REVIEW : JUDGED, usage })
+
+  it('RB_CONFIG_LENS_REC=1 enables it and echoes lens_rec=1; the record carries it, the judge and findings.json never see it', async () => {
+    respond()
+    const env = { ...fixture(), RB_CONFIG_LENS_REC: '1' }
+
+    await runBenchmark(env)
+
+    expect(cfg.lenses.recommend).toBe(true)
+    expect(cfg.lenses.enabled).toBe(false)
+    expect(settingsLine().endsWith(' j_proposal=0 lens_rec=1')).toBe(true)
+    expect(completeStructured).toHaveBeenCalledTimes(2)
+    expect(completeStructured.mock.calls[0][2]).not.toBe(REVIEW_OUTPUT_SCHEMA)
+    expect(usageRecord().lens_recommendations).toEqual(RECS)
+    expect(stdout()).toContain('Lens recommendations: security (pool exposed to request handlers), reliability (pop() on an empty pool)')
+    expect(completeStructured.mock.calls[1][1]).not.toMatch(/request handlers|empty pool|lens/)
+    expect(JSON.stringify(readOut(env))).not.toMatch(/request handlers|empty pool|lens/)
+  })
+
+  it('RB_CONFIG_LENS_REC=0 leaves the settings line, provider calls, findings and record unchanged', async () => {
+    const run = async (labels: Record<string, string>) => {
+      completeStructured.mockReset()
+      respond()
+      logSpy.mockClear()
+      const env = { ...fixture(), ...labels }
+      await runBenchmark(env)
+      const { timestamp: _t, duration_ms: _d, ...record } = usageRecord()
+      return { calls: JSON.stringify(completeStructured.mock.calls), findings: readOut(env).findings, line: settingsLine(), record: JSON.stringify(record) }
+    }
+    const absent = await run({})
+    const zero = await run({ RB_CONFIG_LENS_REC: '0' })
+
+    expect(cfg.lenses.recommend).toBe(false)
+    expect(zero).toEqual(absent)
+    expect(absent.line).not.toContain('lens_rec')
+    expect(absent.record).not.toContain('lens_recommendations')
+    expect(completeStructured.mock.calls[0][2]).toBe(REVIEW_OUTPUT_SCHEMA)
   })
 })
 

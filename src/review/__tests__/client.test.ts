@@ -7,8 +7,10 @@ vi.mock('../../llm/provider.js', () => ({
   createProvider: vi.fn(() => ({ complete, completeStructured })),
 }))
 
-import { runReview, runJudge, runCommentResponse, REVIEW_OUTPUT_SCHEMA, JUDGE_OUTPUT_SCHEMA } from '../client.js'
-import { renderReview, type ReviewObject } from '../formatter.js'
+import { createHash } from 'crypto'
+import { runReview, runJudge, runCommentResponse, runLens, runBreadth, reviewOutputSchema, REVIEW_OUTPUT_SCHEMA, JUDGE_OUTPUT_SCHEMA, BREADTH_OUTPUT_SCHEMA } from '../client.js'
+import { LENS_REGISTRY } from '../lenses.js'
+import { renderReview, type ReviewObject, type ReviewFinding } from '../formatter.js'
 import { REASON_CATEGORIES } from '../judge-decisions.js'
 import type { PRInfo, ReviewComment, CommentReply } from '../../vcs/adapter.js'
 import type { LoadedPrompt } from '../../prompt/loader.js'
@@ -53,6 +55,87 @@ describe('runReview (structured output)', () => {
     })
     const res = await runReview('key', 'model', 3, 16000, 'high', prInfo, 'DIFF', [], prompt, [])
     expect(res.text).toBe('NO_CHANGE')
+  })
+})
+
+describe('reviewOutputSchema (lens recommendation variant)', () => {
+  type Variant = { properties: Record<string, any>; required: string[] }
+
+  it('flag off returns the shared REVIEW_OUTPUT_SCHEMA object itself', () => {
+    expect(reviewOutputSchema(false)).toBe(REVIEW_OUTPUT_SCHEMA)
+  })
+
+  it('flag on adds one required lens_recommendations property, enum from the registry, cached, constant untouched', () => {
+    const before = JSON.stringify(REVIEW_OUTPUT_SCHEMA)
+    const on = reviewOutputSchema(true) as unknown as Variant
+
+    expect(on).not.toBe(REVIEW_OUTPUT_SCHEMA)
+    expect(reviewOutputSchema(true)).toBe(on)
+    expect(Object.keys(on.properties)).toEqual([...Object.keys(REVIEW_OUTPUT_SCHEMA.properties), 'lens_recommendations'])
+    expect(on.required).toEqual([...REVIEW_OUTPUT_SCHEMA.required, 'lens_recommendations'])
+    const field = on.properties.lens_recommendations
+    expect(field.type).toBe('array')
+    expect(field.items.properties.lens.enum).toEqual(Object.keys(LENS_REGISTRY))
+    expect(field.items.properties.reason.description).toBe('One short clause naming the changed code that gives this concern real surface.')
+    expect(field.items.required).toEqual(['lens', 'reason'])
+    expect(field.items.additionalProperties).toBe(false)
+    for (const lens of Object.values(LENS_REGISTRY)) expect(field.description).toContain(`${lens.name} (${lens.when})`)
+    expect(field.description).toContain('empty array for small, cosmetic, or unrelated changes')
+    expect(field.description).toContain('not shown to the developer')
+    expect(JSON.stringify(REVIEW_OUTPUT_SCHEMA)).toBe(before)
+  })
+})
+
+describe('runReview lens recommendation', () => {
+  beforeEach(() => { complete.mockReset(); completeStructured.mockReset() })
+  const base: ReviewObject = {
+    summary: 'Adds login.', findings: [{ severity: 'MEDIUM', title: 'boom', file: 'a.ts', lines: '3', body: 'bad' }],
+    behavioral_diff: [], production_risk: [], unresolved_questions: [],
+  }
+
+  it('flag off: same schema object, same provider options, same review object, no lensRecommendations key', async () => {
+    completeStructured.mockResolvedValue({ object: base, usage })
+    const res = await runReview('key', 'model', 3, 16000, '', prInfo, 'DIFF', [], prompt, [], [], '', true)
+    expect(completeStructured.mock.calls[0][2]).toBe(REVIEW_OUTPUT_SCHEMA)
+    expect(completeStructured.mock.calls[0][3]).toEqual({ model: 'model', maxTokens: 16000, maxRetries: 3, effort: undefined })
+    expect(Object.keys(completeStructured.mock.calls[0][3])).toEqual(['model', 'maxTokens', 'maxRetries', 'effort'])
+    expect(res.review).toBe(base)
+    expect('lensRecommendations' in res).toBe(false)
+  })
+
+  it('flag on: requests the variant with the same system prompt, strips the field from review and text, returns it sanitized', async () => {
+    completeStructured.mockResolvedValue({
+      object: { ...base, lens_recommendations: [
+        { lens: 'security', reason: ' new /login endpoint ' }, { lens: 'style', reason: 'x' },
+        { lens: 'security', reason: 'dup' }, { lens: 'reliability', reason: 'r'.repeat(300) },
+      ] },
+      usage,
+    })
+    const res = await runReview('key', 'model', 3, 16000, '', prInfo, 'DIFF', [], prompt, [], [], '', true, true)
+
+    const [system, user, schema, opts] = completeStructured.mock.calls[0]
+    expect(schema).toBe(reviewOutputSchema(true))
+    expect(opts).toEqual({ model: 'model', maxTokens: 16000, maxRetries: 3, effort: undefined, tolerateMissing: ['lens_recommendations'] })
+    expect(system).toBe('SYSTEM')
+    expect(user).not.toContain('lens')
+    expect(res.review).toEqual(base)
+    expect('lens_recommendations' in res.review!).toBe(false)
+    expect(res.text).toBe(renderReview(base))
+    expect(res.text).not.toMatch(/login endpoint|lens/)
+    expect(res.lensRecommendations).toEqual([{ lens: 'security', reason: 'new /login endpoint' }, { lens: 'reliability', reason: 'r'.repeat(200) }])
+  })
+
+  it('flag on: a missing or non-array field is null (not answered), an empty one is [] (none recommended)', async () => {
+    const cases: Array<[object, unknown]> = [
+      [base, null], [{ ...base, lens_recommendations: 'security' }, null], [{ ...base, lens_recommendations: [] }, []],
+    ]
+    for (const [object, expected] of cases) {
+      completeStructured.mockReset()
+      completeStructured.mockResolvedValue({ object, usage })
+      const res = await runReview('key', 'model', 3, 16000, '', prInfo, 'DIFF', [], prompt, [], [], '', true, true)
+      expect(res.lensRecommendations).toEqual(expected)
+      expect(res.review).toEqual(base)
+    }
   })
 })
 
@@ -224,6 +307,98 @@ describe('runJudge (structured output)', () => {
     await runJudge('key', 'model', 3, 16000, '', 'DIFF', review, [{ path: 'a.ts', content: 'const a = 1' }])
 
     expect(completeStructured.mock.calls[0][1]).toContain('## Full file context:\n\n### a.ts\n```\nconst a = 1\n```')
+  })
+})
+
+describe('runLens (shared reviewer-pass core)', () => {
+  beforeEach(() => { complete.mockReset(); completeStructured.mockReset() })
+
+  const finding: ReviewFinding = { severity: 'HIGH', title: 'Leak', file: 'a.ts', lines: '2', body: 'handle never closed' }
+  const hash = (s: string) => createHash('sha256').update(s).digest('hex').slice(0, 12)
+
+  it('sends an arbitrary system prompt + payload and returns the structured findings', async () => {
+    completeStructured.mockResolvedValue({ object: { findings: [finding] }, usage })
+
+    const res = await runLens('key', 'model', 3, 16000, 'high', prInfo, 'DIFF', [{ path: 'a.ts', content: 'x' }], 'LENS SYSTEM', 'LENS BRIEFING', false, 'lens:reliability')
+
+    const [system, userMessage, schema, opts] = completeStructured.mock.calls[0]
+    expect(system).toBe('LENS SYSTEM')
+    expect(userMessage).toContain('## Diff:\n```diff\nDIFF\n```')
+    expect(userMessage).toContain('### a.ts\n```\nx\n```')
+    expect(userMessage).toMatch(/```\n\nLENS BRIEFING$/)
+    expect(schema).toBe(BREADTH_OUTPUT_SCHEMA)
+    expect(opts).toEqual({ model: 'model', maxTokens: 16000, maxRetries: 3, effort: 'high' })
+    expect(res).toEqual({ findings: [finding], usage, promptHash: hash('LENS SYSTEM') })
+  })
+
+  it('derives promptHash from the system prompt alone', async () => {
+    completeStructured.mockResolvedValue({ object: { findings: [] }, usage })
+    const a = await runLens('key', 'model', 3, 16000, '', prInfo, 'DIFF', [], 'SYSTEM A', 'BRIEF 1')
+    const b = await runLens('key', 'model', 3, 16000, '', prInfo, 'OTHER DIFF', [], 'SYSTEM A', 'BRIEF 2')
+    const c = await runLens('key', 'model', 3, 16000, '', prInfo, 'DIFF', [], 'SYSTEM B', 'BRIEF 1')
+    expect(a.promptHash).toBe(hash('SYSTEM A'))
+    expect(b.promptHash).toBe(a.promptHash)
+    expect(c.promptHash).toBe(hash('SYSTEM B'))
+  })
+
+  it('logs under the given label and returns no findings when the model omits the array', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    completeStructured.mockResolvedValue({ object: {}, usage })
+
+    const res = await runLens('key', 'model', 3, 16000, '', prInfo, 'DIFF', [], 'SYSTEM', 'BRIEF', false, 'lens:security')
+
+    expect(log.mock.calls.map(c => c[0])).toEqual([
+      'Sending to lens:security reviewer (model, maxRetries: 3)...',
+      'Lens:security received (100 in / 50 out tokens, 0 findings)',
+    ])
+    expect(res.findings).toEqual([])
+    log.mockRestore()
+  })
+
+  it('coerces a non-array findings field to [] so candidate assembly never throws', async () => {
+    completeStructured.mockResolvedValue({ object: { findings: {} as unknown as ReviewFinding[] }, usage })
+    const res = await runLens('key', 'model', 3, 16000, '', prInfo, 'DIFF', [], 'SYSTEM', 'BRIEF', false, 'lens:security')
+    expect(res.findings).toEqual([])
+  })
+})
+
+describe('runBreadth (delegates to runLens)', () => {
+  beforeEach(() => { complete.mockReset(); completeStructured.mockReset() })
+
+  const finding: ReviewFinding = { severity: 'MEDIUM', title: 'Same bug', file: 'b.ts', lines: '4', body: 'b' }
+
+  it('sends the same provider call runLens does for the same args, pinned byte-for-byte', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    completeStructured.mockResolvedValue({ object: { findings: [finding] }, usage })
+    const args: Parameters<typeof runBreadth> = ['key', 'model', 3, 16000, '', prInfo, 'DIFF', [], 'BREADTH SYSTEM', 'BRIEF']
+
+    const breadth = await runBreadth(...args)
+    const lens = await runLens(...args)
+
+    const [breadthCall, lensCall] = completeStructured.mock.calls
+    expect(breadthCall).toEqual(lensCall)
+    expect(breadthCall[0]).toBe('BREADTH SYSTEM')
+    expect(breadthCall[1]).toBe('## Pull Request: t\n\n## Branch: s → m\n\n## Diff:\n```diff\nDIFF\n```\n\nBRIEF')
+    expect(breadthCall[2]).toBe(BREADTH_OUTPUT_SCHEMA)
+    expect(breadthCall[3]).toEqual({ model: 'model', maxTokens: 16000, maxRetries: 3, effort: undefined })
+    expect(breadth).toEqual(lens)
+    expect(log.mock.calls.slice(0, 2).map(c => c[0])).toEqual([
+      'Sending to breadth reviewer (model, maxRetries: 3)...',
+      'Breadth received (100 in / 50 out tokens, 1 findings)',
+    ])
+    log.mockRestore()
+  })
+
+  it('forwards lineNumbers and a custom label', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    completeStructured.mockResolvedValue({ object: { findings: [] }, usage })
+    const diff = 'diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1,1 +1,2 @@\n keep\n+added'
+
+    await runBreadth('key', 'model', 3, 16000, '', prInfo, diff, [], 'SYSTEM', 'BRIEF', true, 'second-look')
+
+    expect(completeStructured.mock.calls[0][1]).toContain('    1  keep\n    2 +added')
+    expect(log.mock.calls[0][0]).toBe('Sending to second-look reviewer (model, maxRetries: 3)...')
+    log.mockRestore()
   })
 })
 

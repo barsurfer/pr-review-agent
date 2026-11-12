@@ -112,6 +112,20 @@ describe('applyJudgeDecisions — shown-context anchors', () => {
     expect(ambiguous.kept[1].anchorSource).toBe('none')
   })
 
+  it('resolves a lens candidate against the lens source, checked before the second-look range it also falls in', () => {
+    const shown = { judge: buildShownSource(DIFF), breadth: buildShownSource(DIFF), secondLook: buildShownSource(DIFF), secondLookFrom: 1, lens: buildShownSource(DIFF, [FULL]), lensFrom: 2 }
+    const three = [finding({ lines: '1' }), finding({ lines: '1' }), finding({ lines: '1' })]
+    const decisions = out([dec({ candidate_id: 'c0' }), dec({ candidate_id: 'c1' }), dec({ candidate_id: 'c2' })])
+
+    const res = applyJudgeDecisions(three, decisions, POLICY, [], DIFF, 1, { shownAnchors: shown })
+    expect(res.kept[1]).toMatchObject({ lines: undefined, anchorSource: 'none' })
+    expect(res.kept[2]).toMatchObject({ lines: '1', anchorSource: 'reviewer' })
+    expect(res.decisions[2].anchor_basis).toBe('shown_context')
+
+    const { lens: _l, lensFrom: _f, ...withoutLens } = shown
+    expect(applyJudgeDecisions(three, decisions, POLICY, [], DIFF, 1, { shownAnchors: withoutLens }).kept[2]).toMatchObject({ lines: undefined, anchorSource: 'none' })
+  })
+
   it('reviewer-origin numeric anchors keep legacy ungated behavior either way', () => {
     const shown = { judge: buildShownSource(DIFF) }
     const res = run([finding({ lines: '500' })], [dec({ candidate_id: 'c0' })], { shownAnchors: shown })

@@ -54,6 +54,32 @@ describe('breadth settings', () => {
   })
 })
 
+describe('lens settings', () => {
+  afterEach(() => { vi.unstubAllEnvs() })
+
+  const load = async (env: Record<string, string>) => {
+    vi.unstubAllEnvs()
+    for (const [name, value] of Object.entries(env)) vi.stubEnv(name, value)
+    vi.resetModules()
+    return (await import('../config.js')).config.lenses
+  }
+
+  it('defaults to off with an empty list and model', async () => {
+    expect(await load({})).toEqual({ enabled: false, list: '', model: '', recommend: false })
+  })
+
+  it('turns on only from the exact string true and keeps LENSES unparsed', async () => {
+    expect(await load({ ENABLE_LENSES: 'true', LENSES: 'reliability+security', LENS_MODEL: 'claude-haiku-5-5' }))
+      .toEqual({ enabled: true, list: 'reliability+security', model: 'claude-haiku-5-5', recommend: false })
+    expect((await load({ ENABLE_LENSES: '1' })).enabled).toBe(false)
+  })
+
+  it('ENABLE_LENS_RECOMMENDATION turns on only from the exact string true, independent of ENABLE_LENSES', async () => {
+    expect(await load({ ENABLE_LENS_RECOMMENDATION: 'true' })).toEqual({ enabled: false, list: '', model: '', recommend: true })
+    for (const value of ['false', '1', '']) expect((await load({ ENABLE_LENS_RECOMMENDATION: value })).recommend).toBe(false)
+  })
+})
+
 describe('llmApiKey — conditional required key per provider', () => {
   afterEach(() => { vi.unstubAllEnvs() })
 
