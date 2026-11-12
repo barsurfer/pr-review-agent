@@ -12,15 +12,17 @@ permissions:
 
 jobs:
   review:
-    # Anyone can comment on a public repo's PRs, so a comment needs a trusted author; Dependabot runs get no secrets.
+    # On a public repo anyone can comment and any reader can open a same-repo PR, so both paths need a trusted author; Dependabot PRs are keyed on the PR author, not the actor.
     if: >-
       (github.event_name == 'pull_request'
       && github.event.pull_request.head.repo.full_name == github.repository
-      && github.actor != 'dependabot[bot]'
+      && github.event.pull_request.user.login != 'dependabot[bot]'
+      && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)
       && (github.event.action != 'edited' || github.event.changes.base)) ||
       (github.event_name == 'issue_comment'
       && github.event.issue.pull_request
       && github.event.issue.state == 'open'
+      && github.event.issue.user.login != 'dependabot[bot]'
       && github.event.comment.user.type != 'Bot'
       && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
     # Job-level so a run skipped by `if:` never joins the group; no cancel, so a paid review is never killed mid-run.
@@ -45,6 +47,9 @@ jobs:
           fi
       - if: steps.guard.outputs.run == 'true'
         uses: actions/checkout@v5
+        with:
+          # Nothing later pushes or fetches, so the job token need not sit in .git/config while npm ci runs package scripts.
+          persist-credentials: false
       - if: steps.guard.outputs.run == 'true'
         uses: actions/setup-node@v5
         with:
