@@ -99,7 +99,10 @@ export interface UsageRecord {
   recall_levers: { j_quality: boolean; sl_breadth: boolean; j_shown_anchor: boolean; b_priority: boolean }
   touch_rate: number | null
   delta: { developer_replies: number; resolved: number; still_open: number; new_findings: number } | null
+  checked_commit?: string
+  dedup_source?: 'checked_commit'
   jenkins: { job: string; build: string; url: string } | null
+  trigger?: { event: string | null; comment_author: string | null }
   error: { type: string; message: string; status: number | null } | null
 }
 
@@ -131,9 +134,13 @@ function haiku55Pricing(inputTokens: number): { input: number; output: number } 
   return inputTokens > 100_000 ? { input: 0.5, output: 2.5 } : { input: 0.1, output: 0.5 }
 }
 
+// Dated ids price as their alias; OpenRouter names the same models anthropic/claude-sonnet-5.5[:variant].
+function pricingBase(model: string): string {
+  return model.replace(/^anthropic\//, '').replace(/:[\w-]+$/, '').replace(/\./g, '-').replace(/-\d{8}$/, '')
+}
+
 export function estimateCost(tokens: { input: number; output: number }, model: string): number {
-  // Dated IDs (claude-haiku-4-5-20251001) price as their alias
-  const base = model.replace(/-\d{8}$/, '')
+  const base = pricingBase(model)
   let p = base === 'claude-haiku-5-5' ? haiku55Pricing(tokens.input) : (MODEL_PRICING[model] ?? MODEL_PRICING[base])
   if (!p) {
     console.warn(`No pricing entry for model "${model}" — estimating with claude-sonnet-4-6 rates`)
@@ -356,7 +363,12 @@ export function buildUsageRecord(
       still_open: deltaStats?.still_open ?? 0,
       new_findings: deltaStats?.new_findings ?? 0,
     } : null,
+    // Present only when the head was really checked and the run did not fail afterwards; CI stores exactly this value.
+    ...(ctx.headChecked && !error ? { checked_commit: ctx.prInfo!.sourceCommit } : {}),
+    ...(ctx.dedupHit === 'checked_commit' ? { dedup_source: 'checked_commit' as const } : {}),
     jenkins: getJenkinsMeta(),
+    // Absent when CI passed no trigger, so those records serialize exactly as before.
+    ...(ctx.trigger ? { trigger: { event: ctx.trigger.event || null, comment_author: ctx.trigger.commentAuthor || null } } : {}),
     error,
   }
 }

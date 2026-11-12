@@ -35,6 +35,8 @@ pr-review-agent/
 │   │   ├── judge-decisions.ts    # Judge decision contract: policy table, anchors, kept findings
 │   │   ├── judge-quality.ts      # ENABLE_JUDGE_QUALITY / proposals prompt and schema additions
 │   │   ├── shown-anchors.ts      # What each pass was shown, for ENABLE_JUDGE_SHOWN_CONTEXT_ANCHORS
+│   │   ├── trigger.ts            # Trigger context (--event/--comment-author) and IGNORE_COMMENT_AUTHORS matching
+│   │   ├── checked-commit.ts     # Checked commit from CI (--checked-commit/LAST_CHECKED_COMMIT): validation, head match
 │   │   ├── aggregate.ts          # Merge/dedupe findings across bundles
 │   │   ├── bundler.ts            # Split an over-budget PR into directory bundles
 │   │   ├── bundled.ts            # Per-bundle reviewer+judge orchestration
@@ -111,14 +113,16 @@ used for all Claude API calls and for size-threshold checks — excluded files d
 toward `MIN/MAX_CHANGED_*`. The raw diff counts are kept for usage-record metrics.
 
 ```
+CHECK_TRIGGER ├─ [comment event by an IGNORE_COMMENT_AUTHORS id, no --force] → SKIP → DONE
+              └─ FETCH_PR_INFO (no trigger, or not a listed comment author, or --force)
 FETCH_PR_INFO → CHECK_BRANCHES
-                  ├─ [source/target match skip patterns] → SKIP → DONE
+                  ├─ [source/target match skip patterns, or target not in ONLY_TARGET_BRANCHES] → SKIP → DONE
                   └─ FETCH_DIFF (+ filterDiff)
                                   ├─ [no reviewable changes after exclusions] → SKIP → DONE
                                   └─ CHECK_THRESHOLDS
                                   ├─ [fail] → SKIP → DONE
                                   └─ CHECK_PREVIOUS_REVIEWS
-                                       ├─ [same commit] → CHECK_REPLIES
+                                       ├─ [same commit, or head = checked commit from CI] → CHECK_REPLIES
                                        │   ├─ [replies] → RESPOND_TO_REPLIES → DONE
                                        │   └─ [none] → SKIP → DONE
                                        ├─ [delta diff empty after filter] → CHECK_REPLIES
@@ -133,7 +137,7 @@ FETCH_PR_INFO → CHECK_BRANCHES
                                                     └─ [no judge] → POST_REVIEW → DONE
 ```
 
-**20 states**, **10 possible outcomes**: skip (branch exclusion), skip (no reviewable changes),
+**21 states**, **11 possible outcomes**: skip (ignored comment author), skip (branch exclusion), skip (no reviewable changes),
 skip (threshold), skip (same commit, no replies), skip (delta diff empty, no replies),
 skip (reply limit reached), skip (no new findings), reply to developer, skip (NO_CHANGE), or post review. The optional `JUDGE_REVIEW` state sends the review output and diff to a
 separate judge model (`JUDGING_MODEL`) that validates each finding against the actual code

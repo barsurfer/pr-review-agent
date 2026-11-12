@@ -14,15 +14,21 @@ Related: [review/skip-logic.md](skip-logic.md) | [review/replies.md](replies.md)
 ## State Transitions
 
 ```
+CHECK_TRIGGER (passthrough unless CI passed --event/--comment-author)
+  ├─ [comment event by an IGNORE_COMMENT_AUTHORS id, no --force] → SKIP → DONE
+  └─ FETCH_PR_INFO (below)
 FETCH_PR_INFO
   └─ CHECK_BRANCHES
-       ├─ [branch exclusion match] → SKIP → DONE
+       ├─ [branch exclusion match, or target not in ONLY_TARGET_BRANCHES] → SKIP → DONE
        └─ FETCH_DIFF (+ filterDiff)
             ├─ [no reviewable changes after exclusions] → SKIP → DONE
             └─ CHECK_THRESHOLDS
                  ├─ [fail] → SKIP → DONE
                  └─ CHECK_PREVIOUS_REVIEWS
                       ├─ [same commit] → CHECK_REPLIES
+                      │    ├─ [unanswered replies] → RESPOND_TO_REPLIES → DONE
+                      │    └─ [none] → SKIP → DONE
+                      ├─ [head = checked commit from CI (LAST_CHECKED_COMMIT), not forced] → CHECK_REPLIES
                       │    ├─ [unanswered replies] → RESPOND_TO_REPLIES → DONE
                       │    └─ [none] → SKIP → DONE
                       ├─ [delta diff empty after filter] → CHECK_REPLIES
@@ -44,19 +50,20 @@ Both inbound edges to `RESPOND_TO_REPLIES` (`CHECK_REPLIES` and this `JUDGE_REVI
 
 **Bundled path (`ENABLE_BUNDLED_REVIEW=true`, default off):** after `FETCH_CONTEXT`, `ESTIMATE_TOKENS` drops file contexts if over `MAX_INPUT_TOKENS`; if the diff alone is still over budget it routes to `BUNDLED_REVIEW` instead of SKIP, then `POST_REVIEW`. In-budget PRs never enter it. It bypasses `BREADTH_REVIEW`, `SECOND_LOOK` and `LENS_REVIEW`; the usage record infers their statuses (each active lens → `skipped_bundled`).
 
-**20 states. 10 possible outcomes:**
-1. Skip — branch exclusion
-2. Skip — no reviewable changes after exclusions
-3. Skip — threshold (too few/many reviewable files or lines)
-4. Skip — same commit, no replies
-5. Skip — delta diff empty, no replies
-6. Skip — reply limit reached
-7. Skip — NO_CHANGE re-review (falls through to CHECK_REPLIES first; skips only when no reply is pending)
-8. Skip — re-review produced no new findings and the prior review was clean (`NO_NEW_FINDINGS`)
-9. Reply — developer question answered (including after a NO_CHANGE re-review)
-10. Post review — new review comment
+**21 states. 11 possible outcomes:**
+1. Skip — ignored comment author (`IGNORE_COMMENT_AUTHORS`, before any VCS call)
+2. Skip — branch exclusion (incl. a target not in `ONLY_TARGET_BRANCHES`)
+3. Skip — no reviewable changes after exclusions
+4. Skip — threshold (too few/many reviewable files or lines)
+5. Skip — same commit (or the head CI reported as checked), no replies
+6. Skip — delta diff empty, no replies
+7. Skip — reply limit reached
+8. Skip — NO_CHANGE re-review (falls through to CHECK_REPLIES first; skips only when no reply is pending)
+9. Skip — re-review produced no new findings and the prior review was clean (`NO_NEW_FINDINGS`)
+10. Reply — developer question answered (including after a NO_CHANGE re-review)
+11. Post review — new review comment
 
-(Fine-grained skips — input-budget exceeded, context-window overflow, a bundled review that needs too many bundles, an oversized diff the adapter can't fetch (`PrTooLargeError`, GitHub), and the pre-post race — fall under outcomes 1–3; see [skip-logic.md](skip-logic.md).)
+(Fine-grained skips — input-budget exceeded, context-window overflow, a bundled review that needs too many bundles, an oversized diff the adapter can't fetch (`PrTooLargeError`, GitHub), and the pre-post race — fall under outcomes 2–4; see [skip-logic.md](skip-logic.md).)
 
 ---
 
@@ -64,10 +71,11 @@ Both inbound edges to `RESPOND_TO_REPLIES` (`CHECK_REPLIES` and this `JUDGE_REVI
 
 | State | What happens |
 |-------|-------------|
+| `CHECK_TRIGGER` | Initial state. With no trigger passed (`--event`/`--comment-author` or `TRIGGER_EVENT`/`TRIGGER_COMMENT_AUTHOR`), goes straight to `FETCH_PR_INFO` with no log and no I/O. Otherwise logs `Trigger: …`, and SKIPs a comment event whose actor id is in `IGNORE_COMMENT_AUTHORS` unless `--force` is set; non-comment events are never skipped. See [skip-logic.md §7](skip-logic.md) |
 | `FETCH_DIFF` | Fetches raw diff from VCS API; calls `filterDiff()` to produce filtered copy; computes reviewable (post-filter) line/file counts; skips immediately if zero reviewable lines. A `PrTooLargeError` from the adapter (diff over the provider's size ceilings — GitHub only today) is caught here and becomes a clean SKIP, not an ERROR |
 | `CHECK_THRESHOLDS` | Compares reviewable (post-filter) line/file counts against `MIN/MAX_CHANGED_*` env vars |
-| `CHECK_BRANCHES` | Compares source/target branch names against `SKIP_SOURCE_BRANCHES` / `SKIP_TARGET_BRANCHES` glob patterns |
-| `CHECK_PREVIOUS_REVIEWS` | Parses commit hash from last review footer; triggers delta diff pre-check if different commit |
+| `CHECK_BRANCHES` | Compares source/target branch names against `SKIP_SOURCE_BRANCHES` / `SKIP_TARGET_BRANCHES` glob patterns, then (when set) skips a target matching none of `ONLY_TARGET_BRANCHES`; the skip lists win on overlap. Each list can be overridden per repo by its CLI flag (`--skip-source-branches` etc.), where an empty value turns that list off |
+| `CHECK_PREVIOUS_REVIEWS` | Parses commit hash from last review footer; same commit → `CHECK_REPLIES`. On a footer miss, a checked commit passed by CI (`LAST_CHECKED_COMMIT` / `--checked-commit`) that equals the head → `CHECK_REPLIES` too (`dedup_source: checked_commit`); not consulted on a first review or under `--force clean` / `re-review`, and never changes the delta base. Otherwise triggers the delta diff pre-check. See [skip-logic.md §8](skip-logic.md) |
 | `LOAD_PROMPT` | Fetches `.agent-review-instructions.md` from the target repo (CLI `--prompt` → source commit → target branch; each ref probes root → `docs/` → single-module-dir fallback; then composed tech-stack rule sets; defaults last) |
 | `FETCH_CONTEXT` | Fetches full file content for changed files (see [fetching/strategy.md](../fetching/strategy.md)) |
 | `ESTIMATE_TOKENS` | Estimates input (~chars/4); over the input budget (min of `MAX_INPUT_TOKENS` and the context window — the smaller of the reviewer's and judge's, derived from the model id or `MODEL_CONTEXT_TOKENS` — minus the output reserve) → drops file contexts (diff-only); still over → `BUNDLED_REVIEW` when enabled, else SKIP |
@@ -95,6 +103,8 @@ Three guards run before every post (guard 3 only when `--force` is off; all skip
 
 3. **Pre-post dedup** — on non-dry-run runs without `--force`, re-fetches review comments immediately before posting and checks if a concurrent agent run already reviewed the same commit. Prevents race conditions from parallel Jenkins triggers.
 
+**Checked-commit mark:** the states that end a run on a genuinely checked head (posted review, pre-post race, footer or checked-commit match, zero-reviewable delta, coherent structured `NO_CHANGE`, `NO_NEW_FINDINGS`, a quiet reply, the JUDGE-gate reply limit) set `ctx.headChecked`, which emits `checked_commit` in the record. Dry-run, benchmark, forced runs, a failed delta fetch and an uncertain bundle never mark, and an error after the mark drops it. Full table in [skip-logic.md §8](skip-logic.md).
+
 ---
 
 ## ReviewContext Interface
@@ -107,6 +117,8 @@ interface ReviewContext {
   readonly repoSlug: string
   readonly force: 'off' | 'clean' | 're-review'
   readonly outcomeSink?: OutcomeSink   // benchmark mode: receives the ReviewOutcome instead of a posted comment
+  readonly trigger?: TriggerInfo       // { event, commentAuthor } from CI; undefined when none was passed
+  readonly checkedCommit?: string      // head CI passed back (LAST_CHECKED_COMMIT); read only in CHECK_PREVIOUS_REVIEWS
   prInfo?: PRInfo
   diff?: string            // raw diff — metrics only, never sent to the model
   filteredDiff?: string    // sent to the model
@@ -123,6 +135,7 @@ interface ReviewContext {
   judgeScores?: FindingScore[]  // judge's per-finding 0–10 confidence — logged, never posted
   judgedFindings?: KeptFinding[]
   skipReason?: string
+  headChecked?: boolean    // set at the checked-commit mark points; emits checked_commit
 }
 ```
 

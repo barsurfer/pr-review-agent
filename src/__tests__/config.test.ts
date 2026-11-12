@@ -80,6 +80,83 @@ describe('lens settings', () => {
   })
 })
 
+describe('branch and trigger settings', () => {
+  afterEach(() => { vi.unstubAllEnvs() })
+
+  const load = async (env: Record<string, string>) => {
+    vi.unstubAllEnvs()
+    for (const name of ['SKIP_SOURCE_BRANCHES', 'SKIP_TARGET_BRANCHES', 'ONLY_TARGET_BRANCHES', 'TRIGGER_EVENT', 'TRIGGER_COMMENT_AUTHOR', 'IGNORE_COMMENT_AUTHORS']) {
+      vi.stubEnv(name, env[name] as string)
+    }
+    vi.resetModules()
+    return (await import('../config.js')).config
+  }
+
+  it('ONLY_TARGET_BRANCHES defaults to [] and stays [] for empty, whitespace and bare commas; parses and trims a list', async () => {
+    expect((await load({})).onlyTargetBranches).toEqual([])
+    for (const value of ['', ' ', ',', ' , ']) expect((await load({ ONLY_TARGET_BRANCHES: value })).onlyTargetBranches).toEqual([])
+    expect((await load({ ONLY_TARGET_BRANCHES: ' develop , release/* ,' })).onlyTargetBranches).toEqual(['develop', 'release/*'])
+  })
+
+  it('skip-list defaults are unchanged', async () => {
+    const c = await load({})
+    expect(c.skipSourceBranches).toEqual(['main', 'master', 'release/*', 'hotfix/*'])
+    expect(c.skipTargetBranches).toEqual(['main', 'master'])
+  })
+
+  it('trigger settings default to empty, trim values, and split/trim/filter IGNORE_COMMENT_AUTHORS', async () => {
+    expect((await load({})).trigger).toEqual({ event: '', commentAuthor: '', ignoreCommentAuthors: [] })
+    expect((await load({ TRIGGER_EVENT: ' pullrequest:comment_created ', TRIGGER_COMMENT_AUTHOR: ' {abc} ', IGNORE_COMMENT_AUTHORS: ' {a} ,, b ,' })).trigger)
+      .toEqual({ event: 'pullrequest:comment_created', commentAuthor: '{abc}', ignoreCommentAuthors: ['{a}', 'b'] })
+    expect((await load({ IGNORE_COMMENT_AUTHORS: ' , ' })).trigger.ignoreCommentAuthors).toEqual([])
+  })
+})
+
+describe('parseBranchList (branch-list env vars and their CLI overrides)', () => {
+  it('trims entries and drops empty ones; an empty or blank value is an empty list', async () => {
+    const { parseBranchList } = await import('../config.js')
+    expect(parseBranchList('')).toEqual([])
+    for (const blank of [' ', ',', ' , , ']) expect(parseBranchList(blank)).toEqual([])
+    expect(parseBranchList('main')).toEqual(['main'])
+    expect(parseBranchList(' main , ,release/* ,')).toEqual(['main', 'release/*'])
+  })
+
+  it('is exactly what the env values get', async () => {
+    vi.unstubAllEnvs()
+    vi.stubEnv('SKIP_SOURCE_BRANCHES', ' a ,, b/* ')
+    vi.stubEnv('SKIP_TARGET_BRANCHES', ' , ')
+    vi.stubEnv('ONLY_TARGET_BRANCHES', 'main,')
+    vi.resetModules()
+    try {
+      const { config, parseBranchList } = await import('../config.js')
+      expect(config.skipSourceBranches).toEqual(parseBranchList(' a ,, b/* '))
+      expect(config.skipTargetBranches).toEqual(parseBranchList(' , '))
+      expect(config.onlyTargetBranches).toEqual(parseBranchList('main,'))
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+})
+
+describe('checked commit setting', () => {
+  afterEach(() => { vi.unstubAllEnvs() })
+
+  const load = async (value: string | undefined) => {
+    vi.unstubAllEnvs()
+    vi.stubEnv('LAST_CHECKED_COMMIT', value as string)
+    vi.resetModules()
+    return (await import('../config.js')).config.lastCheckedCommit
+  }
+
+  it('C1 LAST_CHECKED_COMMIT defaults to empty and is trimmed, otherwise unparsed', async () => {
+    expect(await load(undefined)).toBe('')
+    expect(await load('')).toBe('')
+    expect(await load('  ')).toBe('')
+    expect(await load(' 0123456789AB ')).toBe('0123456789AB')
+    expect(await load('garbage')).toBe('garbage')
+  })
+})
+
 describe('llmApiKey — conditional required key per provider', () => {
   afterEach(() => { vi.unstubAllEnvs() })
 

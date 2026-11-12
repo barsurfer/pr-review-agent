@@ -10,7 +10,7 @@ Patterns and conventions specific to this project.
 
 ## Stateless Design
 
-The agent derives all state from the PR's comment history via API on each run. No database, no stored diffs. Review number is computed by counting existing review comments; dedup key is parsed from the last review footer. This means the agent can be deployed anywhere with no persistent infrastructure.
+The agent derives all state from the PR's comment history via API on each run. No database, no stored diffs. Review number is computed by counting existing review comments; dedup key is parsed from the last review footer. This means the agent can be deployed anywhere with no persistent infrastructure. The one optional input from outside the PR is a per-PR hash CI may hand back: the `checked_commit` an earlier run reported, passed as `LAST_CHECKED_COMMIT` so a head checked without a post isn't re-reviewed. CI holds it; the agent stores nothing, and without it behaviour is unchanged (see [review/skip-logic.md §8](review/skip-logic.md)).
 
 ## API-Only Access
 

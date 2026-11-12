@@ -33,6 +33,47 @@ describe('estimateCost', () => {
   it('falls back to sonnet-4-6 rates for an unknown model', () => {
     expect(estimateCost({ input: 1_000_000, output: 0 }, 'mystery-model')).toBe(3)
   })
+
+  describe('OpenRouter slugs', () => {
+    let warnSpy: ReturnType<typeof vi.spyOn>
+    beforeEach(() => { warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {}) })
+    afterEach(() => { warnSpy.mockRestore() })
+
+    it('prices OpenRouter Anthropic slugs as their table entry', () => {
+      expect(estimateCost({ input: 1_000_000, output: 0 }, 'anthropic/claude-sonnet-5.5')).toBe(2)
+      expect(estimateCost({ input: 50_000, output: 0 }, 'anthropic/claude-haiku-5.5')).toBe(0.005)
+      expect(estimateCost({ input: 200_000, output: 0 }, 'anthropic/claude-haiku-5.5')).toBe(0.1)
+      expect(estimateCost({ input: 200_000, output: 0 }, 'anthropic/claude-haiku-5-5')).toBe(0.1)
+      expect(estimateCost({ input: 50_000, output: 0 }, 'anthropic/claude-haiku-5.5:thinking')).toBe(0.005)
+      expect(estimateCost({ input: 1_000_000, output: 0 }, 'anthropic/claude-opus-4.8')).toBe(5)
+      expect(estimateCost({ input: 1_000_000, output: 0 }, 'anthropic/claude-sonnet-5.5:beta')).toBe(2)
+      expect(estimateCost({ input: 1_000_000, output: 0 }, 'claude-haiku-4.5-20251001')).toBe(1)
+      expect(warnSpy).not.toHaveBeenCalled()
+    })
+
+    it('leaves every id that resolves today unchanged and silent, dated or not', () => {
+      const rates: Record<string, number> = {
+        'claude-fable-5-1': 10, 'claude-fable-5': 10, 'claude-mythos-5-1': 10, 'claude-mythos-5': 10,
+        'claude-opus-5-5': 4, 'claude-opus-5': 5, 'claude-opus-4-8': 5, 'claude-opus-4-7': 5, 'claude-opus-4-6': 5, 'claude-opus-4-5': 5,
+        'claude-sonnet-5-5': 2, 'claude-sonnet-5': 2, 'claude-sonnet-4-6': 3, 'claude-sonnet-4-5': 3, 'claude-haiku-4-5': 1,
+        'claude-haiku-5-5': 0.5,
+      }
+      for (const [id, rate] of Object.entries(rates)) {
+        for (const model of [id, `${id}-20260101`]) {
+          expect(estimateCost({ input: 1_000_000, output: 0 }, model)).toBe(rate)
+        }
+      }
+      expect(warnSpy).not.toHaveBeenCalled()
+    })
+
+    it('still falls back and warns for non-Anthropic or unmapped slugs', () => {
+      for (const model of ['openai/gpt-x', 'google/gemini-2.5-pro', 'anthropic/claude-3.7-sonnet']) {
+        warnSpy.mockClear()
+        expect(estimateCost({ input: 1_000_000, output: 0 }, model)).toBe(3)
+        expect(warnSpy).toHaveBeenCalledTimes(1)
+      }
+    })
+  })
 })
 
 describe('buildUsageRecord provenance fields', () => {
@@ -109,6 +150,67 @@ describe('buildUsageRecord provenance fields', () => {
     expect(r.cost_usd).toBe(1.5)
     expect(r.judge_cost_usd).toBe(0.3)
     expect(r.breadth_cost_usd).toBe(0.2)
+  })
+
+  it('zero-call run under an OpenRouter slug: cost_usd 0 and no fallback warning', () => {
+    const saved = config.anthropic.model
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    config.anthropic.model = 'anthropic/claude-sonnet-5.5'
+    try {
+      const r = buildUsageRecord(baseCtx({ action: 'SKIP', usage: { input_tokens: 0, output_tokens: 0, cache_read: 0, cache_write: 0 } }), 1, null)
+      expect(r.cost_usd).toBe(0)
+      expect(warnSpy.mock.calls.some(c => String(c[0]).includes('No pricing entry'))).toBe(false)
+    } finally {
+      config.anthropic.model = saved
+      warnSpy.mockRestore()
+    }
+  })
+
+  it('a provider-reported cost is used as is under a slug model', () => {
+    const saved = config.anthropic.model
+    config.anthropic.model = 'anthropic/claude-sonnet-5.5'
+    try {
+      const r = buildUsageRecord(baseCtx({ usage: { input_tokens: 1_000_000, output_tokens: 0, cache_read: 0, cache_write: 0, cost_usd: 0.42 } }), 1, null)
+      expect(r.cost_usd).toBe(0.42)
+    } finally {
+      config.anthropic.model = saved
+    }
+  })
+
+  it('trigger: absent without ctx.trigger; raw values with null for a missing part, placed between jenkins and error', () => {
+    expect('trigger' in buildUsageRecord(baseCtx(), 1, null)).toBe(false)
+    const both = buildUsageRecord(baseCtx({ trigger: { event: 'pullrequest:comment_created', commentAuthor: '{A}' } }), 1, null)
+    expect(both.trigger).toEqual({ event: 'pullrequest:comment_created', comment_author: '{A}' })
+    expect(Object.keys(both).slice(-3)).toEqual(['jenkins', 'trigger', 'error'])
+    expect(buildUsageRecord(baseCtx({ trigger: { event: '', commentAuthor: '{A}' } }), 1, null).trigger).toEqual({ event: null, comment_author: '{A}' })
+    expect(buildUsageRecord(baseCtx({ trigger: { event: 'pullrequest:updated', commentAuthor: '' } }), 1, null).trigger).toEqual({ event: 'pullrequest:updated', comment_author: null })
+  })
+
+  it('U1 no mark → neither checked_commit nor dedup_source', () => {
+    const r = buildUsageRecord(baseCtx({ prInfo: { sourceCommit: 'abcdef0123456789' } as never }), 1, null)
+    expect('checked_commit' in r).toBe(false)
+    expect('dedup_source' in r).toBe(false)
+  })
+
+  it('U2 checked_commit is the full sourceCommit when marked, and dropped when the run errored afterwards', () => {
+    const ctx = baseCtx({ prInfo: { sourceCommit: 'abcdef0123456789' } as never, headChecked: true })
+    expect(buildUsageRecord(ctx, 1, null).checked_commit).toBe('abcdef0123456789')
+    expect('checked_commit' in buildUsageRecord(ctx, 1, { type: 'Error', message: 'boom', status: null })).toBe(false)
+  })
+
+  it('U3 dedup_source only with dedupHit, kept on an errored run', () => {
+    expect(buildUsageRecord(baseCtx({ dedupHit: 'checked_commit' }), 1, null).dedup_source).toBe('checked_commit')
+    expect(buildUsageRecord(baseCtx({ dedupHit: 'checked_commit' }), 1, { type: 'Error', message: 'boom', status: null }).dedup_source).toBe('checked_commit')
+    expect('dedup_source' in buildUsageRecord(baseCtx({ headChecked: true, prInfo: { sourceCommit: 'abc' } as never }), 1, null)).toBe(false)
+  })
+
+  it('a pre-FETCH_PR_INFO ctx builds a well-formed record', () => {
+    const r = buildUsageRecord(baseCtx({ action: 'SKIP', reviewNumber: 0, estimatedInputTokens: 0, usage: { input_tokens: 0, output_tokens: 0, cache_read: 0, cache_write: 0 } }), 1, null)
+    expect(r.run_id).toBe(`${config.vcsProvider}-repo-7-unknown`)
+    expect(r).toMatchObject({
+      pr_author: 'unknown', source_commit: 'unknown', source_branch: 'unknown', target_branch: 'unknown',
+      diff_size: null, changed_files: 0, cost_usd: 0, error: null, prompt_source: 'none', delta: null, touch_rate: null, verdict_score: null,
+    })
   })
 
   it('logs and costs a REPLY run at the reply model (REPLY_MODEL), not the reviewer model', () => {

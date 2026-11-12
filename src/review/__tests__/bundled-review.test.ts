@@ -13,6 +13,7 @@ vi.mock('../../config.js', () => ({
     context: { maxFiles: 20, maxFileLines: 500 },
     skipSourceBranches: [],
     skipTargetBranches: [],
+    onlyTargetBranches: [],
     diffExcludePatterns: [],
     thresholds: { minChangedFiles: 0, maxChangedFiles: 2, minChangedLines: 0, maxChangedLines: 10 },
     vcsProvider: 'bitbucket',
@@ -291,4 +292,95 @@ describe('bundled review', () => {
     expect(posted).toMatch(/was not reviewed/i)
     expect(record!.action).toBe('REVIEW')
   })
+})
+
+describe('bundled review: checked_commit mark', () => {
+  const FILES = ['a/one.ts', 'a/two.ts', 'b/one.ts', 'b/two.ts']
+  const HUGE = section('c/huge.ts', 700)
+  const CLEAN_PRIOR = '### Summary\nAll good.\n\n### Findings\nNo findings.\n\n### Unresolved Questions\nNone.'
+  const reReview = (diff: string, files: string[]) => ({
+    ...adapter(diff, files),
+    getPreviousReviewComments: vi.fn().mockResolvedValue([{ id: '200', body: CLEAN_PRIOR + '\n\n---\n*Reviewed by test-bot (m) | Prompt: repo | Review #1 | Commit: 111111111111*', createdOn: '2026-03-09T10:00:00Z' }]),
+    getCommitDiff: vi.fn().mockResolvedValue(SMALL_DIFF),
+  }) as unknown as VCSAdapter
+  const quiet = (extra: Partial<ReviewObject> = {}): ReviewObject =>
+    ({ summary: 'ok', findings: [], behavioral_diff: [], production_risk: [], unresolved_questions: [], delta_stats: { resolved: 0, still_open: 0, new_findings: 0 }, ...extra })
+  const every = (o: ReviewObject, text = renderReview(o)) => mockRunReview.mockResolvedValue({ text, usage, review: o })
+  const quietRun = (fn: () => Promise<unknown>) => async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    try { return await fn() } finally { log.mockRestore() }
+  }
+
+  it('BR1 NO_NEW_FINDINGS with every file reviewed → present', quietRun(async () => {
+    every(quiet())
+    const record = await review(reReview(BIG_DIFF, FILES), '1', false)
+
+    expect(mockRunReview.mock.calls.length).toBeGreaterThan(1)
+    expect(record!.action).toBe('NO_NEW_FINDINGS')
+    expect(record!.checked_commit).toBe(pr.sourceCommit)
+  }))
+
+  it('BR2 NO_NEW_FINDINGS with an oversized file left unreviewed → absent', quietRun(async () => {
+    every(quiet())
+    const record = await review(reReview(BIG_DIFF + HUGE, [...FILES, 'c/huge.ts']), '1', false)
+
+    expect(record!.action).toBe('NO_NEW_FINDINGS')
+    expect('checked_commit' in record!).toBe(false)
+  }))
+
+  it('BR3 coherent no_change in every bundle → present', quietRun(async () => {
+    every(quiet({ summary: '', no_change: true, delta_stats: undefined }))
+    const record = await review(reReview(BIG_DIFF, FILES), '1', false)
+
+    expect(record!.action).toBe('NO_CHANGE')
+    expect(record!.checked_commit).toBe(pr.sourceCommit)
+  }))
+
+  it('BR3 a regex-only NO_CHANGE bundle, or no_change with findings, → absent', quietRun(async () => {
+    const finding = { severity: 'MEDIUM' as const, title: 'x', file: 'a/one.ts', lines: '5', body: 'bad' }
+    const variants: Array<[string, () => void]> = [
+      ['regex-only in every bundle', () => every(quiet({ findings: [finding] }), 'NO_CHANGE')],
+      ['no_change plus a finding', () => every(quiet({ no_change: true, findings: [finding] }), 'NO_CHANGE')],
+      ['one coherent bundle and one regex-only', () => {
+        mockRunReview.mockImplementation(async (...args) => (args[6] as string).includes('a/one.ts')
+          ? { text: 'NO_CHANGE', usage, review: quiet({ summary: '', no_change: true }) }
+          : { text: 'Summary\nNO_CHANGE', usage, review: quiet() })
+      }],
+    ]
+    for (const [name, setup] of variants) {
+      vi.clearAllMocks(); mockRunReview.mockReset(); setup()
+      const record = await review(reReview(BIG_DIFF, FILES), '1', false)
+      expect(mockRunReview.mock.calls.length, name).toBeGreaterThan(1)
+      expect(record!.action, name).toBe('NO_CHANGE')
+      expect('checked_commit' in record!, name).toBe(false)
+    }
+  }))
+
+  it('BR3 merged path: a regex-only NO_CHANGE bundle beside a reviewed 0-finding bundle → NO_NEW_FINDINGS, absent', quietRun(async () => {
+    mockRunReview.mockImplementation(async (...args) => (args[6] as string).includes('a/one.ts')
+      ? { text: 'Summary\nNO_CHANGE', usage, review: quiet() }
+      : { text: renderReview(quiet()), usage, review: quiet() })
+    const record = await review(reReview(BIG_DIFF, FILES), '1', false)
+
+    expect(mockRunReview.mock.calls.length).toBeGreaterThan(1)
+    expect(record!.action).toBe('NO_NEW_FINDINGS')
+    expect('checked_commit' in record!).toBe(false)
+  }))
+
+  it('BR4 a posted bundled review with an unreviewed file → absent; with every file reviewed → present', quietRun(async () => {
+    mockRunReview.mockImplementation(async (...args) => {
+      const o = obj('Alpha problem', (args[6] as string).includes('a/one.ts') ? 'a/one.ts' : 'b/one.ts')
+      return { text: renderReview(o), usage, review: o }
+    })
+    const partial = adapter(BIG_DIFF + HUGE, [...FILES, 'c/huge.ts'])
+    const uncertain = await review(partial, '1', false)
+    expect(partial.postComment).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(partial.postComment).mock.calls[0][1]).toMatch(/was not reviewed/i)
+    expect('checked_commit' in uncertain!).toBe(false)
+
+    const full = adapter(BIG_DIFF, FILES)
+    const certain = await review(full, '1', false)
+    expect(full.postComment).toHaveBeenCalledTimes(1)
+    expect(certain!.checked_commit).toBe(pr.sourceCommit)
+  }))
 })

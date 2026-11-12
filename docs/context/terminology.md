@@ -23,6 +23,7 @@ Focus on shared vocabulary used across code, docs, and prompts.
 | Term | Definition | Aliases to avoid |
 |------|-----------|-----------------|
 | **Commit Hash Dedup** | Skip mechanism: agent parses the commit hash from the Review Footer and compares to current PR head; matching hash = skip | Hash check |
+| **Checked Commit** | Head an earlier run genuinely checked, reported as `checked_commit` in its `results.jsonl` record; CI stores it per PR and passes it back (`LAST_CHECKED_COMMIT`), so a later run on that same head goes to `CHECK_REPLIES` like a footer match. Never changes the delta base | Last reviewed commit, head_checked |
 | **Delta Diff Pre-Check** | Deterministic check: fetches commit-to-commit diff (last reviewed → current head), applies exclusions; if zero lines remain, skip without any API call | Incremental diff |
 | **Branch Exclusion** | Configurable glob patterns for source/target branches that skip review entirely (e.g. `release/*`, `main`) | Branch filter |
 

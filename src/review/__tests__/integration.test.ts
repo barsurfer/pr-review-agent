@@ -18,6 +18,8 @@ vi.mock('../../config.js', () => ({
     context: { maxFiles: 20, maxFileLines: 500 },
     skipSourceBranches: ['main', 'master', 'release/*', 'hotfix/*'],
     skipTargetBranches: ['main', 'master'],
+    onlyTargetBranches: [],
+    trigger: { event: '', commentAuthor: '', ignoreCommentAuthors: [] },
     diffExcludePatterns: ['*.lock', 'package-lock.json', '*.spec.ts'],
     thresholds: { minChangedFiles: 0, maxChangedFiles: 200, minChangedLines: 0, maxChangedLines: 3000 },
     vcsProvider: 'bitbucket',
@@ -155,6 +157,8 @@ beforeEach(() => {
   cfg.review = { maxFindings: 0, splitCheck: false, todoScan: true, effort: '' }
   cfg.skipSourceBranches = ['main', 'master', 'release/*', 'hotfix/*']
   cfg.skipTargetBranches = ['main', 'master']
+  cfg.onlyTargetBranches = []
+  cfg.trigger = { event: '', commentAuthor: '', ignoreCommentAuthors: [] }
   cfg.diffExcludePatterns = ['*.lock', 'package-lock.json', '*.spec.ts']
   cfg.thresholds = { minChangedFiles: 0, maxChangedFiles: 200, minChangedLines: 0, maxChangedLines: 3000 }
 })
@@ -2589,5 +2593,685 @@ describe('skip directed-elsewhere replies', () => {
     expect(record!.action).not.toBe('REPLY')
     expect(mockRunCommentResponse).not.toHaveBeenCalled()
     expect(adapter.postReply).not.toHaveBeenCalled()
+  })
+})
+
+describe('trigger pre-check (IGNORE_COMMENT_AUTHORS) runs before any VCS call', () => {
+  const COMMENT_BY_BOT = { event: 'pullrequest:comment_created', commentAuthor: '{BOT}' }
+  const run = (adapter: VCSAdapter, trigger?: { event: string; commentAuthor: string }, force: 'off' | 'clean' | 're-review' = 'off', dryRun = false) =>
+    review(adapter, '100', dryRun, undefined, force, true, 'repo', undefined, trigger)
+  const runCapturing = async (adapter: VCSAdapter, trigger?: { event: string; commentAuthor: string }, force: 'off' | 'clean' | 're-review' = 'off', dryRun = false) => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const record = await run(adapter, trigger, force, dryRun)
+      return { record: record!, logs: [...logSpy.mock.calls, ...warnSpy.mock.calls].map(c => c.join(' ')) }
+    } finally {
+      logSpy.mockRestore(); warnSpy.mockRestore()
+    }
+  }
+
+  beforeEach(() => { cfg.trigger.ignoreCommentAuthors = ['bot'] })
+
+  it('listed comment author → SKIP with no VCS or model call, record logged', async () => {
+    const adapter = makeAdapter()
+
+    const record = await run(adapter, COMMENT_BY_BOT)
+
+    for (const fn of Object.values(adapter)) expect(fn).not.toHaveBeenCalled()
+    expect(mockRunReview).not.toHaveBeenCalled()
+    expect(mockRunJudge).not.toHaveBeenCalled()
+    expect(mockRunCommentResponse).not.toHaveBeenCalled()
+    expect(vi.mocked(runBreadth)).not.toHaveBeenCalled()
+    expect(vi.mocked(runLens)).not.toHaveBeenCalled()
+    expect(mockLoadPrompt).not.toHaveBeenCalled()
+    expect(mockFetchContext).not.toHaveBeenCalled()
+    expect(logUsageRecord).toHaveBeenCalledTimes(1)
+    expect(record!.action).toBe('SKIP')
+    expect(record!.skip_reason).toBe('pullrequest:comment_created by "{BOT}" matches IGNORE_COMMENT_AUTHORS')
+    expect(record!.trigger).toEqual({ event: 'pullrequest:comment_created', comment_author: '{BOT}' })
+    expect(record!.pr_author).toBe('unknown')
+    expect(record!.source_commit).toBe('unknown')
+    expect(record!.diff_size).toBeNull()
+    expect(record!.cost_usd).toBe(0)
+    expect(record!.review_number).toBe(0)
+    expect(record!.error).toBeNull()
+    expect(record!.run_id).toBe('bitbucket-repo-100-unknown')
+  })
+
+  it('listed author on pullrequest:updated (a bot push) reviews normally', async () => {
+    const adapter = makeAdapter()
+
+    const record = await run(adapter, { event: 'pullrequest:updated', commentAuthor: '{BOT}' })
+
+    expect(adapter.getPullRequestInfo).toHaveBeenCalledTimes(1)
+    expect(record!.action).toBe('REVIEW')
+    expect(record!.trigger).toEqual({ event: 'pullrequest:updated', comment_author: '{BOT}' })
+  })
+
+  it('unlisted author → normal flow, trigger recorded and logged', async () => {
+    const { record, logs } = await runCapturing(makeAdapter(), { event: 'pullrequest:comment_created', commentAuthor: '{human}' })
+
+    expect(record.action).toBe('REVIEW')
+    expect(record.trigger).toEqual({ event: 'pullrequest:comment_created', comment_author: '{human}' })
+    expect(logs).toContain('Trigger: pullrequest:comment_created by {human}')
+  })
+
+  it.each(['clean', 're-review'] as const)('--force %s overrides the ignore list', async (force) => {
+    const adapter = makeAdapter()
+
+    const { record, logs } = await runCapturing(adapter, COMMENT_BY_BOT, force, true)
+
+    expect(adapter.getPullRequestInfo).toHaveBeenCalledTimes(1)
+    expect(record.action).toBe('REVIEW')
+    expect(record.force).toBe(force)
+    expect(logs).toContain('  {BOT} matches IGNORE_COMMENT_AUTHORS - running anyway (--force)')
+  })
+
+  it('an empty --force (CI passes "" for an unset parameter) does not override the ignore list', async () => {
+    const adapter = makeAdapter()
+
+    const record = await run(adapter, COMMENT_BY_BOT, '' as never)
+
+    expect(adapter.getPullRequestInfo).not.toHaveBeenCalled()
+    expect(record!.action).toBe('SKIP')
+    expect(record!.skip_reason).toContain('IGNORE_COMMENT_AUTHORS')
+  })
+
+  it('dry-run still skips', async () => {
+    const adapter = makeAdapter()
+
+    const record = await run(adapter, COMMENT_BY_BOT, 'off', true)
+
+    expect(adapter.getPullRequestInfo).not.toHaveBeenCalled()
+    expect(record!.action).toBe('SKIP')
+    expect(record!.dry_run).toBe(true)
+  })
+
+  it('author without event is not skipped, warns, and records a null event', async () => {
+    const { record, logs } = await runCapturing(makeAdapter(), { event: '', commentAuthor: '{BOT}' })
+
+    expect(record.action).toBe('REVIEW')
+    expect(record.trigger).toEqual({ event: null, comment_author: '{BOT}' })
+    expect(logs).toContain('Trigger: unknown event by {BOT}')
+    expect(logs.some(l => l.includes('Comment author given without an event'))).toBe(true)
+  })
+
+  it('event without author is not skipped and does not warn', async () => {
+    const { record, logs } = await runCapturing(makeAdapter(), { event: 'pullrequest:comment_created', commentAuthor: '' })
+
+    expect(record.action).toBe('REVIEW')
+    expect(record.trigger).toEqual({ event: 'pullrequest:comment_created', comment_author: null })
+    expect(logs).toContain('Trigger: pullrequest:comment_created')
+    expect(logs.some(l => l.includes('without an event'))).toBe(false)
+  })
+
+  it('author without event and an empty ignore list does not warn', async () => {
+    cfg.trigger.ignoreCommentAuthors = []
+
+    const { logs } = await runCapturing(makeAdapter(), { event: '', commentAuthor: '{BOT}' })
+
+    expect(logs.some(l => l.includes('without an event'))).toBe(false)
+  })
+
+  it('no trigger: no trigger key, no Trigger line, and the flow starts at FETCH_PR_INFO', async () => {
+    const adapter = makeAdapter()
+
+    const { record, logs } = await runCapturing(adapter)
+
+    expect('trigger' in record).toBe(false)
+    expect(Object.keys(record).slice(-2)).toEqual(['jenkins', 'error'])
+    expect(logs.some(l => l.startsWith('Trigger:'))).toBe(false)
+    expect(adapter.getPullRequestInfo).toHaveBeenCalledTimes(1)
+    expect(record.action).toBe('REVIEW')
+  })
+})
+
+describe('ONLY_TARGET_BRANCHES allow-list: after both skip lists, before the diff', () => {
+  const withBranches = (sourceBranch: string, targetBranch: string) =>
+    makeAdapter({ getPullRequestInfo: vi.fn().mockResolvedValue({ ...makePRInfo(), sourceBranch, targetBranch }) })
+  const runWithWarnings = async (adapter: VCSAdapter) => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const record = await review(adapter, '100', true)
+      return { record: record!, warnings: warnSpy.mock.calls.map(c => c.join(' ')) }
+    } finally {
+      warnSpy.mockRestore()
+    }
+  }
+
+  it('empty: a develop target is reviewed as today', async () => {
+    const record = await review(withBranches('feature/x', 'develop'), '100', true)
+
+    expect(record!.action).toBe('REVIEW')
+  })
+
+  it('an unlisted target is skipped before the diff is fetched', async () => {
+    cfg.onlyTargetBranches = ['develop', 'release/*']
+    const adapter = withBranches('feature/x', 'feature/base')
+
+    const record = await review(adapter, '100', true)
+
+    expect(record!.action).toBe('SKIP')
+    expect(record!.skip_reason).toBe('target branch "feature/base" is not in ONLY_TARGET_BRANCHES (develop,release/*)')
+    expect(adapter.getDiff).not.toHaveBeenCalled()
+  })
+
+  it('release/* wildcard admits release/1.2', async () => {
+    cfg.onlyTargetBranches = ['develop', 'release/*']
+
+    const record = await review(withBranches('fix/y', 'release/1.2'), '100', true)
+
+    expect(record!.action).toBe('REVIEW')
+  })
+
+  it('SKIP_TARGET_BRANCHES wins over ONLY_TARGET_BRANCHES, with a warning', async () => {
+    cfg.onlyTargetBranches = ['main']
+
+    const { record, warnings } = await runWithWarnings(withBranches('feature/x', 'main'))
+
+    expect(record.action).toBe('SKIP')
+    expect(record.skip_reason).toBe('target branch "main" matches SKIP_TARGET_BRANCHES')
+    expect(warnings).toContain('  "main" is in both SKIP_TARGET_BRANCHES and ONLY_TARGET_BRANCHES - the skip list wins; set SKIP_TARGET_BRANCHES= to review it')
+  })
+
+  it('a SKIP_TARGET_BRANCHES match emits no ONLY_TARGET_BRANCHES warning when the allow-list is empty or does not list it', async () => {
+    for (const only of [[], ['develop']]) {
+      cfg.onlyTargetBranches = only
+      const { record, warnings } = await runWithWarnings(withBranches('feature/x', 'main'))
+
+      expect(record.skip_reason).toBe('target branch "main" matches SKIP_TARGET_BRANCHES')
+      expect(warnings.some(w => w.includes('ONLY_TARGET_BRANCHES'))).toBe(false)
+    }
+  })
+
+  it('SKIP_SOURCE_BRANCHES still wins', async () => {
+    cfg.onlyTargetBranches = ['develop']
+
+    const record = await review(withBranches('hotfix/x', 'develop'), '100', true)
+
+    expect(record!.action).toBe('SKIP')
+    expect(record!.skip_reason).toBe('source branch "hotfix/x" matches SKIP_SOURCE_BRANCHES')
+  })
+
+  it('main-only recipe: empty skip-target + ONLY=main reviews into main and skips a stacked PR', async () => {
+    cfg.skipTargetBranches = []
+    cfg.onlyTargetBranches = ['main']
+
+    expect((await review(withBranches('feature/x', 'main'), '100', true))!.action).toBe('REVIEW')
+    const stacked = await review(withBranches('feature/y', 'feature/x'), '100', true)
+    expect(stacked!.action).toBe('SKIP')
+    expect(stacked!.skip_reason).toContain('is not in ONLY_TARGET_BRANCHES')
+  })
+})
+
+describe('checked commit from CI', () => {
+  const HEAD40 = COMMIT_A + '4444555566667777888899990000'
+  const DEDUP_REASON = 'head already checked by an earlier run and no unanswered questions'
+  const MATCH_LINE = `  Source commit ${COMMIT_A} already checked by an earlier run (checked commit) — checking for unanswered replies...`
+  const isCheckedLog = (l: string) => l.includes('(checked commit)') || l.startsWith('  Checked commit ')
+  type RunOpts = { dryRun?: boolean; force?: 'off' | 'clean' | 're-review'; trigger?: { event: string; commentAuthor: string } }
+
+  const runWith = async (adapter: VCSAdapter, checkedCommit: string | undefined, opts: RunOpts = {}) => {
+    const logs: string[] = []
+    const capture = (...a: unknown[]) => { const l = a.map(String).join(' '); if (!l.startsWith('\n=== Usage ===')) logs.push(l) }
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(capture)
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(capture)
+    try {
+      const record = await review(adapter, '100', opts.dryRun ?? false, undefined, opts.force ?? 'off', true, 'repo', undefined, opts.trigger, checkedCommit)
+      return { record: record!, logs }
+    } finally {
+      logSpy.mockRestore(); warnSpy.mockRestore()
+    }
+  }
+  const failWith = async (adapter: VCSAdapter, checkedCommit: string | undefined, message: string) => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await expect(review(adapter, '100', false, undefined, 'off', true, 'repo', undefined, undefined, checkedCommit)).rejects.toThrow(message)
+    } finally {
+      logSpy.mockRestore(); warnSpy.mockRestore()
+    }
+    return vi.mocked(logUsageRecord).mock.calls[0][0]
+  }
+  const sameHeadAdapter = (replies: CommentReply[] = [], agentReplyCount = 0, overrides: Partial<VCSAdapter> = {}) => makeAdapter({
+    getPreviousReviewComments: vi.fn().mockResolvedValue([{ id: '200', body: CLEAN_PRIOR + footer(1, COMMIT_A), createdOn: PRIOR_AT }]),
+    getRepliesToReviewComments: vi.fn().mockResolvedValue({ replies, agentReplyCount }),
+    ...overrides,
+  })
+  const quietZero = () => mockReviewer(reviewWith([], { delta_stats: { resolved: 0, still_open: 0, new_findings: 0 } }))
+  const noChange = (findings: ReviewObject['findings'] = []) => mockReviewer(reviewWith(findings, { summary: '', no_change: true }))
+
+  describe('input: consulted only after a footer miss, with previous reviews, when not forced', () => {
+    it('I1 match with an older footer → CHECK_REPLIES: no delta fetch, no model call, DEDUP_SKIP with its own reason', async () => {
+      const adapter = reReviewAdapter(CLEAN_PRIOR)
+
+      const { record, logs } = await runWith(adapter, COMMIT_A)
+
+      expect(adapter.getCommitDiff).not.toHaveBeenCalled()
+      expect(mockRunReview).not.toHaveBeenCalled()
+      expect(adapter.getRepliesToReviewComments).toHaveBeenCalledTimes(1)
+      expect(adapter.getRepliesToReviewComments).toHaveBeenCalledWith('100', ['200'])
+      expect(logs).toContain(MATCH_LINE)
+      expect(record.action).toBe('DEDUP_SKIP')
+      expect(record.skip_reason).toBe(DEDUP_REASON)
+      expect(record.review_number).toBe(1)
+      expect(record.dedup_source).toBe('checked_commit')
+      expect(record.checked_commit).toBe(COMMIT_A)
+    })
+
+    it('I2 match + unanswered reply → REPLY', async () => {
+      const adapter = reReviewAdapter(CLEAN_PRIOR, [devReply('2026-03-09T12:00:00Z')])
+
+      const { record } = await runWith(adapter, COMMIT_A)
+
+      expect(mockRunReview).not.toHaveBeenCalled()
+      expect(mockRunCommentResponse).toHaveBeenCalledTimes(1)
+      expect(adapter.postReply).toHaveBeenCalledTimes(1)
+      expect(record.action).toBe('REPLY')
+      expect(record.skip_reason).toBeNull()
+      expect(record.dedup_source).toBe('checked_commit')
+      expect(record.checked_commit).toBe(COMMIT_A)
+    })
+
+    it('I3 match + reply limit → DEDUP_SKIP keeps the reply-limit reason', async () => {
+      const adapter = reReviewAdapter(CLEAN_PRIOR, [], {
+        getRepliesToReviewComments: vi.fn().mockResolvedValue({ replies: [devReply('2026-03-09T12:00:00Z')], agentReplyCount: 3 }),
+      })
+
+      const { record } = await runWith(adapter, COMMIT_A)
+
+      expect(record.action).toBe('DEDUP_SKIP')
+      expect(record.skip_reason).toBe('reply limit reached (3/3)')
+      expect(record.dedup_source).toBe('checked_commit')
+      expect(record.checked_commit).toBe(COMMIT_A)
+    })
+
+    it('I4 prefix forms: a 12-char value against a 40-char head, and a 40-char value against a 12-char head', async () => {
+      const longHead = reReviewAdapter(CLEAN_PRIOR, [], { getPullRequestInfo: vi.fn().mockResolvedValue(makePRInfo(HEAD40)) })
+      const a = await runWith(longHead, COMMIT_A)
+      expect(a.record.skip_reason).toBe(DEDUP_REASON)
+      expect(a.record.checked_commit).toBe(HEAD40)
+
+      vi.clearAllMocks(); setupModelMocks()
+      const b = await runWith(reReviewAdapter(CLEAN_PRIOR), HEAD40)
+      expect(b.record.skip_reason).toBe(DEDUP_REASON)
+      expect(b.record.checked_commit).toBe(COMMIT_A)
+    })
+
+    it('I5 mismatch → one log line, and the delta and model input exactly as if unset', async () => {
+      mockReviewer(reviewWith([NEW_FINDING]))
+      const unsetAdapter = reReviewAdapter(CLEAN_PRIOR)
+      const unset = await runWith(unsetAdapter, undefined, { dryRun: true })
+      const unsetReview = structuredClone(mockRunReview.mock.calls)
+      const unsetDelta = structuredClone(vi.mocked(unsetAdapter.getCommitDiff).mock.calls)
+
+      vi.clearAllMocks(); mockReviewer(reviewWith([NEW_FINDING]))
+      const adapter = reReviewAdapter(CLEAN_PRIOR)
+      const mismatch = await runWith(adapter, 'bbbbbbbbbbbbcccc', { dryRun: true })
+
+      expect(vi.mocked(adapter.getCommitDiff).mock.calls).toEqual(unsetDelta)
+      expect(adapter.getCommitDiff).toHaveBeenCalledWith(PRIOR_COMMIT, COMMIT_A)
+      expect(mockRunReview.mock.calls).toEqual(unsetReview)
+      expect(mismatch.logs.filter(isCheckedLog)).toEqual([`  Checked commit bbbbbbbbbbbb is not the current head ${COMMIT_A} — ignoring it`])
+      expect(mismatch.logs.filter(l => !isCheckedLog(l))).toEqual(unset.logs)
+      expect('dedup_source' in mismatch.record).toBe(false)
+      expect(mismatch.record.action).toBe(unset.record.action)
+    })
+
+    it('I6 no previous reviews → not consulted (first review runs)', async () => {
+      const { record, logs } = await runWith(makeAdapter(), COMMIT_A)
+
+      expect(logs.some(isCheckedLog)).toBe(false)
+      expect(mockRunReview).toHaveBeenCalledTimes(1)
+      expect(record.action).toBe('REVIEW')
+      expect('dedup_source' in record).toBe(false)
+    })
+
+    it.each(['clean', 're-review'] as const)('I7 --force %s → not consulted', async (force) => {
+      mockReviewer(reviewWith([NEW_FINDING]))
+      const { record, logs } = await runWith(reReviewAdapter(CLEAN_PRIOR), COMMIT_A, { force, dryRun: true })
+
+      expect(logs.some(isCheckedLog)).toBe(false)
+      expect(mockRunReview).toHaveBeenCalledTimes(1)
+      expect('dedup_source' in record).toBe(false)
+    })
+
+    it("I7 --force '' (CI's unset value) → consulted", async () => {
+      const { record, logs } = await runWith(reReviewAdapter(CLEAN_PRIOR), COMMIT_A, { force: '' as never })
+
+      expect(logs).toContain(MATCH_LINE)
+      expect(mockRunReview).not.toHaveBeenCalled()
+      expect(record.dedup_source).toBe('checked_commit')
+    })
+
+    it('I8 an older head as the value never changes the delta base (footer..head)', async () => {
+      mockReviewer(reviewWith([NEW_FINDING]))
+      const adapter = reReviewAdapter(CLEAN_PRIOR)
+
+      await runWith(adapter, 'ddd444555666', { dryRun: true })
+
+      expect(adapter.getCommitDiff).toHaveBeenCalledWith(PRIOR_COMMIT, COMMIT_A)
+      expect(mockRunReview.mock.calls[0][11]).toContain('+foo()')
+    })
+
+    it('I9 footer already names the head → today\'s path, not consulted, no log', async () => {
+      const { record, logs } = await runWith(sameHeadAdapter(), 'eeeeeeeeeeee')
+
+      expect(logs.some(isCheckedLog)).toBe(false)
+      expect(record.skip_reason).toBe('no new commits and no unanswered questions')
+      expect('dedup_source' in record).toBe(false)
+    })
+
+    it('I10 known limitation: same head after a retarget still dedups on the checked commit', async () => {
+      const adapter = reReviewAdapter(CLEAN_PRIOR, [], { getPullRequestInfo: vi.fn().mockResolvedValue({ ...makePRInfo(), targetBranch: 'release/2.0' }) })
+
+      const { record } = await runWith(adapter, COMMIT_A)
+
+      expect(record.target_branch).toBe('release/2.0')
+      expect(record.action).toBe('DEDUP_SKIP')
+      expect(record.skip_reason).toBe(DEDUP_REASON)
+      expect(mockRunReview).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('mark rule: checked_commit present', () => {
+    it('I11 a posted REVIEW and RE_REVIEW carry the full sourceCommit', async () => {
+      mockReviewer(reviewWith([NEW_FINDING]))
+      const first = await runWith(makeAdapter({ getPullRequestInfo: vi.fn().mockResolvedValue(makePRInfo(HEAD40)) }), undefined)
+      expect(first.record.action).toBe('REVIEW')
+      expect(first.record.checked_commit).toBe(HEAD40)
+
+      vi.clearAllMocks(); mockReviewer(reviewWith([NEW_FINDING]))
+      const again = await runWith(reReviewAdapter(CLEAN_PRIOR), undefined)
+      expect(again.record.action).toBe('RE_REVIEW')
+      expect(again.record.checked_commit).toBe(COMMIT_A)
+      expect('dedup_source' in again.record).toBe(false)
+    })
+
+    it('I11 the new keys sit before jenkins, so trigger and error keep their place at the end', async () => {
+      mockReviewer(reviewWith([NEW_FINDING]))
+      const { record } = await runWith(makeAdapter(), COMMIT_A, { trigger: { event: 'pullrequest:updated', commentAuthor: '{dev}' } })
+
+      expect(Object.keys(record).slice(-4)).toEqual(['checked_commit', 'jenkins', 'trigger', 'error'])
+    })
+
+    it('I13 JUDGE-gate NO_NEW_FINDINGS', async () => {
+      quietZero()
+      const { record } = await runWith(reReviewAdapter(CLEAN_PRIOR), undefined)
+
+      expect(record.action).toBe('NO_NEW_FINDINGS')
+      expect(record.checked_commit).toBe(COMMIT_A)
+    })
+
+    it('I14 coherent no_change with 0 findings: no reply, reply, reply limit', async () => {
+      noChange()
+      const none = await runWith(reReviewAdapter(CLEAN_PRIOR), undefined)
+      expect(none.record.action).toBe('NO_CHANGE')
+      expect(none.record.checked_commit).toBe(COMMIT_A)
+
+      vi.clearAllMocks(); noChange()
+      const reply = await runWith(reReviewAdapter(CLEAN_PRIOR, [devReply('2026-03-09T12:00:00Z')]), undefined)
+      expect(reply.record.action).toBe('REPLY')
+      expect(reply.record.checked_commit).toBe(COMMIT_A)
+
+      vi.clearAllMocks(); noChange()
+      const limited = await runWith(reReviewAdapter(CLEAN_PRIOR, [], {
+        getRepliesToReviewComments: vi.fn().mockResolvedValue({ replies: [devReply('2026-03-09T12:00:00Z')], agentReplyCount: 3 }),
+      }), undefined)
+      expect(limited.record.skip_reason).toBe('reply limit reached (3/3)')
+      expect(limited.record.checked_commit).toBe(COMMIT_A)
+    })
+
+    it('I18 a quiet 0-finding re-review that answers a reply', async () => {
+      quietZero()
+      const { record } = await runWith(reReviewAdapter(CLEAN_PRIOR, [devReply('2026-03-09T12:00:00Z')]), undefined)
+
+      expect(record.action).toBe('REPLY')
+      expect(record.checked_commit).toBe(COMMIT_A)
+    })
+
+    it('I19 JUDGE-gate reply limit', async () => {
+      cfg.reply.maxComments = 1
+      quietZero()
+      const { record } = await runWith(reReviewAdapter(CLEAN_PRIOR, [agentReply('2026-03-09T11:00:00Z'), devReply('2026-03-09T12:00:00Z')]), undefined)
+
+      expect(record.action).toBe('DEDUP_SKIP')
+      expect(record.skip_reason).toBe('reply limit reached (1/1)')
+      expect(mockRunCommentResponse).not.toHaveBeenCalled()
+      expect(record.checked_commit).toBe(COMMIT_A)
+    })
+
+    it('I20 footer same-commit and zero-reviewable delta, each ending DEDUP_SKIP or REPLY', async () => {
+      const lockOnly = 'diff --git a/package-lock.json b/package-lock.json\n--- a/package-lock.json\n+++ b/package-lock.json\n@@ -1 +1 @@\n-"a"\n+"b"\n'
+      const cases: Array<[string, () => VCSAdapter, string]> = [
+        ['same-commit', () => sameHeadAdapter(), 'DEDUP_SKIP'],
+        ['same-commit + reply', () => sameHeadAdapter([devReply('2026-03-09T12:00:00Z')]), 'REPLY'],
+        ['zero delta', () => reReviewAdapter(CLEAN_PRIOR, [], { getCommitDiff: vi.fn().mockResolvedValue(lockOnly) }), 'DEDUP_SKIP'],
+        ['zero delta + reply', () => reReviewAdapter(CLEAN_PRIOR, [devReply('2026-03-09T12:00:00Z')], { getCommitDiff: vi.fn().mockResolvedValue(lockOnly) }), 'REPLY'],
+      ]
+      for (const [name, make, action] of cases) {
+        vi.clearAllMocks(); setupModelMocks()
+        const { record } = await runWith(make(), undefined)
+        expect(mockRunReview, name).not.toHaveBeenCalled()
+        expect(record.action, name).toBe(action)
+        expect(record.checked_commit, name).toBe(COMMIT_A)
+        expect('dedup_source' in record, name).toBe(false)
+      }
+    })
+
+    it('I21 pre-post race (another run posted for this head)', async () => {
+      mockReviewer(reviewWith([NEW_FINDING]))
+      const adapter = makeAdapter({
+        getPreviousReviewComments: vi.fn()
+          .mockResolvedValueOnce([])
+          .mockResolvedValueOnce([{ id: '201', body: CLEAN_PRIOR + footer(1, COMMIT_A), createdOn: PRIOR_AT }]),
+      })
+
+      const { record } = await runWith(adapter, undefined)
+
+      expect(adapter.postComment).not.toHaveBeenCalled()
+      expect(record.skip_reason).toBe('Another agent run already reviewed this commit (race condition avoided)')
+      expect(record.checked_commit).toBe(COMMIT_A)
+    })
+
+    it('I22 a delta dropped as larger than the PR diff still marks (deterministic)', async () => {
+      const huge = 'diff --git a/src/other.ts b/src/other.ts\n--- a/src/other.ts\n+++ b/src/other.ts\n@@ -1,1 +1,80 @@\n' + Array.from({ length: 80 }, (_, i) => `+export const merged${i} = ${i}`).join('\n') + '\n'
+      quietZero()
+      const { record } = await runWith(reReviewAdapter(CLEAN_PRIOR, [], { getCommitDiff: vi.fn().mockResolvedValue(huge) }), undefined)
+
+      expect(record.action).toBe('NO_NEW_FINDINGS')
+      expect(record.checked_commit).toBe(COMMIT_A)
+    })
+  })
+
+  describe('mark rule: checked_commit absent', () => {
+    it('I12 dry-run never marks, though it still consults the checked commit', async () => {
+      mockReviewer(reviewWith([NEW_FINDING]))
+      const first = await runWith(makeAdapter(), undefined, { dryRun: true })
+      expect(first.record.action).toBe('REVIEW')
+      expect('checked_commit' in first.record).toBe(false)
+
+      vi.clearAllMocks(); setupModelMocks()
+      const footerHit = await runWith(sameHeadAdapter(), undefined, { dryRun: true })
+      expect(footerHit.record.action).toBe('DEDUP_SKIP')
+      expect('checked_commit' in footerHit.record).toBe(false)
+
+      vi.clearAllMocks(); setupModelMocks()
+      const consulted = await runWith(reReviewAdapter(CLEAN_PRIOR), COMMIT_A, { dryRun: true })
+      expect(consulted.record.dedup_source).toBe('checked_commit')
+      expect('checked_commit' in consulted.record).toBe(false)
+    })
+
+    it('I15 no_change true with a finding → action NO_CHANGE, not marked', async () => {
+      noChange([NEW_FINDING])
+      const { record } = await runWith(reReviewAdapter(CLEAN_PRIOR), undefined)
+
+      expect(record.action).toBe('NO_CHANGE')
+      expect('checked_commit' in record).toBe(false)
+    })
+
+    it('I16 a bare NO_CHANGE line inside a finding body → NO_CHANGE, not marked', async () => {
+      mockReviewer(reviewWith([{ ...NEW_FINDING, body: 'desc\nNO_CHANGE\nmore' }]))
+      const { record } = await runWith(reReviewAdapter(CLEAN_PRIOR), undefined)
+
+      expect(record.action).toBe('NO_CHANGE')
+      expect('checked_commit' in record).toBe(false)
+    })
+
+    it('I17 POST_REVIEW empty or NO_CHANGE after cleanup', async () => {
+      for (const text of ['<!-- jenkins: build 7 -->', 'NO_CHANGE <!-- jenkins: build 7 -->']) {
+        vi.clearAllMocks()
+        setupModelMocks(text, reviewWith([NEW_FINDING]))
+        const { record } = await runWith(reReviewAdapter(CLEAN_PRIOR), undefined)
+        expect(record.skip_reason, text).toBe('Review text empty or NO_CHANGE after cleanup')
+        expect('checked_commit' in record, text).toBe(false)
+      }
+    })
+
+    it('I18 a non-quiet 0-finding re-review that answers a reply (prior had findings, or one still open)', async () => {
+      quietZero()
+      const flagged = await runWith(reReviewAdapter(FLAGGED_PRIOR, [devReply('2026-03-09T12:00:00Z')]), undefined)
+      expect(flagged.record.action).toBe('REPLY')
+      expect('checked_commit' in flagged.record).toBe(false)
+
+      vi.clearAllMocks()
+      mockReviewer(reviewWith([], { delta_stats: { resolved: 0, still_open: 1, new_findings: 0 } }))
+      const open = await runWith(reReviewAdapter(CLEAN_PRIOR, [devReply('2026-03-09T12:00:00Z')]), undefined)
+      expect(open.record.action).toBe('REPLY')
+      expect('checked_commit' in open.record).toBe(false)
+    })
+
+    it('I18 non-quiet 0-finding re-review + reply: VCS and model calls are exactly the reply path', async () => {
+      quietZero()
+      const reply = devReply('2026-03-09T12:00:00Z')
+      const priorBody = FLAGGED_PRIOR + footer(1, PRIOR_COMMIT)
+      const adapter = reReviewAdapter(FLAGGED_PRIOR, [reply])
+
+      const { record, logs } = await runWith(adapter, undefined)
+
+      expect(vi.mocked(adapter.getPullRequestInfo).mock.calls).toEqual([['100']])
+      expect(vi.mocked(adapter.getPreviousReviewComments).mock.calls).toEqual([['100']])
+      expect(vi.mocked(adapter.getCommitDiff).mock.calls).toEqual([[PRIOR_COMMIT, COMMIT_A]])
+      expect(vi.mocked(adapter.getRepliesToReviewComments).mock.calls).toEqual([['100', ['200'], true]])
+      expect(mockRunReview).toHaveBeenCalledTimes(1)
+      expect(mockRunReview.mock.calls[0][9]).toEqual([{ id: '200', body: priorBody, createdOn: PRIOR_AT }])
+      expect(mockRunReview.mock.calls[0][10]).toEqual([reply])
+      expect(mockRunJudge).not.toHaveBeenCalled()
+      expect(mockRunCommentResponse.mock.calls).toEqual([[cfg.llmApiKey, 'claude-haiku-4-5-20251001', 1, mockRunReview.mock.calls[0][6], priorBody, [reply]]])
+      expect(adapter.postComment).not.toHaveBeenCalled()
+      expect(vi.mocked(adapter.postReply).mock.calls).toEqual([['100', '200', 'Thanks for clarifying.' + buildReplyFooter('test-bot', 'claude-haiku-4-5-20251001', process.env.BUILD_URL || undefined)]])
+      expect(logs).toContain('  Re-review found nothing new, but a developer reply is unanswered — answering it in-thread')
+      expect(logs.some(l => l.includes('Re-review with no new findings — posting'))).toBe(false)
+      expect(record).toMatchObject({ action: 'REPLY', skip_reason: null, review_number: 2 })
+      expect('checked_commit' in record).toBe(false)
+    })
+
+    it('I22 the delta fetch rejects, then NO_NEW_FINDINGS', async () => {
+      quietZero()
+      const { record } = await runWith(reReviewAdapter(CLEAN_PRIOR, [], { getCommitDiff: vi.fn().mockRejectedValue(new Error('404')) }), undefined)
+
+      expect(record.action).toBe('NO_NEW_FINDINGS')
+      expect('checked_commit' in record).toBe(false)
+    })
+
+    it('I22 the delta fetch rejects, then the full-diff fallback review is posted (H9 guard)', async () => {
+      mockReviewer(reviewWith([NEW_FINDING]))
+      const adapter = reReviewAdapter(CLEAN_PRIOR, [], { getCommitDiff: vi.fn().mockRejectedValue(new Error('404')) })
+
+      const { record } = await runWith(adapter, undefined)
+
+      expect(mockRunReview.mock.calls[0][11]).toBe('')
+      expect(adapter.postComment).toHaveBeenCalledTimes(1)
+      expect(record.action).toBe('RE_REVIEW')
+      expect('checked_commit' in record).toBe(false)
+    })
+
+    it('I23 SKIP runs (branch, ONLY_TARGET_BRANCHES, threshold, budget, trigger ignore) never carry it', async () => {
+      const cases: Array<[string, () => void, () => VCSAdapter, RunOpts]> = [
+        ['branch', () => {}, () => reReviewAdapter(CLEAN_PRIOR, [], { getPullRequestInfo: vi.fn().mockResolvedValue({ ...makePRInfo(), sourceBranch: 'hotfix/x' }) }), {}],
+        ['only-target', () => { cfg.onlyTargetBranches = ['release/*'] }, () => reReviewAdapter(CLEAN_PRIOR), {}],
+        ['threshold', () => { cfg.thresholds.minChangedLines = 1000 }, () => reReviewAdapter(CLEAN_PRIOR), {}],
+        ['budget', () => { cfg.anthropic.maxInputTokens = 5 }, () => makeAdapter(), {}],
+        ['trigger ignore', () => { cfg.trigger.ignoreCommentAuthors = ['bot'] }, () => reReviewAdapter(CLEAN_PRIOR), { trigger: { event: 'pullrequest:comment_created', commentAuthor: '{bot}' } }],
+      ]
+      for (const [name, configure, make, opts] of cases) {
+        vi.clearAllMocks(); setupModelMocks(); configure()
+        const { record } = await runWith(make(), COMMIT_A, opts)
+        expect(record.action, name).toBe('SKIP')
+        expect('checked_commit' in record, name).toBe(false)
+        expect('dedup_source' in record, name).toBe(false)
+      }
+    })
+
+    it('I26 an outcome sink (benchmark) never marks, even at a mark point', async () => {
+      const sink = vi.fn().mockResolvedValue(undefined)
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+      try {
+        const first = await review(makeAdapter(), '100', false, undefined, 'off', false, '', sink)
+        expect(sink).toHaveBeenCalledTimes(1)
+        expect('checked_commit' in first!).toBe(false)
+
+        const footerHit = await review(sameHeadAdapter(), '100', false, undefined, 'off', false, '', sink, undefined, COMMIT_A)
+        expect(footerHit!.action).toBe('DEDUP_SKIP')
+        expect('checked_commit' in footerHit!).toBe(false)
+      } finally {
+        logSpy.mockRestore()
+      }
+    })
+  })
+
+  describe('errors after a mark, and force', () => {
+    it('I24 getRepliesToReviewComments rejecting after H1 → ERROR, absent', async () => {
+      const record = await failWith(sameHeadAdapter([], 0, { getRepliesToReviewComments: vi.fn().mockRejectedValue(new Error('replies 503')) }), undefined, 'replies 503')
+
+      expect(record.action).toBe('ERROR')
+      expect('checked_commit' in record).toBe(false)
+    })
+
+    it('I24 getRepliesToReviewComments rejecting after H3 → ERROR, absent (dedup_source kept)', async () => {
+      const record = await failWith(reReviewAdapter(CLEAN_PRIOR, [], { getRepliesToReviewComments: vi.fn().mockRejectedValue(new Error('replies 503')) }), COMMIT_A, 'replies 503')
+
+      expect(record.action).toBe('ERROR')
+      expect(record.dedup_source).toBe('checked_commit')
+      expect('checked_commit' in record).toBe(false)
+    })
+
+    it('I24 runCommentResponse rejecting after H6 → ERROR, absent', async () => {
+      quietZero()
+      mockRunCommentResponse.mockRejectedValue(new Error('reply model down'))
+      const record = await failWith(reReviewAdapter(CLEAN_PRIOR, [devReply('2026-03-09T12:00:00Z')]), undefined, 'reply model down')
+
+      expect(record.action).toBe('ERROR')
+      expect('checked_commit' in record).toBe(false)
+    })
+
+    it.each(['clean', 're-review'] as const)('I25 --force %s → absent even when posted', async (force) => {
+      mockReviewer(reviewWith([NEW_FINDING]))
+      const adapter = sameHeadAdapter()
+
+      const { record } = await runWith(adapter, COMMIT_A, { force })
+
+      expect(adapter.postComment).toHaveBeenCalledTimes(1)
+      expect('checked_commit' in record).toBe(false)
+    })
+
+    it("I25 --force '' → present on H1, H7 and H9 (no pre-post GET)", async () => {
+      const h1 = await runWith(sameHeadAdapter(), undefined, { force: '' as never })
+      expect(h1.record.action).toBe('DEDUP_SKIP')
+      expect(h1.record.checked_commit).toBe(COMMIT_A)
+
+      vi.clearAllMocks(); quietZero()
+      const h7 = await runWith(reReviewAdapter(CLEAN_PRIOR), undefined, { force: '' as never })
+      expect(h7.record.action).toBe('NO_NEW_FINDINGS')
+      expect(h7.record.checked_commit).toBe(COMMIT_A)
+
+      vi.clearAllMocks(); mockReviewer(reviewWith([NEW_FINDING]))
+      const adapter = reReviewAdapter(CLEAN_PRIOR)
+      const h9 = await runWith(adapter, undefined, { force: '' as never })
+      expect(adapter.getPreviousReviewComments).toHaveBeenCalledTimes(1)
+      expect(adapter.postComment).toHaveBeenCalledTimes(1)
+      expect(h9.record.checked_commit).toBe(COMMIT_A)
+    })
   })
 })

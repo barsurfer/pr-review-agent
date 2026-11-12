@@ -20,6 +20,11 @@ function positiveOr(value: number, fallback: number): number {
   return Number.isFinite(value) && value > 0 ? value : fallback
 }
 
+// Shared by the branch-list env vars and their CLI overrides, so both parse a value identically.
+export function parseBranchList(value: string): string[] {
+  return value.split(',').map(p => p.trim()).filter(Boolean)
+}
+
 // Context windows (max_input_tokens, from the Models API): 4.5-gen = 200K, 4.6+/5.x = 1M; matched by id prefix, unknown models fall back to 200K.
 const MODEL_CONTEXT_WINDOWS: readonly [string, number][] = [
   ['claude-haiku-4-5', 200_000],
@@ -164,6 +169,12 @@ export const config = {
     skipDirectedElsewhere: optional('SKIP_DIRECTED_REPLIES', 'false') === 'true',
   },
 
+  trigger: {
+    event: optional('TRIGGER_EVENT', '').trim(),
+    commentAuthor: optional('TRIGGER_COMMENT_AUTHOR', '').trim(),
+    ignoreCommentAuthors: optional('IGNORE_COMMENT_AUTHORS', '').split(',').map(p => p.trim()).filter(Boolean),
+  },
+
   review: {
     maxFindings: parseInt(optional('MAX_FINDINGS', '0'), 10),   // 0 = unlimited
     splitCheck: optional('ENABLE_SPLIT_CHECK', 'true') !== 'false',
@@ -187,11 +198,14 @@ export const config = {
     maxFileLines: parseInt(optional('MAX_FILE_LINES', '500'), 10),
   },
 
-  skipSourceBranches: optional('SKIP_SOURCE_BRANCHES', 'main,master,release/*,hotfix/*')
-    .split(',').map(p => p.trim()).filter(Boolean),
+  skipSourceBranches: parseBranchList(optional('SKIP_SOURCE_BRANCHES', 'main,master,release/*,hotfix/*')),
 
-  skipTargetBranches: optional('SKIP_TARGET_BRANCHES', 'main,master')
-    .split(',').map(p => p.trim()).filter(Boolean),
+  skipTargetBranches: parseBranchList(optional('SKIP_TARGET_BRANCHES', 'main,master')),
+
+  // Skipping stacked PRs until they are retargeted gives them one review instead of one per push.
+  onlyTargetBranches: parseBranchList(optional('ONLY_TARGET_BRANCHES', '')),
+
+  lastCheckedCommit: optional('LAST_CHECKED_COMMIT', '').trim(),
 
   diffExcludePatterns: optional('DIFF_EXCLUDE_PATTERNS', '*.lock,package-lock.json,yarn.lock,pnpm-lock.yaml,*.json,*.spec.ts')
     .split(',')

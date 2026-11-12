@@ -44,8 +44,13 @@ credentials in source code or commit them to version control.**
 | `MAX_CHANGED_FILES` | `200` | Skip review if PR has more reviewable files (0 = disabled). Default: `200` |
 | `MIN_CHANGED_LINES` | `0` | Skip review if PR has fewer reviewable lines (0 = disabled) |
 | `MAX_CHANGED_LINES` | `3000` | Skip review if PR has more reviewable lines (0 = disabled). Default: `3000` |
-| `SKIP_SOURCE_BRANCHES` | `main,master,release/*` | Comma-separated branch patterns. Skip review if PR source branch matches. Default: `main,master,release/*,hotfix/*` |
-| `SKIP_TARGET_BRANCHES` | `main,master` | Comma-separated branch patterns. Skip review if PR target branch matches. Default: `main,master` |
+| `SKIP_SOURCE_BRANCHES` | `main,master,release/*` | Comma-separated branch patterns. Skip review if PR source branch matches. Default: `main,master,release/*,hotfix/*`. CLI: `--skip-source-branches=<list>` (empty value = off) |
+| `SKIP_TARGET_BRANCHES` | `main,master` | Comma-separated branch patterns. Skip review if PR target branch matches. Default: `main,master`. An explicitly empty value disables the default, so don't pass it as an always-on job parameter shared by every repo. CLI: `--skip-target-branches=<list>` (per repo; `--skip-target-branches=` = off) |
+| `ONLY_TARGET_BRANCHES` | `develop,release/*` | Comma-separated branch patterns, same `*` wildcard. When set, skip review if PR target branch matches **none** of them (e.g. stacked PRs until retargeted). Checked after both skip lists, which win on overlap (a target in both `SKIP_TARGET_BRANCHES` and this list logs one warning). Default: empty (off). CLI: `--only-target-branches=<list>`. Main-only recipe: `SKIP_TARGET_BRANCHES=` + `ONLY_TARGET_BRANCHES=main` + `SKIP_SOURCE_BRANCHES=main,master`, or per repo `--skip-target-branches= --only-target-branches=main --skip-source-branches=main,master`. See [review/skip-logic.md §3](../context/review/skip-logic.md) |
+| `TRIGGER_EVENT` | `pullrequest:comment_created` | What started the run (Bitbucket `X-Event-Key`). Logged and recorded as `trigger.event`; only a comment event is checked against `IGNORE_COMMENT_AUTHORS`. Default: empty. CLI: `--event` |
+| `TRIGGER_COMMENT_AUTHOR` | `{a1b2c3…}` | Account id of the event **actor** (Bitbucket `$.actor.uuid`, or `account_id`) — never the PR author, never the display name. Logged and recorded as `trigger.comment_author`. Default: empty. CLI: `--comment-author` |
+| `IGNORE_COMMENT_AUTHORS` | `{bot-uuid}` | Comma-separated actor ids. A comment event by a listed actor skips before any VCS or model call (exit 0, `action: SKIP`); push/created/updated events are never skipped, whatever the actor. Matching is exact after trim, `{}` strip and lowercase. `--force` overrides it. Default: empty (off). **Caveat:** an ignored event never catches up a push that a skip-if-locked CI lock dropped, so that head stays unreviewed until the next non-ignored event — list an actor only when CI queues `pullrequest:updated`, prefer bots that never comment in response to a push, and don't list the agent's own id under a dropping lock. See [review/skip-logic.md §7](../context/review/skip-logic.md) |
+| `LAST_CHECKED_COMMIT` | `0123456789ab…` | The `checked_commit` an earlier run reported for this PR (from that run's `results.jsonl` record). When the head equals it (12–64 hex, so SHA-256 heads work too; prefix match, case-insensitive), a re-review on that head goes to `CHECK_REPLIES` like a footer match instead of re-paying the review. Malformed → one warning, treated as unset. Default: empty (off). CLI: `--checked-commit`. **Rollout:** an older bundle exits 1 on the unknown `--checked-commit` flag, so CI should pass this env var instead. See [review/skip-logic.md §8](../context/review/skip-logic.md) |
 | `DIFF_EXCLUDE_PATTERNS` | `*.lock,*.json,*.spec.ts` | Comma-separated file patterns to strip from diff before sending to Claude. Default: `*.lock,package-lock.json,yarn.lock,pnpm-lock.yaml,*.json,*.spec.ts` |
 | `JUDGING_MODEL` | `claude-sonnet-5` | Judge model for finding validation — **on by default**. Set empty to disable the judge pass. With `LLM_PROVIDER=openrouter` this takes an OpenRouter slug and may be a different vendor than the reviewer. |
 | `REVIEW_EFFORT` | *(unset)* | Reviewer thinking effort: `low`\|`medium`\|`high`\|`xhigh`\|`max`. Unset = model default (a strong model like Opus 4.8 at its adaptive default needs no effort flag). Only the 5-family / Opus-4.6+ / Sonnet-5 support it; models that don't (e.g. Haiku 4.5) are retried without it. `xhigh`/`max` need a larger `MAX_OUTPUT_TOKENS` (~64k) — thinking counts against the output cap and otherwise truncates the review. |
@@ -83,7 +88,17 @@ credentials in source code or commit them to version control.**
 > which override the env var values. Model/token/effort too: `CLAUDE_MODEL`/`JUDGING_MODEL`
 > → `--model`/`--judge-model`; `REPLY_MODEL` → `--reply-model`; `MAX_INPUT_TOKENS`/`MAX_OUTPUT_TOKENS` →
 > `--max-input-tokens`/`--max-output-tokens`; `REVIEW_EFFORT`/`JUDGE_EFFORT` →
-> `--effort`/`--judge-effort`. CLI always wins over env.
+> `--effort`/`--judge-effort`; `TRIGGER_EVENT`/`TRIGGER_COMMENT_AUTHOR` → `--event`/`--comment-author`;
+> `LAST_CHECKED_COMMIT` → `--checked-commit`
+> (an empty CLI value, as Jenkins passes an unset parameter, falls back to the env value). CLI always wins over env.
+> `SKIP_SOURCE_BRANCHES`/`SKIP_TARGET_BRANCHES`/`ONLY_TARGET_BRANCHES` → `--skip-source-branches`/`--skip-target-branches`/`--only-target-branches`,
+> for per-repo values when the CI env is shared. Here an empty value does **not** fall back: `--skip-target-branches=` is an empty
+> list, i.e. that check is off. Write empty values in the `=` form; an unquoted empty value makes the flag swallow the next argument.
+> See [review/skip-logic.md §3](../context/review/skip-logic.md). `IGNORE_COMMENT_AUTHORS` has no CLI flag.
+>
+> **Rollout:** commander rejects an unknown flag with exit 1, so a bundle that predates a flag (or a rollback to one) fails every run
+> that passes it. Pass `TRIGGER_EVENT`/`TRIGGER_COMMENT_AUTHOR`/`LAST_CHECKED_COMMIT` as env vars rather than flags in CI; add the
+> branch-list flags to a job only once `main`'s bundle has them, and remove them before rolling the bundle back.
 >
 > Threshold counts are **reviewable** files/lines — computed after `DIFF_EXCLUDE_PATTERNS`
 > filtering, so excluded files never trip the limits. A PR with zero reviewable lines

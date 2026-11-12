@@ -46,6 +46,7 @@ export async function runBundledReview(ctx: ReviewContext, maxInputTokens: numbe
   const reviews: BundleReview[] = []
   const unreviewed = plan.oversized.map(u => u.path)
   let anyOverflow = false
+  let incoherent = false
   const judgeScores: NonNullable<ReviewContext['judgeScores']> = []
   const judgeUsage: { input_tokens: number; output_tokens: number; cost_usd?: number } = { input_tokens: 0, output_tokens: 0 }
   let judged = false
@@ -104,6 +105,7 @@ export async function runBundledReview(ctx: ReviewContext, maxInputTokens: numbe
     }
     addUsage(ctx, result.usage)
     if (result.review?.no_change || isNoChange(result.text)) {
+      if (result.review?.no_change !== true || (result.review?.findings?.length ?? 0) > 0) incoherent = true
       console.log('  Reviewer: NO_CHANGE for this bundle')
       continue
     }
@@ -149,6 +151,7 @@ export async function runBundledReview(ctx: ReviewContext, maxInputTokens: numbe
     // An overflowed bundle was never reviewed — that is not NO_CHANGE; skip honestly rather than emit a false sentinel a first review would throw on.
     if (anyOverflow) return { ok: false, reason: `A bundle exceeded the model context — ${unreviewed.length} file(s) left unreviewed` }
     ctx.reviewText = 'NO_CHANGE'
+    ctx.bundleUncertain = unreviewed.length > 0 || incoherent
     return { ok: true }
   }
 
@@ -161,6 +164,7 @@ export async function runBundledReview(ctx: ReviewContext, maxInputTokens: numbe
     ctx.judgeScores = judgeScores
   }
   console.log(`\nMerged ${reviews.length} bundle review(s): ${merged.object.findings.length} finding(s) after dedupe`)
+  ctx.bundleUncertain = unreviewed.length > 0 || incoherent
   return { ok: true }
 }
 

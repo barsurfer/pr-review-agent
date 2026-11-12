@@ -240,6 +240,13 @@ On re-trigger, the agent compares this hash against the current PR source commit
 they match (no new code pushed), it **skips the review API call entirely** — saving
 time and tokens.
 
+The footer only moves when a review is posted, so a head that was checked without a post
+(no new findings, `NO_CHANGE`, a reply) would be re-reviewed on every later event. Each
+such run reports `checked_commit` in its usage record; CI can store it per PR and pass it
+back as `LAST_CHECKED_COMMIT`, and a run on that same head is then treated like a footer
+match. Without it, behaviour is unchanged. See
+[skip-logic.md §8](docs/context/review/skip-logic.md) for the mark rule and the CI contract.
+
 ### Comment Reply Handling
 
 When the commit hasn't changed but a developer has replied to the review comment with
@@ -343,6 +350,9 @@ bundle build on every push to `main` and every PR — the gate that keeps `main`
 | `--max-changed-files <n>` | No | Skip review if PR has more reviewable files (overrides `MAX_CHANGED_FILES`) |
 | `--min-changed-lines <n>` | No | Skip review if PR has fewer reviewable lines (overrides `MIN_CHANGED_LINES`) |
 | `--max-changed-lines <n>` | No | Skip review if PR has more reviewable lines (overrides `MAX_CHANGED_LINES`) |
+| `--skip-source-branches=<list>` | No | Comma list of source-branch globs to skip (overrides `SKIP_SOURCE_BRANCHES`). An empty value turns the check off |
+| `--skip-target-branches=<list>` | No | Comma list of target-branch globs to skip (overrides `SKIP_TARGET_BRANCHES`). `--skip-target-branches=` turns the default `main,master` skip off |
+| `--only-target-branches=<list>` | No | Review only PRs into these target globs (overrides `ONLY_TARGET_BRANCHES`). Main-only repo: `--skip-target-branches= --only-target-branches=main --skip-source-branches=main,master`. Write empty values with `=`: an unquoted empty value swallows the next argument. A bundle older than these flags exits 1 on them. See [skip-logic.md §3](docs/context/review/skip-logic.md) |
 | `--max-input-tokens <n>` | No | Input-token budget before degrade/skip (overrides `MAX_INPUT_TOKENS`) |
 | `--max-output-tokens <n>` | No | Max output tokens for reviewer + judge (overrides `MAX_OUTPUT_TOKENS`) |
 | `--effort <level>` | No | Reviewer thinking effort `low`\|`medium`\|`high`\|`xhigh`\|`max` (overrides `REVIEW_EFFORT`) |
@@ -352,6 +362,9 @@ bundle build on every push to `main` and every PR — the gate that keeps `main`
 | `--lenses <list>` | No | Concern-specific reviewer passes, e.g. `reliability+security` — any of `reliability`, `security`, `testing`, `performance`, `architecture`, or the aliases `rel`, `sec`, `test`, `perf`, `arch` (overrides `ENABLE_LENSES`/`LENSES`; requires a judge) |
 | `--lens-recommendation` | No | Log which lenses the first-pass reviewer recommends for the PR to `results.jsonl` `lens_recommendations`; log-only, never enables or skips a lens (overrides `ENABLE_LENS_RECOMMENDATION`) |
 | `--proposals` | No | Add a concise fix proposal to each kept finding in `results.jsonl` `anchored_findings` (overrides `ENABLE_JUDGE_PROPOSALS`; requires a judge) |
+| `--event <name>` | No | What started the run, e.g. `pullrequest:comment_created` (overrides `TRIGGER_EVENT`); logged and recorded, and a comment event is checked against `IGNORE_COMMENT_AUTHORS`. An empty value falls back to the env |
+| `--comment-author <id>` | No | Account id of the event actor, e.g. the Bitbucket `actor.uuid` — never the PR author (overrides `TRIGGER_COMMENT_AUTHOR`) |
+| `--checked-commit <hash>` | No | Head an earlier run reported as `checked_commit` for this PR; a run on that same head skips the re-review (overrides `LAST_CHECKED_COMMIT`). In CI prefer the env var: a bundle without this flag exits 1 on it. If you use the flag, write `--checked-commit="$X"`: an unquoted empty value swallows the next argument |
 | `--benchmark` | No | ReviewBench mode — read the PR from `RB_*` env + mounted files, write findings JSON to `RB_OUT`, never post; always exits 0. See [reviewbench/README.md](reviewbench/README.md) |
 
 \* Not required when using `--validate-prompt --prompt <path>` (local file validation).
@@ -401,7 +414,10 @@ All credentials and settings are provided via environment variables.
 | `MAX_OUTPUT_TOKENS` | `32000` | Max output tokens per reviewer/judge call (raise for big PRs at high effort) |
 | `MODEL_CONTEXT_TOKENS` | `0` (derive) | Override the model's context-window size used for budgeting |
 | `MAX_REPLY_COMMENTS` | `5` | Max agent replies per PR (0 = unlimited) |
-| `SKIP_SOURCE_BRANCHES` / `SKIP_TARGET_BRANCHES` | `main,master,release/*,hotfix/*` / `main,master` | Branch-exclusion globs |
+| `SKIP_SOURCE_BRANCHES` / `SKIP_TARGET_BRANCHES` | `main,master,release/*,hotfix/*` / `main,master` | Branch-exclusion globs; per repo via `--skip-source-branches=` / `--skip-target-branches=` |
+| `ONLY_TARGET_BRANCHES` | — (off) | When set, skip PRs whose target matches none of these globs (e.g. stacked PRs until retargeted); the skip lists win on overlap. Main-only repo: `SKIP_TARGET_BRANCHES=` + `ONLY_TARGET_BRANCHES=main` + `SKIP_SOURCE_BRANCHES=main,master`. See [skip-logic.md](docs/context/review/skip-logic.md) |
+| `IGNORE_COMMENT_AUTHORS` | — (off) | Actor ids whose **comment** events skip the run before any VCS call (needs `--event`/`--comment-author`); pushes are never skipped. An ignored event never catches up a push a skip-if-locked CI lock dropped, so list an actor only when CI queues `pullrequest:updated`. See [skip-logic.md](docs/context/review/skip-logic.md) |
+| `LAST_CHECKED_COMMIT` | — (off) | The `checked_commit` an earlier run reported for this PR; CI stores it per PR and passes it back, and a run on that same head goes to the reply check like a footer match. Prefer it over `--checked-commit` in CI. See [skip-logic.md §8](docs/context/review/skip-logic.md) |
 | `DIFF_EXCLUDE_PATTERNS` | `*.lock,package-lock.json,yarn.lock,pnpm-lock.yaml,*.json,*.spec.ts` | Globs excluded from the reviewable diff |
 | `ANTHROPIC_WORKSPACE_ID` | — | Sets the `anthropic-workspace-id` header; required for a user-scoped key (`sk-ant-usr-…`) that isn't bound to a workspace, unneeded for a workspace-scoped key |
 

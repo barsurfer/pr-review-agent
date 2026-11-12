@@ -16,6 +16,8 @@ import { filterDiff, countChangedLines, parseVerdictScore, isPathExcluded, scanT
 import { buildReviewFooter, buildReplyFooter, stripPreviousFooter, stripDeltaStats, stripJudgeNotes, stripJenkinsMeta, stripPreamble, isNoChange, extractCommitHash, countFindings, markdownHasFindings, hasReplyFooter } from './formatter.js'
 import { runBundledReview, addUsage } from './bundled.js'
 import { buildUsageRecord, logUsageRecord, getBuildCommit, getJobUrl } from './usage.js'
+import { ignoredCommentAuthor } from './trigger.js'
+import { headMatches } from './checked-commit.js'
 import { State } from './types.js'
 
 // Supersede boundary: the latest review that isn't human-resolved (a resolved review is dismissed, so it must not bury an unanswered reply); falls back to the last review when all are resolved.
@@ -25,7 +27,7 @@ function supersedeBoundary<T extends { resolved?: boolean }>(reviews: T[]): T | 
   return pool[pool.length - 1]
 }
 
-import type { ReviewContext, OutcomeSink, LensRun } from './types.js'
+import type { ReviewContext, OutcomeSink, LensRun, TriggerInfo } from './types.js'
 import { PrTooLargeError } from '../vcs/adapter.js'
 import type { VCSAdapter, CommentReply } from '../vcs/adapter.js'
 
@@ -42,6 +44,15 @@ async function dropRepliesDirectedElsewhere(ctx: ReviewContext, replies: Comment
     console.warn(`  Directed-reply filter failed (${(err as Error).message}) — keeping all replies`)
     return replies
   }
+}
+
+// '' is how CI passes an unset --force, so only the two real modes count as forced.
+const forced = (ctx: ReviewContext): boolean => ctx.force === 'clean' || ctx.force === 're-review'
+
+// CI stores checked_commit from this, so only points where the head's reviewable content was really checked may set it.
+function markHeadChecked(ctx: ReviewContext): void {
+  if (forced(ctx) || ctx.dryRun || ctx.outcomeSink || ctx.bundleUncertain || ctx.deltaFetchFailed) return
+  ctx.headChecked = true
 }
 
 // The stage is entered only with at least one known lens, so a lens-off run never reaches it.
@@ -61,6 +72,23 @@ export type { UsageRecord } from './usage.js'
 
 async function transition(state: State, ctx: ReviewContext): Promise<State> {
   switch (state) {
+
+    case State.CHECK_TRIGGER: {
+      if (!ctx.trigger) return State.FETCH_PR_INFO
+      const { event, commentAuthor } = ctx.trigger
+      const ignoreList = config.trigger.ignoreCommentAuthors
+      console.log(`Trigger: ${event || 'unknown event'}${commentAuthor ? ` by ${commentAuthor}` : ''}`)
+      if (commentAuthor && !event && ignoreList.length) console.warn('  Comment author given without an event - IGNORE_COMMENT_AUTHORS not applied (every PR event carries an actor)')
+      if (!ignoredCommentAuthor(ctx.trigger, ignoreList)) return State.FETCH_PR_INFO
+      // An empty --force from CI arrives as '' rather than 'off', and must not bypass the list.
+      if (forced(ctx)) {
+        console.log(`  ${commentAuthor} matches IGNORE_COMMENT_AUTHORS - running anyway (--force)`)
+        return State.FETCH_PR_INFO
+      }
+      ctx.action = 'SKIP'
+      ctx.skipReason = `${event} by "${commentAuthor}" matches IGNORE_COMMENT_AUTHORS`
+      return State.SKIP
+    }
 
     case State.FETCH_PR_INFO: {
       console.log('Fetching PR info...')
@@ -83,8 +111,16 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         return State.SKIP
       }
       if (config.skipTargetBranches.length > 0 && matchesPattern(tgt, config.skipTargetBranches)) {
+        if (config.onlyTargetBranches.length > 0 && matchesPattern(tgt, config.onlyTargetBranches)) {
+          console.warn(`  "${tgt}" is in both SKIP_TARGET_BRANCHES and ONLY_TARGET_BRANCHES - the skip list wins; set SKIP_TARGET_BRANCHES= to review it`)
+        }
         ctx.action = 'SKIP'
         ctx.skipReason = `target branch "${tgt}" matches SKIP_TARGET_BRANCHES`
+        return State.SKIP
+      }
+      if (config.onlyTargetBranches.length > 0 && !matchesPattern(tgt, config.onlyTargetBranches)) {
+        ctx.action = 'SKIP'
+        ctx.skipReason = `target branch "${tgt}" is not in ONLY_TARGET_BRANCHES (${config.onlyTargetBranches.join(',')})`
         return State.SKIP
       }
       return State.FETCH_DIFF
@@ -180,8 +216,21 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         } else {
           if (commitHash && commitHash === ctx.prInfo!.sourceCommit.slice(0, 12)) {
             console.log(`  Source commit ${ctx.prInfo!.sourceCommit.slice(0, 12)} already reviewed — checking for unanswered replies...`)
+            markHeadChecked(ctx)
             ctx.reviewNumber = ctx.previousReviews.length
             return State.CHECK_REPLIES
+          }
+
+          if (ctx.checkedCommit) {
+            const head12 = ctx.prInfo!.sourceCommit.slice(0, 12)
+            if (headMatches(ctx.checkedCommit, ctx.prInfo!.sourceCommit)) {
+              console.log(`  Source commit ${head12} already checked by an earlier run (checked commit) — checking for unanswered replies...`)
+              ctx.dedupHit = 'checked_commit'
+              markHeadChecked(ctx)
+              ctx.reviewNumber = ctx.previousReviews.length
+              return State.CHECK_REPLIES
+            }
+            console.log(`  Checked commit ${ctx.checkedCommit.slice(0, 12)} is not the current head ${head12} — ignoring it`)
           }
 
           // Delta diff check: fetch only the changes since the last reviewed commit
@@ -194,12 +243,15 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
               console.log(`  Delta: ${countChangedLines(deltaDiff)} lines total, ${removedCount} file(s) filtered, ${deltaLines} lines remain`)
               if (deltaLines === 0) {
                 console.log('  No reviewable changes in delta — checking for unanswered replies...')
+                markHeadChecked(ctx)
                 ctx.reviewNumber = ctx.previousReviews!.length
                 return State.CHECK_REPLIES
               }
               ctx.deltaDiff = filtered   // feed the exact changes-since-last-review to the reviewer
             } catch (err: unknown) {
               console.log(`  Delta diff fetch failed (${(err as Error).message}) — falling back to full PR diff`)
+              // The fallback review was told to report only new findings but cannot see what is new.
+              ctx.deltaFetchFailed = true
             }
           }
         }
@@ -247,7 +299,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       // dedup path, where no action was set yet.
       if (ctx.action !== 'NO_CHANGE') {
         ctx.action = 'DEDUP_SKIP'
-        ctx.skipReason = 'no new commits and no unanswered questions'
+        ctx.skipReason = ctx.dedupHit === 'checked_commit' ? 'head already checked by an earlier run and no unanswered questions' : 'no new commits and no unanswered questions'
       }
       return State.SKIP
     }
@@ -446,6 +498,8 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         console.log('  Reviewer: NO_CHANGE')
         ctx.action = 'NO_CHANGE'
         ctx.skipReason = 'No changes since last review'
+        // renderReview yields NO_CHANGE for any truthy no_change and drops findings, so only a coherent structured verdict counts.
+        if (ctx.reviewObject ? ctx.reviewObject.no_change === true && ctx.reviewObject.findings?.length === 0 : ctx.reviewText === 'NO_CHANGE') markHeadChecked(ctx)
         // No code change, but a developer may have replied since the last review — answer them
         // rather than skip, so a reply on a PR with only trivial new commits isn't dropped.
         return State.CHECK_REPLIES
@@ -667,25 +721,29 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         const unanswered = await dropRepliesDirectedElsewhere(ctx, replies.filter(r =>
           !hasReplyFooter(r.body) && !!lastReview && r.createdOn > lastReview.createdOn && r.createdOn > lastAgentReplyAt))
 
+        const priorHadFindings = !!lastReview && markdownHasFindings(lastReview.body)
+        const stillOpen = (ctx.reviewObject?.delta_stats?.still_open ?? 0) > 0
         if (unanswered.length > 0) {
           const agentReplies = replies.filter(r => hasReplyFooter(r.body)).length
           if (config.reply.maxComments > 0 && agentReplies >= config.reply.maxComments) {
             console.log(`  Unanswered dev reply, but reply limit reached (${agentReplies}/${config.reply.maxComments}) — skipping`)
             ctx.action = 'DEDUP_SKIP'
             ctx.skipReason = `reply limit reached (${agentReplies}/${config.reply.maxComments})`
+            markHeadChecked(ctx)
             return State.SKIP
           }
           ctx.replies = unanswered
           console.log('  Re-review found nothing new, but a developer reply is unanswered — answering it in-thread')
+          // A non-quiet re-review still owes the confirmation post on the next event, so only a quiet one counts as checked.
+          if (!priorHadFindings && !stillOpen) markHeadChecked(ctx)
           return State.RESPOND_TO_REPLIES
         }
 
-        const priorHadFindings = !!lastReview && markdownHasFindings(lastReview.body)
-        const stillOpen = (ctx.reviewObject?.delta_stats?.still_open ?? 0) > 0
         if (!priorHadFindings && !stillOpen) {
           console.log('  Re-review: no findings, prior clean, nothing open, no discussion — nothing to post, skipping')
           ctx.action = 'NO_NEW_FINDINGS'
           ctx.skipReason = 'Re-review found no new findings (prior review already clean)'
+          markHeadChecked(ctx)
           return State.SKIP
         }
         console.log(`  Re-review with no new findings — posting (${stillOpen ? 'findings still open' : 'prior review had findings'})`)
@@ -796,6 +854,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         if (!priorHadFindings && (merged.delta_stats?.still_open ?? 0) === 0) {
           ctx.action = 'NO_NEW_FINDINGS'
           ctx.skipReason = 'Re-review found no new findings (prior review already clean)'
+          markHeadChecked(ctx)
           return State.SKIP
         }
       }
@@ -880,11 +939,13 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
             console.log(`  Commit ${commitShort} already reviewed by another run — skipping post`)
             ctx.action = 'DEDUP_SKIP'
             ctx.skipReason = 'Another agent run already reviewed this commit (race condition avoided)'
+            markHeadChecked(ctx)
             return State.SKIP
           }
         }
         console.log('Posting review comment...')
         await ctx.adapter.postComment(ctx.prId, comment)
+        markHeadChecked(ctx)
         console.log('Done. Review posted to PR.\n')
       }
       ctx.action = ctx.reviewNumber > 1 ? 'RE_REVIEW' : 'REVIEW'
@@ -905,12 +966,12 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
 // Public API
 // ---------------------------------------------------------------------------
 
-export async function review(adapter: VCSAdapter, prId: string, dryRun = false, promptPath?: string, force: 'off' | 'clean' | 're-review' = 'off', logUsage = false, repoSlug = '', outcomeSink?: OutcomeSink): Promise<UsageRecord | null> {
+export async function review(adapter: VCSAdapter, prId: string, dryRun = false, promptPath?: string, force: 'off' | 'clean' | 're-review' = 'off', logUsage = false, repoSlug = '', outcomeSink?: OutcomeSink, trigger?: TriggerInfo, checkedCommit?: string): Promise<UsageRecord | null> {
   console.log(`\nStarting review for PR #${prId}`)
 
   const startTime = Date.now()
   const ctx: ReviewContext = {
-    adapter, prId, dryRun, promptPath, force, logUsage, repoSlug, outcomeSink, startTime,
+    adapter, prId, dryRun, promptPath, force, logUsage, repoSlug, outcomeSink, trigger, checkedCommit, startTime,
     usage: { input_tokens: 0, output_tokens: 0, cache_read: 0, cache_write: 0 },
     estimatedInputTokens: 0,
     action: 'ERROR',
@@ -920,7 +981,7 @@ export async function review(adapter: VCSAdapter, prId: string, dryRun = false, 
   let error: { type: string; message: string; status: number | null } | null = null
 
   try {
-    let state = State.FETCH_PR_INFO
+    let state = State.CHECK_TRIGGER
     while (state !== State.DONE) {
       state = await transition(state, ctx)
     }

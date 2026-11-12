@@ -1,0 +1,7584 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`characterization: review() with no checked commit > K1 first review posted 1`] = `
+{
+  "console": [
+    "log: 
+Starting review for PR #100",
+    "log: Fetching PR info...",
+    "log:   "Test PR" (feature/test → develop)",
+    "log: Fetching diff...",
+    "log: Fetching changed files...",
+    "log:   1 changed file(s), 1 reviewable",
+    "log:   2 changed line(s), 2 reviewable",
+    "log: Checking for previous reviews...",
+    "log:   No previous reviews — first review for this PR",
+    "log: Loading prompt...",
+    "log:   Prompt source: repo",
+    "log: Fetching file context...",
+    "log:   Fetched full content for 0 file(s)",
+    "log:   Estimated input: ~36 tokens  [prompt 5 | diff 32 | delta 0 | files 0 (0) | prev_reviews 0 (0) | replies 0 (0)]",
+    "log:   Reviewer findings: 0H / 1M / 0L",
+    "log: Posting review comment...",
+    "log: Done. Review posted to PR.
+",
+  ],
+  "model": [
+    [
+      "runReview",
+      [
+        "test-key",
+        "claude-haiku-4-5-20251001",
+        1,
+        32000,
+        "",
+        {
+          "author": "dev",
+          "description": "A test PR",
+          "id": "100",
+          "sourceBranch": "feature/test",
+          "sourceCommit": "aaa111222333ffffffffffffffffffffffffffff",
+          "targetBranch": "develop",
+          "title": "Test PR",
+        },
+        "diff --git a/src/app.ts b/src/app.ts
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -10,3 +10,5 @@
++import { foo } from './foo'
++foo()
+",
+        [],
+        {
+          "content": "System prompt here",
+          "source": "repo",
+        },
+        [],
+        [],
+        "",
+        false,
+      ],
+    ],
+  ],
+  "record": {
+    "action": "REVIEW",
+    "anchored_findings": null,
+    "breadth_cost_usd": null,
+    "breadth_model": null,
+    "breadth_prompt_hash": null,
+    "breadth_status": "disabled",
+    "breadth_tokens": null,
+    "changed_files": 1,
+    "changed_lines": 2,
+    "computed_score": 96,
+    "context_files_fetched": 0,
+    "cost_usd": 0.002,
+    "degraded": false,
+    "delta": null,
+    "diff_size": {
+      "files": {
+        "added": 0,
+        "deleted": 0,
+        "modified": 1,
+        "renamed": 0,
+      },
+      "lines_added": 2,
+      "lines_removed": 0,
+      "reviewable_files": 1,
+      "reviewable_lines_added": 2,
+      "reviewable_lines_removed": 0,
+    },
+    "dry_run": false,
+    "effort": null,
+    "error": null,
+    "finding_scores": null,
+    "findings": {
+      "high": 0,
+      "low": 0,
+      "medium": 1,
+    },
+    "force": "off",
+    "jenkins": null,
+    "judge_anomalies": null,
+    "judge_cost_usd": null,
+    "judge_decisions": null,
+    "judge_effort": null,
+    "judge_model": null,
+    "judge_policy": null,
+    "judge_prompt_hash": null,
+    "judge_status": "disabled",
+    "judge_tokens": null,
+    "min_finding_score": null,
+    "model": "claude-haiku-4-5-20251001",
+    "pr_author": "dev",
+    "pr_id": "100",
+    "prompt_hash": "10052f24e175",
+    "prompt_source": "repo",
+    "recall_levers": {
+      "b_priority": false,
+      "j_quality": false,
+      "j_shown_anchor": false,
+      "sl_breadth": false,
+    },
+    "repo_slug": "repo",
+    "review_candidates": null,
+    "review_findings": {
+      "high": 0,
+      "low": 0,
+      "medium": 1,
+    },
+    "review_number": 1,
+    "run_id": "bitbucket-repo-100-aaa111222333",
+    "second_look_cost_usd": null,
+    "second_look_prompt_hash": null,
+    "second_look_status": "disabled",
+    "second_look_tokens": null,
+    "skip_reason": null,
+    "source_branch": "feature/test",
+    "source_commit": "aaa111222333ffffffffffffffffffffffffffff",
+    "target_branch": "develop",
+    "tokens": {
+      "cache_read": 0,
+      "cache_write": 0,
+      "estimated_input": 36,
+      "input": 1000,
+      "output": 200,
+    },
+    "touch_rate": null,
+    "untouched_files": null,
+    "vcs": "bitbucket",
+    "verdict_score": null,
+    "workspace": "test",
+  },
+  "thrown": null,
+  "vcs": [
+    [
+      "getPullRequestInfo",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getDiff",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getChangedFiles",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getPreviousReviewComments",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getPreviousReviewComments",
+      [
+        "100",
+      ],
+    ],
+    [
+      "postComment",
+      [
+        "100",
+        "### Summary
+ok
+
+### Findings
+- **MEDIUM – New issue** (\`src/app.ts:11\`)
+  desc
+
+### Behavioral Diff
+None.
+
+### Production Risk
+None.
+
+### Unresolved Questions
+None.
+
+---
+*Reviewed by test-bot (claude-haiku-4-5-20251001) | Prompt: repo | Review #1 | Commit: aaa111222333 | Build: testbuild*",
+      ],
+    ],
+  ],
+}
+`;
+
+exports[`characterization: review() with no checked commit > K2 re-review with delta, posted, judge set 1`] = `
+{
+  "console": [
+    "log: 
+Starting review for PR #100",
+    "log: Fetching PR info...",
+    "log:   "Test PR" (feature/test → develop)",
+    "log: Fetching diff...",
+    "log: Fetching changed files...",
+    "log:   1 changed file(s), 1 reviewable",
+    "log:   2 changed line(s), 2 reviewable",
+    "log: Checking for previous reviews...",
+    "log:   Found 1 previous review(s) — will produce delta review",
+    "log:   Fetching delta diff (aabbcc112233..aaa111222333)...",
+    "log:   Delta: 2 lines total, 0 file(s) filtered, 2 lines remain",
+    "log:   Found 1 discussion comment(s) (dev replies + agent replies) — will include in review context",
+    "log: Loading prompt...",
+    "log:   Prompt source: repo",
+    "log: Fetching file context...",
+    "log:   Fetched full content for 0 file(s)",
+    "log:   Estimated input: ~128 tokens  [prompt 5 | diff 32 | delta 32 | files 0 (0) | prev_reviews 57 (1) | replies 5 (1)]",
+    "log:   Reviewer findings: 0H / 1M / 0L",
+    "log:   Judge finding scores: MEDIUM 8/10",
+    "log: Posting review comment...",
+    "log: Done. Review posted to PR.
+",
+  ],
+  "model": [
+    [
+      "runReview",
+      [
+        "test-key",
+        "claude-haiku-4-5-20251001",
+        1,
+        32000,
+        "",
+        {
+          "author": "dev",
+          "description": "A test PR",
+          "id": "100",
+          "sourceBranch": "feature/test",
+          "sourceCommit": "aaa111222333ffffffffffffffffffffffffffff",
+          "targetBranch": "develop",
+          "title": "Test PR",
+        },
+        "diff --git a/src/app.ts b/src/app.ts
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -10,3 +10,5 @@
++import { foo } from './foo'
++foo()
+",
+        [],
+        {
+          "content": "System prompt here",
+          "source": "repo",
+        },
+        [
+          {
+            "body": "### Summary
+One issue.
+
+### Findings
+- **MEDIUM – Prior issue** (\`src/app.ts:11\`)
+  desc
+
+### Unresolved Questions
+None.
+
+---
+*Reviewed by test-bot (claude-haiku-4-5-20251001) | Prompt: repo | Review #1 | Commit: aabbcc112233*",
+            "createdOn": "2026-03-09T10:00:00Z",
+            "id": "200",
+          },
+        ],
+        [
+          {
+            "author": "Fernando",
+            "body": "Fixed in d4f2b43e.",
+            "createdOn": "2026-03-09T12:00:00Z",
+            "id": "dev-2026-03-09T12:00:00Z",
+            "parentId": "200",
+          },
+        ],
+        "diff --git a/src/app.ts b/src/app.ts
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -10,3 +10,5 @@
++import { foo } from './foo'
++foo()
+",
+        false,
+      ],
+    ],
+    [
+      "runJudge",
+      [
+        "test-key",
+        "claude-sonnet-5",
+        1,
+        32000,
+        "",
+        "diff --git a/src/app.ts b/src/app.ts
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -10,3 +10,5 @@
++import { foo } from './foo'
++foo()
+",
+        {
+          "behavioral_diff": [],
+          "delta_stats": {
+            "new_findings": 1,
+            "resolved": 1,
+            "still_open": 0,
+          },
+          "findings": [
+            {
+              "body": "desc",
+              "file": "src/app.ts",
+              "lines": "11",
+              "severity": "MEDIUM",
+              "title": "New issue",
+            },
+          ],
+          "production_risk": [],
+          "summary": "ok",
+          "unresolved_questions": [],
+        },
+        [],
+        {
+          "keepMinor": false,
+          "keepUnverified": false,
+        },
+        false,
+        undefined,
+      ],
+    ],
+  ],
+  "record": {
+    "action": "RE_REVIEW",
+    "anchored_findings": null,
+    "breadth_cost_usd": null,
+    "breadth_model": null,
+    "breadth_prompt_hash": null,
+    "breadth_status": "disabled",
+    "breadth_tokens": null,
+    "changed_files": 1,
+    "changed_lines": 2,
+    "computed_score": 96,
+    "context_files_fetched": 0,
+    "cost_usd": 0.0066,
+    "degraded": false,
+    "delta": {
+      "developer_replies": 1,
+      "new_findings": 1,
+      "resolved": 1,
+      "still_open": 0,
+    },
+    "diff_size": {
+      "files": {
+        "added": 0,
+        "deleted": 0,
+        "modified": 1,
+        "renamed": 0,
+      },
+      "lines_added": 2,
+      "lines_removed": 0,
+      "reviewable_files": 1,
+      "reviewable_lines_added": 2,
+      "reviewable_lines_removed": 0,
+    },
+    "dry_run": false,
+    "effort": null,
+    "error": null,
+    "finding_scores": [
+      {
+        "score": 8,
+        "severity": "MEDIUM",
+        "title": "New issue",
+      },
+    ],
+    "findings": {
+      "high": 0,
+      "low": 0,
+      "medium": 1,
+    },
+    "force": "off",
+    "jenkins": null,
+    "judge_anomalies": null,
+    "judge_cost_usd": 0.0046,
+    "judge_decisions": null,
+    "judge_effort": null,
+    "judge_model": "claude-sonnet-5",
+    "judge_policy": {
+      "file_context": false,
+      "keep_minor": false,
+      "keep_unverified": false,
+    },
+    "judge_prompt_hash": "judgehash123",
+    "judge_status": "succeeded",
+    "judge_tokens": {
+      "input": 800,
+      "output": 300,
+    },
+    "min_finding_score": 8,
+    "model": "claude-haiku-4-5-20251001",
+    "pr_author": "dev",
+    "pr_id": "100",
+    "prompt_hash": "10052f24e175",
+    "prompt_source": "repo",
+    "recall_levers": {
+      "b_priority": false,
+      "j_quality": false,
+      "j_shown_anchor": false,
+      "sl_breadth": false,
+    },
+    "repo_slug": "repo",
+    "review_candidates": null,
+    "review_findings": {
+      "high": 0,
+      "low": 0,
+      "medium": 1,
+    },
+    "review_number": 2,
+    "run_id": "bitbucket-repo-100-aaa111222333",
+    "second_look_cost_usd": null,
+    "second_look_prompt_hash": null,
+    "second_look_status": "disabled",
+    "second_look_tokens": null,
+    "skip_reason": null,
+    "source_branch": "feature/test",
+    "source_commit": "aaa111222333ffffffffffffffffffffffffffff",
+    "target_branch": "develop",
+    "tokens": {
+      "cache_read": 0,
+      "cache_write": 0,
+      "estimated_input": 128,
+      "input": 1800,
+      "output": 500,
+    },
+    "touch_rate": 100,
+    "untouched_files": null,
+    "vcs": "bitbucket",
+    "verdict_score": 80,
+    "workspace": "test",
+  },
+  "thrown": null,
+  "vcs": [
+    [
+      "getPullRequestInfo",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getDiff",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getChangedFiles",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getPreviousReviewComments",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getCommitDiff",
+      [
+        "aabbcc112233",
+        "aaa111222333ffffffffffffffffffffffffffff",
+      ],
+    ],
+    [
+      "getRepliesToReviewComments",
+      [
+        "100",
+        [
+          "200",
+        ],
+        true,
+      ],
+    ],
+    [
+      "getPreviousReviewComments",
+      [
+        "100",
+      ],
+    ],
+    [
+      "postComment",
+      [
+        "100",
+        "### Summary
+ok
+
+### Findings
+- **MEDIUM – New issue** (\`src/app.ts:11\`)
+  desc
+
+### Behavioral Diff
+None.
+
+### Production Risk
+None.
+
+### Unresolved Questions
+None.
+
+### Merge Confidence: 80%
+
+---
+*Reviewed by test-bot (claude-haiku-4-5-20251001) | Prompt: repo | Review #2 | Commit: aaa111222333 | Build: testbuild*",
+      ],
+    ],
+  ],
+}
+`;
+
+exports[`characterization: review() with no checked commit > K3 same-head dedup 1`] = `
+{
+  "console": [
+    "log: 
+Starting review for PR #100",
+    "log: Fetching PR info...",
+    "log:   "Test PR" (feature/test → develop)",
+    "log: Fetching diff...",
+    "log: Fetching changed files...",
+    "log:   1 changed file(s), 1 reviewable",
+    "log:   2 changed line(s), 2 reviewable",
+    "log: Checking for previous reviews...",
+    "log:   Found 1 previous review(s) — will produce delta review",
+    "log:   Source commit aaa111222333 already reviewed — checking for unanswered replies...",
+    "log: 
+Skipping: no new commits and no unanswered questions",
+  ],
+  "model": [],
+  "record": {
+    "action": "DEDUP_SKIP",
+    "anchored_findings": null,
+    "breadth_cost_usd": null,
+    "breadth_model": null,
+    "breadth_prompt_hash": null,
+    "breadth_status": null,
+    "breadth_tokens": null,
+    "changed_files": 1,
+    "changed_lines": 2,
+    "computed_score": null,
+    "context_files_fetched": 0,
+    "cost_usd": 0,
+    "degraded": false,
+    "delta": null,
+    "diff_size": {
+      "files": {
+        "added": 0,
+        "deleted": 0,
+        "modified": 1,
+        "renamed": 0,
+      },
+      "lines_added": 2,
+      "lines_removed": 0,
+      "reviewable_files": 1,
+      "reviewable_lines_added": 2,
+      "reviewable_lines_removed": 0,
+    },
+    "dry_run": false,
+    "effort": null,
+    "error": null,
+    "finding_scores": null,
+    "findings": null,
+    "force": "off",
+    "jenkins": null,
+    "judge_anomalies": null,
+    "judge_cost_usd": null,
+    "judge_decisions": null,
+    "judge_effort": null,
+    "judge_model": null,
+    "judge_policy": null,
+    "judge_prompt_hash": null,
+    "judge_status": null,
+    "judge_tokens": null,
+    "min_finding_score": null,
+    "model": "claude-haiku-4-5-20251001",
+    "pr_author": "dev",
+    "pr_id": "100",
+    "prompt_hash": null,
+    "prompt_source": "none",
+    "recall_levers": {
+      "b_priority": false,
+      "j_quality": false,
+      "j_shown_anchor": false,
+      "sl_breadth": false,
+    },
+    "repo_slug": "repo",
+    "review_candidates": null,
+    "review_findings": null,
+    "review_number": 1,
+    "run_id": "bitbucket-repo-100-aaa111222333",
+    "second_look_cost_usd": null,
+    "second_look_prompt_hash": null,
+    "second_look_status": null,
+    "second_look_tokens": null,
+    "skip_reason": "no new commits and no unanswered questions",
+    "source_branch": "feature/test",
+    "source_commit": "aaa111222333ffffffffffffffffffffffffffff",
+    "target_branch": "develop",
+    "tokens": {
+      "cache_read": 0,
+      "cache_write": 0,
+      "estimated_input": 0,
+      "input": 0,
+      "output": 0,
+    },
+    "touch_rate": null,
+    "untouched_files": null,
+    "vcs": "bitbucket",
+    "verdict_score": null,
+    "workspace": "test",
+  },
+  "thrown": null,
+  "vcs": [
+    [
+      "getPullRequestInfo",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getDiff",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getChangedFiles",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getPreviousReviewComments",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getRepliesToReviewComments",
+      [
+        "100",
+        [
+          "200",
+        ],
+      ],
+    ],
+  ],
+}
+`;
+
+exports[`characterization: review() with no checked commit > K4 zero-reviewable delta 1`] = `
+{
+  "console": [
+    "log: 
+Starting review for PR #100",
+    "log: Fetching PR info...",
+    "log:   "Test PR" (feature/test → develop)",
+    "log: Fetching diff...",
+    "log: Fetching changed files...",
+    "log:   1 changed file(s), 1 reviewable",
+    "log:   2 changed line(s), 2 reviewable",
+    "log: Checking for previous reviews...",
+    "log:   Found 1 previous review(s) — will produce delta review",
+    "log:   Fetching delta diff (aabbcc112233..aaa111222333)...",
+    "log:   Delta: 2 lines total, 1 file(s) filtered, 0 lines remain",
+    "log:   No reviewable changes in delta — checking for unanswered replies...",
+    "log: 
+Skipping: no new commits and no unanswered questions",
+  ],
+  "model": [],
+  "record": {
+    "action": "DEDUP_SKIP",
+    "anchored_findings": null,
+    "breadth_cost_usd": null,
+    "breadth_model": null,
+    "breadth_prompt_hash": null,
+    "breadth_status": null,
+    "breadth_tokens": null,
+    "changed_files": 1,
+    "changed_lines": 2,
+    "computed_score": null,
+    "context_files_fetched": 0,
+    "cost_usd": 0,
+    "degraded": false,
+    "delta": null,
+    "diff_size": {
+      "files": {
+        "added": 0,
+        "deleted": 0,
+        "modified": 1,
+        "renamed": 0,
+      },
+      "lines_added": 2,
+      "lines_removed": 0,
+      "reviewable_files": 1,
+      "reviewable_lines_added": 2,
+      "reviewable_lines_removed": 0,
+    },
+    "dry_run": false,
+    "effort": null,
+    "error": null,
+    "finding_scores": null,
+    "findings": null,
+    "force": "off",
+    "jenkins": null,
+    "judge_anomalies": null,
+    "judge_cost_usd": null,
+    "judge_decisions": null,
+    "judge_effort": null,
+    "judge_model": null,
+    "judge_policy": null,
+    "judge_prompt_hash": null,
+    "judge_status": null,
+    "judge_tokens": null,
+    "min_finding_score": null,
+    "model": "claude-haiku-4-5-20251001",
+    "pr_author": "dev",
+    "pr_id": "100",
+    "prompt_hash": null,
+    "prompt_source": "none",
+    "recall_levers": {
+      "b_priority": false,
+      "j_quality": false,
+      "j_shown_anchor": false,
+      "sl_breadth": false,
+    },
+    "repo_slug": "repo",
+    "review_candidates": null,
+    "review_findings": null,
+    "review_number": 1,
+    "run_id": "bitbucket-repo-100-aaa111222333",
+    "second_look_cost_usd": null,
+    "second_look_prompt_hash": null,
+    "second_look_status": null,
+    "second_look_tokens": null,
+    "skip_reason": "no new commits and no unanswered questions",
+    "source_branch": "feature/test",
+    "source_commit": "aaa111222333ffffffffffffffffffffffffffff",
+    "target_branch": "develop",
+    "tokens": {
+      "cache_read": 0,
+      "cache_write": 0,
+      "estimated_input": 0,
+      "input": 0,
+      "output": 0,
+    },
+    "touch_rate": null,
+    "untouched_files": null,
+    "vcs": "bitbucket",
+    "verdict_score": null,
+    "workspace": "test",
+  },
+  "thrown": null,
+  "vcs": [
+    [
+      "getPullRequestInfo",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getDiff",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getChangedFiles",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getPreviousReviewComments",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getCommitDiff",
+      [
+        "aabbcc112233",
+        "aaa111222333ffffffffffffffffffffffffffff",
+      ],
+    ],
+    [
+      "getRepliesToReviewComments",
+      [
+        "100",
+        [
+          "200",
+        ],
+      ],
+    ],
+  ],
+}
+`;
+
+exports[`characterization: review() with no checked commit > K5 NO_NEW_FINDINGS 1`] = `
+{
+  "console": [
+    "log: 
+Starting review for PR #100",
+    "log: Fetching PR info...",
+    "log:   "Test PR" (feature/test → develop)",
+    "log: Fetching diff...",
+    "log: Fetching changed files...",
+    "log:   1 changed file(s), 1 reviewable",
+    "log:   2 changed line(s), 2 reviewable",
+    "log: Checking for previous reviews...",
+    "log:   Found 1 previous review(s) — will produce delta review",
+    "log:   Fetching delta diff (aabbcc112233..aaa111222333)...",
+    "log:   Delta: 2 lines total, 0 file(s) filtered, 2 lines remain",
+    "log: Loading prompt...",
+    "log:   Prompt source: repo",
+    "log: Fetching file context...",
+    "log:   Fetched full content for 0 file(s)",
+    "log:   Estimated input: ~114 tokens  [prompt 5 | diff 32 | delta 32 | files 0 (0) | prev_reviews 47 (1) | replies 0 (0)]",
+    "log:   Reviewer findings: 0H / 0M / 0L",
+    "log:   Re-review: no findings, prior clean, nothing open, no discussion — nothing to post, skipping",
+    "log: 
+Skipping: Re-review found no new findings (prior review already clean)",
+  ],
+  "model": [
+    [
+      "runReview",
+      [
+        "test-key",
+        "claude-haiku-4-5-20251001",
+        1,
+        32000,
+        "",
+        {
+          "author": "dev",
+          "description": "A test PR",
+          "id": "100",
+          "sourceBranch": "feature/test",
+          "sourceCommit": "aaa111222333ffffffffffffffffffffffffffff",
+          "targetBranch": "develop",
+          "title": "Test PR",
+        },
+        "diff --git a/src/app.ts b/src/app.ts
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -10,3 +10,5 @@
++import { foo } from './foo'
++foo()
+",
+        [],
+        {
+          "content": "System prompt here",
+          "source": "repo",
+        },
+        [
+          {
+            "body": "### Summary
+All good.
+
+### Findings
+No findings.
+
+### Unresolved Questions
+None.
+
+---
+*Reviewed by test-bot (claude-haiku-4-5-20251001) | Prompt: repo | Review #1 | Commit: aabbcc112233*",
+            "createdOn": "2026-03-09T10:00:00Z",
+            "id": "200",
+          },
+        ],
+        [],
+        "diff --git a/src/app.ts b/src/app.ts
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -10,3 +10,5 @@
++import { foo } from './foo'
++foo()
+",
+        false,
+      ],
+    ],
+  ],
+  "record": {
+    "action": "NO_NEW_FINDINGS",
+    "anchored_findings": null,
+    "breadth_cost_usd": null,
+    "breadth_model": null,
+    "breadth_prompt_hash": null,
+    "breadth_status": "disabled",
+    "breadth_tokens": null,
+    "changed_files": 1,
+    "changed_lines": 2,
+    "computed_score": 100,
+    "context_files_fetched": 0,
+    "cost_usd": 0.002,
+    "degraded": false,
+    "delta": {
+      "developer_replies": 0,
+      "new_findings": 0,
+      "resolved": 0,
+      "still_open": 0,
+    },
+    "diff_size": {
+      "files": {
+        "added": 0,
+        "deleted": 0,
+        "modified": 1,
+        "renamed": 0,
+      },
+      "lines_added": 2,
+      "lines_removed": 0,
+      "reviewable_files": 1,
+      "reviewable_lines_added": 2,
+      "reviewable_lines_removed": 0,
+    },
+    "dry_run": false,
+    "effort": null,
+    "error": null,
+    "finding_scores": null,
+    "findings": {
+      "high": 0,
+      "low": 0,
+      "medium": 0,
+    },
+    "force": "off",
+    "jenkins": null,
+    "judge_anomalies": null,
+    "judge_cost_usd": null,
+    "judge_decisions": null,
+    "judge_effort": null,
+    "judge_model": null,
+    "judge_policy": null,
+    "judge_prompt_hash": null,
+    "judge_status": null,
+    "judge_tokens": null,
+    "min_finding_score": null,
+    "model": "claude-haiku-4-5-20251001",
+    "pr_author": "dev",
+    "pr_id": "100",
+    "prompt_hash": "10052f24e175",
+    "prompt_source": "repo",
+    "recall_levers": {
+      "b_priority": false,
+      "j_quality": false,
+      "j_shown_anchor": false,
+      "sl_breadth": false,
+    },
+    "repo_slug": "repo",
+    "review_candidates": null,
+    "review_findings": {
+      "high": 0,
+      "low": 0,
+      "medium": 0,
+    },
+    "review_number": 2,
+    "run_id": "bitbucket-repo-100-aaa111222333",
+    "second_look_cost_usd": null,
+    "second_look_prompt_hash": null,
+    "second_look_status": "disabled",
+    "second_look_tokens": null,
+    "skip_reason": "Re-review found no new findings (prior review already clean)",
+    "source_branch": "feature/test",
+    "source_commit": "aaa111222333ffffffffffffffffffffffffffff",
+    "target_branch": "develop",
+    "tokens": {
+      "cache_read": 0,
+      "cache_write": 0,
+      "estimated_input": 114,
+      "input": 1000,
+      "output": 200,
+    },
+    "touch_rate": null,
+    "untouched_files": null,
+    "vcs": "bitbucket",
+    "verdict_score": null,
+    "workspace": "test",
+  },
+  "thrown": null,
+  "vcs": [
+    [
+      "getPullRequestInfo",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getDiff",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getChangedFiles",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getPreviousReviewComments",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getCommitDiff",
+      [
+        "aabbcc112233",
+        "aaa111222333ffffffffffffffffffffffffffff",
+      ],
+    ],
+    [
+      "getRepliesToReviewComments",
+      [
+        "100",
+        [
+          "200",
+        ],
+        true,
+      ],
+    ],
+  ],
+}
+`;
+
+exports[`characterization: review() with no checked commit > K6 NO_CHANGE + reply 1`] = `
+{
+  "console": [
+    "log: 
+Starting review for PR #100",
+    "log: Fetching PR info...",
+    "log:   "Test PR" (feature/test → develop)",
+    "log: Fetching diff...",
+    "log: Fetching changed files...",
+    "log:   1 changed file(s), 1 reviewable",
+    "log:   2 changed line(s), 2 reviewable",
+    "log: Checking for previous reviews...",
+    "log:   Found 1 previous review(s) — will produce delta review",
+    "log:   Fetching delta diff (aabbcc112233..aaa111222333)...",
+    "log:   Delta: 2 lines total, 0 file(s) filtered, 2 lines remain",
+    "log:   Found 1 discussion comment(s) (dev replies + agent replies) — will include in review context",
+    "log: Loading prompt...",
+    "log:   Prompt source: repo",
+    "log: Fetching file context...",
+    "log:   Fetched full content for 0 file(s)",
+    "log:   Estimated input: ~118 tokens  [prompt 5 | diff 32 | delta 32 | files 0 (0) | prev_reviews 47 (1) | replies 5 (1)]",
+    "log:   Reviewer: NO_CHANGE",
+    "log:   Found 1 unanswered reply(s) — responding... (0/3 replies used)",
+    "log: Done. Reply posted to PR.
+",
+  ],
+  "model": [
+    [
+      "runReview",
+      [
+        "test-key",
+        "claude-haiku-4-5-20251001",
+        1,
+        32000,
+        "",
+        {
+          "author": "dev",
+          "description": "A test PR",
+          "id": "100",
+          "sourceBranch": "feature/test",
+          "sourceCommit": "aaa111222333ffffffffffffffffffffffffffff",
+          "targetBranch": "develop",
+          "title": "Test PR",
+        },
+        "diff --git a/src/app.ts b/src/app.ts
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -10,3 +10,5 @@
++import { foo } from './foo'
++foo()
+",
+        [],
+        {
+          "content": "System prompt here",
+          "source": "repo",
+        },
+        [
+          {
+            "body": "### Summary
+All good.
+
+### Findings
+No findings.
+
+### Unresolved Questions
+None.
+
+---
+*Reviewed by test-bot (claude-haiku-4-5-20251001) | Prompt: repo | Review #1 | Commit: aabbcc112233*",
+            "createdOn": "2026-03-09T10:00:00Z",
+            "id": "200",
+          },
+        ],
+        [
+          {
+            "author": "Fernando",
+            "body": "Fixed in d4f2b43e.",
+            "createdOn": "2026-03-09T12:00:00Z",
+            "id": "dev-2026-03-09T12:00:00Z",
+            "parentId": "200",
+          },
+        ],
+        "diff --git a/src/app.ts b/src/app.ts
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -10,3 +10,5 @@
++import { foo } from './foo'
++foo()
+",
+        false,
+      ],
+    ],
+    [
+      "runCommentResponse",
+      [
+        "test-key",
+        "claude-haiku-4-5-20251001",
+        1,
+        "diff --git a/src/app.ts b/src/app.ts
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -10,3 +10,5 @@
++import { foo } from './foo'
++foo()
+",
+        "### Summary
+All good.
+
+### Findings
+No findings.
+
+### Unresolved Questions
+None.
+
+---
+*Reviewed by test-bot (claude-haiku-4-5-20251001) | Prompt: repo | Review #1 | Commit: aabbcc112233*",
+        [
+          {
+            "author": "Fernando",
+            "body": "Fixed in d4f2b43e.",
+            "createdOn": "2026-03-09T12:00:00Z",
+            "id": "dev-2026-03-09T12:00:00Z",
+            "parentId": "200",
+          },
+        ],
+      ],
+    ],
+  ],
+  "record": {
+    "action": "REPLY",
+    "anchored_findings": null,
+    "breadth_cost_usd": null,
+    "breadth_model": null,
+    "breadth_prompt_hash": null,
+    "breadth_status": null,
+    "breadth_tokens": null,
+    "changed_files": 1,
+    "changed_lines": 2,
+    "computed_score": 100,
+    "context_files_fetched": 0,
+    "cost_usd": 0.003,
+    "degraded": false,
+    "delta": {
+      "developer_replies": 1,
+      "new_findings": 0,
+      "resolved": 0,
+      "still_open": 0,
+    },
+    "diff_size": {
+      "files": {
+        "added": 0,
+        "deleted": 0,
+        "modified": 1,
+        "renamed": 0,
+      },
+      "lines_added": 2,
+      "lines_removed": 0,
+      "reviewable_files": 1,
+      "reviewable_lines_added": 2,
+      "reviewable_lines_removed": 0,
+    },
+    "dry_run": false,
+    "effort": null,
+    "error": null,
+    "finding_scores": null,
+    "findings": {
+      "high": 0,
+      "low": 0,
+      "medium": 0,
+    },
+    "force": "off",
+    "jenkins": null,
+    "judge_anomalies": null,
+    "judge_cost_usd": null,
+    "judge_decisions": null,
+    "judge_effort": null,
+    "judge_model": null,
+    "judge_policy": null,
+    "judge_prompt_hash": null,
+    "judge_status": null,
+    "judge_tokens": null,
+    "min_finding_score": null,
+    "model": "claude-haiku-4-5-20251001",
+    "pr_author": "dev",
+    "pr_id": "100",
+    "prompt_hash": "10052f24e175",
+    "prompt_source": "repo",
+    "recall_levers": {
+      "b_priority": false,
+      "j_quality": false,
+      "j_shown_anchor": false,
+      "sl_breadth": false,
+    },
+    "repo_slug": "repo",
+    "review_candidates": null,
+    "review_findings": {
+      "high": 0,
+      "low": 0,
+      "medium": 0,
+    },
+    "review_number": 2,
+    "run_id": "bitbucket-repo-100-aaa111222333",
+    "second_look_cost_usd": null,
+    "second_look_prompt_hash": null,
+    "second_look_status": null,
+    "second_look_tokens": null,
+    "skip_reason": null,
+    "source_branch": "feature/test",
+    "source_commit": "aaa111222333ffffffffffffffffffffffffffff",
+    "target_branch": "develop",
+    "tokens": {
+      "cache_read": 0,
+      "cache_write": 0,
+      "estimated_input": 118,
+      "input": 1500,
+      "output": 300,
+    },
+    "touch_rate": null,
+    "untouched_files": null,
+    "vcs": "bitbucket",
+    "verdict_score": null,
+    "workspace": "test",
+  },
+  "thrown": null,
+  "vcs": [
+    [
+      "getPullRequestInfo",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getDiff",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getChangedFiles",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getPreviousReviewComments",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getCommitDiff",
+      [
+        "aabbcc112233",
+        "aaa111222333ffffffffffffffffffffffffffff",
+      ],
+    ],
+    [
+      "getRepliesToReviewComments",
+      [
+        "100",
+        [
+          "200",
+        ],
+        true,
+      ],
+    ],
+    [
+      "getRepliesToReviewComments",
+      [
+        "100",
+        [
+          "200",
+        ],
+      ],
+    ],
+    [
+      "postReply",
+      [
+        "100",
+        "200",
+        "Thanks for clarifying.
+
+---
+*Reply by test-bot (claude-haiku-4-5-20251001)*",
+      ],
+    ],
+  ],
+}
+`;
+
+exports[`characterization: review() with no checked commit > K7 NO_CHANGE 1`] = `
+{
+  "console": [
+    "log: 
+Starting review for PR #100",
+    "log: Fetching PR info...",
+    "log:   "Test PR" (feature/test → develop)",
+    "log: Fetching diff...",
+    "log: Fetching changed files...",
+    "log:   1 changed file(s), 1 reviewable",
+    "log:   2 changed line(s), 2 reviewable",
+    "log: Checking for previous reviews...",
+    "log:   Found 1 previous review(s) — will produce delta review",
+    "log:   Fetching delta diff (aabbcc112233..aaa111222333)...",
+    "log:   Delta: 2 lines total, 0 file(s) filtered, 2 lines remain",
+    "log: Loading prompt...",
+    "log:   Prompt source: repo",
+    "log: Fetching file context...",
+    "log:   Fetched full content for 0 file(s)",
+    "log:   Estimated input: ~114 tokens  [prompt 5 | diff 32 | delta 32 | files 0 (0) | prev_reviews 47 (1) | replies 0 (0)]",
+    "log:   Reviewer: NO_CHANGE",
+    "log: 
+Skipping: No changes since last review",
+  ],
+  "model": [
+    [
+      "runReview",
+      [
+        "test-key",
+        "claude-haiku-4-5-20251001",
+        1,
+        32000,
+        "",
+        {
+          "author": "dev",
+          "description": "A test PR",
+          "id": "100",
+          "sourceBranch": "feature/test",
+          "sourceCommit": "aaa111222333ffffffffffffffffffffffffffff",
+          "targetBranch": "develop",
+          "title": "Test PR",
+        },
+        "diff --git a/src/app.ts b/src/app.ts
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -10,3 +10,5 @@
++import { foo } from './foo'
++foo()
+",
+        [],
+        {
+          "content": "System prompt here",
+          "source": "repo",
+        },
+        [
+          {
+            "body": "### Summary
+All good.
+
+### Findings
+No findings.
+
+### Unresolved Questions
+None.
+
+---
+*Reviewed by test-bot (claude-haiku-4-5-20251001) | Prompt: repo | Review #1 | Commit: aabbcc112233*",
+            "createdOn": "2026-03-09T10:00:00Z",
+            "id": "200",
+          },
+        ],
+        [],
+        "diff --git a/src/app.ts b/src/app.ts
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -10,3 +10,5 @@
++import { foo } from './foo'
++foo()
+",
+        false,
+      ],
+    ],
+  ],
+  "record": {
+    "action": "NO_CHANGE",
+    "anchored_findings": null,
+    "breadth_cost_usd": null,
+    "breadth_model": null,
+    "breadth_prompt_hash": null,
+    "breadth_status": null,
+    "breadth_tokens": null,
+    "changed_files": 1,
+    "changed_lines": 2,
+    "computed_score": 100,
+    "context_files_fetched": 0,
+    "cost_usd": 0.002,
+    "degraded": false,
+    "delta": {
+      "developer_replies": 0,
+      "new_findings": 0,
+      "resolved": 0,
+      "still_open": 0,
+    },
+    "diff_size": {
+      "files": {
+        "added": 0,
+        "deleted": 0,
+        "modified": 1,
+        "renamed": 0,
+      },
+      "lines_added": 2,
+      "lines_removed": 0,
+      "reviewable_files": 1,
+      "reviewable_lines_added": 2,
+      "reviewable_lines_removed": 0,
+    },
+    "dry_run": false,
+    "effort": null,
+    "error": null,
+    "finding_scores": null,
+    "findings": {
+      "high": 0,
+      "low": 0,
+      "medium": 0,
+    },
+    "force": "off",
+    "jenkins": null,
+    "judge_anomalies": null,
+    "judge_cost_usd": null,
+    "judge_decisions": null,
+    "judge_effort": null,
+    "judge_model": null,
+    "judge_policy": null,
+    "judge_prompt_hash": null,
+    "judge_status": null,
+    "judge_tokens": null,
+    "min_finding_score": null,
+    "model": "claude-haiku-4-5-20251001",
+    "pr_author": "dev",
+    "pr_id": "100",
+    "prompt_hash": "10052f24e175",
+    "prompt_source": "repo",
+    "recall_levers": {
+      "b_priority": false,
+      "j_quality": false,
+      "j_shown_anchor": false,
+      "sl_breadth": false,
+    },
+    "repo_slug": "repo",
+    "review_candidates": null,
+    "review_findings": {
+      "high": 0,
+      "low": 0,
+      "medium": 0,
+    },
+    "review_number": 2,
+    "run_id": "bitbucket-repo-100-aaa111222333",
+    "second_look_cost_usd": null,
+    "second_look_prompt_hash": null,
+    "second_look_status": null,
+    "second_look_tokens": null,
+    "skip_reason": "No changes since last review",
+    "source_branch": "feature/test",
+    "source_commit": "aaa111222333ffffffffffffffffffffffffffff",
+    "target_branch": "develop",
+    "tokens": {
+      "cache_read": 0,
+      "cache_write": 0,
+      "estimated_input": 114,
+      "input": 1000,
+      "output": 200,
+    },
+    "touch_rate": null,
+    "untouched_files": null,
+    "vcs": "bitbucket",
+    "verdict_score": null,
+    "workspace": "test",
+  },
+  "thrown": null,
+  "vcs": [
+    [
+      "getPullRequestInfo",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getDiff",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getChangedFiles",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getPreviousReviewComments",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getCommitDiff",
+      [
+        "aabbcc112233",
+        "aaa111222333ffffffffffffffffffffffffffff",
+      ],
+    ],
+    [
+      "getRepliesToReviewComments",
+      [
+        "100",
+        [
+          "200",
+        ],
+        true,
+      ],
+    ],
+    [
+      "getRepliesToReviewComments",
+      [
+        "100",
+        [
+          "200",
+        ],
+      ],
+    ],
+  ],
+}
+`;
+
+exports[`characterization: review() with no checked commit > K8 NO_CHANGE + reply limit 1`] = `
+{
+  "console": [
+    "log: 
+Starting review for PR #100",
+    "log: Fetching PR info...",
+    "log:   "Test PR" (feature/test → develop)",
+    "log: Fetching diff...",
+    "log: Fetching changed files...",
+    "log:   1 changed file(s), 1 reviewable",
+    "log:   2 changed line(s), 2 reviewable",
+    "log: Checking for previous reviews...",
+    "log:   Found 1 previous review(s) — will produce delta review",
+    "log:   Fetching delta diff (aabbcc112233..aaa111222333)...",
+    "log:   Delta: 2 lines total, 0 file(s) filtered, 2 lines remain",
+    "log:   Found 1 discussion comment(s) (dev replies + agent replies) — will include in review context",
+    "log: Loading prompt...",
+    "log:   Prompt source: repo",
+    "log: Fetching file context...",
+    "log:   Fetched full content for 0 file(s)",
+    "log:   Estimated input: ~118 tokens  [prompt 5 | diff 32 | delta 32 | files 0 (0) | prev_reviews 47 (1) | replies 5 (1)]",
+    "log:   Reviewer: NO_CHANGE",
+    "log:   Found 1 unanswered reply(s), but agent already posted 3/3 replies — skipping",
+    "log: 
+Skipping: reply limit reached (3/3)",
+  ],
+  "model": [
+    [
+      "runReview",
+      [
+        "test-key",
+        "claude-haiku-4-5-20251001",
+        1,
+        32000,
+        "",
+        {
+          "author": "dev",
+          "description": "A test PR",
+          "id": "100",
+          "sourceBranch": "feature/test",
+          "sourceCommit": "aaa111222333ffffffffffffffffffffffffffff",
+          "targetBranch": "develop",
+          "title": "Test PR",
+        },
+        "diff --git a/src/app.ts b/src/app.ts
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -10,3 +10,5 @@
++import { foo } from './foo'
++foo()
+",
+        [],
+        {
+          "content": "System prompt here",
+          "source": "repo",
+        },
+        [
+          {
+            "body": "### Summary
+All good.
+
+### Findings
+No findings.
+
+### Unresolved Questions
+None.
+
+---
+*Reviewed by test-bot (claude-haiku-4-5-20251001) | Prompt: repo | Review #1 | Commit: aabbcc112233*",
+            "createdOn": "2026-03-09T10:00:00Z",
+            "id": "200",
+          },
+        ],
+        [
+          {
+            "author": "Fernando",
+            "body": "Fixed in d4f2b43e.",
+            "createdOn": "2026-03-09T12:00:00Z",
+            "id": "dev-2026-03-09T12:00:00Z",
+            "parentId": "200",
+          },
+        ],
+        "diff --git a/src/app.ts b/src/app.ts
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -10,3 +10,5 @@
++import { foo } from './foo'
++foo()
+",
+        false,
+      ],
+    ],
+  ],
+  "record": {
+    "action": "DEDUP_SKIP",
+    "anchored_findings": null,
+    "breadth_cost_usd": null,
+    "breadth_model": null,
+    "breadth_prompt_hash": null,
+    "breadth_status": null,
+    "breadth_tokens": null,
+    "changed_files": 1,
+    "changed_lines": 2,
+    "computed_score": 100,
+    "context_files_fetched": 0,
+    "cost_usd": 0.002,
+    "degraded": false,
+    "delta": {
+      "developer_replies": 1,
+      "new_findings": 0,
+      "resolved": 0,
+      "still_open": 0,
+    },
+    "diff_size": {
+      "files": {
+        "added": 0,
+        "deleted": 0,
+        "modified": 1,
+        "renamed": 0,
+      },
+      "lines_added": 2,
+      "lines_removed": 0,
+      "reviewable_files": 1,
+      "reviewable_lines_added": 2,
+      "reviewable_lines_removed": 0,
+    },
+    "dry_run": false,
+    "effort": null,
+    "error": null,
+    "finding_scores": null,
+    "findings": {
+      "high": 0,
+      "low": 0,
+      "medium": 0,
+    },
+    "force": "off",
+    "jenkins": null,
+    "judge_anomalies": null,
+    "judge_cost_usd": null,
+    "judge_decisions": null,
+    "judge_effort": null,
+    "judge_model": null,
+    "judge_policy": null,
+    "judge_prompt_hash": null,
+    "judge_status": null,
+    "judge_tokens": null,
+    "min_finding_score": null,
+    "model": "claude-haiku-4-5-20251001",
+    "pr_author": "dev",
+    "pr_id": "100",
+    "prompt_hash": "10052f24e175",
+    "prompt_source": "repo",
+    "recall_levers": {
+      "b_priority": false,
+      "j_quality": false,
+      "j_shown_anchor": false,
+      "sl_breadth": false,
+    },
+    "repo_slug": "repo",
+    "review_candidates": null,
+    "review_findings": {
+      "high": 0,
+      "low": 0,
+      "medium": 0,
+    },
+    "review_number": 2,
+    "run_id": "bitbucket-repo-100-aaa111222333",
+    "second_look_cost_usd": null,
+    "second_look_prompt_hash": null,
+    "second_look_status": null,
+    "second_look_tokens": null,
+    "skip_reason": "reply limit reached (3/3)",
+    "source_branch": "feature/test",
+    "source_commit": "aaa111222333ffffffffffffffffffffffffffff",
+    "target_branch": "develop",
+    "tokens": {
+      "cache_read": 0,
+      "cache_write": 0,
+      "estimated_input": 118,
+      "input": 1000,
+      "output": 200,
+    },
+    "touch_rate": null,
+    "untouched_files": null,
+    "vcs": "bitbucket",
+    "verdict_score": null,
+    "workspace": "test",
+  },
+  "thrown": null,
+  "vcs": [
+    [
+      "getPullRequestInfo",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getDiff",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getChangedFiles",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getPreviousReviewComments",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getCommitDiff",
+      [
+        "aabbcc112233",
+        "aaa111222333ffffffffffffffffffffffffffff",
+      ],
+    ],
+    [
+      "getRepliesToReviewComments",
+      [
+        "100",
+        [
+          "200",
+        ],
+        true,
+      ],
+    ],
+    [
+      "getRepliesToReviewComments",
+      [
+        "100",
+        [
+          "200",
+        ],
+      ],
+    ],
+  ],
+}
+`;
+
+exports[`characterization: review() with no checked commit > K9 CHECK_REPLIES reply limit 1`] = `
+{
+  "console": [
+    "log: 
+Starting review for PR #100",
+    "log: Fetching PR info...",
+    "log:   "Test PR" (feature/test → develop)",
+    "log: Fetching diff...",
+    "log: Fetching changed files...",
+    "log:   1 changed file(s), 1 reviewable",
+    "log:   2 changed line(s), 2 reviewable",
+    "log: Checking for previous reviews...",
+    "log:   Found 1 previous review(s) — will produce delta review",
+    "log:   Source commit aaa111222333 already reviewed — checking for unanswered replies...",
+    "log:   Found 1 unanswered reply(s), but agent already posted 3/3 replies — skipping",
+    "log: 
+Skipping: reply limit reached (3/3)",
+  ],
+  "model": [],
+  "record": {
+    "action": "DEDUP_SKIP",
+    "anchored_findings": null,
+    "breadth_cost_usd": null,
+    "breadth_model": null,
+    "breadth_prompt_hash": null,
+    "breadth_status": null,
+    "breadth_tokens": null,
+    "changed_files": 1,
+    "changed_lines": 2,
+    "computed_score": null,
+    "context_files_fetched": 0,
+    "cost_usd": 0,
+    "degraded": false,
+    "delta": null,
+    "diff_size": {
+      "files": {
+        "added": 0,
+        "deleted": 0,
+        "modified": 1,
+        "renamed": 0,
+      },
+      "lines_added": 2,
+      "lines_removed": 0,
+      "reviewable_files": 1,
+      "reviewable_lines_added": 2,
+      "reviewable_lines_removed": 0,
+    },
+    "dry_run": false,
+    "effort": null,
+    "error": null,
+    "finding_scores": null,
+    "findings": null,
+    "force": "off",
+    "jenkins": null,
+    "judge_anomalies": null,
+    "judge_cost_usd": null,
+    "judge_decisions": null,
+    "judge_effort": null,
+    "judge_model": null,
+    "judge_policy": null,
+    "judge_prompt_hash": null,
+    "judge_status": null,
+    "judge_tokens": null,
+    "min_finding_score": null,
+    "model": "claude-haiku-4-5-20251001",
+    "pr_author": "dev",
+    "pr_id": "100",
+    "prompt_hash": null,
+    "prompt_source": "none",
+    "recall_levers": {
+      "b_priority": false,
+      "j_quality": false,
+      "j_shown_anchor": false,
+      "sl_breadth": false,
+    },
+    "repo_slug": "repo",
+    "review_candidates": null,
+    "review_findings": null,
+    "review_number": 1,
+    "run_id": "bitbucket-repo-100-aaa111222333",
+    "second_look_cost_usd": null,
+    "second_look_prompt_hash": null,
+    "second_look_status": null,
+    "second_look_tokens": null,
+    "skip_reason": "reply limit reached (3/3)",
+    "source_branch": "feature/test",
+    "source_commit": "aaa111222333ffffffffffffffffffffffffffff",
+    "target_branch": "develop",
+    "tokens": {
+      "cache_read": 0,
+      "cache_write": 0,
+      "estimated_input": 0,
+      "input": 0,
+      "output": 0,
+    },
+    "touch_rate": null,
+    "untouched_files": null,
+    "vcs": "bitbucket",
+    "verdict_score": null,
+    "workspace": "test",
+  },
+  "thrown": null,
+  "vcs": [
+    [
+      "getPullRequestInfo",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getDiff",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getChangedFiles",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getPreviousReviewComments",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getRepliesToReviewComments",
+      [
+        "100",
+        [
+          "200",
+        ],
+      ],
+    ],
+  ],
+}
+`;
+
+exports[`characterization: review() with no checked commit > K10 JUDGE-gate reply limit 1`] = `
+{
+  "console": [
+    "log: 
+Starting review for PR #100",
+    "log: Fetching PR info...",
+    "log:   "Test PR" (feature/test → develop)",
+    "log: Fetching diff...",
+    "log: Fetching changed files...",
+    "log:   1 changed file(s), 1 reviewable",
+    "log:   2 changed line(s), 2 reviewable",
+    "log: Checking for previous reviews...",
+    "log:   Found 1 previous review(s) — will produce delta review",
+    "log:   Fetching delta diff (aabbcc112233..aaa111222333)...",
+    "log:   Delta: 2 lines total, 0 file(s) filtered, 2 lines remain",
+    "log:   Found 2 discussion comment(s) (dev replies + agent replies) — will include in review context",
+    "log: Loading prompt...",
+    "log:   Prompt source: repo",
+    "log: Fetching file context...",
+    "log:   Fetched full content for 0 file(s)",
+    "log:   Estimated input: ~134 tokens  [prompt 5 | diff 32 | delta 32 | files 0 (0) | prev_reviews 47 (1) | replies 21 (2)]",
+    "log:   Reviewer findings: 0H / 0M / 0L",
+    "log:   Unanswered dev reply, but reply limit reached (1/1) — skipping",
+    "log: 
+Skipping: reply limit reached (1/1)",
+  ],
+  "model": [
+    [
+      "runReview",
+      [
+        "test-key",
+        "claude-haiku-4-5-20251001",
+        1,
+        32000,
+        "",
+        {
+          "author": "dev",
+          "description": "A test PR",
+          "id": "100",
+          "sourceBranch": "feature/test",
+          "sourceCommit": "aaa111222333ffffffffffffffffffffffffffff",
+          "targetBranch": "develop",
+          "title": "Test PR",
+        },
+        "diff --git a/src/app.ts b/src/app.ts
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -10,3 +10,5 @@
++import { foo } from './foo'
++foo()
+",
+        [],
+        {
+          "content": "System prompt here",
+          "source": "repo",
+        },
+        [
+          {
+            "body": "### Summary
+All good.
+
+### Findings
+No findings.
+
+### Unresolved Questions
+None.
+
+---
+*Reviewed by test-bot (claude-haiku-4-5-20251001) | Prompt: repo | Review #1 | Commit: aabbcc112233*",
+            "createdOn": "2026-03-09T10:00:00Z",
+            "id": "200",
+          },
+        ],
+        [
+          {
+            "author": "Agent",
+            "body": "Confirmed.
+
+---
+*Reply by test-bot (claude-haiku-4-5-20251001)*",
+            "createdOn": "2026-03-09T11:00:00Z",
+            "id": "agent-2026-03-09T11:00:00Z",
+            "parentId": "200",
+          },
+          {
+            "author": "Fernando",
+            "body": "Fixed in d4f2b43e.",
+            "createdOn": "2026-03-09T12:00:00Z",
+            "id": "dev-2026-03-09T12:00:00Z",
+            "parentId": "200",
+          },
+        ],
+        "diff --git a/src/app.ts b/src/app.ts
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -10,3 +10,5 @@
++import { foo } from './foo'
++foo()
+",
+        false,
+      ],
+    ],
+  ],
+  "record": {
+    "action": "DEDUP_SKIP",
+    "anchored_findings": null,
+    "breadth_cost_usd": null,
+    "breadth_model": null,
+    "breadth_prompt_hash": null,
+    "breadth_status": "disabled",
+    "breadth_tokens": null,
+    "changed_files": 1,
+    "changed_lines": 2,
+    "computed_score": 100,
+    "context_files_fetched": 0,
+    "cost_usd": 0.002,
+    "degraded": false,
+    "delta": {
+      "developer_replies": 2,
+      "new_findings": 0,
+      "resolved": 0,
+      "still_open": 0,
+    },
+    "diff_size": {
+      "files": {
+        "added": 0,
+        "deleted": 0,
+        "modified": 1,
+        "renamed": 0,
+      },
+      "lines_added": 2,
+      "lines_removed": 0,
+      "reviewable_files": 1,
+      "reviewable_lines_added": 2,
+      "reviewable_lines_removed": 0,
+    },
+    "dry_run": false,
+    "effort": null,
+    "error": null,
+    "finding_scores": null,
+    "findings": {
+      "high": 0,
+      "low": 0,
+      "medium": 0,
+    },
+    "force": "off",
+    "jenkins": null,
+    "judge_anomalies": null,
+    "judge_cost_usd": null,
+    "judge_decisions": null,
+    "judge_effort": null,
+    "judge_model": null,
+    "judge_policy": null,
+    "judge_prompt_hash": null,
+    "judge_status": null,
+    "judge_tokens": null,
+    "min_finding_score": null,
+    "model": "claude-haiku-4-5-20251001",
+    "pr_author": "dev",
+    "pr_id": "100",
+    "prompt_hash": "10052f24e175",
+    "prompt_source": "repo",
+    "recall_levers": {
+      "b_priority": false,
+      "j_quality": false,
+      "j_shown_anchor": false,
+      "sl_breadth": false,
+    },
+    "repo_slug": "repo",
+    "review_candidates": null,
+    "review_findings": {
+      "high": 0,
+      "low": 0,
+      "medium": 0,
+    },
+    "review_number": 2,
+    "run_id": "bitbucket-repo-100-aaa111222333",
+    "second_look_cost_usd": null,
+    "second_look_prompt_hash": null,
+    "second_look_status": "disabled",
+    "second_look_tokens": null,
+    "skip_reason": "reply limit reached (1/1)",
+    "source_branch": "feature/test",
+    "source_commit": "aaa111222333ffffffffffffffffffffffffffff",
+    "target_branch": "develop",
+    "tokens": {
+      "cache_read": 0,
+      "cache_write": 0,
+      "estimated_input": 134,
+      "input": 1000,
+      "output": 200,
+    },
+    "touch_rate": null,
+    "untouched_files": null,
+    "vcs": "bitbucket",
+    "verdict_score": null,
+    "workspace": "test",
+  },
+  "thrown": null,
+  "vcs": [
+    [
+      "getPullRequestInfo",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getDiff",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getChangedFiles",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getPreviousReviewComments",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getCommitDiff",
+      [
+        "aabbcc112233",
+        "aaa111222333ffffffffffffffffffffffffffff",
+      ],
+    ],
+    [
+      "getRepliesToReviewComments",
+      [
+        "100",
+        [
+          "200",
+        ],
+        true,
+      ],
+    ],
+  ],
+}
+`;
+
+exports[`characterization: review() with no checked commit > K11 quiet 0-finding + reply 1`] = `
+{
+  "console": [
+    "log: 
+Starting review for PR #100",
+    "log: Fetching PR info...",
+    "log:   "Test PR" (feature/test → develop)",
+    "log: Fetching diff...",
+    "log: Fetching changed files...",
+    "log:   1 changed file(s), 1 reviewable",
+    "log:   2 changed line(s), 2 reviewable",
+    "log: Checking for previous reviews...",
+    "log:   Found 1 previous review(s) — will produce delta review",
+    "log:   Fetching delta diff (aabbcc112233..aaa111222333)...",
+    "log:   Delta: 2 lines total, 0 file(s) filtered, 2 lines remain",
+    "log:   Found 1 discussion comment(s) (dev replies + agent replies) — will include in review context",
+    "log: Loading prompt...",
+    "log:   Prompt source: repo",
+    "log: Fetching file context...",
+    "log:   Fetched full content for 0 file(s)",
+    "log:   Estimated input: ~118 tokens  [prompt 5 | diff 32 | delta 32 | files 0 (0) | prev_reviews 47 (1) | replies 5 (1)]",
+    "log:   Reviewer findings: 0H / 0M / 0L",
+    "log:   Re-review found nothing new, but a developer reply is unanswered — answering it in-thread",
+    "log: Done. Reply posted to PR.
+",
+  ],
+  "model": [
+    [
+      "runReview",
+      [
+        "test-key",
+        "claude-haiku-4-5-20251001",
+        1,
+        32000,
+        "",
+        {
+          "author": "dev",
+          "description": "A test PR",
+          "id": "100",
+          "sourceBranch": "feature/test",
+          "sourceCommit": "aaa111222333ffffffffffffffffffffffffffff",
+          "targetBranch": "develop",
+          "title": "Test PR",
+        },
+        "diff --git a/src/app.ts b/src/app.ts
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -10,3 +10,5 @@
++import { foo } from './foo'
++foo()
+",
+        [],
+        {
+          "content": "System prompt here",
+          "source": "repo",
+        },
+        [
+          {
+            "body": "### Summary
+All good.
+
+### Findings
+No findings.
+
+### Unresolved Questions
+None.
+
+---
+*Reviewed by test-bot (claude-haiku-4-5-20251001) | Prompt: repo | Review #1 | Commit: aabbcc112233*",
+            "createdOn": "2026-03-09T10:00:00Z",
+            "id": "200",
+          },
+        ],
+        [
+          {
+            "author": "Fernando",
+            "body": "Fixed in d4f2b43e.",
+            "createdOn": "2026-03-09T12:00:00Z",
+            "id": "dev-2026-03-09T12:00:00Z",
+            "parentId": "200",
+          },
+        ],
+        "diff --git a/src/app.ts b/src/app.ts
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -10,3 +10,5 @@
++import { foo } from './foo'
++foo()
+",
+        false,
+      ],
+    ],
+    [
+      "runCommentResponse",
+      [
+        "test-key",
+        "claude-haiku-4-5-20251001",
+        1,
+        "diff --git a/src/app.ts b/src/app.ts
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -10,3 +10,5 @@
++import { foo } from './foo'
++foo()
+",
+        "### Summary
+All good.
+
+### Findings
+No findings.
+
+### Unresolved Questions
+None.
+
+---
+*Reviewed by test-bot (claude-haiku-4-5-20251001) | Prompt: repo | Review #1 | Commit: aabbcc112233*",
+        [
+          {
+            "author": "Fernando",
+            "body": "Fixed in d4f2b43e.",
+            "createdOn": "2026-03-09T12:00:00Z",
+            "id": "dev-2026-03-09T12:00:00Z",
+            "parentId": "200",
+          },
+        ],
+      ],
+    ],
+  ],
+  "record": {
+    "action": "REPLY",
+    "anchored_findings": null,
+    "breadth_cost_usd": null,
+    "breadth_model": null,
+    "breadth_prompt_hash": null,
+    "breadth_status": "disabled",
+    "breadth_tokens": null,
+    "changed_files": 1,
+    "changed_lines": 2,
+    "computed_score": 100,
+    "context_files_fetched": 0,
+    "cost_usd": 0.003,
+    "degraded": false,
+    "delta": {
+      "developer_replies": 1,
+      "new_findings": 0,
+      "resolved": 0,
+      "still_open": 0,
+    },
+    "diff_size": {
+      "files": {
+        "added": 0,
+        "deleted": 0,
+        "modified": 1,
+        "renamed": 0,
+      },
+      "lines_added": 2,
+      "lines_removed": 0,
+      "reviewable_files": 1,
+      "reviewable_lines_added": 2,
+      "reviewable_lines_removed": 0,
+    },
+    "dry_run": false,
+    "effort": null,
+    "error": null,
+    "finding_scores": null,
+    "findings": {
+      "high": 0,
+      "low": 0,
+      "medium": 0,
+    },
+    "force": "off",
+    "jenkins": null,
+    "judge_anomalies": null,
+    "judge_cost_usd": null,
+    "judge_decisions": null,
+    "judge_effort": null,
+    "judge_model": null,
+    "judge_policy": null,
+    "judge_prompt_hash": null,
+    "judge_status": null,
+    "judge_tokens": null,
+    "min_finding_score": null,
+    "model": "claude-haiku-4-5-20251001",
+    "pr_author": "dev",
+    "pr_id": "100",
+    "prompt_hash": "10052f24e175",
+    "prompt_source": "repo",
+    "recall_levers": {
+      "b_priority": false,
+      "j_quality": false,
+      "j_shown_anchor": false,
+      "sl_breadth": false,
+    },
+    "repo_slug": "repo",
+    "review_candidates": null,
+    "review_findings": {
+      "high": 0,
+      "low": 0,
+      "medium": 0,
+    },
+    "review_number": 2,
+    "run_id": "bitbucket-repo-100-aaa111222333",
+    "second_look_cost_usd": null,
+    "second_look_prompt_hash": null,
+    "second_look_status": "disabled",
+    "second_look_tokens": null,
+    "skip_reason": null,
+    "source_branch": "feature/test",
+    "source_commit": "aaa111222333ffffffffffffffffffffffffffff",
+    "target_branch": "develop",
+    "tokens": {
+      "cache_read": 0,
+      "cache_write": 0,
+      "estimated_input": 118,
+      "input": 1500,
+      "output": 300,
+    },
+    "touch_rate": null,
+    "untouched_files": null,
+    "vcs": "bitbucket",
+    "verdict_score": null,
+    "workspace": "test",
+  },
+  "thrown": null,
+  "vcs": [
+    [
+      "getPullRequestInfo",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getDiff",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getChangedFiles",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getPreviousReviewComments",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getCommitDiff",
+      [
+        "aabbcc112233",
+        "aaa111222333ffffffffffffffffffffffffffff",
+      ],
+    ],
+    [
+      "getRepliesToReviewComments",
+      [
+        "100",
+        [
+          "200",
+        ],
+        true,
+      ],
+    ],
+    [
+      "postReply",
+      [
+        "100",
+        "200",
+        "Thanks for clarifying.
+
+---
+*Reply by test-bot (claude-haiku-4-5-20251001)*",
+      ],
+    ],
+  ],
+}
+`;
+
+exports[`characterization: review() with no checked commit > K12 confirmation post 1`] = `
+{
+  "console": [
+    "log: 
+Starting review for PR #100",
+    "log: Fetching PR info...",
+    "log:   "Test PR" (feature/test → develop)",
+    "log: Fetching diff...",
+    "log: Fetching changed files...",
+    "log:   1 changed file(s), 1 reviewable",
+    "log:   2 changed line(s), 2 reviewable",
+    "log: Checking for previous reviews...",
+    "log:   Found 1 previous review(s) — will produce delta review",
+    "log:   Fetching delta diff (aabbcc112233..aaa111222333)...",
+    "log:   Delta: 2 lines total, 0 file(s) filtered, 2 lines remain",
+    "log: Loading prompt...",
+    "log:   Prompt source: repo",
+    "log: Fetching file context...",
+    "log:   Fetched full content for 0 file(s)",
+    "log:   Estimated input: ~124 tokens  [prompt 5 | diff 32 | delta 32 | files 0 (0) | prev_reviews 57 (1) | replies 0 (0)]",
+    "log:   Reviewer findings: 0H / 0M / 0L",
+    "log:   Re-review with no new findings — posting (prior review had findings)",
+    "log: Posting review comment...",
+    "log: Done. Review posted to PR.
+",
+  ],
+  "model": [
+    [
+      "runReview",
+      [
+        "test-key",
+        "claude-haiku-4-5-20251001",
+        1,
+        32000,
+        "",
+        {
+          "author": "dev",
+          "description": "A test PR",
+          "id": "100",
+          "sourceBranch": "feature/test",
+          "sourceCommit": "aaa111222333ffffffffffffffffffffffffffff",
+          "targetBranch": "develop",
+          "title": "Test PR",
+        },
+        "diff --git a/src/app.ts b/src/app.ts
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -10,3 +10,5 @@
++import { foo } from './foo'
++foo()
+",
+        [],
+        {
+          "content": "System prompt here",
+          "source": "repo",
+        },
+        [
+          {
+            "body": "### Summary
+One issue.
+
+### Findings
+- **MEDIUM – Prior issue** (\`src/app.ts:11\`)
+  desc
+
+### Unresolved Questions
+None.
+
+---
+*Reviewed by test-bot (claude-haiku-4-5-20251001) | Prompt: repo | Review #1 | Commit: aabbcc112233*",
+            "createdOn": "2026-03-09T10:00:00Z",
+            "id": "200",
+          },
+        ],
+        [],
+        "diff --git a/src/app.ts b/src/app.ts
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -10,3 +10,5 @@
++import { foo } from './foo'
++foo()
+",
+        false,
+      ],
+    ],
+  ],
+  "record": {
+    "action": "RE_REVIEW",
+    "anchored_findings": null,
+    "breadth_cost_usd": null,
+    "breadth_model": null,
+    "breadth_prompt_hash": null,
+    "breadth_status": "disabled",
+    "breadth_tokens": null,
+    "changed_files": 1,
+    "changed_lines": 2,
+    "computed_score": 100,
+    "context_files_fetched": 0,
+    "cost_usd": 0.002,
+    "degraded": false,
+    "delta": {
+      "developer_replies": 0,
+      "new_findings": 0,
+      "resolved": 1,
+      "still_open": 0,
+    },
+    "diff_size": {
+      "files": {
+        "added": 0,
+        "deleted": 0,
+        "modified": 1,
+        "renamed": 0,
+      },
+      "lines_added": 2,
+      "lines_removed": 0,
+      "reviewable_files": 1,
+      "reviewable_lines_added": 2,
+      "reviewable_lines_removed": 0,
+    },
+    "dry_run": false,
+    "effort": null,
+    "error": null,
+    "finding_scores": null,
+    "findings": {
+      "high": 0,
+      "low": 0,
+      "medium": 0,
+    },
+    "force": "off",
+    "jenkins": null,
+    "judge_anomalies": null,
+    "judge_cost_usd": null,
+    "judge_decisions": null,
+    "judge_effort": null,
+    "judge_model": null,
+    "judge_policy": null,
+    "judge_prompt_hash": null,
+    "judge_status": "disabled",
+    "judge_tokens": null,
+    "min_finding_score": null,
+    "model": "claude-haiku-4-5-20251001",
+    "pr_author": "dev",
+    "pr_id": "100",
+    "prompt_hash": "10052f24e175",
+    "prompt_source": "repo",
+    "recall_levers": {
+      "b_priority": false,
+      "j_quality": false,
+      "j_shown_anchor": false,
+      "sl_breadth": false,
+    },
+    "repo_slug": "repo",
+    "review_candidates": null,
+    "review_findings": {
+      "high": 0,
+      "low": 0,
+      "medium": 0,
+    },
+    "review_number": 2,
+    "run_id": "bitbucket-repo-100-aaa111222333",
+    "second_look_cost_usd": null,
+    "second_look_prompt_hash": null,
+    "second_look_status": "disabled",
+    "second_look_tokens": null,
+    "skip_reason": null,
+    "source_branch": "feature/test",
+    "source_commit": "aaa111222333ffffffffffffffffffffffffffff",
+    "target_branch": "develop",
+    "tokens": {
+      "cache_read": 0,
+      "cache_write": 0,
+      "estimated_input": 124,
+      "input": 1000,
+      "output": 200,
+    },
+    "touch_rate": 100,
+    "untouched_files": null,
+    "vcs": "bitbucket",
+    "verdict_score": null,
+    "workspace": "test",
+  },
+  "thrown": null,
+  "vcs": [
+    [
+      "getPullRequestInfo",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getDiff",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getChangedFiles",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getPreviousReviewComments",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getCommitDiff",
+      [
+        "aabbcc112233",
+        "aaa111222333ffffffffffffffffffffffffffff",
+      ],
+    ],
+    [
+      "getRepliesToReviewComments",
+      [
+        "100",
+        [
+          "200",
+        ],
+        true,
+      ],
+    ],
+    [
+      "getPreviousReviewComments",
+      [
+        "100",
+      ],
+    ],
+    [
+      "postComment",
+      [
+        "100",
+        "### Summary
+ok
+
+### Findings
+No findings.
+
+### Behavioral Diff
+None.
+
+### Production Risk
+None.
+
+### Unresolved Questions
+None.
+
+---
+*Reviewed by test-bot (claude-haiku-4-5-20251001) | Prompt: repo | Review #2 | Commit: aaa111222333 | Build: testbuild*",
+      ],
+    ],
+  ],
+}
+`;
+
+exports[`characterization: review() with no checked commit > K13 pre-post race 1`] = `
+{
+  "console": [
+    "log: 
+Starting review for PR #100",
+    "log: Fetching PR info...",
+    "log:   "Test PR" (feature/test → develop)",
+    "log: Fetching diff...",
+    "log: Fetching changed files...",
+    "log:   1 changed file(s), 1 reviewable",
+    "log:   2 changed line(s), 2 reviewable",
+    "log: Checking for previous reviews...",
+    "log:   No previous reviews — first review for this PR",
+    "log: Loading prompt...",
+    "log:   Prompt source: repo",
+    "log: Fetching file context...",
+    "log:   Fetched full content for 0 file(s)",
+    "log:   Estimated input: ~36 tokens  [prompt 5 | diff 32 | delta 0 | files 0 (0) | prev_reviews 0 (0) | replies 0 (0)]",
+    "log:   Reviewer findings: 0H / 1M / 0L",
+    "log:   Commit aaa111222333 already reviewed by another run — skipping post",
+    "log: 
+Skipping: Another agent run already reviewed this commit (race condition avoided)",
+  ],
+  "model": [
+    [
+      "runReview",
+      [
+        "test-key",
+        "claude-haiku-4-5-20251001",
+        1,
+        32000,
+        "",
+        {
+          "author": "dev",
+          "description": "A test PR",
+          "id": "100",
+          "sourceBranch": "feature/test",
+          "sourceCommit": "aaa111222333ffffffffffffffffffffffffffff",
+          "targetBranch": "develop",
+          "title": "Test PR",
+        },
+        "diff --git a/src/app.ts b/src/app.ts
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -10,3 +10,5 @@
++import { foo } from './foo'
++foo()
+",
+        [],
+        {
+          "content": "System prompt here",
+          "source": "repo",
+        },
+        [],
+        [],
+        "",
+        false,
+      ],
+    ],
+  ],
+  "record": {
+    "action": "DEDUP_SKIP",
+    "anchored_findings": null,
+    "breadth_cost_usd": null,
+    "breadth_model": null,
+    "breadth_prompt_hash": null,
+    "breadth_status": "disabled",
+    "breadth_tokens": null,
+    "changed_files": 1,
+    "changed_lines": 2,
+    "computed_score": 96,
+    "context_files_fetched": 0,
+    "cost_usd": 0.002,
+    "degraded": false,
+    "delta": null,
+    "diff_size": {
+      "files": {
+        "added": 0,
+        "deleted": 0,
+        "modified": 1,
+        "renamed": 0,
+      },
+      "lines_added": 2,
+      "lines_removed": 0,
+      "reviewable_files": 1,
+      "reviewable_lines_added": 2,
+      "reviewable_lines_removed": 0,
+    },
+    "dry_run": false,
+    "effort": null,
+    "error": null,
+    "finding_scores": null,
+    "findings": {
+      "high": 0,
+      "low": 0,
+      "medium": 1,
+    },
+    "force": "off",
+    "jenkins": null,
+    "judge_anomalies": null,
+    "judge_cost_usd": null,
+    "judge_decisions": null,
+    "judge_effort": null,
+    "judge_model": null,
+    "judge_policy": null,
+    "judge_prompt_hash": null,
+    "judge_status": "disabled",
+    "judge_tokens": null,
+    "min_finding_score": null,
+    "model": "claude-haiku-4-5-20251001",
+    "pr_author": "dev",
+    "pr_id": "100",
+    "prompt_hash": "10052f24e175",
+    "prompt_source": "repo",
+    "recall_levers": {
+      "b_priority": false,
+      "j_quality": false,
+      "j_shown_anchor": false,
+      "sl_breadth": false,
+    },
+    "repo_slug": "repo",
+    "review_candidates": null,
+    "review_findings": {
+      "high": 0,
+      "low": 0,
+      "medium": 1,
+    },
+    "review_number": 1,
+    "run_id": "bitbucket-repo-100-aaa111222333",
+    "second_look_cost_usd": null,
+    "second_look_prompt_hash": null,
+    "second_look_status": "disabled",
+    "second_look_tokens": null,
+    "skip_reason": "Another agent run already reviewed this commit (race condition avoided)",
+    "source_branch": "feature/test",
+    "source_commit": "aaa111222333ffffffffffffffffffffffffffff",
+    "target_branch": "develop",
+    "tokens": {
+      "cache_read": 0,
+      "cache_write": 0,
+      "estimated_input": 36,
+      "input": 1000,
+      "output": 200,
+    },
+    "touch_rate": null,
+    "untouched_files": null,
+    "vcs": "bitbucket",
+    "verdict_score": null,
+    "workspace": "test",
+  },
+  "thrown": null,
+  "vcs": [
+    [
+      "getPullRequestInfo",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getDiff",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getChangedFiles",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getPreviousReviewComments",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getPreviousReviewComments",
+      [
+        "100",
+      ],
+    ],
+  ],
+}
+`;
+
+exports[`characterization: review() with no checked commit > K14 delta fetch failure 1`] = `
+{
+  "console": [
+    "log: 
+Starting review for PR #100",
+    "log: Fetching PR info...",
+    "log:   "Test PR" (feature/test → develop)",
+    "log: Fetching diff...",
+    "log: Fetching changed files...",
+    "log:   1 changed file(s), 1 reviewable",
+    "log:   2 changed line(s), 2 reviewable",
+    "log: Checking for previous reviews...",
+    "log:   Found 1 previous review(s) — will produce delta review",
+    "log:   Fetching delta diff (aabbcc112233..aaa111222333)...",
+    "log:   Delta diff fetch failed (Request failed with status code 404) — falling back to full PR diff",
+    "log: Loading prompt...",
+    "log:   Prompt source: repo",
+    "log: Fetching file context...",
+    "log:   Fetched full content for 0 file(s)",
+    "log:   Estimated input: ~83 tokens  [prompt 5 | diff 32 | delta 0 | files 0 (0) | prev_reviews 47 (1) | replies 0 (0)]",
+    "log:   Reviewer findings: 0H / 0M / 0L",
+    "log:   Re-review: no findings, prior clean, nothing open, no discussion — nothing to post, skipping",
+    "log: 
+Skipping: Re-review found no new findings (prior review already clean)",
+  ],
+  "model": [
+    [
+      "runReview",
+      [
+        "test-key",
+        "claude-haiku-4-5-20251001",
+        1,
+        32000,
+        "",
+        {
+          "author": "dev",
+          "description": "A test PR",
+          "id": "100",
+          "sourceBranch": "feature/test",
+          "sourceCommit": "aaa111222333ffffffffffffffffffffffffffff",
+          "targetBranch": "develop",
+          "title": "Test PR",
+        },
+        "diff --git a/src/app.ts b/src/app.ts
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -10,3 +10,5 @@
++import { foo } from './foo'
++foo()
+",
+        [],
+        {
+          "content": "System prompt here",
+          "source": "repo",
+        },
+        [
+          {
+            "body": "### Summary
+All good.
+
+### Findings
+No findings.
+
+### Unresolved Questions
+None.
+
+---
+*Reviewed by test-bot (claude-haiku-4-5-20251001) | Prompt: repo | Review #1 | Commit: aabbcc112233*",
+            "createdOn": "2026-03-09T10:00:00Z",
+            "id": "200",
+          },
+        ],
+        [],
+        "",
+        false,
+      ],
+    ],
+  ],
+  "record": {
+    "action": "NO_NEW_FINDINGS",
+    "anchored_findings": null,
+    "breadth_cost_usd": null,
+    "breadth_model": null,
+    "breadth_prompt_hash": null,
+    "breadth_status": "disabled",
+    "breadth_tokens": null,
+    "changed_files": 1,
+    "changed_lines": 2,
+    "computed_score": 100,
+    "context_files_fetched": 0,
+    "cost_usd": 0.002,
+    "degraded": false,
+    "delta": {
+      "developer_replies": 0,
+      "new_findings": 0,
+      "resolved": 0,
+      "still_open": 0,
+    },
+    "diff_size": {
+      "files": {
+        "added": 0,
+        "deleted": 0,
+        "modified": 1,
+        "renamed": 0,
+      },
+      "lines_added": 2,
+      "lines_removed": 0,
+      "reviewable_files": 1,
+      "reviewable_lines_added": 2,
+      "reviewable_lines_removed": 0,
+    },
+    "dry_run": false,
+    "effort": null,
+    "error": null,
+    "finding_scores": null,
+    "findings": {
+      "high": 0,
+      "low": 0,
+      "medium": 0,
+    },
+    "force": "off",
+    "jenkins": null,
+    "judge_anomalies": null,
+    "judge_cost_usd": null,
+    "judge_decisions": null,
+    "judge_effort": null,
+    "judge_model": null,
+    "judge_policy": null,
+    "judge_prompt_hash": null,
+    "judge_status": null,
+    "judge_tokens": null,
+    "min_finding_score": null,
+    "model": "claude-haiku-4-5-20251001",
+    "pr_author": "dev",
+    "pr_id": "100",
+    "prompt_hash": "10052f24e175",
+    "prompt_source": "repo",
+    "recall_levers": {
+      "b_priority": false,
+      "j_quality": false,
+      "j_shown_anchor": false,
+      "sl_breadth": false,
+    },
+    "repo_slug": "repo",
+    "review_candidates": null,
+    "review_findings": {
+      "high": 0,
+      "low": 0,
+      "medium": 0,
+    },
+    "review_number": 2,
+    "run_id": "bitbucket-repo-100-aaa111222333",
+    "second_look_cost_usd": null,
+    "second_look_prompt_hash": null,
+    "second_look_status": "disabled",
+    "second_look_tokens": null,
+    "skip_reason": "Re-review found no new findings (prior review already clean)",
+    "source_branch": "feature/test",
+    "source_commit": "aaa111222333ffffffffffffffffffffffffffff",
+    "target_branch": "develop",
+    "tokens": {
+      "cache_read": 0,
+      "cache_write": 0,
+      "estimated_input": 83,
+      "input": 1000,
+      "output": 200,
+    },
+    "touch_rate": null,
+    "untouched_files": null,
+    "vcs": "bitbucket",
+    "verdict_score": null,
+    "workspace": "test",
+  },
+  "thrown": null,
+  "vcs": [
+    [
+      "getPullRequestInfo",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getDiff",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getChangedFiles",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getPreviousReviewComments",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getCommitDiff",
+      [
+        "aabbcc112233",
+        "aaa111222333ffffffffffffffffffffffffffff",
+      ],
+    ],
+    [
+      "getRepliesToReviewComments",
+      [
+        "100",
+        [
+          "200",
+        ],
+        true,
+      ],
+    ],
+  ],
+}
+`;
+
+exports[`characterization: review() with no checked commit > K15 delta > diff 1`] = `
+{
+  "console": [
+    "log: 
+Starting review for PR #100",
+    "log: Fetching PR info...",
+    "log:   "Test PR" (feature/test → develop)",
+    "log: Fetching diff...",
+    "log: Fetching changed files...",
+    "log:   1 changed file(s), 1 reviewable",
+    "log:   2 changed line(s), 2 reviewable",
+    "log: Checking for previous reviews...",
+    "log:   Found 1 previous review(s) — will produce delta review",
+    "log:   Fetching delta diff (aabbcc112233..aaa111222333)...",
+    "log:   Delta: 80 lines total, 0 file(s) filtered, 80 lines remain",
+    "log: Loading prompt...",
+    "log:   Prompt source: repo",
+    "log: Fetching file context...",
+    "log:   Fetched full content for 0 file(s)",
+    "log:   Estimated input: ~662 tokens  [prompt 5 | diff 32 | delta 579 | files 0 (0) | prev_reviews 47 (1) | replies 0 (0)]",
+    "warn:   Delta (579 tok) exceeds full PR diff (32 tok) — likely a merged target branch; dropping delta, reviewing full diff",
+    "log:   Re-estimated input: ~83 tokens (full diff, no delta)  [prompt 5 | diff 32 | delta 0 | files 0 (0) | prev_reviews 47 (1) | replies 0 (0)]",
+    "log:   Reviewer findings: 0H / 0M / 0L",
+    "log:   Re-review: no findings, prior clean, nothing open, no discussion — nothing to post, skipping",
+    "log: 
+Skipping: Re-review found no new findings (prior review already clean)",
+  ],
+  "model": [
+    [
+      "runReview",
+      [
+        "test-key",
+        "claude-haiku-4-5-20251001",
+        1,
+        32000,
+        "",
+        {
+          "author": "dev",
+          "description": "A test PR",
+          "id": "100",
+          "sourceBranch": "feature/test",
+          "sourceCommit": "aaa111222333ffffffffffffffffffffffffffff",
+          "targetBranch": "develop",
+          "title": "Test PR",
+        },
+        "diff --git a/src/app.ts b/src/app.ts
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -10,3 +10,5 @@
++import { foo } from './foo'
++foo()
+",
+        [],
+        {
+          "content": "System prompt here",
+          "source": "repo",
+        },
+        [
+          {
+            "body": "### Summary
+All good.
+
+### Findings
+No findings.
+
+### Unresolved Questions
+None.
+
+---
+*Reviewed by test-bot (claude-haiku-4-5-20251001) | Prompt: repo | Review #1 | Commit: aabbcc112233*",
+            "createdOn": "2026-03-09T10:00:00Z",
+            "id": "200",
+          },
+        ],
+        [],
+        "",
+        false,
+      ],
+    ],
+  ],
+  "record": {
+    "action": "NO_NEW_FINDINGS",
+    "anchored_findings": null,
+    "breadth_cost_usd": null,
+    "breadth_model": null,
+    "breadth_prompt_hash": null,
+    "breadth_status": "disabled",
+    "breadth_tokens": null,
+    "changed_files": 1,
+    "changed_lines": 2,
+    "computed_score": 100,
+    "context_files_fetched": 0,
+    "cost_usd": 0.002,
+    "degraded": false,
+    "delta": {
+      "developer_replies": 0,
+      "new_findings": 0,
+      "resolved": 0,
+      "still_open": 0,
+    },
+    "diff_size": {
+      "files": {
+        "added": 0,
+        "deleted": 0,
+        "modified": 1,
+        "renamed": 0,
+      },
+      "lines_added": 2,
+      "lines_removed": 0,
+      "reviewable_files": 1,
+      "reviewable_lines_added": 2,
+      "reviewable_lines_removed": 0,
+    },
+    "dry_run": false,
+    "effort": null,
+    "error": null,
+    "finding_scores": null,
+    "findings": {
+      "high": 0,
+      "low": 0,
+      "medium": 0,
+    },
+    "force": "off",
+    "jenkins": null,
+    "judge_anomalies": null,
+    "judge_cost_usd": null,
+    "judge_decisions": null,
+    "judge_effort": null,
+    "judge_model": null,
+    "judge_policy": null,
+    "judge_prompt_hash": null,
+    "judge_status": null,
+    "judge_tokens": null,
+    "min_finding_score": null,
+    "model": "claude-haiku-4-5-20251001",
+    "pr_author": "dev",
+    "pr_id": "100",
+    "prompt_hash": "10052f24e175",
+    "prompt_source": "repo",
+    "recall_levers": {
+      "b_priority": false,
+      "j_quality": false,
+      "j_shown_anchor": false,
+      "sl_breadth": false,
+    },
+    "repo_slug": "repo",
+    "review_candidates": null,
+    "review_findings": {
+      "high": 0,
+      "low": 0,
+      "medium": 0,
+    },
+    "review_number": 2,
+    "run_id": "bitbucket-repo-100-aaa111222333",
+    "second_look_cost_usd": null,
+    "second_look_prompt_hash": null,
+    "second_look_status": "disabled",
+    "second_look_tokens": null,
+    "skip_reason": "Re-review found no new findings (prior review already clean)",
+    "source_branch": "feature/test",
+    "source_commit": "aaa111222333ffffffffffffffffffffffffffff",
+    "target_branch": "develop",
+    "tokens": {
+      "cache_read": 0,
+      "cache_write": 0,
+      "estimated_input": 83,
+      "input": 1000,
+      "output": 200,
+    },
+    "touch_rate": null,
+    "untouched_files": null,
+    "vcs": "bitbucket",
+    "verdict_score": null,
+    "workspace": "test",
+  },
+  "thrown": null,
+  "vcs": [
+    [
+      "getPullRequestInfo",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getDiff",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getChangedFiles",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getPreviousReviewComments",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getCommitDiff",
+      [
+        "aabbcc112233",
+        "aaa111222333ffffffffffffffffffffffffffff",
+      ],
+    ],
+    [
+      "getRepliesToReviewComments",
+      [
+        "100",
+        [
+          "200",
+        ],
+        true,
+      ],
+    ],
+  ],
+}
+`;
+
+exports[`characterization: review() with no checked commit > K16 bundled NO_NEW_FINDINGS 1`] = `
+{
+  "console": [
+    "log: 
+Starting review for PR #100",
+    "log: Fetching PR info...",
+    "log:   "Test PR" (feature/test → develop)",
+    "log: Fetching diff...",
+    "log: Fetching changed files...",
+    "log:   4 changed file(s), 4 reviewable",
+    "log:   480 changed line(s), 480 reviewable",
+    "log: Checking for previous reviews...",
+    "log:   Found 1 previous review(s) — will produce delta review",
+    "log:   Fetching delta diff (aabbcc112233..aaa111222333)...",
+    "log:   Delta: 2 lines total, 0 file(s) filtered, 2 lines remain",
+    "log: Loading prompt...",
+    "log:   Prompt source: repo",
+    "log: Fetching file context...",
+    "log:   Fetched full content for 0 file(s)",
+    "log:   Estimated input: ~2,461 tokens  [prompt 5 | diff 2,381 | delta 29 | files 0 (0) | prev_reviews 47 (1) | replies 0 (0)]",
+    "log:   Still over budget — switching to bundled review",
+    "log:   Bundled review: 2 bundle(s), 0 oversized file(s) unreviewed (budget ~1,270 tokens of diff each)",
+    "log: 
+Bundle 1/2: a/ (2 files) (~1,220 tokens)",
+    "log:   Reviewer findings: 0H / 0M / 0L",
+    "log: 
+Bundle 2/2: b/ (2 files) (~1,192 tokens)",
+    "log:   Reviewer findings: 0H / 0M / 0L",
+    "log: 
+Merged 2 bundle review(s): 0 finding(s) after dedupe",
+    "log: 
+Skipping: Re-review found no new findings (prior review already clean)",
+  ],
+  "model": [
+    [
+      "runReview",
+      [
+        "test-key",
+        "claude-haiku-4-5-20251001",
+        1,
+        32000,
+        "",
+        {
+          "author": "dev",
+          "description": "A test PR",
+          "id": "100",
+          "sourceBranch": "feature/test",
+          "sourceCommit": "aaa111222333ffffffffffffffffffffffffffff",
+          "targetBranch": "develop",
+          "title": "Test PR",
+        },
+        "diff --git a/a/one.ts b/a/one.ts
+--- a/a/one.ts
++++ b/a/one.ts
+@@ -1,1 +1,120 @@
++const line0 = 0
++const line1 = 1
++const line2 = 2
++const line3 = 3
++const line4 = 4
++const line5 = 5
++const line6 = 6
++const line7 = 7
++const line8 = 8
++const line9 = 9
++const line10 = 10
++const line11 = 11
++const line12 = 12
++const line13 = 13
++const line14 = 14
++const line15 = 15
++const line16 = 16
++const line17 = 17
++const line18 = 18
++const line19 = 19
++const line20 = 20
++const line21 = 21
++const line22 = 22
++const line23 = 23
++const line24 = 24
++const line25 = 25
++const line26 = 26
++const line27 = 27
++const line28 = 28
++const line29 = 29
++const line30 = 30
++const line31 = 31
++const line32 = 32
++const line33 = 33
++const line34 = 34
++const line35 = 35
++const line36 = 36
++const line37 = 37
++const line38 = 38
++const line39 = 39
++const line40 = 40
++const line41 = 41
++const line42 = 42
++const line43 = 43
++const line44 = 44
++const line45 = 45
++const line46 = 46
++const line47 = 47
++const line48 = 48
++const line49 = 49
++const line50 = 50
++const line51 = 51
++const line52 = 52
++const line53 = 53
++const line54 = 54
++const line55 = 55
++const line56 = 56
++const line57 = 57
++const line58 = 58
++const line59 = 59
++const line60 = 60
++const line61 = 61
++const line62 = 62
++const line63 = 63
++const line64 = 64
++const line65 = 65
++const line66 = 66
++const line67 = 67
++const line68 = 68
++const line69 = 69
++const line70 = 70
++const line71 = 71
++const line72 = 72
++const line73 = 73
++const line74 = 74
++const line75 = 75
++const line76 = 76
++const line77 = 77
++const line78 = 78
++const line79 = 79
++const line80 = 80
++const line81 = 81
++const line82 = 82
++const line83 = 83
++const line84 = 84
++const line85 = 85
++const line86 = 86
++const line87 = 87
++const line88 = 88
++const line89 = 89
++const line90 = 90
++const line91 = 91
++const line92 = 92
++const line93 = 93
++const line94 = 94
++const line95 = 95
++const line96 = 96
++const line97 = 97
++const line98 = 98
++const line99 = 99
++const line100 = 100
++const line101 = 101
++const line102 = 102
++const line103 = 103
++const line104 = 104
++const line105 = 105
++const line106 = 106
++const line107 = 107
++const line108 = 108
++const line109 = 109
++const line110 = 110
++const line111 = 111
++const line112 = 112
++const line113 = 113
++const line114 = 114
++const line115 = 115
++const line116 = 116
++const line117 = 117
++const line118 = 118
++const line119 = 119
+diff --git a/a/two.ts b/a/two.ts
+--- a/a/two.ts
++++ b/a/two.ts
+@@ -1,1 +1,120 @@
++const line0 = 0
++const line1 = 1
++const line2 = 2
++const line3 = 3
++const line4 = 4
++const line5 = 5
++const line6 = 6
++const line7 = 7
++const line8 = 8
++const line9 = 9
++const line10 = 10
++const line11 = 11
++const line12 = 12
++const line13 = 13
++const line14 = 14
++const line15 = 15
++const line16 = 16
++const line17 = 17
++const line18 = 18
++const line19 = 19
++const line20 = 20
++const line21 = 21
++const line22 = 22
++const line23 = 23
++const line24 = 24
++const line25 = 25
++const line26 = 26
++const line27 = 27
++const line28 = 28
++const line29 = 29
++const line30 = 30
++const line31 = 31
++const line32 = 32
++const line33 = 33
++const line34 = 34
++const line35 = 35
++const line36 = 36
++const line37 = 37
++const line38 = 38
++const line39 = 39
++const line40 = 40
++const line41 = 41
++const line42 = 42
++const line43 = 43
++const line44 = 44
++const line45 = 45
++const line46 = 46
++const line47 = 47
++const line48 = 48
++const line49 = 49
++const line50 = 50
++const line51 = 51
++const line52 = 52
++const line53 = 53
++const line54 = 54
++const line55 = 55
++const line56 = 56
++const line57 = 57
++const line58 = 58
++const line59 = 59
++const line60 = 60
++const line61 = 61
++const line62 = 62
++const line63 = 63
++const line64 = 64
++const line65 = 65
++const line66 = 66
++const line67 = 67
++const line68 = 68
++const line69 = 69
++const line70 = 70
++const line71 = 71
++const line72 = 72
++const line73 = 73
++const line74 = 74
++const line75 = 75
++const line76 = 76
++const line77 = 77
++const line78 = 78
++const line79 = 79
++const line80 = 80
++const line81 = 81
++const line82 = 82
++const line83 = 83
++const line84 = 84
++const line85 = 85
++const line86 = 86
++const line87 = 87
++const line88 = 88
++const line89 = 89
++const line90 = 90
++const line91 = 91
++const line92 = 92
++const line93 = 93
++const line94 = 94
++const line95 = 95
++const line96 = 96
++const line97 = 97
++const line98 = 98
++const line99 = 99
++const line100 = 100
++const line101 = 101
++const line102 = 102
++const line103 = 103
++const line104 = 104
++const line105 = 105
++const line106 = 106
++const line107 = 107
++const line108 = 108
++const line109 = 109
++const line110 = 110
++const line111 = 111
++const line112 = 112
++const line113 = 113
++const line114 = 114
++const line115 = 115
++const line116 = 116
++const line117 = 117
++const line118 = 118
++const line119 = 119
+",
+        [],
+        {
+          "content": "System prompt here
+
+## BUNDLED REVIEW
+This PR is too large for one pass. You are reviewing bundle 1 of 2; the diff contains only: a/one.ts, a/two.ts. Review only these files and do not flag code you cannot see. Leave \`can_be_split\` empty.",
+          "source": "repo",
+        },
+        [
+          {
+            "body": "### Summary
+All good.
+
+### Findings
+No findings.
+
+### Unresolved Questions
+None.
+
+---
+*Reviewed by test-bot (claude-haiku-4-5-20251001) | Prompt: repo | Review #1 | Commit: aabbcc112233*",
+            "createdOn": "2026-03-09T10:00:00Z",
+            "id": "200",
+          },
+        ],
+        [],
+        "diff --git a/a/one.ts b/a/one.ts
+--- a/a/one.ts
++++ b/a/one.ts
+@@ -1,1 +1,2 @@
++const line0 = 0
++const line1 = 1
+",
+        false,
+      ],
+    ],
+    [
+      "runReview",
+      [
+        "test-key",
+        "claude-haiku-4-5-20251001",
+        1,
+        32000,
+        "",
+        {
+          "author": "dev",
+          "description": "A test PR",
+          "id": "100",
+          "sourceBranch": "feature/test",
+          "sourceCommit": "aaa111222333ffffffffffffffffffffffffffff",
+          "targetBranch": "develop",
+          "title": "Test PR",
+        },
+        "diff --git a/b/one.ts b/b/one.ts
+--- a/b/one.ts
++++ b/b/one.ts
+@@ -1,1 +1,120 @@
++const line0 = 0
++const line1 = 1
++const line2 = 2
++const line3 = 3
++const line4 = 4
++const line5 = 5
++const line6 = 6
++const line7 = 7
++const line8 = 8
++const line9 = 9
++const line10 = 10
++const line11 = 11
++const line12 = 12
++const line13 = 13
++const line14 = 14
++const line15 = 15
++const line16 = 16
++const line17 = 17
++const line18 = 18
++const line19 = 19
++const line20 = 20
++const line21 = 21
++const line22 = 22
++const line23 = 23
++const line24 = 24
++const line25 = 25
++const line26 = 26
++const line27 = 27
++const line28 = 28
++const line29 = 29
++const line30 = 30
++const line31 = 31
++const line32 = 32
++const line33 = 33
++const line34 = 34
++const line35 = 35
++const line36 = 36
++const line37 = 37
++const line38 = 38
++const line39 = 39
++const line40 = 40
++const line41 = 41
++const line42 = 42
++const line43 = 43
++const line44 = 44
++const line45 = 45
++const line46 = 46
++const line47 = 47
++const line48 = 48
++const line49 = 49
++const line50 = 50
++const line51 = 51
++const line52 = 52
++const line53 = 53
++const line54 = 54
++const line55 = 55
++const line56 = 56
++const line57 = 57
++const line58 = 58
++const line59 = 59
++const line60 = 60
++const line61 = 61
++const line62 = 62
++const line63 = 63
++const line64 = 64
++const line65 = 65
++const line66 = 66
++const line67 = 67
++const line68 = 68
++const line69 = 69
++const line70 = 70
++const line71 = 71
++const line72 = 72
++const line73 = 73
++const line74 = 74
++const line75 = 75
++const line76 = 76
++const line77 = 77
++const line78 = 78
++const line79 = 79
++const line80 = 80
++const line81 = 81
++const line82 = 82
++const line83 = 83
++const line84 = 84
++const line85 = 85
++const line86 = 86
++const line87 = 87
++const line88 = 88
++const line89 = 89
++const line90 = 90
++const line91 = 91
++const line92 = 92
++const line93 = 93
++const line94 = 94
++const line95 = 95
++const line96 = 96
++const line97 = 97
++const line98 = 98
++const line99 = 99
++const line100 = 100
++const line101 = 101
++const line102 = 102
++const line103 = 103
++const line104 = 104
++const line105 = 105
++const line106 = 106
++const line107 = 107
++const line108 = 108
++const line109 = 109
++const line110 = 110
++const line111 = 111
++const line112 = 112
++const line113 = 113
++const line114 = 114
++const line115 = 115
++const line116 = 116
++const line117 = 117
++const line118 = 118
++const line119 = 119
+diff --git a/b/two.ts b/b/two.ts
+--- a/b/two.ts
++++ b/b/two.ts
+@@ -1,1 +1,120 @@
++const line0 = 0
++const line1 = 1
++const line2 = 2
++const line3 = 3
++const line4 = 4
++const line5 = 5
++const line6 = 6
++const line7 = 7
++const line8 = 8
++const line9 = 9
++const line10 = 10
++const line11 = 11
++const line12 = 12
++const line13 = 13
++const line14 = 14
++const line15 = 15
++const line16 = 16
++const line17 = 17
++const line18 = 18
++const line19 = 19
++const line20 = 20
++const line21 = 21
++const line22 = 22
++const line23 = 23
++const line24 = 24
++const line25 = 25
++const line26 = 26
++const line27 = 27
++const line28 = 28
++const line29 = 29
++const line30 = 30
++const line31 = 31
++const line32 = 32
++const line33 = 33
++const line34 = 34
++const line35 = 35
++const line36 = 36
++const line37 = 37
++const line38 = 38
++const line39 = 39
++const line40 = 40
++const line41 = 41
++const line42 = 42
++const line43 = 43
++const line44 = 44
++const line45 = 45
++const line46 = 46
++const line47 = 47
++const line48 = 48
++const line49 = 49
++const line50 = 50
++const line51 = 51
++const line52 = 52
++const line53 = 53
++const line54 = 54
++const line55 = 55
++const line56 = 56
++const line57 = 57
++const line58 = 58
++const line59 = 59
++const line60 = 60
++const line61 = 61
++const line62 = 62
++const line63 = 63
++const line64 = 64
++const line65 = 65
++const line66 = 66
++const line67 = 67
++const line68 = 68
++const line69 = 69
++const line70 = 70
++const line71 = 71
++const line72 = 72
++const line73 = 73
++const line74 = 74
++const line75 = 75
++const line76 = 76
++const line77 = 77
++const line78 = 78
++const line79 = 79
++const line80 = 80
++const line81 = 81
++const line82 = 82
++const line83 = 83
++const line84 = 84
++const line85 = 85
++const line86 = 86
++const line87 = 87
++const line88 = 88
++const line89 = 89
++const line90 = 90
++const line91 = 91
++const line92 = 92
++const line93 = 93
++const line94 = 94
++const line95 = 95
++const line96 = 96
++const line97 = 97
++const line98 = 98
++const line99 = 99
++const line100 = 100
++const line101 = 101
++const line102 = 102
++const line103 = 103
++const line104 = 104
++const line105 = 105
++const line106 = 106
++const line107 = 107
++const line108 = 108
++const line109 = 109
++const line110 = 110
++const line111 = 111
++const line112 = 112
++const line113 = 113
++const line114 = 114
++const line115 = 115
++const line116 = 116
++const line117 = 117
++const line118 = 118
++const line119 = 119
+",
+        [],
+        {
+          "content": "System prompt here
+
+## BUNDLED REVIEW
+This PR is too large for one pass. You are reviewing bundle 2 of 2; the diff contains only: b/one.ts, b/two.ts. Review only these files and do not flag code you cannot see. Leave \`can_be_split\` empty.",
+          "source": "repo",
+        },
+        [
+          {
+            "body": "### Summary
+All good.
+
+### Findings
+No findings.
+
+### Unresolved Questions
+None.
+
+---
+*Reviewed by test-bot (claude-haiku-4-5-20251001) | Prompt: repo | Review #1 | Commit: aabbcc112233*",
+            "createdOn": "2026-03-09T10:00:00Z",
+            "id": "200",
+          },
+        ],
+        [],
+        "",
+        false,
+      ],
+    ],
+  ],
+  "record": {
+    "action": "NO_NEW_FINDINGS",
+    "anchored_findings": null,
+    "breadth_cost_usd": null,
+    "breadth_model": null,
+    "breadth_prompt_hash": null,
+    "breadth_status": "disabled",
+    "breadth_tokens": null,
+    "changed_files": 4,
+    "changed_lines": 480,
+    "computed_score": 100,
+    "context_files_fetched": 0,
+    "cost_usd": 0.004,
+    "degraded": false,
+    "delta": {
+      "developer_replies": 0,
+      "new_findings": 0,
+      "resolved": 0,
+      "still_open": 0,
+    },
+    "diff_size": {
+      "files": {
+        "added": 0,
+        "deleted": 0,
+        "modified": 4,
+        "renamed": 0,
+      },
+      "lines_added": 480,
+      "lines_removed": 0,
+      "reviewable_files": 4,
+      "reviewable_lines_added": 480,
+      "reviewable_lines_removed": 0,
+    },
+    "dry_run": false,
+    "effort": null,
+    "error": null,
+    "finding_scores": null,
+    "findings": {
+      "high": 0,
+      "low": 0,
+      "medium": 0,
+    },
+    "force": "off",
+    "jenkins": null,
+    "judge_anomalies": null,
+    "judge_cost_usd": null,
+    "judge_decisions": null,
+    "judge_effort": null,
+    "judge_model": null,
+    "judge_policy": null,
+    "judge_prompt_hash": null,
+    "judge_status": null,
+    "judge_tokens": null,
+    "min_finding_score": null,
+    "model": "claude-haiku-4-5-20251001",
+    "pr_author": "dev",
+    "pr_id": "100",
+    "prompt_hash": "10052f24e175",
+    "prompt_source": "repo",
+    "recall_levers": {
+      "b_priority": false,
+      "j_quality": false,
+      "j_shown_anchor": false,
+      "sl_breadth": false,
+    },
+    "repo_slug": "repo",
+    "review_candidates": null,
+    "review_findings": {
+      "high": 0,
+      "low": 0,
+      "medium": 0,
+    },
+    "review_number": 2,
+    "run_id": "bitbucket-repo-100-aaa111222333",
+    "second_look_cost_usd": null,
+    "second_look_prompt_hash": null,
+    "second_look_status": "disabled",
+    "second_look_tokens": null,
+    "skip_reason": "Re-review found no new findings (prior review already clean)",
+    "source_branch": "feature/test",
+    "source_commit": "aaa111222333ffffffffffffffffffffffffffff",
+    "target_branch": "develop",
+    "tokens": {
+      "cache_read": 0,
+      "cache_write": 0,
+      "estimated_input": 2461,
+      "input": 2000,
+      "output": 400,
+    },
+    "touch_rate": null,
+    "untouched_files": null,
+    "vcs": "bitbucket",
+    "verdict_score": null,
+    "workspace": "test",
+  },
+  "thrown": null,
+  "vcs": [
+    [
+      "getPullRequestInfo",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getDiff",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getChangedFiles",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getPreviousReviewComments",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getCommitDiff",
+      [
+        "aabbcc112233",
+        "aaa111222333ffffffffffffffffffffffffffff",
+      ],
+    ],
+    [
+      "getRepliesToReviewComments",
+      [
+        "100",
+        [
+          "200",
+        ],
+        true,
+      ],
+    ],
+  ],
+}
+`;
+
+exports[`characterization: review() with no checked commit > K17 bundled all-NO_CHANGE 1`] = `
+{
+  "console": [
+    "log: 
+Starting review for PR #100",
+    "log: Fetching PR info...",
+    "log:   "Test PR" (feature/test → develop)",
+    "log: Fetching diff...",
+    "log: Fetching changed files...",
+    "log:   4 changed file(s), 4 reviewable",
+    "log:   480 changed line(s), 480 reviewable",
+    "log: Checking for previous reviews...",
+    "log:   Found 1 previous review(s) — will produce delta review",
+    "log:   Fetching delta diff (aabbcc112233..aaa111222333)...",
+    "log:   Delta: 2 lines total, 0 file(s) filtered, 2 lines remain",
+    "log: Loading prompt...",
+    "log:   Prompt source: repo",
+    "log: Fetching file context...",
+    "log:   Fetched full content for 0 file(s)",
+    "log:   Estimated input: ~2,461 tokens  [prompt 5 | diff 2,381 | delta 29 | files 0 (0) | prev_reviews 47 (1) | replies 0 (0)]",
+    "log:   Still over budget — switching to bundled review",
+    "log:   Bundled review: 2 bundle(s), 0 oversized file(s) unreviewed (budget ~1,270 tokens of diff each)",
+    "log: 
+Bundle 1/2: a/ (2 files) (~1,220 tokens)",
+    "log:   Reviewer: NO_CHANGE for this bundle",
+    "log: 
+Bundle 2/2: b/ (2 files) (~1,192 tokens)",
+    "log:   Reviewer: NO_CHANGE for this bundle",
+    "log:   Reviewer: NO_CHANGE",
+    "log: 
+Skipping: No changes since last review",
+  ],
+  "model": [
+    [
+      "runReview",
+      [
+        "test-key",
+        "claude-haiku-4-5-20251001",
+        1,
+        32000,
+        "",
+        {
+          "author": "dev",
+          "description": "A test PR",
+          "id": "100",
+          "sourceBranch": "feature/test",
+          "sourceCommit": "aaa111222333ffffffffffffffffffffffffffff",
+          "targetBranch": "develop",
+          "title": "Test PR",
+        },
+        "diff --git a/a/one.ts b/a/one.ts
+--- a/a/one.ts
++++ b/a/one.ts
+@@ -1,1 +1,120 @@
++const line0 = 0
++const line1 = 1
++const line2 = 2
++const line3 = 3
++const line4 = 4
++const line5 = 5
++const line6 = 6
++const line7 = 7
++const line8 = 8
++const line9 = 9
++const line10 = 10
++const line11 = 11
++const line12 = 12
++const line13 = 13
++const line14 = 14
++const line15 = 15
++const line16 = 16
++const line17 = 17
++const line18 = 18
++const line19 = 19
++const line20 = 20
++const line21 = 21
++const line22 = 22
++const line23 = 23
++const line24 = 24
++const line25 = 25
++const line26 = 26
++const line27 = 27
++const line28 = 28
++const line29 = 29
++const line30 = 30
++const line31 = 31
++const line32 = 32
++const line33 = 33
++const line34 = 34
++const line35 = 35
++const line36 = 36
++const line37 = 37
++const line38 = 38
++const line39 = 39
++const line40 = 40
++const line41 = 41
++const line42 = 42
++const line43 = 43
++const line44 = 44
++const line45 = 45
++const line46 = 46
++const line47 = 47
++const line48 = 48
++const line49 = 49
++const line50 = 50
++const line51 = 51
++const line52 = 52
++const line53 = 53
++const line54 = 54
++const line55 = 55
++const line56 = 56
++const line57 = 57
++const line58 = 58
++const line59 = 59
++const line60 = 60
++const line61 = 61
++const line62 = 62
++const line63 = 63
++const line64 = 64
++const line65 = 65
++const line66 = 66
++const line67 = 67
++const line68 = 68
++const line69 = 69
++const line70 = 70
++const line71 = 71
++const line72 = 72
++const line73 = 73
++const line74 = 74
++const line75 = 75
++const line76 = 76
++const line77 = 77
++const line78 = 78
++const line79 = 79
++const line80 = 80
++const line81 = 81
++const line82 = 82
++const line83 = 83
++const line84 = 84
++const line85 = 85
++const line86 = 86
++const line87 = 87
++const line88 = 88
++const line89 = 89
++const line90 = 90
++const line91 = 91
++const line92 = 92
++const line93 = 93
++const line94 = 94
++const line95 = 95
++const line96 = 96
++const line97 = 97
++const line98 = 98
++const line99 = 99
++const line100 = 100
++const line101 = 101
++const line102 = 102
++const line103 = 103
++const line104 = 104
++const line105 = 105
++const line106 = 106
++const line107 = 107
++const line108 = 108
++const line109 = 109
++const line110 = 110
++const line111 = 111
++const line112 = 112
++const line113 = 113
++const line114 = 114
++const line115 = 115
++const line116 = 116
++const line117 = 117
++const line118 = 118
++const line119 = 119
+diff --git a/a/two.ts b/a/two.ts
+--- a/a/two.ts
++++ b/a/two.ts
+@@ -1,1 +1,120 @@
++const line0 = 0
++const line1 = 1
++const line2 = 2
++const line3 = 3
++const line4 = 4
++const line5 = 5
++const line6 = 6
++const line7 = 7
++const line8 = 8
++const line9 = 9
++const line10 = 10
++const line11 = 11
++const line12 = 12
++const line13 = 13
++const line14 = 14
++const line15 = 15
++const line16 = 16
++const line17 = 17
++const line18 = 18
++const line19 = 19
++const line20 = 20
++const line21 = 21
++const line22 = 22
++const line23 = 23
++const line24 = 24
++const line25 = 25
++const line26 = 26
++const line27 = 27
++const line28 = 28
++const line29 = 29
++const line30 = 30
++const line31 = 31
++const line32 = 32
++const line33 = 33
++const line34 = 34
++const line35 = 35
++const line36 = 36
++const line37 = 37
++const line38 = 38
++const line39 = 39
++const line40 = 40
++const line41 = 41
++const line42 = 42
++const line43 = 43
++const line44 = 44
++const line45 = 45
++const line46 = 46
++const line47 = 47
++const line48 = 48
++const line49 = 49
++const line50 = 50
++const line51 = 51
++const line52 = 52
++const line53 = 53
++const line54 = 54
++const line55 = 55
++const line56 = 56
++const line57 = 57
++const line58 = 58
++const line59 = 59
++const line60 = 60
++const line61 = 61
++const line62 = 62
++const line63 = 63
++const line64 = 64
++const line65 = 65
++const line66 = 66
++const line67 = 67
++const line68 = 68
++const line69 = 69
++const line70 = 70
++const line71 = 71
++const line72 = 72
++const line73 = 73
++const line74 = 74
++const line75 = 75
++const line76 = 76
++const line77 = 77
++const line78 = 78
++const line79 = 79
++const line80 = 80
++const line81 = 81
++const line82 = 82
++const line83 = 83
++const line84 = 84
++const line85 = 85
++const line86 = 86
++const line87 = 87
++const line88 = 88
++const line89 = 89
++const line90 = 90
++const line91 = 91
++const line92 = 92
++const line93 = 93
++const line94 = 94
++const line95 = 95
++const line96 = 96
++const line97 = 97
++const line98 = 98
++const line99 = 99
++const line100 = 100
++const line101 = 101
++const line102 = 102
++const line103 = 103
++const line104 = 104
++const line105 = 105
++const line106 = 106
++const line107 = 107
++const line108 = 108
++const line109 = 109
++const line110 = 110
++const line111 = 111
++const line112 = 112
++const line113 = 113
++const line114 = 114
++const line115 = 115
++const line116 = 116
++const line117 = 117
++const line118 = 118
++const line119 = 119
+",
+        [],
+        {
+          "content": "System prompt here
+
+## BUNDLED REVIEW
+This PR is too large for one pass. You are reviewing bundle 1 of 2; the diff contains only: a/one.ts, a/two.ts. Review only these files and do not flag code you cannot see. Leave \`can_be_split\` empty.",
+          "source": "repo",
+        },
+        [
+          {
+            "body": "### Summary
+All good.
+
+### Findings
+No findings.
+
+### Unresolved Questions
+None.
+
+---
+*Reviewed by test-bot (claude-haiku-4-5-20251001) | Prompt: repo | Review #1 | Commit: aabbcc112233*",
+            "createdOn": "2026-03-09T10:00:00Z",
+            "id": "200",
+          },
+        ],
+        [],
+        "diff --git a/a/one.ts b/a/one.ts
+--- a/a/one.ts
++++ b/a/one.ts
+@@ -1,1 +1,2 @@
++const line0 = 0
++const line1 = 1
+",
+        false,
+      ],
+    ],
+    [
+      "runReview",
+      [
+        "test-key",
+        "claude-haiku-4-5-20251001",
+        1,
+        32000,
+        "",
+        {
+          "author": "dev",
+          "description": "A test PR",
+          "id": "100",
+          "sourceBranch": "feature/test",
+          "sourceCommit": "aaa111222333ffffffffffffffffffffffffffff",
+          "targetBranch": "develop",
+          "title": "Test PR",
+        },
+        "diff --git a/b/one.ts b/b/one.ts
+--- a/b/one.ts
++++ b/b/one.ts
+@@ -1,1 +1,120 @@
++const line0 = 0
++const line1 = 1
++const line2 = 2
++const line3 = 3
++const line4 = 4
++const line5 = 5
++const line6 = 6
++const line7 = 7
++const line8 = 8
++const line9 = 9
++const line10 = 10
++const line11 = 11
++const line12 = 12
++const line13 = 13
++const line14 = 14
++const line15 = 15
++const line16 = 16
++const line17 = 17
++const line18 = 18
++const line19 = 19
++const line20 = 20
++const line21 = 21
++const line22 = 22
++const line23 = 23
++const line24 = 24
++const line25 = 25
++const line26 = 26
++const line27 = 27
++const line28 = 28
++const line29 = 29
++const line30 = 30
++const line31 = 31
++const line32 = 32
++const line33 = 33
++const line34 = 34
++const line35 = 35
++const line36 = 36
++const line37 = 37
++const line38 = 38
++const line39 = 39
++const line40 = 40
++const line41 = 41
++const line42 = 42
++const line43 = 43
++const line44 = 44
++const line45 = 45
++const line46 = 46
++const line47 = 47
++const line48 = 48
++const line49 = 49
++const line50 = 50
++const line51 = 51
++const line52 = 52
++const line53 = 53
++const line54 = 54
++const line55 = 55
++const line56 = 56
++const line57 = 57
++const line58 = 58
++const line59 = 59
++const line60 = 60
++const line61 = 61
++const line62 = 62
++const line63 = 63
++const line64 = 64
++const line65 = 65
++const line66 = 66
++const line67 = 67
++const line68 = 68
++const line69 = 69
++const line70 = 70
++const line71 = 71
++const line72 = 72
++const line73 = 73
++const line74 = 74
++const line75 = 75
++const line76 = 76
++const line77 = 77
++const line78 = 78
++const line79 = 79
++const line80 = 80
++const line81 = 81
++const line82 = 82
++const line83 = 83
++const line84 = 84
++const line85 = 85
++const line86 = 86
++const line87 = 87
++const line88 = 88
++const line89 = 89
++const line90 = 90
++const line91 = 91
++const line92 = 92
++const line93 = 93
++const line94 = 94
++const line95 = 95
++const line96 = 96
++const line97 = 97
++const line98 = 98
++const line99 = 99
++const line100 = 100
++const line101 = 101
++const line102 = 102
++const line103 = 103
++const line104 = 104
++const line105 = 105
++const line106 = 106
++const line107 = 107
++const line108 = 108
++const line109 = 109
++const line110 = 110
++const line111 = 111
++const line112 = 112
++const line113 = 113
++const line114 = 114
++const line115 = 115
++const line116 = 116
++const line117 = 117
++const line118 = 118
++const line119 = 119
+diff --git a/b/two.ts b/b/two.ts
+--- a/b/two.ts
++++ b/b/two.ts
+@@ -1,1 +1,120 @@
++const line0 = 0
++const line1 = 1
++const line2 = 2
++const line3 = 3
++const line4 = 4
++const line5 = 5
++const line6 = 6
++const line7 = 7
++const line8 = 8
++const line9 = 9
++const line10 = 10
++const line11 = 11
++const line12 = 12
++const line13 = 13
++const line14 = 14
++const line15 = 15
++const line16 = 16
++const line17 = 17
++const line18 = 18
++const line19 = 19
++const line20 = 20
++const line21 = 21
++const line22 = 22
++const line23 = 23
++const line24 = 24
++const line25 = 25
++const line26 = 26
++const line27 = 27
++const line28 = 28
++const line29 = 29
++const line30 = 30
++const line31 = 31
++const line32 = 32
++const line33 = 33
++const line34 = 34
++const line35 = 35
++const line36 = 36
++const line37 = 37
++const line38 = 38
++const line39 = 39
++const line40 = 40
++const line41 = 41
++const line42 = 42
++const line43 = 43
++const line44 = 44
++const line45 = 45
++const line46 = 46
++const line47 = 47
++const line48 = 48
++const line49 = 49
++const line50 = 50
++const line51 = 51
++const line52 = 52
++const line53 = 53
++const line54 = 54
++const line55 = 55
++const line56 = 56
++const line57 = 57
++const line58 = 58
++const line59 = 59
++const line60 = 60
++const line61 = 61
++const line62 = 62
++const line63 = 63
++const line64 = 64
++const line65 = 65
++const line66 = 66
++const line67 = 67
++const line68 = 68
++const line69 = 69
++const line70 = 70
++const line71 = 71
++const line72 = 72
++const line73 = 73
++const line74 = 74
++const line75 = 75
++const line76 = 76
++const line77 = 77
++const line78 = 78
++const line79 = 79
++const line80 = 80
++const line81 = 81
++const line82 = 82
++const line83 = 83
++const line84 = 84
++const line85 = 85
++const line86 = 86
++const line87 = 87
++const line88 = 88
++const line89 = 89
++const line90 = 90
++const line91 = 91
++const line92 = 92
++const line93 = 93
++const line94 = 94
++const line95 = 95
++const line96 = 96
++const line97 = 97
++const line98 = 98
++const line99 = 99
++const line100 = 100
++const line101 = 101
++const line102 = 102
++const line103 = 103
++const line104 = 104
++const line105 = 105
++const line106 = 106
++const line107 = 107
++const line108 = 108
++const line109 = 109
++const line110 = 110
++const line111 = 111
++const line112 = 112
++const line113 = 113
++const line114 = 114
++const line115 = 115
++const line116 = 116
++const line117 = 117
++const line118 = 118
++const line119 = 119
+",
+        [],
+        {
+          "content": "System prompt here
+
+## BUNDLED REVIEW
+This PR is too large for one pass. You are reviewing bundle 2 of 2; the diff contains only: b/one.ts, b/two.ts. Review only these files and do not flag code you cannot see. Leave \`can_be_split\` empty.",
+          "source": "repo",
+        },
+        [
+          {
+            "body": "### Summary
+All good.
+
+### Findings
+No findings.
+
+### Unresolved Questions
+None.
+
+---
+*Reviewed by test-bot (claude-haiku-4-5-20251001) | Prompt: repo | Review #1 | Commit: aabbcc112233*",
+            "createdOn": "2026-03-09T10:00:00Z",
+            "id": "200",
+          },
+        ],
+        [],
+        "",
+        false,
+      ],
+    ],
+  ],
+  "record": {
+    "action": "NO_CHANGE",
+    "anchored_findings": null,
+    "breadth_cost_usd": null,
+    "breadth_model": null,
+    "breadth_prompt_hash": null,
+    "breadth_status": null,
+    "breadth_tokens": null,
+    "changed_files": 4,
+    "changed_lines": 480,
+    "computed_score": 100,
+    "context_files_fetched": 0,
+    "cost_usd": 0.004,
+    "degraded": false,
+    "delta": null,
+    "diff_size": {
+      "files": {
+        "added": 0,
+        "deleted": 0,
+        "modified": 4,
+        "renamed": 0,
+      },
+      "lines_added": 480,
+      "lines_removed": 0,
+      "reviewable_files": 4,
+      "reviewable_lines_added": 480,
+      "reviewable_lines_removed": 0,
+    },
+    "dry_run": false,
+    "effort": null,
+    "error": null,
+    "finding_scores": null,
+    "findings": {
+      "high": 0,
+      "low": 0,
+      "medium": 0,
+    },
+    "force": "off",
+    "jenkins": null,
+    "judge_anomalies": null,
+    "judge_cost_usd": null,
+    "judge_decisions": null,
+    "judge_effort": null,
+    "judge_model": null,
+    "judge_policy": null,
+    "judge_prompt_hash": null,
+    "judge_status": null,
+    "judge_tokens": null,
+    "min_finding_score": null,
+    "model": "claude-haiku-4-5-20251001",
+    "pr_author": "dev",
+    "pr_id": "100",
+    "prompt_hash": "10052f24e175",
+    "prompt_source": "repo",
+    "recall_levers": {
+      "b_priority": false,
+      "j_quality": false,
+      "j_shown_anchor": false,
+      "sl_breadth": false,
+    },
+    "repo_slug": "repo",
+    "review_candidates": null,
+    "review_findings": null,
+    "review_number": 2,
+    "run_id": "bitbucket-repo-100-aaa111222333",
+    "second_look_cost_usd": null,
+    "second_look_prompt_hash": null,
+    "second_look_status": null,
+    "second_look_tokens": null,
+    "skip_reason": "No changes since last review",
+    "source_branch": "feature/test",
+    "source_commit": "aaa111222333ffffffffffffffffffffffffffff",
+    "target_branch": "develop",
+    "tokens": {
+      "cache_read": 0,
+      "cache_write": 0,
+      "estimated_input": 2461,
+      "input": 2000,
+      "output": 400,
+    },
+    "touch_rate": null,
+    "untouched_files": null,
+    "vcs": "bitbucket",
+    "verdict_score": null,
+    "workspace": "test",
+  },
+  "thrown": null,
+  "vcs": [
+    [
+      "getPullRequestInfo",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getDiff",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getChangedFiles",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getPreviousReviewComments",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getCommitDiff",
+      [
+        "aabbcc112233",
+        "aaa111222333ffffffffffffffffffffffffffff",
+      ],
+    ],
+    [
+      "getRepliesToReviewComments",
+      [
+        "100",
+        [
+          "200",
+        ],
+        true,
+      ],
+    ],
+    [
+      "getRepliesToReviewComments",
+      [
+        "100",
+        [
+          "200",
+        ],
+      ],
+    ],
+  ],
+}
+`;
+
+exports[`characterization: review() with no checked commit > K18 bundled post 1`] = `
+{
+  "console": [
+    "log: 
+Starting review for PR #100",
+    "log: Fetching PR info...",
+    "log:   "Test PR" (feature/test → develop)",
+    "log: Fetching diff...",
+    "log: Fetching changed files...",
+    "log:   4 changed file(s), 4 reviewable",
+    "log:   480 changed line(s), 480 reviewable",
+    "log: Checking for previous reviews...",
+    "log:   No previous reviews — first review for this PR",
+    "log: Loading prompt...",
+    "log:   Prompt source: repo",
+    "log: Fetching file context...",
+    "log:   Fetched full content for 0 file(s)",
+    "log:   Estimated input: ~2,386 tokens  [prompt 5 | diff 2,381 | delta 0 | files 0 (0) | prev_reviews 0 (0) | replies 0 (0)]",
+    "log:   Still over budget — switching to bundled review",
+    "log:   Bundled review: 2 bundle(s), 0 oversized file(s) unreviewed (budget ~1,316 tokens of diff each)",
+    "log: 
+Bundle 1/2: a/ (2 files) (~1,192 tokens)",
+    "log:   Reviewer findings: 0H / 1M / 0L",
+    "log: 
+Bundle 2/2: b/ (2 files) (~1,192 tokens)",
+    "log:   Reviewer findings: 0H / 1M / 0L",
+    "log: 
+Merged 2 bundle review(s): 2 finding(s) after dedupe",
+    "log: Posting review comment...",
+    "log: Done. Review posted to PR.
+",
+    "warn: No pricing entry for model "judge-model" — estimating with claude-sonnet-4-6 rates",
+  ],
+  "model": [
+    [
+      "runReview",
+      [
+        "test-key",
+        "claude-haiku-4-5-20251001",
+        1,
+        32000,
+        "",
+        {
+          "author": "dev",
+          "description": "A test PR",
+          "id": "100",
+          "sourceBranch": "feature/test",
+          "sourceCommit": "aaa111222333ffffffffffffffffffffffffffff",
+          "targetBranch": "develop",
+          "title": "Test PR",
+        },
+        "diff --git a/a/one.ts b/a/one.ts
+--- a/a/one.ts
++++ b/a/one.ts
+@@ -1,1 +1,120 @@
++const line0 = 0
++const line1 = 1
++const line2 = 2
++const line3 = 3
++const line4 = 4
++const line5 = 5
++const line6 = 6
++const line7 = 7
++const line8 = 8
++const line9 = 9
++const line10 = 10
++const line11 = 11
++const line12 = 12
++const line13 = 13
++const line14 = 14
++const line15 = 15
++const line16 = 16
++const line17 = 17
++const line18 = 18
++const line19 = 19
++const line20 = 20
++const line21 = 21
++const line22 = 22
++const line23 = 23
++const line24 = 24
++const line25 = 25
++const line26 = 26
++const line27 = 27
++const line28 = 28
++const line29 = 29
++const line30 = 30
++const line31 = 31
++const line32 = 32
++const line33 = 33
++const line34 = 34
++const line35 = 35
++const line36 = 36
++const line37 = 37
++const line38 = 38
++const line39 = 39
++const line40 = 40
++const line41 = 41
++const line42 = 42
++const line43 = 43
++const line44 = 44
++const line45 = 45
++const line46 = 46
++const line47 = 47
++const line48 = 48
++const line49 = 49
++const line50 = 50
++const line51 = 51
++const line52 = 52
++const line53 = 53
++const line54 = 54
++const line55 = 55
++const line56 = 56
++const line57 = 57
++const line58 = 58
++const line59 = 59
++const line60 = 60
++const line61 = 61
++const line62 = 62
++const line63 = 63
++const line64 = 64
++const line65 = 65
++const line66 = 66
++const line67 = 67
++const line68 = 68
++const line69 = 69
++const line70 = 70
++const line71 = 71
++const line72 = 72
++const line73 = 73
++const line74 = 74
++const line75 = 75
++const line76 = 76
++const line77 = 77
++const line78 = 78
++const line79 = 79
++const line80 = 80
++const line81 = 81
++const line82 = 82
++const line83 = 83
++const line84 = 84
++const line85 = 85
++const line86 = 86
++const line87 = 87
++const line88 = 88
++const line89 = 89
++const line90 = 90
++const line91 = 91
++const line92 = 92
++const line93 = 93
++const line94 = 94
++const line95 = 95
++const line96 = 96
++const line97 = 97
++const line98 = 98
++const line99 = 99
++const line100 = 100
++const line101 = 101
++const line102 = 102
++const line103 = 103
++const line104 = 104
++const line105 = 105
++const line106 = 106
++const line107 = 107
++const line108 = 108
++const line109 = 109
++const line110 = 110
++const line111 = 111
++const line112 = 112
++const line113 = 113
++const line114 = 114
++const line115 = 115
++const line116 = 116
++const line117 = 117
++const line118 = 118
++const line119 = 119
+diff --git a/a/two.ts b/a/two.ts
+--- a/a/two.ts
++++ b/a/two.ts
+@@ -1,1 +1,120 @@
++const line0 = 0
++const line1 = 1
++const line2 = 2
++const line3 = 3
++const line4 = 4
++const line5 = 5
++const line6 = 6
++const line7 = 7
++const line8 = 8
++const line9 = 9
++const line10 = 10
++const line11 = 11
++const line12 = 12
++const line13 = 13
++const line14 = 14
++const line15 = 15
++const line16 = 16
++const line17 = 17
++const line18 = 18
++const line19 = 19
++const line20 = 20
++const line21 = 21
++const line22 = 22
++const line23 = 23
++const line24 = 24
++const line25 = 25
++const line26 = 26
++const line27 = 27
++const line28 = 28
++const line29 = 29
++const line30 = 30
++const line31 = 31
++const line32 = 32
++const line33 = 33
++const line34 = 34
++const line35 = 35
++const line36 = 36
++const line37 = 37
++const line38 = 38
++const line39 = 39
++const line40 = 40
++const line41 = 41
++const line42 = 42
++const line43 = 43
++const line44 = 44
++const line45 = 45
++const line46 = 46
++const line47 = 47
++const line48 = 48
++const line49 = 49
++const line50 = 50
++const line51 = 51
++const line52 = 52
++const line53 = 53
++const line54 = 54
++const line55 = 55
++const line56 = 56
++const line57 = 57
++const line58 = 58
++const line59 = 59
++const line60 = 60
++const line61 = 61
++const line62 = 62
++const line63 = 63
++const line64 = 64
++const line65 = 65
++const line66 = 66
++const line67 = 67
++const line68 = 68
++const line69 = 69
++const line70 = 70
++const line71 = 71
++const line72 = 72
++const line73 = 73
++const line74 = 74
++const line75 = 75
++const line76 = 76
++const line77 = 77
++const line78 = 78
++const line79 = 79
++const line80 = 80
++const line81 = 81
++const line82 = 82
++const line83 = 83
++const line84 = 84
++const line85 = 85
++const line86 = 86
++const line87 = 87
++const line88 = 88
++const line89 = 89
++const line90 = 90
++const line91 = 91
++const line92 = 92
++const line93 = 93
++const line94 = 94
++const line95 = 95
++const line96 = 96
++const line97 = 97
++const line98 = 98
++const line99 = 99
++const line100 = 100
++const line101 = 101
++const line102 = 102
++const line103 = 103
++const line104 = 104
++const line105 = 105
++const line106 = 106
++const line107 = 107
++const line108 = 108
++const line109 = 109
++const line110 = 110
++const line111 = 111
++const line112 = 112
++const line113 = 113
++const line114 = 114
++const line115 = 115
++const line116 = 116
++const line117 = 117
++const line118 = 118
++const line119 = 119
+",
+        [],
+        {
+          "content": "System prompt here
+
+## BUNDLED REVIEW
+This PR is too large for one pass. You are reviewing bundle 1 of 2; the diff contains only: a/one.ts, a/two.ts. Review only these files and do not flag code you cannot see. Leave \`can_be_split\` empty.",
+          "source": "repo",
+        },
+        [],
+        [],
+        "",
+        false,
+      ],
+    ],
+    [
+      "runJudge",
+      [
+        "test-key",
+        "judge-model",
+        1,
+        32000,
+        "",
+        "diff --git a/a/one.ts b/a/one.ts
+--- a/a/one.ts
++++ b/a/one.ts
+@@ -1,1 +1,120 @@
++const line0 = 0
++const line1 = 1
++const line2 = 2
++const line3 = 3
++const line4 = 4
++const line5 = 5
++const line6 = 6
++const line7 = 7
++const line8 = 8
++const line9 = 9
++const line10 = 10
++const line11 = 11
++const line12 = 12
++const line13 = 13
++const line14 = 14
++const line15 = 15
++const line16 = 16
++const line17 = 17
++const line18 = 18
++const line19 = 19
++const line20 = 20
++const line21 = 21
++const line22 = 22
++const line23 = 23
++const line24 = 24
++const line25 = 25
++const line26 = 26
++const line27 = 27
++const line28 = 28
++const line29 = 29
++const line30 = 30
++const line31 = 31
++const line32 = 32
++const line33 = 33
++const line34 = 34
++const line35 = 35
++const line36 = 36
++const line37 = 37
++const line38 = 38
++const line39 = 39
++const line40 = 40
++const line41 = 41
++const line42 = 42
++const line43 = 43
++const line44 = 44
++const line45 = 45
++const line46 = 46
++const line47 = 47
++const line48 = 48
++const line49 = 49
++const line50 = 50
++const line51 = 51
++const line52 = 52
++const line53 = 53
++const line54 = 54
++const line55 = 55
++const line56 = 56
++const line57 = 57
++const line58 = 58
++const line59 = 59
++const line60 = 60
++const line61 = 61
++const line62 = 62
++const line63 = 63
++const line64 = 64
++const line65 = 65
++const line66 = 66
++const line67 = 67
++const line68 = 68
++const line69 = 69
++const line70 = 70
++const line71 = 71
++const line72 = 72
++const line73 = 73
++const line74 = 74
++const line75 = 75
++const line76 = 76
++const line77 = 77
++const line78 = 78
++const line79 = 79
++const line80 = 80
++const line81 = 81
++const line82 = 82
++const line83 = 83
++const line84 = 84
++const line85 = 85
++const line86 = 86
++const line87 = 87
++const line88 = 88
++const line89 = 89
++const line90 = 90
++const line91 = 91
++const line92 = 92
++const line93 = 93
++const line94 = 94
++const line95 = 95
++const line96 = 96
++const line97 = 97
++const line98 = 98
++const line99 = 99
++const line100 = 100
++const line101 = 101
++const line102 = 102
++const line103 = 103
++const line104 = 104
++const line105 = 105
++const line106 = 106
++const line107 = 107
++const line108 = 108
++const line109 = 109
++const line110 = 110
++const line111 = 111
++const line112 = 112
++const line113 = 113
++const line114 = 114
++const line115 = 115
++const line116 = 116
++const line117 = 117
++const line118 = 118
++const line119 = 119
+diff --git a/a/two.ts b/a/two.ts
+--- a/a/two.ts
++++ b/a/two.ts
+@@ -1,1 +1,120 @@
++const line0 = 0
++const line1 = 1
++const line2 = 2
++const line3 = 3
++const line4 = 4
++const line5 = 5
++const line6 = 6
++const line7 = 7
++const line8 = 8
++const line9 = 9
++const line10 = 10
++const line11 = 11
++const line12 = 12
++const line13 = 13
++const line14 = 14
++const line15 = 15
++const line16 = 16
++const line17 = 17
++const line18 = 18
++const line19 = 19
++const line20 = 20
++const line21 = 21
++const line22 = 22
++const line23 = 23
++const line24 = 24
++const line25 = 25
++const line26 = 26
++const line27 = 27
++const line28 = 28
++const line29 = 29
++const line30 = 30
++const line31 = 31
++const line32 = 32
++const line33 = 33
++const line34 = 34
++const line35 = 35
++const line36 = 36
++const line37 = 37
++const line38 = 38
++const line39 = 39
++const line40 = 40
++const line41 = 41
++const line42 = 42
++const line43 = 43
++const line44 = 44
++const line45 = 45
++const line46 = 46
++const line47 = 47
++const line48 = 48
++const line49 = 49
++const line50 = 50
++const line51 = 51
++const line52 = 52
++const line53 = 53
++const line54 = 54
++const line55 = 55
++const line56 = 56
++const line57 = 57
++const line58 = 58
++const line59 = 59
++const line60 = 60
++const line61 = 61
++const line62 = 62
++const line63 = 63
++const line64 = 64
++const line65 = 65
++const line66 = 66
++const line67 = 67
++const line68 = 68
++const line69 = 69
++const line70 = 70
++const line71 = 71
++const line72 = 72
++const line73 = 73
++const line74 = 74
++const line75 = 75
++const line76 = 76
++const line77 = 77
++const line78 = 78
++const line79 = 79
++const line80 = 80
++const line81 = 81
++const line82 = 82
++const line83 = 83
++const line84 = 84
++const line85 = 85
++const line86 = 86
++const line87 = 87
++const line88 = 88
++const line89 = 89
++const line90 = 90
++const line91 = 91
++const line92 = 92
++const line93 = 93
++const line94 = 94
++const line95 = 95
++const line96 = 96
++const line97 = 97
++const line98 = 98
++const line99 = 99
++const line100 = 100
++const line101 = 101
++const line102 = 102
++const line103 = 103
++const line104 = 104
++const line105 = 105
++const line106 = 106
++const line107 = 107
++const line108 = 108
++const line109 = 109
++const line110 = 110
++const line111 = 111
++const line112 = 112
++const line113 = 113
++const line114 = 114
++const line115 = 115
++const line116 = 116
++const line117 = 117
++const line118 = 118
++const line119 = 119
+",
+        {
+          "behavioral_diff": [],
+          "findings": [
+            {
+              "body": "desc",
+              "file": "a/one.ts",
+              "lines": "5",
+              "severity": "MEDIUM",
+              "title": "Alpha problem",
+            },
+          ],
+          "production_risk": [],
+          "summary": "ok",
+          "unresolved_questions": [],
+        },
+        [],
+        {
+          "keepMinor": false,
+          "keepUnverified": false,
+        },
+        false,
+      ],
+    ],
+    [
+      "runReview",
+      [
+        "test-key",
+        "claude-haiku-4-5-20251001",
+        1,
+        32000,
+        "",
+        {
+          "author": "dev",
+          "description": "A test PR",
+          "id": "100",
+          "sourceBranch": "feature/test",
+          "sourceCommit": "aaa111222333ffffffffffffffffffffffffffff",
+          "targetBranch": "develop",
+          "title": "Test PR",
+        },
+        "diff --git a/b/one.ts b/b/one.ts
+--- a/b/one.ts
++++ b/b/one.ts
+@@ -1,1 +1,120 @@
++const line0 = 0
++const line1 = 1
++const line2 = 2
++const line3 = 3
++const line4 = 4
++const line5 = 5
++const line6 = 6
++const line7 = 7
++const line8 = 8
++const line9 = 9
++const line10 = 10
++const line11 = 11
++const line12 = 12
++const line13 = 13
++const line14 = 14
++const line15 = 15
++const line16 = 16
++const line17 = 17
++const line18 = 18
++const line19 = 19
++const line20 = 20
++const line21 = 21
++const line22 = 22
++const line23 = 23
++const line24 = 24
++const line25 = 25
++const line26 = 26
++const line27 = 27
++const line28 = 28
++const line29 = 29
++const line30 = 30
++const line31 = 31
++const line32 = 32
++const line33 = 33
++const line34 = 34
++const line35 = 35
++const line36 = 36
++const line37 = 37
++const line38 = 38
++const line39 = 39
++const line40 = 40
++const line41 = 41
++const line42 = 42
++const line43 = 43
++const line44 = 44
++const line45 = 45
++const line46 = 46
++const line47 = 47
++const line48 = 48
++const line49 = 49
++const line50 = 50
++const line51 = 51
++const line52 = 52
++const line53 = 53
++const line54 = 54
++const line55 = 55
++const line56 = 56
++const line57 = 57
++const line58 = 58
++const line59 = 59
++const line60 = 60
++const line61 = 61
++const line62 = 62
++const line63 = 63
++const line64 = 64
++const line65 = 65
++const line66 = 66
++const line67 = 67
++const line68 = 68
++const line69 = 69
++const line70 = 70
++const line71 = 71
++const line72 = 72
++const line73 = 73
++const line74 = 74
++const line75 = 75
++const line76 = 76
++const line77 = 77
++const line78 = 78
++const line79 = 79
++const line80 = 80
++const line81 = 81
++const line82 = 82
++const line83 = 83
++const line84 = 84
++const line85 = 85
++const line86 = 86
++const line87 = 87
++const line88 = 88
++const line89 = 89
++const line90 = 90
++const line91 = 91
++const line92 = 92
++const line93 = 93
++const line94 = 94
++const line95 = 95
++const line96 = 96
++const line97 = 97
++const line98 = 98
++const line99 = 99
++const line100 = 100
++const line101 = 101
++const line102 = 102
++const line103 = 103
++const line104 = 104
++const line105 = 105
++const line106 = 106
++const line107 = 107
++const line108 = 108
++const line109 = 109
++const line110 = 110
++const line111 = 111
++const line112 = 112
++const line113 = 113
++const line114 = 114
++const line115 = 115
++const line116 = 116
++const line117 = 117
++const line118 = 118
++const line119 = 119
+diff --git a/b/two.ts b/b/two.ts
+--- a/b/two.ts
++++ b/b/two.ts
+@@ -1,1 +1,120 @@
++const line0 = 0
++const line1 = 1
++const line2 = 2
++const line3 = 3
++const line4 = 4
++const line5 = 5
++const line6 = 6
++const line7 = 7
++const line8 = 8
++const line9 = 9
++const line10 = 10
++const line11 = 11
++const line12 = 12
++const line13 = 13
++const line14 = 14
++const line15 = 15
++const line16 = 16
++const line17 = 17
++const line18 = 18
++const line19 = 19
++const line20 = 20
++const line21 = 21
++const line22 = 22
++const line23 = 23
++const line24 = 24
++const line25 = 25
++const line26 = 26
++const line27 = 27
++const line28 = 28
++const line29 = 29
++const line30 = 30
++const line31 = 31
++const line32 = 32
++const line33 = 33
++const line34 = 34
++const line35 = 35
++const line36 = 36
++const line37 = 37
++const line38 = 38
++const line39 = 39
++const line40 = 40
++const line41 = 41
++const line42 = 42
++const line43 = 43
++const line44 = 44
++const line45 = 45
++const line46 = 46
++const line47 = 47
++const line48 = 48
++const line49 = 49
++const line50 = 50
++const line51 = 51
++const line52 = 52
++const line53 = 53
++const line54 = 54
++const line55 = 55
++const line56 = 56
++const line57 = 57
++const line58 = 58
++const line59 = 59
++const line60 = 60
++const line61 = 61
++const line62 = 62
++const line63 = 63
++const line64 = 64
++const line65 = 65
++const line66 = 66
++const line67 = 67
++const line68 = 68
++const line69 = 69
++const line70 = 70
++const line71 = 71
++const line72 = 72
++const line73 = 73
++const line74 = 74
++const line75 = 75
++const line76 = 76
++const line77 = 77
++const line78 = 78
++const line79 = 79
++const line80 = 80
++const line81 = 81
++const line82 = 82
++const line83 = 83
++const line84 = 84
++const line85 = 85
++const line86 = 86
++const line87 = 87
++const line88 = 88
++const line89 = 89
++const line90 = 90
++const line91 = 91
++const line92 = 92
++const line93 = 93
++const line94 = 94
++const line95 = 95
++const line96 = 96
++const line97 = 97
++const line98 = 98
++const line99 = 99
++const line100 = 100
++const line101 = 101
++const line102 = 102
++const line103 = 103
++const line104 = 104
++const line105 = 105
++const line106 = 106
++const line107 = 107
++const line108 = 108
++const line109 = 109
++const line110 = 110
++const line111 = 111
++const line112 = 112
++const line113 = 113
++const line114 = 114
++const line115 = 115
++const line116 = 116
++const line117 = 117
++const line118 = 118
++const line119 = 119
+",
+        [],
+        {
+          "content": "System prompt here
+
+## BUNDLED REVIEW
+This PR is too large for one pass. You are reviewing bundle 2 of 2; the diff contains only: b/one.ts, b/two.ts. Review only these files and do not flag code you cannot see. Leave \`can_be_split\` empty.",
+          "source": "repo",
+        },
+        [],
+        [],
+        "",
+        false,
+      ],
+    ],
+    [
+      "runJudge",
+      [
+        "test-key",
+        "judge-model",
+        1,
+        32000,
+        "",
+        "diff --git a/b/one.ts b/b/one.ts
+--- a/b/one.ts
++++ b/b/one.ts
+@@ -1,1 +1,120 @@
++const line0 = 0
++const line1 = 1
++const line2 = 2
++const line3 = 3
++const line4 = 4
++const line5 = 5
++const line6 = 6
++const line7 = 7
++const line8 = 8
++const line9 = 9
++const line10 = 10
++const line11 = 11
++const line12 = 12
++const line13 = 13
++const line14 = 14
++const line15 = 15
++const line16 = 16
++const line17 = 17
++const line18 = 18
++const line19 = 19
++const line20 = 20
++const line21 = 21
++const line22 = 22
++const line23 = 23
++const line24 = 24
++const line25 = 25
++const line26 = 26
++const line27 = 27
++const line28 = 28
++const line29 = 29
++const line30 = 30
++const line31 = 31
++const line32 = 32
++const line33 = 33
++const line34 = 34
++const line35 = 35
++const line36 = 36
++const line37 = 37
++const line38 = 38
++const line39 = 39
++const line40 = 40
++const line41 = 41
++const line42 = 42
++const line43 = 43
++const line44 = 44
++const line45 = 45
++const line46 = 46
++const line47 = 47
++const line48 = 48
++const line49 = 49
++const line50 = 50
++const line51 = 51
++const line52 = 52
++const line53 = 53
++const line54 = 54
++const line55 = 55
++const line56 = 56
++const line57 = 57
++const line58 = 58
++const line59 = 59
++const line60 = 60
++const line61 = 61
++const line62 = 62
++const line63 = 63
++const line64 = 64
++const line65 = 65
++const line66 = 66
++const line67 = 67
++const line68 = 68
++const line69 = 69
++const line70 = 70
++const line71 = 71
++const line72 = 72
++const line73 = 73
++const line74 = 74
++const line75 = 75
++const line76 = 76
++const line77 = 77
++const line78 = 78
++const line79 = 79
++const line80 = 80
++const line81 = 81
++const line82 = 82
++const line83 = 83
++const line84 = 84
++const line85 = 85
++const line86 = 86
++const line87 = 87
++const line88 = 88
++const line89 = 89
++const line90 = 90
++const line91 = 91
++const line92 = 92
++const line93 = 93
++const line94 = 94
++const line95 = 95
++const line96 = 96
++const line97 = 97
++const line98 = 98
++const line99 = 99
++const line100 = 100
++const line101 = 101
++const line102 = 102
++const line103 = 103
++const line104 = 104
++const line105 = 105
++const line106 = 106
++const line107 = 107
++const line108 = 108
++const line109 = 109
++const line110 = 110
++const line111 = 111
++const line112 = 112
++const line113 = 113
++const line114 = 114
++const line115 = 115
++const line116 = 116
++const line117 = 117
++const line118 = 118
++const line119 = 119
+diff --git a/b/two.ts b/b/two.ts
+--- a/b/two.ts
++++ b/b/two.ts
+@@ -1,1 +1,120 @@
++const line0 = 0
++const line1 = 1
++const line2 = 2
++const line3 = 3
++const line4 = 4
++const line5 = 5
++const line6 = 6
++const line7 = 7
++const line8 = 8
++const line9 = 9
++const line10 = 10
++const line11 = 11
++const line12 = 12
++const line13 = 13
++const line14 = 14
++const line15 = 15
++const line16 = 16
++const line17 = 17
++const line18 = 18
++const line19 = 19
++const line20 = 20
++const line21 = 21
++const line22 = 22
++const line23 = 23
++const line24 = 24
++const line25 = 25
++const line26 = 26
++const line27 = 27
++const line28 = 28
++const line29 = 29
++const line30 = 30
++const line31 = 31
++const line32 = 32
++const line33 = 33
++const line34 = 34
++const line35 = 35
++const line36 = 36
++const line37 = 37
++const line38 = 38
++const line39 = 39
++const line40 = 40
++const line41 = 41
++const line42 = 42
++const line43 = 43
++const line44 = 44
++const line45 = 45
++const line46 = 46
++const line47 = 47
++const line48 = 48
++const line49 = 49
++const line50 = 50
++const line51 = 51
++const line52 = 52
++const line53 = 53
++const line54 = 54
++const line55 = 55
++const line56 = 56
++const line57 = 57
++const line58 = 58
++const line59 = 59
++const line60 = 60
++const line61 = 61
++const line62 = 62
++const line63 = 63
++const line64 = 64
++const line65 = 65
++const line66 = 66
++const line67 = 67
++const line68 = 68
++const line69 = 69
++const line70 = 70
++const line71 = 71
++const line72 = 72
++const line73 = 73
++const line74 = 74
++const line75 = 75
++const line76 = 76
++const line77 = 77
++const line78 = 78
++const line79 = 79
++const line80 = 80
++const line81 = 81
++const line82 = 82
++const line83 = 83
++const line84 = 84
++const line85 = 85
++const line86 = 86
++const line87 = 87
++const line88 = 88
++const line89 = 89
++const line90 = 90
++const line91 = 91
++const line92 = 92
++const line93 = 93
++const line94 = 94
++const line95 = 95
++const line96 = 96
++const line97 = 97
++const line98 = 98
++const line99 = 99
++const line100 = 100
++const line101 = 101
++const line102 = 102
++const line103 = 103
++const line104 = 104
++const line105 = 105
++const line106 = 106
++const line107 = 107
++const line108 = 108
++const line109 = 109
++const line110 = 110
++const line111 = 111
++const line112 = 112
++const line113 = 113
++const line114 = 114
++const line115 = 115
++const line116 = 116
++const line117 = 117
++const line118 = 118
++const line119 = 119
+",
+        {
+          "behavioral_diff": [],
+          "findings": [
+            {
+              "body": "desc",
+              "file": "b/one.ts",
+              "lines": "5",
+              "severity": "MEDIUM",
+              "title": "Beta problem",
+            },
+          ],
+          "production_risk": [],
+          "summary": "ok",
+          "unresolved_questions": [],
+        },
+        [],
+        {
+          "keepMinor": false,
+          "keepUnverified": false,
+        },
+        false,
+      ],
+    ],
+  ],
+  "record": {
+    "action": "REVIEW",
+    "anchored_findings": null,
+    "breadth_cost_usd": null,
+    "breadth_model": null,
+    "breadth_prompt_hash": null,
+    "breadth_status": "disabled",
+    "breadth_tokens": null,
+    "changed_files": 4,
+    "changed_lines": 480,
+    "computed_score": 92,
+    "context_files_fetched": 0,
+    "cost_usd": 0.0049,
+    "degraded": false,
+    "delta": null,
+    "diff_size": {
+      "files": {
+        "added": 0,
+        "deleted": 0,
+        "modified": 4,
+        "renamed": 0,
+      },
+      "lines_added": 480,
+      "lines_removed": 0,
+      "reviewable_files": 4,
+      "reviewable_lines_added": 480,
+      "reviewable_lines_removed": 0,
+    },
+    "dry_run": false,
+    "effort": null,
+    "error": null,
+    "finding_scores": [
+      {
+        "score": 8,
+        "severity": "MEDIUM",
+        "title": "t",
+      },
+      {
+        "score": 8,
+        "severity": "MEDIUM",
+        "title": "t",
+      },
+    ],
+    "findings": {
+      "high": 0,
+      "low": 0,
+      "medium": 2,
+    },
+    "force": "off",
+    "jenkins": null,
+    "judge_anomalies": null,
+    "judge_cost_usd": 0.0009,
+    "judge_decisions": null,
+    "judge_effort": null,
+    "judge_model": "judge-model",
+    "judge_policy": {
+      "file_context": false,
+      "keep_minor": false,
+      "keep_unverified": false,
+    },
+    "judge_prompt_hash": null,
+    "judge_status": "succeeded",
+    "judge_tokens": {
+      "input": 200,
+      "output": 20,
+    },
+    "min_finding_score": 8,
+    "model": "claude-haiku-4-5-20251001",
+    "pr_author": "dev",
+    "pr_id": "100",
+    "prompt_hash": "10052f24e175",
+    "prompt_source": "repo",
+    "recall_levers": {
+      "b_priority": false,
+      "j_quality": false,
+      "j_shown_anchor": false,
+      "sl_breadth": false,
+    },
+    "repo_slug": "repo",
+    "review_candidates": null,
+    "review_findings": {
+      "high": 0,
+      "low": 0,
+      "medium": 2,
+    },
+    "review_number": 1,
+    "run_id": "bitbucket-repo-100-aaa111222333",
+    "second_look_cost_usd": null,
+    "second_look_prompt_hash": null,
+    "second_look_status": "disabled",
+    "second_look_tokens": null,
+    "skip_reason": null,
+    "source_branch": "feature/test",
+    "source_commit": "aaa111222333ffffffffffffffffffffffffffff",
+    "target_branch": "develop",
+    "tokens": {
+      "cache_read": 0,
+      "cache_write": 0,
+      "estimated_input": 2386,
+      "input": 2200,
+      "output": 420,
+    },
+    "touch_rate": null,
+    "untouched_files": null,
+    "vcs": "bitbucket",
+    "verdict_score": 80,
+    "workspace": "test",
+  },
+  "thrown": null,
+  "vcs": [
+    [
+      "getPullRequestInfo",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getDiff",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getChangedFiles",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getPreviousReviewComments",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getPreviousReviewComments",
+      [
+        "100",
+      ],
+    ],
+    [
+      "postComment",
+      [
+        "100",
+        "### Summary
+Large PR reviewed in 2 bundle(s).
+- **a/ (2 files)**: ok
+- **b/ (2 files)**: ok
+
+### Findings
+- **MEDIUM – Alpha problem** (\`a/one.ts:5\`)
+  desc
+
+- **MEDIUM – Beta problem** (\`b/one.ts:5\`)
+  desc
+
+### Behavioral Diff
+None.
+
+### Production Risk
+None.
+
+### Unresolved Questions
+None.
+
+### Merge Confidence: 80%
+
+*"This verdict is opinionated and must be validated by a human reviewer."*
+
+---
+*Reviewed by test-bot (claude-haiku-4-5-20251001) | Prompt: repo | Review #1 | Commit: aaa111222333 | Build: testbuild*",
+      ],
+    ],
+  ],
+}
+`;
+
+exports[`characterization: review() with no checked commit > K19 dry-run 1`] = `
+{
+  "console": [
+    "log: 
+Starting review for PR #100",
+    "log: Fetching PR info...",
+    "log:   "Test PR" (feature/test → develop)",
+    "log: Fetching diff...",
+    "log: Fetching changed files...",
+    "log:   1 changed file(s), 1 reviewable",
+    "log:   2 changed line(s), 2 reviewable",
+    "log: Checking for previous reviews...",
+    "log:   No previous reviews — first review for this PR",
+    "log: Loading prompt...",
+    "log:   Prompt source: repo",
+    "log: Fetching file context...",
+    "log:   Fetched full content for 0 file(s)",
+    "log:   Estimated input: ~36 tokens  [prompt 5 | diff 32 | delta 0 | files 0 (0) | prev_reviews 0 (0) | replies 0 (0)]",
+    "log:   Reviewer findings: 0H / 1M / 0L",
+    "log: 
+=== DRY RUN — Review output (not posted) ===
+",
+    "log: ### Summary
+ok
+
+### Findings
+- **MEDIUM – New issue** (\`src/app.ts:11\`)
+  desc
+
+### Behavioral Diff
+None.
+
+### Production Risk
+None.
+
+### Unresolved Questions
+None.
+
+---
+*Reviewed by test-bot (claude-haiku-4-5-20251001) | Prompt: repo | Review #1 | Commit: aaa111222333 | Build: testbuild*",
+    "log: 
+=== End of review ===
+",
+  ],
+  "model": [
+    [
+      "runReview",
+      [
+        "test-key",
+        "claude-haiku-4-5-20251001",
+        1,
+        32000,
+        "",
+        {
+          "author": "dev",
+          "description": "A test PR",
+          "id": "100",
+          "sourceBranch": "feature/test",
+          "sourceCommit": "aaa111222333ffffffffffffffffffffffffffff",
+          "targetBranch": "develop",
+          "title": "Test PR",
+        },
+        "diff --git a/src/app.ts b/src/app.ts
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -10,3 +10,5 @@
++import { foo } from './foo'
++foo()
+",
+        [],
+        {
+          "content": "System prompt here",
+          "source": "repo",
+        },
+        [],
+        [],
+        "",
+        false,
+      ],
+    ],
+  ],
+  "record": {
+    "action": "REVIEW",
+    "anchored_findings": null,
+    "breadth_cost_usd": null,
+    "breadth_model": null,
+    "breadth_prompt_hash": null,
+    "breadth_status": "disabled",
+    "breadth_tokens": null,
+    "changed_files": 1,
+    "changed_lines": 2,
+    "computed_score": 96,
+    "context_files_fetched": 0,
+    "cost_usd": 0.002,
+    "degraded": false,
+    "delta": null,
+    "diff_size": {
+      "files": {
+        "added": 0,
+        "deleted": 0,
+        "modified": 1,
+        "renamed": 0,
+      },
+      "lines_added": 2,
+      "lines_removed": 0,
+      "reviewable_files": 1,
+      "reviewable_lines_added": 2,
+      "reviewable_lines_removed": 0,
+    },
+    "dry_run": true,
+    "effort": null,
+    "error": null,
+    "finding_scores": null,
+    "findings": {
+      "high": 0,
+      "low": 0,
+      "medium": 1,
+    },
+    "force": "off",
+    "jenkins": null,
+    "judge_anomalies": null,
+    "judge_cost_usd": null,
+    "judge_decisions": null,
+    "judge_effort": null,
+    "judge_model": null,
+    "judge_policy": null,
+    "judge_prompt_hash": null,
+    "judge_status": "disabled",
+    "judge_tokens": null,
+    "min_finding_score": null,
+    "model": "claude-haiku-4-5-20251001",
+    "pr_author": "dev",
+    "pr_id": "100",
+    "prompt_hash": "10052f24e175",
+    "prompt_source": "repo",
+    "recall_levers": {
+      "b_priority": false,
+      "j_quality": false,
+      "j_shown_anchor": false,
+      "sl_breadth": false,
+    },
+    "repo_slug": "repo",
+    "review_candidates": null,
+    "review_findings": {
+      "high": 0,
+      "low": 0,
+      "medium": 1,
+    },
+    "review_number": 1,
+    "run_id": "bitbucket-repo-100-aaa111222333",
+    "second_look_cost_usd": null,
+    "second_look_prompt_hash": null,
+    "second_look_status": "disabled",
+    "second_look_tokens": null,
+    "skip_reason": null,
+    "source_branch": "feature/test",
+    "source_commit": "aaa111222333ffffffffffffffffffffffffffff",
+    "target_branch": "develop",
+    "tokens": {
+      "cache_read": 0,
+      "cache_write": 0,
+      "estimated_input": 36,
+      "input": 1000,
+      "output": 200,
+    },
+    "touch_rate": null,
+    "untouched_files": null,
+    "vcs": "bitbucket",
+    "verdict_score": null,
+    "workspace": "test",
+  },
+  "thrown": null,
+  "vcs": [
+    [
+      "getPullRequestInfo",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getDiff",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getChangedFiles",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getPreviousReviewComments",
+      [
+        "100",
+      ],
+    ],
+  ],
+}
+`;
+
+exports[`characterization: review() with no checked commit > K20 --force re-review 1`] = `
+{
+  "console": [
+    "log: 
+Starting review for PR #100",
+    "log: Fetching PR info...",
+    "log:   "Test PR" (feature/test → develop)",
+    "log: Fetching diff...",
+    "log: Fetching changed files...",
+    "log:   1 changed file(s), 1 reviewable",
+    "log:   2 changed line(s), 2 reviewable",
+    "log: Checking for previous reviews...",
+    "log:   Found 1 previous review(s) — will produce delta review",
+    "log:   Bypassing dedup check (--force re-review) — will re-review with full context",
+    "log: Loading prompt...",
+    "log:   Prompt source: repo",
+    "log: Fetching file context...",
+    "log:   Fetched full content for 0 file(s)",
+    "log:   Estimated input: ~93 tokens  [prompt 5 | diff 32 | delta 0 | files 0 (0) | prev_reviews 57 (1) | replies 0 (0)]",
+    "log:   Reviewer findings: 0H / 1M / 0L",
+    "log: Posting review comment...",
+    "log: Done. Review posted to PR.
+",
+  ],
+  "model": [
+    [
+      "runReview",
+      [
+        "test-key",
+        "claude-haiku-4-5-20251001",
+        1,
+        32000,
+        "",
+        {
+          "author": "dev",
+          "description": "A test PR",
+          "id": "100",
+          "sourceBranch": "feature/test",
+          "sourceCommit": "aaa111222333ffffffffffffffffffffffffffff",
+          "targetBranch": "develop",
+          "title": "Test PR",
+        },
+        "diff --git a/src/app.ts b/src/app.ts
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -10,3 +10,5 @@
++import { foo } from './foo'
++foo()
+",
+        [],
+        {
+          "content": "System prompt here",
+          "source": "repo",
+        },
+        [
+          {
+            "body": "### Summary
+One issue.
+
+### Findings
+- **MEDIUM – Prior issue** (\`src/app.ts:11\`)
+  desc
+
+### Unresolved Questions
+None.
+
+---
+*Reviewed by test-bot (claude-haiku-4-5-20251001) | Prompt: repo | Review #1 | Commit: aaa111222333*",
+            "createdOn": "2026-03-09T10:00:00Z",
+            "id": "200",
+          },
+        ],
+        [],
+        "",
+        false,
+      ],
+    ],
+  ],
+  "record": {
+    "action": "RE_REVIEW",
+    "anchored_findings": null,
+    "breadth_cost_usd": null,
+    "breadth_model": null,
+    "breadth_prompt_hash": null,
+    "breadth_status": "disabled",
+    "breadth_tokens": null,
+    "changed_files": 1,
+    "changed_lines": 2,
+    "computed_score": 96,
+    "context_files_fetched": 0,
+    "cost_usd": 0.002,
+    "degraded": false,
+    "delta": {
+      "developer_replies": 0,
+      "new_findings": 0,
+      "resolved": 0,
+      "still_open": 0,
+    },
+    "diff_size": {
+      "files": {
+        "added": 0,
+        "deleted": 0,
+        "modified": 1,
+        "renamed": 0,
+      },
+      "lines_added": 2,
+      "lines_removed": 0,
+      "reviewable_files": 1,
+      "reviewable_lines_added": 2,
+      "reviewable_lines_removed": 0,
+    },
+    "dry_run": false,
+    "effort": null,
+    "error": null,
+    "finding_scores": null,
+    "findings": {
+      "high": 0,
+      "low": 0,
+      "medium": 1,
+    },
+    "force": "re-review",
+    "jenkins": null,
+    "judge_anomalies": null,
+    "judge_cost_usd": null,
+    "judge_decisions": null,
+    "judge_effort": null,
+    "judge_model": null,
+    "judge_policy": null,
+    "judge_prompt_hash": null,
+    "judge_status": "disabled",
+    "judge_tokens": null,
+    "min_finding_score": null,
+    "model": "claude-haiku-4-5-20251001",
+    "pr_author": "dev",
+    "pr_id": "100",
+    "prompt_hash": "10052f24e175",
+    "prompt_source": "repo",
+    "recall_levers": {
+      "b_priority": false,
+      "j_quality": false,
+      "j_shown_anchor": false,
+      "sl_breadth": false,
+    },
+    "repo_slug": "repo",
+    "review_candidates": null,
+    "review_findings": {
+      "high": 0,
+      "low": 0,
+      "medium": 1,
+    },
+    "review_number": 2,
+    "run_id": "bitbucket-repo-100-aaa111222333",
+    "second_look_cost_usd": null,
+    "second_look_prompt_hash": null,
+    "second_look_status": "disabled",
+    "second_look_tokens": null,
+    "skip_reason": null,
+    "source_branch": "feature/test",
+    "source_commit": "aaa111222333ffffffffffffffffffffffffffff",
+    "target_branch": "develop",
+    "tokens": {
+      "cache_read": 0,
+      "cache_write": 0,
+      "estimated_input": 93,
+      "input": 1000,
+      "output": 200,
+    },
+    "touch_rate": null,
+    "untouched_files": null,
+    "vcs": "bitbucket",
+    "verdict_score": null,
+    "workspace": "test",
+  },
+  "thrown": null,
+  "vcs": [
+    [
+      "getPullRequestInfo",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getDiff",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getChangedFiles",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getPreviousReviewComments",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getRepliesToReviewComments",
+      [
+        "100",
+        [
+          "200",
+        ],
+        true,
+      ],
+    ],
+    [
+      "postComment",
+      [
+        "100",
+        "### Summary
+ok
+
+### Findings
+- **MEDIUM – New issue** (\`src/app.ts:11\`)
+  desc
+
+### Behavioral Diff
+None.
+
+### Production Risk
+None.
+
+### Unresolved Questions
+None.
+
+---
+*Reviewed by test-bot (claude-haiku-4-5-20251001) | Prompt: repo | Review #2 | Commit: aaa111222333 | Build: testbuild*",
+      ],
+    ],
+  ],
+}
+`;
+
+exports[`characterization: review() with no checked commit > K21 --force clean 1`] = `
+{
+  "console": [
+    "log: 
+Starting review for PR #100",
+    "log: Fetching PR info...",
+    "log:   "Test PR" (feature/test → develop)",
+    "log: Fetching diff...",
+    "log: Fetching changed files...",
+    "log:   1 changed file(s), 1 reviewable",
+    "log:   2 changed line(s), 2 reviewable",
+    "log: Skipping previous review check (--force clean)",
+    "log: Loading prompt...",
+    "log:   Prompt source: repo",
+    "log: Fetching file context...",
+    "log:   Fetched full content for 0 file(s)",
+    "log:   Estimated input: ~36 tokens  [prompt 5 | diff 32 | delta 0 | files 0 (0) | prev_reviews 0 (0) | replies 0 (0)]",
+    "log:   Reviewer findings: 0H / 1M / 0L",
+    "log: Posting review comment...",
+    "log: Done. Review posted to PR.
+",
+  ],
+  "model": [
+    [
+      "runReview",
+      [
+        "test-key",
+        "claude-haiku-4-5-20251001",
+        1,
+        32000,
+        "",
+        {
+          "author": "dev",
+          "description": "A test PR",
+          "id": "100",
+          "sourceBranch": "feature/test",
+          "sourceCommit": "aaa111222333ffffffffffffffffffffffffffff",
+          "targetBranch": "develop",
+          "title": "Test PR",
+        },
+        "diff --git a/src/app.ts b/src/app.ts
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -10,3 +10,5 @@
++import { foo } from './foo'
++foo()
+",
+        [],
+        {
+          "content": "System prompt here",
+          "source": "repo",
+        },
+        [],
+        [],
+        "",
+        false,
+      ],
+    ],
+  ],
+  "record": {
+    "action": "REVIEW",
+    "anchored_findings": null,
+    "breadth_cost_usd": null,
+    "breadth_model": null,
+    "breadth_prompt_hash": null,
+    "breadth_status": "disabled",
+    "breadth_tokens": null,
+    "changed_files": 1,
+    "changed_lines": 2,
+    "computed_score": 96,
+    "context_files_fetched": 0,
+    "cost_usd": 0.002,
+    "degraded": false,
+    "delta": null,
+    "diff_size": {
+      "files": {
+        "added": 0,
+        "deleted": 0,
+        "modified": 1,
+        "renamed": 0,
+      },
+      "lines_added": 2,
+      "lines_removed": 0,
+      "reviewable_files": 1,
+      "reviewable_lines_added": 2,
+      "reviewable_lines_removed": 0,
+    },
+    "dry_run": false,
+    "effort": null,
+    "error": null,
+    "finding_scores": null,
+    "findings": {
+      "high": 0,
+      "low": 0,
+      "medium": 1,
+    },
+    "force": "clean",
+    "jenkins": null,
+    "judge_anomalies": null,
+    "judge_cost_usd": null,
+    "judge_decisions": null,
+    "judge_effort": null,
+    "judge_model": null,
+    "judge_policy": null,
+    "judge_prompt_hash": null,
+    "judge_status": "disabled",
+    "judge_tokens": null,
+    "min_finding_score": null,
+    "model": "claude-haiku-4-5-20251001",
+    "pr_author": "dev",
+    "pr_id": "100",
+    "prompt_hash": "10052f24e175",
+    "prompt_source": "repo",
+    "recall_levers": {
+      "b_priority": false,
+      "j_quality": false,
+      "j_shown_anchor": false,
+      "sl_breadth": false,
+    },
+    "repo_slug": "repo",
+    "review_candidates": null,
+    "review_findings": {
+      "high": 0,
+      "low": 0,
+      "medium": 1,
+    },
+    "review_number": 1,
+    "run_id": "bitbucket-repo-100-aaa111222333",
+    "second_look_cost_usd": null,
+    "second_look_prompt_hash": null,
+    "second_look_status": "disabled",
+    "second_look_tokens": null,
+    "skip_reason": null,
+    "source_branch": "feature/test",
+    "source_commit": "aaa111222333ffffffffffffffffffffffffffff",
+    "target_branch": "develop",
+    "tokens": {
+      "cache_read": 0,
+      "cache_write": 0,
+      "estimated_input": 36,
+      "input": 1000,
+      "output": 200,
+    },
+    "touch_rate": null,
+    "untouched_files": null,
+    "vcs": "bitbucket",
+    "verdict_score": null,
+    "workspace": "test",
+  },
+  "thrown": null,
+  "vcs": [
+    [
+      "getPullRequestInfo",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getDiff",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getChangedFiles",
+      [
+        "100",
+      ],
+    ],
+    [
+      "postComment",
+      [
+        "100",
+        "### Summary
+ok
+
+### Findings
+- **MEDIUM – New issue** (\`src/app.ts:11\`)
+  desc
+
+### Behavioral Diff
+None.
+
+### Production Risk
+None.
+
+### Unresolved Questions
+None.
+
+---
+*Reviewed by test-bot (claude-haiku-4-5-20251001) | Prompt: repo | Review #1 | Commit: aaa111222333 | Build: testbuild*",
+      ],
+    ],
+  ],
+}
+`;
+
+exports[`characterization: review() with no checked commit > K22 force empty string 1`] = `
+{
+  "console": [
+    "log: 
+Starting review for PR #100",
+    "log: Fetching PR info...",
+    "log:   "Test PR" (feature/test → develop)",
+    "log: Fetching diff...",
+    "log: Fetching changed files...",
+    "log:   1 changed file(s), 1 reviewable",
+    "log:   2 changed line(s), 2 reviewable",
+    "log: Checking for previous reviews...",
+    "log:   Found 1 previous review(s) — will produce delta review",
+    "log:   Fetching delta diff (aabbcc112233..aaa111222333)...",
+    "log:   Delta: 2 lines total, 0 file(s) filtered, 2 lines remain",
+    "log: Loading prompt...",
+    "log:   Prompt source: repo",
+    "log: Fetching file context...",
+    "log:   Fetched full content for 0 file(s)",
+    "log:   Estimated input: ~114 tokens  [prompt 5 | diff 32 | delta 32 | files 0 (0) | prev_reviews 47 (1) | replies 0 (0)]",
+    "log:   Reviewer findings: 0H / 1M / 0L",
+    "log: Posting review comment...",
+    "log: Done. Review posted to PR.
+",
+  ],
+  "model": [
+    [
+      "runReview",
+      [
+        "test-key",
+        "claude-haiku-4-5-20251001",
+        1,
+        32000,
+        "",
+        {
+          "author": "dev",
+          "description": "A test PR",
+          "id": "100",
+          "sourceBranch": "feature/test",
+          "sourceCommit": "aaa111222333ffffffffffffffffffffffffffff",
+          "targetBranch": "develop",
+          "title": "Test PR",
+        },
+        "diff --git a/src/app.ts b/src/app.ts
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -10,3 +10,5 @@
++import { foo } from './foo'
++foo()
+",
+        [],
+        {
+          "content": "System prompt here",
+          "source": "repo",
+        },
+        [
+          {
+            "body": "### Summary
+All good.
+
+### Findings
+No findings.
+
+### Unresolved Questions
+None.
+
+---
+*Reviewed by test-bot (claude-haiku-4-5-20251001) | Prompt: repo | Review #1 | Commit: aabbcc112233*",
+            "createdOn": "2026-03-09T10:00:00Z",
+            "id": "200",
+          },
+        ],
+        [],
+        "diff --git a/src/app.ts b/src/app.ts
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -10,3 +10,5 @@
++import { foo } from './foo'
++foo()
+",
+        false,
+      ],
+    ],
+  ],
+  "record": {
+    "action": "RE_REVIEW",
+    "anchored_findings": null,
+    "breadth_cost_usd": null,
+    "breadth_model": null,
+    "breadth_prompt_hash": null,
+    "breadth_status": "disabled",
+    "breadth_tokens": null,
+    "changed_files": 1,
+    "changed_lines": 2,
+    "computed_score": 96,
+    "context_files_fetched": 0,
+    "cost_usd": 0.002,
+    "degraded": false,
+    "delta": {
+      "developer_replies": 0,
+      "new_findings": 0,
+      "resolved": 0,
+      "still_open": 0,
+    },
+    "diff_size": {
+      "files": {
+        "added": 0,
+        "deleted": 0,
+        "modified": 1,
+        "renamed": 0,
+      },
+      "lines_added": 2,
+      "lines_removed": 0,
+      "reviewable_files": 1,
+      "reviewable_lines_added": 2,
+      "reviewable_lines_removed": 0,
+    },
+    "dry_run": false,
+    "effort": null,
+    "error": null,
+    "finding_scores": null,
+    "findings": {
+      "high": 0,
+      "low": 0,
+      "medium": 1,
+    },
+    "force": "",
+    "jenkins": null,
+    "judge_anomalies": null,
+    "judge_cost_usd": null,
+    "judge_decisions": null,
+    "judge_effort": null,
+    "judge_model": null,
+    "judge_policy": null,
+    "judge_prompt_hash": null,
+    "judge_status": "disabled",
+    "judge_tokens": null,
+    "min_finding_score": null,
+    "model": "claude-haiku-4-5-20251001",
+    "pr_author": "dev",
+    "pr_id": "100",
+    "prompt_hash": "10052f24e175",
+    "prompt_source": "repo",
+    "recall_levers": {
+      "b_priority": false,
+      "j_quality": false,
+      "j_shown_anchor": false,
+      "sl_breadth": false,
+    },
+    "repo_slug": "repo",
+    "review_candidates": null,
+    "review_findings": {
+      "high": 0,
+      "low": 0,
+      "medium": 1,
+    },
+    "review_number": 2,
+    "run_id": "bitbucket-repo-100-aaa111222333",
+    "second_look_cost_usd": null,
+    "second_look_prompt_hash": null,
+    "second_look_status": "disabled",
+    "second_look_tokens": null,
+    "skip_reason": null,
+    "source_branch": "feature/test",
+    "source_commit": "aaa111222333ffffffffffffffffffffffffffff",
+    "target_branch": "develop",
+    "tokens": {
+      "cache_read": 0,
+      "cache_write": 0,
+      "estimated_input": 114,
+      "input": 1000,
+      "output": 200,
+    },
+    "touch_rate": null,
+    "untouched_files": null,
+    "vcs": "bitbucket",
+    "verdict_score": null,
+    "workspace": "test",
+  },
+  "thrown": null,
+  "vcs": [
+    [
+      "getPullRequestInfo",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getDiff",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getChangedFiles",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getPreviousReviewComments",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getCommitDiff",
+      [
+        "aabbcc112233",
+        "aaa111222333ffffffffffffffffffffffffffff",
+      ],
+    ],
+    [
+      "getRepliesToReviewComments",
+      [
+        "100",
+        [
+          "200",
+        ],
+        true,
+      ],
+    ],
+    [
+      "postComment",
+      [
+        "100",
+        "### Summary
+ok
+
+### Findings
+- **MEDIUM – New issue** (\`src/app.ts:11\`)
+  desc
+
+### Behavioral Diff
+None.
+
+### Production Risk
+None.
+
+### Unresolved Questions
+None.
+
+---
+*Reviewed by test-bot (claude-haiku-4-5-20251001) | Prompt: repo | Review #2 | Commit: aaa111222333 | Build: testbuild*",
+      ],
+    ],
+  ],
+}
+`;
+
+exports[`characterization: review() with no checked commit > K23 bare NO_CHANGE line in a finding body 1`] = `
+{
+  "console": [
+    "log: 
+Starting review for PR #100",
+    "log: Fetching PR info...",
+    "log:   "Test PR" (feature/test → develop)",
+    "log: Fetching diff...",
+    "log: Fetching changed files...",
+    "log:   1 changed file(s), 1 reviewable",
+    "log:   2 changed line(s), 2 reviewable",
+    "log: Checking for previous reviews...",
+    "log:   Found 1 previous review(s) — will produce delta review",
+    "log:   Fetching delta diff (aabbcc112233..aaa111222333)...",
+    "log:   Delta: 2 lines total, 0 file(s) filtered, 2 lines remain",
+    "log: Loading prompt...",
+    "log:   Prompt source: repo",
+    "log: Fetching file context...",
+    "log:   Fetched full content for 0 file(s)",
+    "log:   Estimated input: ~114 tokens  [prompt 5 | diff 32 | delta 32 | files 0 (0) | prev_reviews 47 (1) | replies 0 (0)]",
+    "log:   Reviewer: NO_CHANGE",
+    "log: 
+Skipping: No changes since last review",
+  ],
+  "model": [
+    [
+      "runReview",
+      [
+        "test-key",
+        "claude-haiku-4-5-20251001",
+        1,
+        32000,
+        "",
+        {
+          "author": "dev",
+          "description": "A test PR",
+          "id": "100",
+          "sourceBranch": "feature/test",
+          "sourceCommit": "aaa111222333ffffffffffffffffffffffffffff",
+          "targetBranch": "develop",
+          "title": "Test PR",
+        },
+        "diff --git a/src/app.ts b/src/app.ts
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -10,3 +10,5 @@
++import { foo } from './foo'
++foo()
+",
+        [],
+        {
+          "content": "System prompt here",
+          "source": "repo",
+        },
+        [
+          {
+            "body": "### Summary
+All good.
+
+### Findings
+No findings.
+
+### Unresolved Questions
+None.
+
+---
+*Reviewed by test-bot (claude-haiku-4-5-20251001) | Prompt: repo | Review #1 | Commit: aabbcc112233*",
+            "createdOn": "2026-03-09T10:00:00Z",
+            "id": "200",
+          },
+        ],
+        [],
+        "diff --git a/src/app.ts b/src/app.ts
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -10,3 +10,5 @@
++import { foo } from './foo'
++foo()
+",
+        false,
+      ],
+    ],
+  ],
+  "record": {
+    "action": "NO_CHANGE",
+    "anchored_findings": null,
+    "breadth_cost_usd": null,
+    "breadth_model": null,
+    "breadth_prompt_hash": null,
+    "breadth_status": null,
+    "breadth_tokens": null,
+    "changed_files": 1,
+    "changed_lines": 2,
+    "computed_score": 96,
+    "context_files_fetched": 0,
+    "cost_usd": 0.002,
+    "degraded": false,
+    "delta": {
+      "developer_replies": 0,
+      "new_findings": 0,
+      "resolved": 0,
+      "still_open": 0,
+    },
+    "diff_size": {
+      "files": {
+        "added": 0,
+        "deleted": 0,
+        "modified": 1,
+        "renamed": 0,
+      },
+      "lines_added": 2,
+      "lines_removed": 0,
+      "reviewable_files": 1,
+      "reviewable_lines_added": 2,
+      "reviewable_lines_removed": 0,
+    },
+    "dry_run": false,
+    "effort": null,
+    "error": null,
+    "finding_scores": null,
+    "findings": {
+      "high": 0,
+      "low": 0,
+      "medium": 1,
+    },
+    "force": "off",
+    "jenkins": null,
+    "judge_anomalies": null,
+    "judge_cost_usd": null,
+    "judge_decisions": null,
+    "judge_effort": null,
+    "judge_model": null,
+    "judge_policy": null,
+    "judge_prompt_hash": null,
+    "judge_status": null,
+    "judge_tokens": null,
+    "min_finding_score": null,
+    "model": "claude-haiku-4-5-20251001",
+    "pr_author": "dev",
+    "pr_id": "100",
+    "prompt_hash": "10052f24e175",
+    "prompt_source": "repo",
+    "recall_levers": {
+      "b_priority": false,
+      "j_quality": false,
+      "j_shown_anchor": false,
+      "sl_breadth": false,
+    },
+    "repo_slug": "repo",
+    "review_candidates": null,
+    "review_findings": {
+      "high": 0,
+      "low": 0,
+      "medium": 1,
+    },
+    "review_number": 2,
+    "run_id": "bitbucket-repo-100-aaa111222333",
+    "second_look_cost_usd": null,
+    "second_look_prompt_hash": null,
+    "second_look_status": null,
+    "second_look_tokens": null,
+    "skip_reason": "No changes since last review",
+    "source_branch": "feature/test",
+    "source_commit": "aaa111222333ffffffffffffffffffffffffffff",
+    "target_branch": "develop",
+    "tokens": {
+      "cache_read": 0,
+      "cache_write": 0,
+      "estimated_input": 114,
+      "input": 1000,
+      "output": 200,
+    },
+    "touch_rate": null,
+    "untouched_files": null,
+    "vcs": "bitbucket",
+    "verdict_score": null,
+    "workspace": "test",
+  },
+  "thrown": null,
+  "vcs": [
+    [
+      "getPullRequestInfo",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getDiff",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getChangedFiles",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getPreviousReviewComments",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getCommitDiff",
+      [
+        "aabbcc112233",
+        "aaa111222333ffffffffffffffffffffffffffff",
+      ],
+    ],
+    [
+      "getRepliesToReviewComments",
+      [
+        "100",
+        [
+          "200",
+        ],
+        true,
+      ],
+    ],
+    [
+      "getRepliesToReviewComments",
+      [
+        "100",
+        [
+          "200",
+        ],
+      ],
+    ],
+  ],
+}
+`;
+
+exports[`characterization: review() with no checked commit > K24 trigger passed 1`] = `
+{
+  "console": [
+    "log: 
+Starting review for PR #100",
+    "log: Trigger: pullrequest:updated by {dev}",
+    "log: Fetching PR info...",
+    "log:   "Test PR" (feature/test → develop)",
+    "log: Fetching diff...",
+    "log: Fetching changed files...",
+    "log:   1 changed file(s), 1 reviewable",
+    "log:   2 changed line(s), 2 reviewable",
+    "log: Checking for previous reviews...",
+    "log:   No previous reviews — first review for this PR",
+    "log: Loading prompt...",
+    "log:   Prompt source: repo",
+    "log: Fetching file context...",
+    "log:   Fetched full content for 0 file(s)",
+    "log:   Estimated input: ~36 tokens  [prompt 5 | diff 32 | delta 0 | files 0 (0) | prev_reviews 0 (0) | replies 0 (0)]",
+    "log:   Reviewer findings: 0H / 1M / 0L",
+    "log: Posting review comment...",
+    "log: Done. Review posted to PR.
+",
+  ],
+  "model": [
+    [
+      "runReview",
+      [
+        "test-key",
+        "claude-haiku-4-5-20251001",
+        1,
+        32000,
+        "",
+        {
+          "author": "dev",
+          "description": "A test PR",
+          "id": "100",
+          "sourceBranch": "feature/test",
+          "sourceCommit": "aaa111222333ffffffffffffffffffffffffffff",
+          "targetBranch": "develop",
+          "title": "Test PR",
+        },
+        "diff --git a/src/app.ts b/src/app.ts
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -10,3 +10,5 @@
++import { foo } from './foo'
++foo()
+",
+        [],
+        {
+          "content": "System prompt here",
+          "source": "repo",
+        },
+        [],
+        [],
+        "",
+        false,
+      ],
+    ],
+  ],
+  "record": {
+    "action": "REVIEW",
+    "anchored_findings": null,
+    "breadth_cost_usd": null,
+    "breadth_model": null,
+    "breadth_prompt_hash": null,
+    "breadth_status": "disabled",
+    "breadth_tokens": null,
+    "changed_files": 1,
+    "changed_lines": 2,
+    "computed_score": 96,
+    "context_files_fetched": 0,
+    "cost_usd": 0.002,
+    "degraded": false,
+    "delta": null,
+    "diff_size": {
+      "files": {
+        "added": 0,
+        "deleted": 0,
+        "modified": 1,
+        "renamed": 0,
+      },
+      "lines_added": 2,
+      "lines_removed": 0,
+      "reviewable_files": 1,
+      "reviewable_lines_added": 2,
+      "reviewable_lines_removed": 0,
+    },
+    "dry_run": false,
+    "effort": null,
+    "error": null,
+    "finding_scores": null,
+    "findings": {
+      "high": 0,
+      "low": 0,
+      "medium": 1,
+    },
+    "force": "off",
+    "jenkins": null,
+    "judge_anomalies": null,
+    "judge_cost_usd": null,
+    "judge_decisions": null,
+    "judge_effort": null,
+    "judge_model": null,
+    "judge_policy": null,
+    "judge_prompt_hash": null,
+    "judge_status": "disabled",
+    "judge_tokens": null,
+    "min_finding_score": null,
+    "model": "claude-haiku-4-5-20251001",
+    "pr_author": "dev",
+    "pr_id": "100",
+    "prompt_hash": "10052f24e175",
+    "prompt_source": "repo",
+    "recall_levers": {
+      "b_priority": false,
+      "j_quality": false,
+      "j_shown_anchor": false,
+      "sl_breadth": false,
+    },
+    "repo_slug": "repo",
+    "review_candidates": null,
+    "review_findings": {
+      "high": 0,
+      "low": 0,
+      "medium": 1,
+    },
+    "review_number": 1,
+    "run_id": "bitbucket-repo-100-aaa111222333",
+    "second_look_cost_usd": null,
+    "second_look_prompt_hash": null,
+    "second_look_status": "disabled",
+    "second_look_tokens": null,
+    "skip_reason": null,
+    "source_branch": "feature/test",
+    "source_commit": "aaa111222333ffffffffffffffffffffffffffff",
+    "target_branch": "develop",
+    "tokens": {
+      "cache_read": 0,
+      "cache_write": 0,
+      "estimated_input": 36,
+      "input": 1000,
+      "output": 200,
+    },
+    "touch_rate": null,
+    "trigger": {
+      "comment_author": "{dev}",
+      "event": "pullrequest:updated",
+    },
+    "untouched_files": null,
+    "vcs": "bitbucket",
+    "verdict_score": null,
+    "workspace": "test",
+  },
+  "thrown": null,
+  "vcs": [
+    [
+      "getPullRequestInfo",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getDiff",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getChangedFiles",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getPreviousReviewComments",
+      [
+        "100",
+      ],
+    ],
+    [
+      "getPreviousReviewComments",
+      [
+        "100",
+      ],
+    ],
+    [
+      "postComment",
+      [
+        "100",
+        "### Summary
+ok
+
+### Findings
+- **MEDIUM – New issue** (\`src/app.ts:11\`)
+  desc
+
+### Behavioral Diff
+None.
+
+### Production Risk
+None.
+
+### Unresolved Questions
+None.
+
+---
+*Reviewed by test-bot (claude-haiku-4-5-20251001) | Prompt: repo | Review #1 | Commit: aaa111222333 | Build: testbuild*",
+      ],
+    ],
+  ],
+}
+`;

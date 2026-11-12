@@ -65,6 +65,7 @@ function applyBenchmarkConfig(env: NodeJS.ProcessEnv): void {
   // Branch names are placeholders and a skipped PR scores zero, so only explicit size caps apply.
   config.skipSourceBranches = []
   config.skipTargetBranches = []
+  config.onlyTargetBranches = []
   if (!env.MAX_CHANGED_FILES) config.thresholds.maxChangedFiles = 0
   if (!env.MAX_CHANGED_LINES) config.thresholds.maxChangedLines = 0
   config.review.splitCheck = false   // can_be_split has no place in the findings file

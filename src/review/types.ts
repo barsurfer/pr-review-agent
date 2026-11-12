@@ -14,6 +14,7 @@ import type { LensRecommendation } from './lenses.js'
 
 /** Every node in the review flow. */
 export enum State {
+  CHECK_TRIGGER,
   FETCH_PR_INFO,
   CHECK_BRANCHES,
   FETCH_DIFF,
@@ -59,6 +60,11 @@ export interface LensRun {
 
 export type OutcomeSink = (outcome: ReviewOutcome) => void | Promise<void>
 
+export interface TriggerInfo {
+  event: string
+  commentAuthor: string
+}
+
 /** Accumulated data shared across states. */
 export interface ReviewContext {
   // Immutable inputs
@@ -70,6 +76,8 @@ export interface ReviewContext {
   readonly logUsage: boolean
   readonly repoSlug: string
   readonly outcomeSink?: OutcomeSink
+  readonly trigger?: TriggerInfo
+  readonly checkedCommit?: string
   readonly startTime: number
 
   // Populated progressively
@@ -125,4 +133,8 @@ export interface ReviewContext {
   inputBudget?: number
   bundleCount?: number  // set when the PR was reviewed as bundles instead of one pass
   degraded?: boolean  // file contexts dropped to fit MAX_INPUT_TOKENS (diff-only review)
+  dedupHit?: 'checked_commit'
+  headChecked?: boolean
+  deltaFetchFailed?: boolean
+  bundleUncertain?: boolean
 }

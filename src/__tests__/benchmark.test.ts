@@ -206,6 +206,17 @@ describe('benchmark mode end-to-end (model + judge mocked)', () => {
     expect(readOut(env).findings.length).toBeGreaterThan(0)
   })
 
+  it('clears ONLY_TARGET_BRANCHES like the skip lists, since benchmark branch names are placeholders', async () => {
+    cfg.onlyTargetBranches = ['develop']
+    const env = fixture()
+
+    await runBenchmark(env)
+
+    expect(cfg.onlyTargetBranches).toEqual([])
+    expect(completeStructured).toHaveBeenCalledTimes(2)
+    expect(readOut(env).findings.length).toBe(2)
+  })
+
   it('keeps the reviewer anchor when the judge rewrites a kept body', async () => {
     mockModel(REVIEW, {
       ...JUDGED,

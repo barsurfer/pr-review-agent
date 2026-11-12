@@ -37,6 +37,7 @@ context and use a shorter system prompt. The reply `max_tokens` cap is 4,096 (re
 | Exclusion patterns (context) | see below | Skips generated/lock files from full-file context |
 | Diff filtering | always on | Strips lock file sections from diff before sending to Claude |
 | Commit hash dedup | always on | Skips API call entirely if same commit already reviewed |
+| Checked commit from CI | off (`LAST_CHECKED_COMMIT`) | Skips the re-review of a head an earlier run already checked without posting (see [skip-logic.md §8](../context/review/skip-logic.md)) |
 | `NO_CHANGE` stop word | always on | Skips posting if delta review has no meaningful changes |
 | Reply timestamp dedup | always on | Skips reply API call if developer question already answered |
 | Latest review only | always on | Sends only the most recent previous review (not all) to save tokens |
@@ -140,7 +141,10 @@ The record is also printed to stdout at the end of every run regardless of the f
 | `anchored_findings` | `array \| null` | Compact kept-finding rows `{ anchor, severity, type, description, proposal?, quality_action? }` resolved to a real line; `proposal?` only with `ENABLE_JUDGE_PROPOSALS`, `quality_action?` only with `ENABLE_JUDGE_QUALITY`; judge-run only |
 | `touch_rate` | `number \| null` | Re-review only: `resolved / (resolved + still_open) × 100` — percentage of previous findings addressed by the developer |
 | `delta` | `object \| null` | Re-review only: `{ developer_replies, resolved, still_open, new_findings }` |
+| `checked_commit` | `string` \| absent | The full `source_commit`, present only when this run genuinely checked that head (posted review, pre-post race, footer or checked-commit match, zero-reviewable delta, coherent structured `NO_CHANGE`, `NO_NEW_FINDINGS`, a quiet reply, the JUDGE-gate reply limit) and did not fail afterwards. Never on `SKIP`/`ERROR`, dry-run, `--benchmark`, `--force clean`/`re-review`, after a failed delta fetch or on an uncertain bundle. CI stores exactly this value per PR and passes it back as `LAST_CHECKED_COMMIT`. See [review/skip-logic.md §8](../context/review/skip-logic.md) |
+| `dedup_source` | `"checked_commit"` \| absent | Present when the run matched the head against the checked commit CI passed (`LAST_CHECKED_COMMIT`), kept even if the run then errored |
 | `jenkins` | `object \| null` | `{ job, build, url }` from Jenkins env (`JOB_NAME`/`BUILD_NUMBER`/`BUILD_URL`), or null off-CI — maps a run to its build/artifact |
+| `trigger` | `object` \| absent | `{ event, comment_author }` — raw trimmed values from `--event`/`--comment-author` (or `TRIGGER_EVENT`/`TRIGGER_COMMENT_AUTHOR`), null for the one not given. The key is absent when neither was given, so those records serialize as before. See [review/skip-logic.md §7](../context/review/skip-logic.md) |
 | `error` | `object \| null` | `{ type, message, status }` on failure. On a max-tokens truncation, `type` is `TruncatedResponseError` and `tokens.*` still hold the real spend (not zeros) |
 
 ### Action Values
@@ -152,13 +156,55 @@ The record is also printed to stdout at the end of every run regardless of the f
 | `REPLY` | Reply to developer question posted |
 | `NO_CHANGE` | Re-review found nothing material; no review posted. Still runs `CHECK_REPLIES` — answers a pending developer reply (→ `REPLY`), else skips keeping this label |
 | `NO_NEW_FINDINGS` | Re-review produced 0 findings and the prior review was clean with nothing open — nothing posted |
-| `SKIP` | Out of scope — branch exclusion, size thresholds, input budget, or context-window overflow — no review posted |
-| `DEDUP_SKIP` | Commit already reviewed with no unanswered reply, or the reply limit / a pre-post race — no review posted |
+| `SKIP` | Out of scope — branch exclusion (incl. a target not in `ONLY_TARGET_BRANCHES`), a comment event by an `IGNORE_COMMENT_AUTHORS` actor (no VCS call: PR fields are `unknown`, `review_number` 0), size thresholds, input budget, or context-window overflow — no review posted |
+| `DEDUP_SKIP` | Commit already reviewed with no unanswered reply, or the reply limit / a pre-post race — no review posted. A head matched against the checked commit from CI has `skip_reason: head already checked by an earlier run and no unanswered questions` and `dedup_source: checked_commit` |
 | `ERROR` | Agent failed — see `error` field. Includes the **cut guard**: a review truncated before its final section (judge → Merge Confidence; reviewer → Unresolved Questions) is refused rather than posted partial, and retries on the next trigger. |
+
+### Telling Skipped from Reviewed in CI
+
+There is no distinct exit code for a skip:
+- `0` for every non-error outcome (nothing calls `process.exit`).
+- `1` for `ERROR`: the record is written, then the error is rethrown.
+- `1` for argument/config errors, with no record written.
+- `--benchmark` always exits 0.
+
+Read `action` from **this build's** record in `results.jsonl` instead: the line whose `jenkins.job` / `jenkins.build` equal `$JOB_NAME` / `$BUILD_NUMBER`. The file is appended in the working directory and accumulates when the Jenkins workspace is reused, and a run that fails before writing (argument/config error, crash) leaves an earlier build's record as the last line, so the last line alone can describe the wrong run. Off Jenkins (`jenkins: null`) the last line is the only option. The same JSON is printed to stdout under `=== Usage ===` regardless of `--log-usage`.
+
+| `action` | Posted? |
+|---|---|
+| `REVIEW`, `RE_REVIEW` | review comment posted |
+| `REPLY` | threaded reply posted |
+| `SKIP`, `DEDUP_SKIP`, `NO_CHANGE`, `NO_NEW_FINDINGS` | nothing posted |
+| `ERROR` | nothing posted; exit 1 |
+
+With `dry_run: true` nothing is posted, whatever the `action`. Tell the allow-list and ignored-author skips apart by `skip_reason` (it contains `ONLY_TARGET_BRANCHES` or `IGNORE_COMMENT_AUTHORS`).
+
+```sh
+# This build's record (empty when the run wrote none); REVIEW|RE_REVIEW|REPLY = posted; SKIP|DEDUP_SKIP|NO_CHANGE|NO_NEW_FINDINGS = nothing posted
+RECORD=$(jq -c --arg job "$JOB_NAME" --arg build "$BUILD_NUMBER" 'select(.jenkins.job == $job and .jenkins.build == $build)' results.jsonl | tail -n 1)
+ACTION=$(printf '%s' "$RECORD" | jq -r '.action // empty')
+```
+
+### Storing `checked_commit` for the Next Run
+
+To skip re-reviews of a head that was already checked without a post, CI stores `checked_commit` per PR and passes it back as `LAST_CHECKED_COMMIT` (full contract in [skip-logic.md §8](../context/review/skip-logic.md)):
+- Read **this build's** record (`jenkins.job`/`jenkins.build` equal `$JOB_NAME`/`$BUILD_NUMBER`), not just the last line: a crashed run writes nothing.
+- Key by `vcs` + `workspace` + `repo_slug` + `pr_id`. If the record has `checked_commit`, overwrite the stored value; otherwise store nothing. Ignore `action` and the exit code.
+- Fail open: a missing, unreadable or malformed value means pass nothing.
+
+It is a separate field, not an `action`, because `NO_CHANGE`, `REPLY` and `DEDUP_SKIP` each mix trustworthy endings (structured `NO_CHANGE`, quiet reply, recognised head) with untrustworthy ones (regex `NO_CHANGE`, a reply that still owes a confirmation post, a reply limit after a regex `NO_CHANGE`), and a `SKIP` or `ERROR` never means the head was reviewed.
+
+```sh
+# This build's record, last match; prints nothing when there is nothing to store
+jq -c --arg job "$JOB_NAME" --arg build "$BUILD_NUMBER" 'select(.jenkins.job == $job and .jenkins.build == $build)' results.jsonl | tail -n 1 \
+  | jq -c 'select(.checked_commit) | {vcs, workspace, repo_slug, pr_id, checked_commit}'
+```
 
 ### Cost Estimation
 
-Cost is calculated client-side from token counts and a per-model pricing table (per 1M tokens) in `MODEL_PRICING` (`src/review/usage.ts`) — the single source of truth, covering the haiku / sonnet / opus 4.x and 5.x families (`claude-haiku-5-5` is tiered by input size). Unknown models fall back to Sonnet pricing. Update that table when Anthropic changes rates. A call whose provider reports its own cost (OpenRouter) is logged at that cost instead of the table estimate.
+Cost is calculated client-side from token counts and a per-model pricing table (per 1M tokens) in `MODEL_PRICING` (`src/review/usage.ts`) — the single source of truth, covering the haiku / sonnet / opus 4.x and 5.x families (`claude-haiku-5-5` is tiered by input size). Unknown models fall back to Sonnet 4.6 pricing with a `No pricing entry` warning. Update that table when Anthropic changes rates. A call whose provider reports its own cost (OpenRouter) is logged at that cost instead of the table estimate.
+
+OpenRouter's Anthropic slugs price as their table entry: the lookup strips an `anthropic/` prefix and a `:variant` suffix, turns dots into dashes and drops a `-YYYYMMDD` date, so `anthropic/claude-sonnet-5.5[:beta]` prices as `claude-sonnet-5-5` and `anthropic/claude-haiku-5.5` gets the Haiku 5.5 tier. Ids that already resolved price exactly as before. Non-Anthropic slugs (`openai/…`), version-first names (`anthropic/claude-3.7-sonnet`) and models absent from the table still fall back and warn. This touches only the estimate path, i.e. calls without a provider-reported cost, and only five logged fields: `cost_usd`, `judge_cost_usd`, `breadth_cost_usd`, `second_look_cost_usd` and `lens_runs[].cost_usd`. No code path reads them (the FSM never reads a cost). For a slug that used to fall back, those estimates move from Sonnet 4.6 rates to the model's own rates (e.g. an unreported `anthropic/claude-haiku-5.5` judge call is now ~30× lower). A zero-call run stays at `cost_usd: 0` and just loses the warning line.
 
 ### Useful Queries
 
@@ -174,6 +220,10 @@ jq -s '[.[] | select(.action=="REVIEW") | .tokens.input] | add/length' results.j
 
 # DEDUP_SKIP rate
 jq -s '{total: length, dedup: [.[] | select(.action=="DEDUP_SKIP")] | length}' results.jsonl
+
+# Checked heads to store per PR, and runs the checked commit deduped
+jq -c 'select(.checked_commit) | {vcs, workspace, repo_slug, pr_id, checked_commit}' results.jsonl
+jq -s '[.[] | select(.dedup_source=="checked_commit")] | length' results.jsonl
 
 # Error rate
 jq -s '{total: length, errors: [.[] | select(.action=="ERROR")] | length}' results.jsonl

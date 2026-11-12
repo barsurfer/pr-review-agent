@@ -5,12 +5,14 @@ if (major < 22) {
 }
 
 import { Command } from 'commander'
-import { config, validateBitbucketConfig, validateAzureConfig, validateGitHubConfig } from './config.js'
+import { config, parseBranchList, validateBitbucketConfig, validateAzureConfig, validateGitHubConfig } from './config.js'
 import { BitbucketAdapter } from './vcs/bitbucket.js'
 import { AzureDevOpsAdapter } from './vcs/azure.js'
 import { GitHubAdapter } from './vcs/github.js'
 import { GitLabAdapter } from './vcs/gitlab.js'
 import { review } from './review/index.js'
+import { resolveTrigger } from './review/trigger.js'
+import { resolveCheckedCommit } from './review/checked-commit.js'
 import { validateLocalPrompt, loadPrompt } from './prompt/loader.js'
 import { runBenchmark } from './benchmark.js'
 import type { VCSAdapter } from './vcs/adapter.js'
@@ -36,6 +38,9 @@ program
   .option('--max-changed-files <n>', 'Skip review if more files changed (overrides MAX_CHANGED_FILES)')
   .option('--min-changed-lines <n>', 'Skip review if fewer lines changed (overrides MIN_CHANGED_LINES)')
   .option('--max-changed-lines <n>', 'Skip review if more lines changed (overrides MAX_CHANGED_LINES)')
+  .option('--skip-source-branches <list>', 'Comma list of source-branch globs to skip (overrides SKIP_SOURCE_BRANCHES); an empty value (--skip-source-branches=) disables the check')
+  .option('--skip-target-branches <list>', 'Comma list of target-branch globs to skip (overrides SKIP_TARGET_BRANCHES); an empty value (--skip-target-branches=) disables the check')
+  .option('--only-target-branches <list>', 'Comma list of target-branch globs to review, skipping all others (overrides ONLY_TARGET_BRANCHES); an empty value (--only-target-branches=) disables the check')
   .option('--max-input-tokens <n>', 'Max estimated input tokens before degrade/skip (overrides MAX_INPUT_TOKENS)')
   .option('--max-output-tokens <n>', 'Max output tokens for reviewer + judge (overrides MAX_OUTPUT_TOKENS)')
   .option('--effort <level>', 'Reviewer thinking effort: low|medium|high|xhigh|max (overrides REVIEW_EFFORT; ignored by models without effort)')
@@ -45,6 +50,9 @@ program
   .option('--lenses <list>', 'Concern-specific reviewer passes, e.g. reliability+security (overrides ENABLE_LENSES/LENSES; requires a judge)')
   .option('--lens-recommendation', 'Log which lenses the first-pass reviewer recommends for this PR; never gates a lens (overrides ENABLE_LENS_RECOMMENDATION)')
   .option('--proposals', 'Add a concise fix proposal to each kept finding in results.jsonl anchored_findings (overrides ENABLE_JUDGE_PROPOSALS; requires a judge)')
+  .option('--event <name>', 'What started this run, e.g. pullrequest:comment_created (overrides TRIGGER_EVENT); logged, and enables IGNORE_COMMENT_AUTHORS on comment events')
+  .option('--comment-author <id>', 'Account id of the event actor, e.g. the Bitbucket actor uuid (overrides TRIGGER_COMMENT_AUTHOR)')
+  .option('--checked-commit <hash>', 'Head an earlier run reported as checked_commit for this PR; a run on that same head skips the re-review (overrides LAST_CHECKED_COMMIT)')
   .option('--benchmark', 'ReviewBench mode: read the PR from RB_* env + mounted files, write findings JSON to RB_OUT instead of posting; always exits 0')
   .parse(process.argv)
 
@@ -65,6 +73,9 @@ const opts = program.opts<{
   maxChangedFiles?: string
   minChangedLines?: string
   maxChangedLines?: string
+  skipSourceBranches?: string
+  skipTargetBranches?: string
+  onlyTargetBranches?: string
   maxInputTokens?: string
   maxOutputTokens?: string
   effort?: string
@@ -74,6 +85,9 @@ const opts = program.opts<{
   lenses?: string
   lensRecommendation?: boolean
   proposals?: boolean
+  event?: string
+  commentAuthor?: string
+  checkedCommit?: string
   benchmark?: boolean
 }>()
 
@@ -188,6 +202,11 @@ async function main(): Promise<void> {
   if (opts.minChangedLines) config.thresholds.minChangedLines = parseInt(opts.minChangedLines, 10)
   if (opts.maxChangedLines) config.thresholds.maxChangedLines = parseInt(opts.maxChangedLines, 10)
 
+  // Compared with undefined, not truthiness: an empty value is how one repo disables a list, e.g. the default main,master target skip.
+  if (opts.skipSourceBranches !== undefined) config.skipSourceBranches = parseBranchList(opts.skipSourceBranches)
+  if (opts.skipTargetBranches !== undefined) config.skipTargetBranches = parseBranchList(opts.skipTargetBranches)
+  if (opts.onlyTargetBranches !== undefined) config.onlyTargetBranches = parseBranchList(opts.onlyTargetBranches)
+
   // CLI flags override env var token limits
   if (opts.maxInputTokens) config.anthropic.maxInputTokens = parseInt(opts.maxInputTokens, 10)
   if (opts.maxOutputTokens) config.anthropic.maxTokens = parseInt(opts.maxOutputTokens, 10)
@@ -201,10 +220,13 @@ async function main(): Promise<void> {
   if (opts.lensRecommendation) config.lenses.recommend = true
   if (config.judge.proposals && !config.judge.model) console.warn('Warning: proposals requested but the judge is disabled (JUDGING_MODEL empty) - no proposals will be produced.')
   if (opts.repoSlug) config.repoSlug = opts.repoSlug
+  const trigger = resolveTrigger(opts, config.trigger)
+  if (!trigger && config.trigger.ignoreCommentAuthors.length) console.warn('Warning: IGNORE_COMMENT_AUTHORS is set but no --event/--comment-author (TRIGGER_EVENT/TRIGGER_COMMENT_AUTHOR) was given - the ignore list is inactive.')
+  const checkedCommit = resolveCheckedCommit(opts.checkedCommit, config.lastCheckedCommit)
 
   // --force with no value defaults to 're-review'; --force clean or --force re-review explicit
   const forceMode = opts.force === true ? 're-review' : typeof opts.force === 'string' ? opts.force as 'clean' | 're-review' : 'off'
-  await review(adapter, opts.prId!, opts.dryRun ?? false, opts.prompt, forceMode, opts.logUsage ?? true, opts.repoSlug ?? '')
+  await review(adapter, opts.prId!, opts.dryRun ?? false, opts.prompt, forceMode, opts.logUsage ?? true, opts.repoSlug ?? '', undefined, trigger, checkedCommit)
 }
 
 main().catch((err: unknown) => {
