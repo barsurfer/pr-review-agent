@@ -15,6 +15,7 @@
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:local": "vitest run --pool=vmForks",
     "test:watch": "vitest"
   },
   "dependencies": {
