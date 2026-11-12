@@ -36376,6 +36376,7 @@ var config = {
     commentAuthor: optional("TRIGGER_COMMENT_AUTHOR", "").trim(),
     ignoreCommentAuthors: parseBranchList(optional("IGNORE_COMMENT_AUTHORS", ""))
   },
+  triggerEventKind: optional("TRIGGER_EVENT_KIND", "").trim(),
   review: {
     maxFindings: parseInt(optional("MAX_FINDINGS", "0"), 10),
     // 0 = unlimited
@@ -36405,6 +36406,7 @@ var config = {
   // Skipping stacked PRs until they are retargeted gives them one review instead of one per push.
   onlyTargetBranches: parseBranchList(optional("ONLY_TARGET_BRANCHES", "")),
   lastCheckedCommit: optional("LAST_CHECKED_COMMIT", "").trim(),
+  usageRecordFile: optional("USAGE_RECORD_FILE", "").trim(),
   diffExcludePatterns: optional("DIFF_EXCLUDE_PATTERNS", "*.lock,package-lock.json,yarn.lock,pnpm-lock.yaml,*.json,*.spec.ts").split(",").map((p) => p.trim()).filter(Boolean),
   thresholds: {
     minChangedFiles: parseInt(optional("MIN_CHANGED_FILES", "0"), 10),
@@ -42923,6 +42925,7 @@ var AzureDevOpsAdapter = class {
   client;
   authHeader;
   repoSlug = "";
+  prId = "";
   constructor(baseUrl, org, project, pat, accessToken = "") {
     this.authHeader = accessToken ? `Bearer ${accessToken}` : "Basic " + Buffer.from(`:${pat}`).toString("base64");
     this.client = axios_default.create({
@@ -42939,6 +42942,9 @@ var AzureDevOpsAdapter = class {
   async getPullRequestInfo(prId) {
     const repo = this.getRepoSlug();
     const { data } = await this.client.get(`/repositories/${encodeURIComponent(repo)}/pullRequests/${prId}`);
+    const sourceCommit = data.lastMergeSourceCommit?.commitId;
+    if (!sourceCommit) throw new Error(`PR ${prId} has no lastMergeSourceCommit \u2014 cannot tell which head to review`);
+    this.prId = prId;
     return {
       id: String(data.pullRequestId),
       title: data.title,
@@ -42946,7 +42952,7 @@ var AzureDevOpsAdapter = class {
       author: data.createdBy?.displayName ?? "Unknown",
       sourceBranch: stripRefsHeads(data.sourceRefName),
       targetBranch: stripRefsHeads(data.targetRefName),
-      sourceCommit: data.lastMergeSourceCommit?.commitId ?? ""
+      sourceCommit
     };
   }
   async getDiff(prId) {
@@ -42955,7 +42961,7 @@ var AzureDevOpsAdapter = class {
   }
   async getCommitDiff(fromCommit, toCommit) {
     const base = await this.resolveCommit(fromCommit, toCommit);
-    return this.buildDiff(base, toCommit, false);
+    return this.buildDiff(base, toCommit, false, true);
   }
   async getChangedFiles(prId) {
     const { base, target } = await this.getPrCommits(prId);
@@ -43073,7 +43079,7 @@ var AzureDevOpsAdapter = class {
   }
   /** Azure's diffs/commits requires full 40-char SHAs, but review footers carry an abbreviated
    *  hash. Resolve it by prefix-matching the commits reachable from `reachableFrom` — a full SHA
-   *  we already hold (the current PR source commit) — so no PR id or extra context is needed. */
+   *  we already hold (the current PR source commit) — then the PR's pushed heads. */
   async resolveCommit(ref, reachableFrom) {
     if (/^[0-9a-f]{40}$/i.test(ref)) return ref;
     const repo = this.getRepoSlug();
@@ -43085,8 +43091,26 @@ var AzureDevOpsAdapter = class {
       }
     });
     const match = (data.value ?? []).find((c) => typeof c.commitId === "string" && c.commitId.startsWith(ref));
-    if (!match) throw new Error(`cannot resolve abbreviated commit ${ref} within the ${(data.value ?? []).length} most recent commits`);
-    return match.commitId;
+    if (match) return match.commitId;
+    const notFound = `cannot resolve abbreviated commit ${ref} within the ${(data.value ?? []).length} most recent commits`;
+    if (!this.prId) throw new Error(notFound);
+    let iterationHead;
+    try {
+      iterationHead = await this.findIterationHead(this.prId, ref);
+    } catch (err) {
+      throw new Error(`${notFound}; PR iterations lookup failed (${err.message})`);
+    }
+    if (!iterationHead) throw new Error(`${notFound} or among the PR's iterations`);
+    return iterationHead;
+  }
+  async findIterationHead(prId, prefix) {
+    const repo = this.getRepoSlug();
+    const { data } = await this.client.get(`/repositories/${encodeURIComponent(repo)}/pullRequests/${prId}/iterations`);
+    for (const iteration of data.value ?? []) {
+      const id = iteration.sourceRefCommit?.commitId;
+      if (typeof id === "string" && id.startsWith(prefix)) return id;
+    }
+    return void 0;
   }
   async fetchThreads(prId) {
     const repo = this.getRepoSlug();
@@ -43133,16 +43157,16 @@ var AzureDevOpsAdapter = class {
     return { baseCommit, targetCommit, changes };
   }
   /** Reconstruct a unified diff by fetching old/new blob content and running jsdiff. */
-  async buildDiff(baseVersion, targetVersion, diffCommonCommit) {
+  async buildDiff(baseVersion, targetVersion, diffCommonCommit, strict = false) {
     const { baseCommit, targetCommit, changes } = await this.fetchCommitDiff(baseVersion, targetVersion, diffCommonCommit);
     const parts = [];
     for (const change of changes) {
-      const patch = await this.buildFilePatch(change, baseCommit, targetCommit);
+      const patch = await this.buildFilePatch(change, baseCommit, targetCommit, strict);
       if (patch) parts.push(patch);
     }
     return parts.join("");
   }
-  async buildFilePatch(change, oldRef, newRef) {
+  async buildFilePatch(change, oldRef, newRef, strict) {
     let oldPath;
     let newPath;
     let oldContent;
@@ -43152,40 +43176,43 @@ var AzureDevOpsAdapter = class {
         oldPath = null;
         newPath = change.path;
         oldContent = "";
-        newContent = await this.contentForDiff(change.path, newRef);
+        newContent = await this.contentForDiff(change.path, newRef, strict);
         break;
       case "delete":
         oldPath = change.path;
         newPath = null;
-        oldContent = await this.contentForDiff(change.path, oldRef);
+        oldContent = await this.contentForDiff(change.path, oldRef, strict);
         newContent = "";
         break;
       case "rename": {
         const from = change.originalPath ?? change.path;
         oldPath = from;
         newPath = change.path;
-        oldContent = await this.contentForDiff(from, oldRef);
-        newContent = await this.contentForDiff(change.path, newRef);
+        oldContent = await this.contentForDiff(from, oldRef, strict && from !== change.path);
+        newContent = await this.contentForDiff(change.path, newRef, strict);
         break;
       }
       default:
         oldPath = change.path;
         newPath = change.path;
-        oldContent = await this.contentForDiff(change.path, oldRef);
-        newContent = await this.contentForDiff(change.path, newRef);
+        oldContent = await this.contentForDiff(change.path, oldRef, strict);
+        newContent = await this.contentForDiff(change.path, newRef, strict);
     }
     if (oldContent === null || newContent === null) return "";
     return buildUnifiedFilePatch(oldPath, newPath, oldContent, newContent);
   }
-  /** Fetch blob text for diffing; null for binary/oversized/missing (caller skips it). */
-  async contentForDiff(path4, ref) {
+  /** Fetch blob text for diffing; null for binary/oversized, and for missing unless `mustExist`. */
+  async contentForDiff(path4, ref, mustExist = false) {
     try {
       const content = await this.getFileContent(path4, ref);
       if (content.length > MAX_DIFF_FILE_CHARS) return null;
       if (isBinary(content)) return null;
       return content;
     } catch (err) {
-      if (axios_default.isAxiosError(err) && err.response?.status === 404) return null;
+      if (axios_default.isAxiosError(err) && err.response?.status === 404) {
+        if (mustExist) throw new Error(`blob ${path4} at ${ref.slice(0, 12)} is in the change list but returned 404`);
+        return null;
+      }
       throw err;
     }
   }
@@ -43206,11 +43233,11 @@ function isBinary(content) {
   return false;
 }
 function mapChangeType(ct) {
-  const s = ct.toLowerCase();
-  if (s.includes("rename")) return "rename";
-  if (s.includes("delete")) return "delete";
-  if (s.includes("add")) return "add";
-  if (s.includes("edit")) return "edit";
+  const t = ct.toLowerCase().split(",").map((s) => s.trim());
+  if (t.includes("rename")) return "rename";
+  if (t.includes("delete") || t.includes("sourcerename")) return "delete";
+  if (t.includes("add")) return "add";
+  if (t.includes("edit")) return "edit";
   return null;
 }
 function mapStatus(ct) {
@@ -43362,7 +43389,7 @@ var GitHubAdapter = class {
     const comments = await this.getIssueComments(prId);
     return comments.filter((c) => hasReviewFooter(c.body ?? "")).map((c) => ({ id: String(c.id), body: c.body, createdOn: c.created_at }));
   }
-  // Issue comments are flat (no parent id): a reply is any human comment after the agent's latest one.
+  // Issue comments are flat (no parent id): a reply is any non-bot, non-agent comment after the agent's latest one.
   async getRepliesToReviewComments(prId, _reviewCommentIds, includeAnswered = false) {
     const comments = await this.getIssueComments(prId);
     const humanReplies = [];
@@ -43390,6 +43417,7 @@ var GitHubAdapter = class {
         }
         continue;
       }
+      if (c.user?.type === "Bot") continue;
       humanReplies.push({ id: String(c.id), parentId, author: c.user?.login ?? "Unknown", body, createdOn: c.created_at });
     }
     if (includeAnswered) return { replies: humanReplies, agentReplyCount };
@@ -43401,7 +43429,7 @@ var GitHubAdapter = class {
   async getCommitDiff(fromCommit, toCommit) {
     const { data } = await this.client.get(
       `${this.repoPath()}/compare/${fromCommit}...${toCommit}`,
-      { headers: { Accept: DIFF_ACCEPT }, responseType: "text" }
+      { headers: { Accept: DIFF_ACCEPT }, responseType: "text", timeout: COMPARE_TIMEOUT_MS }
     );
     return data;
   }
@@ -43454,41 +43482,6 @@ var GitHubAdapter = class {
       default:
         return "modified";
     }
-  }
-};
-
-// src/vcs/gitlab.ts
-init_define_STACK_PROMPTS();
-var GitLabAdapter = class {
-  getPullRequestInfo(_prId) {
-    throw new Error("GitLabAdapter not implemented \u2014 deferred to Phase 3");
-  }
-  getDiff(_prId) {
-    throw new Error("GitLabAdapter not implemented \u2014 deferred to Phase 3");
-  }
-  getFileContent(_filePath, _ref) {
-    throw new Error("GitLabAdapter not implemented \u2014 deferred to Phase 3");
-  }
-  getChangedFiles(_prId) {
-    throw new Error("GitLabAdapter not implemented \u2014 deferred to Phase 3");
-  }
-  getRepoFileContent(_filePath) {
-    throw new Error("GitLabAdapter not implemented \u2014 deferred to Phase 3");
-  }
-  postComment(_prId, _body) {
-    throw new Error("GitLabAdapter not implemented \u2014 deferred to Phase 3");
-  }
-  getPreviousReviewComments(_prId) {
-    throw new Error("GitLabAdapter not implemented \u2014 deferred to Phase 3");
-  }
-  getRepliesToReviewComments(_prId, _reviewCommentIds, _includeAnswered) {
-    throw new Error("GitLabAdapter not implemented \u2014 deferred to Phase 3");
-  }
-  postReply(_prId, _parentId, _body) {
-    throw new Error("GitLabAdapter not implemented \u2014 deferred to Phase 3");
-  }
-  getCommitDiff(_fromCommit, _toCommit) {
-    throw new Error("GitLabAdapter not implemented \u2014 deferred to Phase 3");
   }
 };
 
@@ -46049,6 +46042,35 @@ var import_child_process = require("child_process");
 var import_crypto3 = require("crypto");
 var import_path72 = require("path");
 var import_url4 = require("url");
+
+// src/review/checked-commit.ts
+init_define_STACK_PROMPTS();
+
+// src/review/cli-value.ts
+init_define_STACK_PROMPTS();
+function cliOrEnv(cli, env) {
+  return cli?.trim() || env;
+}
+
+// src/review/checked-commit.ts
+var HASH = /^[0-9a-f]{12,64}$/;
+function isCheckedCommitHash(value) {
+  return HASH.test(value.toLowerCase());
+}
+function resolveCheckedCommit(cli, env) {
+  const value = cliOrEnv(cli, env).toLowerCase();
+  if (!value) return void 0;
+  if (isCheckedCommitHash(value)) return value;
+  console.warn(`Warning: ignoring the checked commit "${value.slice(0, 64)}" (--checked-commit/LAST_CHECKED_COMMIT) - expected 12 to 64 hex characters`);
+  return void 0;
+}
+function headMatches(checked, sourceCommit) {
+  const head = sourceCommit.toLowerCase();
+  const [short, long] = checked.length <= head.length ? [checked, head] : [head, checked];
+  return short.length >= 12 && long.startsWith(short);
+}
+
+// src/review/usage.ts
 var import_meta3 = {};
 function hash12(s) {
   return (0, import_crypto3.createHash)("sha256").update(s).digest("hex").slice(0, 12);
@@ -46093,7 +46115,7 @@ function getAgentVersion() {
     const pkg = JSON.parse((0, import_fs4.readFileSync)(pkgPath, "utf-8"));
     return pkg.version;
   } catch {
-    if (true) return "0.0.45";
+    if (true) return "0.0.46";
     return "unknown";
   }
 }
@@ -46105,7 +46127,7 @@ function getBuildCommit() {
     const dirty = (0, import_child_process.execSync)("git status --porcelain", opts2).toString().trim() ? "-dirty" : "";
     return hash + dirty;
   } catch {
-    if (true) return "28c166a";
+    if (true) return "abad11b";
     return "unknown";
   }
 }
@@ -46159,7 +46181,7 @@ function buildUsageRecord(ctx, durationMs, error) {
     timestamp: (/* @__PURE__ */ new Date()).toISOString(),
     agent_version: getAgentVersion(),
     vcs: config.vcsProvider,
-    workspace: config.vcsProvider === "azure" ? config.azure.org : config.bitbucket.workspace,
+    workspace: config.vcsProvider === "azure" ? config.azure.org : config.vcsProvider === "github" ? config.github.owner : config.bitbucket.workspace,
     repo_slug: ctx.repoSlug,
     pr_id: ctx.prId,
     pr_author: ctx.prInfo?.author ?? "unknown",
@@ -46255,61 +46277,57 @@ function buildUsageRecord(ctx, durationMs, error) {
       still_open: deltaStats?.still_open ?? 0,
       new_findings: deltaStats?.new_findings ?? 0
     } : null,
-    // Present only when the head was really checked and the run did not fail afterwards; CI stores exactly this value.
-    ...ctx.headChecked && !error ? { checked_commit: ctx.prInfo.sourceCommit } : {},
+    // Present only when the head was really checked and the run did not fail afterwards; CI stores exactly this value, so it must pass the LAST_CHECKED_COMMIT rule too, whatever head the adapter reported.
+    ...ctx.headChecked && !error && isCheckedCommitHash(ctx.prInfo.sourceCommit) ? { checked_commit: ctx.prInfo.sourceCommit } : {},
     ...ctx.dedupHit === "checked_commit" ? { dedup_source: "checked_commit" } : {},
     jenkins: getJenkinsMeta(),
     // Absent when CI passed no trigger, so those records serialize exactly as before.
-    ...ctx.trigger ? { trigger: { event: ctx.trigger.event || null, comment_author: ctx.trigger.commentAuthor || null } } : {},
+    ...ctx.trigger ? { trigger: { event: ctx.trigger.event || null, comment_author: ctx.trigger.commentAuthor || null, ...ctx.trigger.kind ? { event_kind: ctx.trigger.kind } : {} } } : {},
     error
   };
 }
 function logUsageRecord(record) {
-  (0, import_fs4.appendFileSync)("results.jsonl", JSON.stringify(record) + "\n");
+  const line = JSON.stringify(record) + "\n";
+  (0, import_fs4.appendFileSync)("results.jsonl", line);
   console.log("Usage appended to results.jsonl");
+  if (!config.usageRecordFile) return;
+  try {
+    (0, import_fs4.writeFileSync)(config.usageRecordFile, line);
+  } catch (err) {
+    console.warn(`Warning: could not write USAGE_RECORD_FILE "${config.usageRecordFile}": ${err.message}`);
+  }
 }
 
 // src/review/trigger.ts
 init_define_STACK_PROMPTS();
-
-// src/review/cli-value.ts
-init_define_STACK_PROMPTS();
-function cliOrEnv(cli, env) {
-  return cli?.trim() || env;
-}
-
-// src/review/trigger.ts
+var UNNAMED_COMMENT_EVENTS = /^(note|note hook|pull_request_review)$/i;
 function isCommentEvent(event) {
-  return /comment/i.test(event);
+  return /comment/i.test(event) || UNNAMED_COMMENT_EVENTS.test(event.trim());
+}
+function isCommentTrigger(trigger) {
+  return trigger.kind ? trigger.kind === "comment" : isCommentEvent(trigger.event);
 }
 function normalizeAuthorId(id) {
   return id.trim().replace(/^\{(.*)\}$/, "$1").trim().toLowerCase();
 }
+function resolveEventKind(cli, env) {
+  const value = cliOrEnv(cli, env).trim().toLowerCase();
+  if (!value) return void 0;
+  if (value === "comment" || value === "other") return value;
+  console.warn(`Warning: ignoring the event kind "${value.slice(0, 64)}" (--event-kind/TRIGGER_EVENT_KIND) - expected comment or other`);
+  return void 0;
+}
 function resolveTrigger(cli, env) {
   const event = cliOrEnv(cli.event, env.event);
   const commentAuthor = cliOrEnv(cli.commentAuthor, env.commentAuthor);
-  return event || commentAuthor ? { event, commentAuthor } : void 0;
+  const kind = resolveEventKind(cli.eventKind, env.eventKind ?? "");
+  if (!event && !commentAuthor) return void 0;
+  return kind ? { event, commentAuthor, kind } : { event, commentAuthor };
 }
 function ignoredCommentAuthor(trigger, ignoreList) {
   const author = normalizeAuthorId(trigger.commentAuthor);
-  if (!author || !isCommentEvent(trigger.event)) return null;
+  if (!author || !isCommentTrigger(trigger)) return null;
   return ignoreList.find((entry) => normalizeAuthorId(entry) === author) ?? null;
-}
-
-// src/review/checked-commit.ts
-init_define_STACK_PROMPTS();
-var HASH = /^[0-9a-f]{12,64}$/;
-function resolveCheckedCommit(cli, env) {
-  const value = cliOrEnv(cli, env).toLowerCase();
-  if (!value) return void 0;
-  if (HASH.test(value)) return value;
-  console.warn(`Warning: ignoring the checked commit "${value.slice(0, 64)}" (--checked-commit/LAST_CHECKED_COMMIT) - expected 12 to 64 hex characters`);
-  return void 0;
-}
-function headMatches(checked, sourceCommit) {
-  const head = sourceCommit.toLowerCase();
-  const [short, long] = checked.length <= head.length ? [checked, head] : [head, checked];
-  return short.length >= 12 && long.startsWith(short);
 }
 
 // src/review/types.ts
@@ -46348,17 +46366,17 @@ async function transition(state, ctx) {
   switch (state) {
     case 0 /* CHECK_TRIGGER */: {
       if (!ctx.trigger) return 1 /* FETCH_PR_INFO */;
-      const { event, commentAuthor } = ctx.trigger;
+      const { event, commentAuthor, kind } = ctx.trigger;
       const ignoreList = config.trigger.ignoreCommentAuthors;
-      console.log(`Trigger: ${event || "unknown event"}${commentAuthor ? ` by ${commentAuthor}` : ""}`);
-      if (commentAuthor && !event && ignoreList.length) console.warn("  Comment author given without an event - IGNORE_COMMENT_AUTHORS not applied (every PR event carries an actor)");
+      console.log(`Trigger: ${event || "unknown event"}${commentAuthor ? ` by ${commentAuthor}` : ""}${kind ? ` (event kind: ${kind})` : ""}`);
+      if (commentAuthor && !event && !kind && ignoreList.length) console.warn("  Comment author given without an event - IGNORE_COMMENT_AUTHORS not applied (every PR event carries an actor)");
       if (!ignoredCommentAuthor(ctx.trigger, ignoreList)) return 1 /* FETCH_PR_INFO */;
       if (forced(ctx)) {
         console.log(`  ${commentAuthor} matches IGNORE_COMMENT_AUTHORS - running anyway (--force)`);
         return 1 /* FETCH_PR_INFO */;
       }
       ctx.action = "SKIP";
-      ctx.skipReason = `${event} by "${commentAuthor}" matches IGNORE_COMMENT_AUTHORS`;
+      ctx.skipReason = `${event || "comment event"} by "${commentAuthor}" matches IGNORE_COMMENT_AUTHORS`;
       return 19 /* SKIP */;
     }
     case 1 /* FETCH_PR_INFO */: {
@@ -47498,7 +47516,7 @@ if (major < 22) {
   process.exit(1);
 }
 var program2 = new Command();
-program2.name("pr-review-agent").description("Automated PR code review powered by Claude").option("--pr-id <id>", "Pull request ID").option("--workspace <workspace>", "VCS workspace / org (overrides BITBUCKET_WORKSPACE)").option("--repo-slug <slug>", "Repository slug").option("--vcs <provider>", "VCS provider: bitbucket | azure (WIP) | github | gitlab (overrides VCS_PROVIDER)").option("--dry-run", "Print the review to stdout without posting to the PR").option("--force [mode]", 'Force review: "clean" (no prior context) or "re-review" (keep context, bypass dedup)').option("--log-usage [bool]", "Log usage data to results.jsonl (default: true)", (v) => v !== "false", true).option("--prompt <path>", "Path to a local prompt file (overrides repo .agent-review-instructions.md)").option("--validate-prompt", "Validate prompt and exit (local via --prompt, or repo via --pr-id)").option("--model <id>", "Claude model ID (overrides CLAUDE_MODEL)").option("--judge-model <id>", "Judge model ID (overrides JUDGING_MODEL)").option("--reply-model <id>", "Model ID for developer replies (overrides REPLY_MODEL; empty = reviewer model)").option("--min-changed-files <n>", "Skip review if fewer files changed (overrides MIN_CHANGED_FILES)").option("--max-changed-files <n>", "Skip review if more files changed (overrides MAX_CHANGED_FILES)").option("--min-changed-lines <n>", "Skip review if fewer lines changed (overrides MIN_CHANGED_LINES)").option("--max-changed-lines <n>", "Skip review if more lines changed (overrides MAX_CHANGED_LINES)").option("--skip-source-branches <list>", "Comma list of source-branch globs to skip (overrides SKIP_SOURCE_BRANCHES); an empty value (--skip-source-branches=) disables the check").option("--skip-target-branches <list>", "Comma list of target-branch globs to skip (overrides SKIP_TARGET_BRANCHES); an empty value (--skip-target-branches=) disables the check").option("--only-target-branches <list>", "Comma list of target-branch globs to review, skipping all others (overrides ONLY_TARGET_BRANCHES); an empty value (--only-target-branches=) disables the check").option("--max-input-tokens <n>", "Max estimated input tokens before degrade/skip (overrides MAX_INPUT_TOKENS)").option("--max-output-tokens <n>", "Max output tokens for reviewer + judge (overrides MAX_OUTPUT_TOKENS)").option("--effort <level>", "Reviewer thinking effort: low|medium|high|xhigh|max (overrides REVIEW_EFFORT; ignored by models without effort)").option("--judge-effort <level>", "Judge thinking effort (overrides JUDGE_EFFORT)").option("--skip-directed-replies", "Skip replying to dev comments @-directed at someone else (Bitbucket only; overrides SKIP_DIRECTED_REPLIES)").option("--second-look", "Second reviewer pass over already-flagged files to lift recall (overrides ENABLE_SECOND_LOOK; requires a judge)").option("--lenses <list>", "Concern-specific reviewer passes, e.g. reliability+security (overrides ENABLE_LENSES/LENSES; requires a judge)").option("--lens-recommendation", "Log which lenses the first-pass reviewer recommends for this PR; never gates a lens (overrides ENABLE_LENS_RECOMMENDATION)").option("--proposals", "Add a concise fix proposal to each kept finding in results.jsonl anchored_findings (overrides ENABLE_JUDGE_PROPOSALS; requires a judge)").option("--event <name>", "What started this run, e.g. pullrequest:comment_created (overrides TRIGGER_EVENT); logged, and enables IGNORE_COMMENT_AUTHORS on comment events").option("--comment-author <id>", "Account id of the event actor, e.g. the Bitbucket actor uuid (overrides TRIGGER_COMMENT_AUTHOR)").option("--checked-commit <hash>", "Head an earlier run reported as checked_commit for this PR; a run on that same head skips the re-review (overrides LAST_CHECKED_COMMIT)").option("--benchmark", "ReviewBench mode: read the PR from RB_* env + mounted files, write findings JSON to RB_OUT instead of posting; always exits 0").parse(process.argv);
+program2.name("pr-review-agent").description("Automated PR code review powered by Claude").option("--pr-id <id>", "Pull request ID").option("--workspace <workspace>", "VCS workspace / org (overrides BITBUCKET_WORKSPACE)").option("--repo-slug <slug>", "Repository slug").option("--vcs <provider>", "VCS provider: bitbucket | azure (WIP) | github (overrides VCS_PROVIDER); gitlab is not implemented and exits 1").option("--dry-run", "Print the review to stdout without posting to the PR").option("--force [mode]", 'Force review: "clean" (no prior context) or "re-review" (keep context, bypass dedup)').option("--log-usage [bool]", "Log usage data to results.jsonl (default: true)", (v) => v !== "false", true).option("--prompt <path>", "Path to a local prompt file (overrides repo .agent-review-instructions.md)").option("--validate-prompt", "Validate prompt and exit (local via --prompt, or repo via --pr-id)").option("--model <id>", "Claude model ID (overrides CLAUDE_MODEL)").option("--judge-model <id>", "Judge model ID (overrides JUDGING_MODEL)").option("--reply-model <id>", "Model ID for developer replies (overrides REPLY_MODEL; empty = reviewer model)").option("--min-changed-files <n>", "Skip review if fewer files changed (overrides MIN_CHANGED_FILES)").option("--max-changed-files <n>", "Skip review if more files changed (overrides MAX_CHANGED_FILES)").option("--min-changed-lines <n>", "Skip review if fewer lines changed (overrides MIN_CHANGED_LINES)").option("--max-changed-lines <n>", "Skip review if more lines changed (overrides MAX_CHANGED_LINES)").option("--skip-source-branches <list>", "Comma list of source-branch globs to skip (overrides SKIP_SOURCE_BRANCHES); an empty value (--skip-source-branches=) disables the check").option("--skip-target-branches <list>", "Comma list of target-branch globs to skip (overrides SKIP_TARGET_BRANCHES); an empty value (--skip-target-branches=) disables the check").option("--only-target-branches <list>", "Comma list of target-branch globs to review, skipping all others (overrides ONLY_TARGET_BRANCHES); an empty value (--only-target-branches=) disables the check").option("--max-input-tokens <n>", "Max estimated input tokens before degrade/skip (overrides MAX_INPUT_TOKENS)").option("--max-output-tokens <n>", "Max output tokens for reviewer + judge (overrides MAX_OUTPUT_TOKENS)").option("--effort <level>", "Reviewer thinking effort: low|medium|high|xhigh|max (overrides REVIEW_EFFORT; ignored by models without effort)").option("--judge-effort <level>", "Judge thinking effort (overrides JUDGE_EFFORT)").option("--skip-directed-replies", "Skip replying to dev comments @-directed at someone else (Bitbucket only; overrides SKIP_DIRECTED_REPLIES)").option("--second-look", "Second reviewer pass over already-flagged files to lift recall (overrides ENABLE_SECOND_LOOK; requires a judge)").option("--lenses <list>", "Concern-specific reviewer passes, e.g. reliability+security (overrides ENABLE_LENSES/LENSES; requires a judge)").option("--lens-recommendation", "Log which lenses the first-pass reviewer recommends for this PR; never gates a lens (overrides ENABLE_LENS_RECOMMENDATION)").option("--proposals", "Add a concise fix proposal to each kept finding in results.jsonl anchored_findings (overrides ENABLE_JUDGE_PROPOSALS; requires a judge)").option("--event <name>", "What started this run, e.g. pullrequest:comment_created (overrides TRIGGER_EVENT); logged, and enables IGNORE_COMMENT_AUTHORS on comment events").option("--comment-author <id>", "Account id of the event actor, e.g. the Bitbucket actor uuid (overrides TRIGGER_COMMENT_AUTHOR)").option("--event-kind <kind>", "comment | other: whether the --event is a comment event, whatever its name (overrides TRIGGER_EVENT_KIND)").option("--checked-commit <hash>", "Head an earlier run reported as checked_commit for this PR; a run on that same head skips the re-review (overrides LAST_CHECKED_COMMIT)").option("--benchmark", "ReviewBench mode: read the PR from RB_* env + mounted files, write findings JSON to RB_OUT instead of posting; always exits 0").parse(process.argv);
 var opts = program2.opts();
 async function main() {
   if (opts.proposals) config.judge.proposals = true;
@@ -47565,7 +47583,8 @@ async function main() {
     gh.setRepoSlug(opts.repoSlug);
     adapter2 = gh;
   } else if (provider === "gitlab") {
-    adapter2 = new GitLabAdapter();
+    console.error("Error: VCS provider gitlab is not implemented yet - use bitbucket, github or azure");
+    process.exit(1);
   } else {
     console.error(`Unknown VCS provider: ${provider}`);
     process.exit(1);
@@ -47602,7 +47621,7 @@ Filled prompt length: ${result.content.length} chars (~${Math.ceil(result.conten
   if (opts.lensRecommendation) config.lenses.recommend = true;
   if (config.judge.proposals && !config.judge.model) console.warn("Warning: proposals requested but the judge is disabled (JUDGING_MODEL empty) - no proposals will be produced.");
   if (opts.repoSlug) config.repoSlug = opts.repoSlug;
-  const trigger = resolveTrigger(opts, config.trigger);
+  const trigger = resolveTrigger(opts, { ...config.trigger, eventKind: config.triggerEventKind });
   if (!trigger && config.trigger.ignoreCommentAuthors.length) console.warn("Warning: IGNORE_COMMENT_AUTHORS is set but no --event/--comment-author (TRIGGER_EVENT/TRIGGER_COMMENT_AUTHOR) was given - the ignore list is inactive.");
   const checkedCommit = resolveCheckedCommit(opts.checkedCommit, config.lastCheckedCommit);
   const forceMode = opts.force === true ? "re-review" : typeof opts.force === "string" && opts.force.trim() ? opts.force : "off";
