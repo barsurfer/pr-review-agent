@@ -204,6 +204,38 @@ describe('buildUsageRecord provenance fields', () => {
     expect('dedup_source' in buildUsageRecord(baseCtx({ headChecked: true, prInfo: { sourceCommit: 'abc' } as never }), 1, null)).toBe(false)
   })
 
+  it('U4 checked_commit is emitted only for a 12-64 hex head, unchanged; an empty or odd head never gives a storable value', () => {
+    const marked = (sourceCommit: string) => buildUsageRecord(baseCtx({ prInfo: { sourceCommit } as never, headChecked: true }), 1, null)
+    for (const head of ['abcdef012345', 'abc123abc123abc', 'a'.repeat(40), 'ABCDEF0123456789ABCDEF0123456789ABCDEF01', 'f'.repeat(64)]) {
+      expect(marked(head).checked_commit, head).toBe(head)
+    }
+    for (const head of ['', 'HEAD', 'abc', 'abcdef01234', 'f'.repeat(65), 'g'.repeat(40), ' abcdef012345', 'abcdef012345\n']) {
+      expect('checked_commit' in marked(head), JSON.stringify(head)).toBe(false)
+    }
+  })
+
+  it('U5 workspace is the provider scope: Bitbucket workspace, Azure org, GitHub owner; other providers keep the Bitbucket value', () => {
+    const saved = { vcs: config.vcsProvider, ws: config.bitbucket.workspace, org: config.azure.org, owner: config.github.owner }
+    config.bitbucket.workspace = 'bb-ws'; config.azure.org = 'az-org'; config.github.owner = 'gh-owner'
+    try {
+      const record = (vcs: typeof config.vcsProvider) => { config.vcsProvider = vcs; return buildUsageRecord(baseCtx(), 1, null) }
+      expect(record('bitbucket').workspace).toBe('bb-ws')
+      expect(record('azure').workspace).toBe('az-org')
+      expect(record('github').workspace).toBe('gh-owner')
+      expect(record('gitlab').workspace).toBe('bb-ws')
+      expect(record('reviewbench').workspace).toBe('bb-ws')
+      expect(record('github').run_id).toBe('github-repo-7-unknown')
+    } finally {
+      config.vcsProvider = saved.vcs; config.bitbucket.workspace = saved.ws; config.azure.org = saved.org; config.github.owner = saved.owner
+    }
+  })
+
+  it('U6 trigger.event_kind is added only when the kind was given', () => {
+    const r = buildUsageRecord(baseCtx({ trigger: { event: 'relay:note', commentAuthor: '{A}', kind: 'comment' } }), 1, null)
+    expect(r.trigger).toEqual({ event: 'relay:note', comment_author: '{A}', event_kind: 'comment' })
+    expect(JSON.stringify(buildUsageRecord(baseCtx({ trigger: { event: 'e', commentAuthor: '' } }), 1, null).trigger)).toBe('{"event":"e","comment_author":null}')
+  })
+
   it('a pre-FETCH_PR_INFO ctx builds a well-formed record', () => {
     const r = buildUsageRecord(baseCtx({ action: 'SKIP', reviewNumber: 0, estimatedInputTokens: 0, usage: { input_tokens: 0, output_tokens: 0, cache_read: 0, cache_write: 0 } }), 1, null)
     expect(r.run_id).toBe(`${config.vcsProvider}-repo-7-unknown`)

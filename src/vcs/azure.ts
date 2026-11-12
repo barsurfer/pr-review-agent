@@ -40,6 +40,7 @@ export class AzureDevOpsAdapter implements VCSAdapter {
   private readonly client: AxiosInstance
   private readonly authHeader: string
   private repoSlug = ''
+  private prId = ''
 
   constructor(baseUrl: string, org: string, project: string, pat: string, accessToken = '') {
     // Auth precedence: AZURE_ACCESS_TOKEN (OAuth Bearer — e.g. an Azure Pipelines
@@ -62,6 +63,11 @@ export class AzureDevOpsAdapter implements VCSAdapter {
   async getPullRequestInfo(prId: string): Promise<PRInfo> {
     const repo = this.getRepoSlug()
     const { data } = await this.client.get(`/repositories/${encodeURIComponent(repo)}/pullRequests/${prId}`)
+    const sourceCommit: string | undefined = data.lastMergeSourceCommit?.commitId
+    // An empty head would post a footer no later run can dedup against.
+    if (!sourceCommit) throw new Error(`PR ${prId} has no lastMergeSourceCommit — cannot tell which head to review`)
+    // getCommitDiff has no PR id but needs one to find a force-pushed-away commit in the PR's iterations.
+    this.prId = prId
     return {
       id: String(data.pullRequestId),
       title: data.title,
@@ -69,7 +75,7 @@ export class AzureDevOpsAdapter implements VCSAdapter {
       author: data.createdBy?.displayName ?? 'Unknown',
       sourceBranch: stripRefsHeads(data.sourceRefName),
       targetBranch: stripRefsHeads(data.targetRefName),
-      sourceCommit: data.lastMergeSourceCommit?.commitId ?? '',
+      sourceCommit,
     }
   }
 
@@ -84,7 +90,8 @@ export class AzureDevOpsAdapter implements VCSAdapter {
     // Azure's diffs/commits rejects short SHAs, so resolve it to a full 40-char id first.
     const base = await this.resolveCommit(fromCommit, toCommit)
     // Two-dot diff: exactly the changes introduced between the two commits.
-    return this.buildDiff(base, toCommit, false)
+    // Strict: a delta that silently drops a listed file could let the run mark the head as checked.
+    return this.buildDiff(base, toCommit, false, true)
   }
 
   async getChangedFiles(prId: string): Promise<ChangedFile[]> {
@@ -223,7 +230,7 @@ export class AzureDevOpsAdapter implements VCSAdapter {
 
   /** Azure's diffs/commits requires full 40-char SHAs, but review footers carry an abbreviated
    *  hash. Resolve it by prefix-matching the commits reachable from `reachableFrom` — a full SHA
-   *  we already hold (the current PR source commit) — so no PR id or extra context is needed. */
+   *  we already hold (the current PR source commit) — then the PR's pushed heads. */
   private async resolveCommit(ref: string, reachableFrom: string): Promise<string> {
     if (/^[0-9a-f]{40}$/i.test(ref)) return ref
     const repo = this.getRepoSlug()
@@ -235,8 +242,28 @@ export class AzureDevOpsAdapter implements VCSAdapter {
       },
     })
     const match = (data.value ?? []).find((c: any) => typeof c.commitId === 'string' && c.commitId.startsWith(ref))
-    if (!match) throw new Error(`cannot resolve abbreviated commit ${ref} within the ${(data.value ?? []).length} most recent commits`)
-    return match.commitId as string
+    if (match) return match.commitId as string
+    const notFound = `cannot resolve abbreviated commit ${ref} within the ${(data.value ?? []).length} most recent commits`
+    if (!this.prId) throw new Error(notFound)
+    // A rebase or force-push removes the reviewed head from the branch history; the PR's iterations still list it.
+    let iterationHead: string | undefined
+    try {
+      iterationHead = await this.findIterationHead(this.prId, ref)
+    } catch (err: unknown) {
+      throw new Error(`${notFound}; PR iterations lookup failed (${(err as Error).message})`)
+    }
+    if (!iterationHead) throw new Error(`${notFound} or among the PR's iterations`)
+    return iterationHead
+  }
+
+  private async findIterationHead(prId: string, prefix: string): Promise<string | undefined> {
+    const repo = this.getRepoSlug()
+    const { data }: { data: any } = await this.client.get(`/repositories/${encodeURIComponent(repo)}/pullRequests/${prId}/iterations`)
+    for (const iteration of data.value ?? []) {
+      const id = iteration.sourceRefCommit?.commitId
+      if (typeof id === 'string' && id.startsWith(prefix)) return id
+    }
+    return undefined
   }
 
   private async fetchThreads(prId: string): Promise<any[]> {
@@ -288,17 +315,17 @@ export class AzureDevOpsAdapter implements VCSAdapter {
   }
 
   /** Reconstruct a unified diff by fetching old/new blob content and running jsdiff. */
-  private async buildDiff(baseVersion: string, targetVersion: string, diffCommonCommit: boolean): Promise<string> {
+  private async buildDiff(baseVersion: string, targetVersion: string, diffCommonCommit: boolean, strict = false): Promise<string> {
     const { baseCommit, targetCommit, changes } = await this.fetchCommitDiff(baseVersion, targetVersion, diffCommonCommit)
     const parts: string[] = []
     for (const change of changes) {
-      const patch = await this.buildFilePatch(change, baseCommit, targetCommit)
+      const patch = await this.buildFilePatch(change, baseCommit, targetCommit, strict)
       if (patch) parts.push(patch)
     }
     return parts.join('')
   }
 
-  private async buildFilePatch(change: AzureChange, oldRef: string, newRef: string): Promise<string> {
+  private async buildFilePatch(change: AzureChange, oldRef: string, newRef: string, strict: boolean): Promise<string> {
     let oldPath: string | null
     let newPath: string | null
     let oldContent: string | null
@@ -308,39 +335,43 @@ export class AzureDevOpsAdapter implements VCSAdapter {
       case 'add':
         oldPath = null; newPath = change.path
         oldContent = ''
-        newContent = await this.contentForDiff(change.path, newRef)
+        newContent = await this.contentForDiff(change.path, newRef, strict)
         break
       case 'delete':
         oldPath = change.path; newPath = null
-        oldContent = await this.contentForDiff(change.path, oldRef)
+        oldContent = await this.contentForDiff(change.path, oldRef, strict)
         newContent = ''
         break
       case 'rename': {
         const from = change.originalPath ?? change.path
         oldPath = from; newPath = change.path
-        oldContent = await this.contentForDiff(from, oldRef)
-        newContent = await this.contentForDiff(change.path, newRef)
+        // Without a distinct original path the old side is a guess that may legitimately 404.
+        oldContent = await this.contentForDiff(from, oldRef, strict && from !== change.path)
+        newContent = await this.contentForDiff(change.path, newRef, strict)
         break
       }
       default:   // edit
         oldPath = change.path; newPath = change.path
-        oldContent = await this.contentForDiff(change.path, oldRef)
-        newContent = await this.contentForDiff(change.path, newRef)
+        oldContent = await this.contentForDiff(change.path, oldRef, strict)
+        newContent = await this.contentForDiff(change.path, newRef, strict)
     }
 
     if (oldContent === null || newContent === null) return ''   // binary, oversized, or missing — skip
     return buildUnifiedFilePatch(oldPath, newPath, oldContent, newContent)
   }
 
-  /** Fetch blob text for diffing; null for binary/oversized/missing (caller skips it). */
-  private async contentForDiff(path: string, ref: string): Promise<string | null> {
+  /** Fetch blob text for diffing; null for binary/oversized, and for missing unless `mustExist`. */
+  private async contentForDiff(path: string, ref: string, mustExist = false): Promise<string | null> {
     try {
       const content = await this.getFileContent(path, ref)
       if (content.length > MAX_DIFF_FILE_CHARS) return null
       if (isBinary(content)) return null
       return content
     } catch (err: unknown) {
-      if (axios.isAxiosError(err) && err.response?.status === 404) return null
+      if (axios.isAxiosError(err) && err.response?.status === 404) {
+        if (mustExist) throw new Error(`blob ${path} at ${ref.slice(0, 12)} is in the change list but returned 404`)
+        return null
+      }
       throw err
     }
   }
@@ -372,11 +403,12 @@ function isBinary(content: string): boolean {
 
 /** Map Azure VersionControlChangeType (may be comma-combined, e.g. "edit, rename"). */
 function mapChangeType(ct: string): AzureChangeType | null {
-  const s = ct.toLowerCase()
-  if (s.includes('rename')) return 'rename'   // captures "edit, rename" too — content diff still computed
-  if (s.includes('delete')) return 'delete'
-  if (s.includes('add')) return 'add'
-  if (s.includes('edit')) return 'edit'
+  const t = ct.toLowerCase().split(',').map(s => s.trim())
+  if (t.includes('rename')) return 'rename'   // captures "edit, rename" too — content diff still computed
+  // A rename's vacated old path ("delete, sourceRename") must not become a rename that fetches the old path at the new commit.
+  if (t.includes('delete') || t.includes('sourcerename')) return 'delete'
+  if (t.includes('add')) return 'add'
+  if (t.includes('edit')) return 'edit'
   return null
 }
 

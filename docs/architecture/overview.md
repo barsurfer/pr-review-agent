@@ -55,7 +55,7 @@ pr-review-agent/
 │   │   ├── reviewbench.ts        # Filesystem adapter for --benchmark
 │   │   ├── github.ts             # GitHub implementation (experimental, same-repo PRs via Actions)
 │   │   ├── mention-filter.ts     # Drop rule for replies @-directed at someone else (SKIP_DIRECTED_REPLIES)
-│   │   └── gitlab.ts             # GitLab stub (backlog)
+│   │   └── gitlab.ts             # GitLab stub (backlog; --vcs gitlab exits 1)
 │   ├── prompt/
 │   │   ├── loader.ts             # Loads base template, parses repo sections, composes stacks, fills placeholders
 │   │   ├── stack.ts              # Tech-stack detection (base-by-extension + framework overlays)
@@ -76,7 +76,7 @@ pr-review-agent/
 │   ├── ci.yml                    # Typecheck + tests + bundle build (the release gate)
 │   ├── pr-review.yml             # GitHub Actions trigger: review on PR events, reply on PR comments
 │   └── reviewbench-image.yml     # Builds/publishes the ReviewBench GHCR image on v* tags
-├── azure/                        # Azure DevOps pipelines (review + reply)
+├── azure/                        # Azure DevOps pipelines (review + reply) + shared settings template
 ├── jenkins/                      # Jenkins pipeline
 ├── reviewbench/                  # ReviewBench Docker image + harness
 ├── scripts/

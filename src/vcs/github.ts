@@ -139,7 +139,7 @@ export class GitHubAdapter implements VCSAdapter {
       .map(c => ({ id: String(c.id), body: c.body as string, createdOn: c.created_at }))
   }
 
-  // Issue comments are flat (no parent id): a reply is any human comment after the agent's latest one.
+  // Issue comments are flat (no parent id): a reply is any non-bot, non-agent comment after the agent's latest one.
   async getRepliesToReviewComments(prId: string, _reviewCommentIds: string[], includeAnswered = false): Promise<ReplyResult> {
     const comments = await this.getIssueComments(prId)
     const humanReplies: CommentReply[] = []
@@ -172,6 +172,8 @@ export class GitHubAdapter implements VCSAdapter {
         }
         continue
       }
+      // After the footer checks, so an agent posting as a GitHub App/Actions bot still counts; other bots' comments are not questions.
+      if (c.user?.type === 'Bot') continue
       humanReplies.push({ id: String(c.id), parentId, author: c.user?.login ?? 'Unknown', body, createdOn: c.created_at })
     }
 
@@ -187,7 +189,7 @@ export class GitHubAdapter implements VCSAdapter {
     // Non-2xx (e.g. 404 after a force-push drops the old sha) throws so the caller falls back to the full diff
     const { data } = await this.client.get(
       `${this.repoPath()}/compare/${fromCommit}...${toCommit}`,
-      { headers: { Accept: DIFF_ACCEPT }, responseType: 'text' }
+      { headers: { Accept: DIFF_ACCEPT }, responseType: 'text', timeout: COMPARE_TIMEOUT_MS }
     )
     return data as string
   }

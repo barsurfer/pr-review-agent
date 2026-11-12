@@ -74,6 +74,7 @@ Size thresholds are checked against the filtered diff (excluded files don't coun
 
 Every run appends a JSON record to `results.jsonl` (controlled by `--log-usage`, default: `true`).
 The record is also printed to stdout at the end of every run regardless of the flag.
+From 0.0.46, with `USAGE_RECORD_FILE` set (and `--log-usage` on), the same record is also written to that path, overwriting it, so the file holds only this run's record (see [Finding this run's record](#finding-this-runs-record)). A failed write logs one warning and changes nothing else.
 
 ### Record Schema
 
@@ -83,7 +84,7 @@ The record is also printed to stdout at the end of every run regardless of the f
 | `timestamp` | `string` | ISO 8601 UTC |
 | `agent_version` | `string` | From `package.json` (injected at bundle time) |
 | `vcs` | `string` | VCS provider actually used — a `--vcs` flag override is authoritative (also drives `run_id`) |
-| `workspace` | `string` | Bitbucket workspace slug; the Azure **org** on `azure` runs. Other providers (GitHub, `--benchmark`) still log `BITBUCKET_WORKSPACE`, usually empty |
+| `workspace` | `string` | The provider's owner scope, part of the per-PR key: the Bitbucket workspace (`--workspace`, else `BITBUCKET_WORKSPACE`); the Azure **org** (`AZURE_ORG`) on `azure`; the GitHub **owner** (`--workspace`, else `GITHUB_OWNER`) on `github` from 0.0.46 (bundles up to 0.0.45 logged `BITBUCKET_WORKSPACE` there, usually empty). `--benchmark` logs `BITBUCKET_WORKSPACE`. Not part of `run_id` |
 | `repo_slug` | `string` | Repository slug |
 | `pr_id` | `string` | Pull request ID |
 | `pr_author` | `string` | PR author display name |
@@ -141,10 +142,10 @@ The record is also printed to stdout at the end of every run regardless of the f
 | `anchored_findings` | `array \| null` | Compact kept-finding rows `{ anchor, severity, type, description, proposal?, quality_action? }` resolved to a real line; `proposal?` only with `ENABLE_JUDGE_PROPOSALS`, `quality_action?` only with `ENABLE_JUDGE_QUALITY`; judge-run only |
 | `touch_rate` | `number \| null` | Re-review only: `resolved / (resolved + still_open) × 100` — percentage of previous findings addressed by the developer |
 | `delta` | `object \| null` | Re-review only: `{ developer_replies, resolved, still_open, new_findings }` |
-| `checked_commit` | `string` \| absent | The full `source_commit`, present only when this run genuinely checked that head (posted review, pre-post race, footer or checked-commit match, zero-reviewable delta, coherent structured `NO_CHANGE`, `NO_NEW_FINDINGS`, a quiet reply, the JUDGE-gate reply limit) and did not fail afterwards. Never on `SKIP`/`ERROR`, dry-run, `--benchmark`, `--force clean`/`re-review`, after a failed delta fetch or on an uncertain bundle. CI stores exactly this value per PR and passes it back as `LAST_CHECKED_COMMIT`. See [review/skip-logic.md §8](../context/review/skip-logic.md) |
+| `checked_commit` | `string` \| absent | The full `source_commit`, present only when this run genuinely checked that head (posted review, pre-post race, footer or checked-commit match, zero-reviewable delta, coherent structured `NO_CHANGE`, `NO_NEW_FINDINGS`, a quiet reply, the JUDGE-gate reply limit) and did not fail afterwards. Never on `SKIP`/`ERROR`, dry-run, `--benchmark`, `--force clean`/`re-review`, after a failed delta fetch or on an uncertain bundle, and, from 0.0.46, never for a head that fails the `LAST_CHECKED_COMMIT` rule (12–64 hex), so a provider that reports an empty head yields no value. CI stores exactly this value per PR and passes it back as `LAST_CHECKED_COMMIT`. See [review/skip-logic.md §8](../context/review/skip-logic.md) |
 | `dedup_source` | `"checked_commit"` \| absent | Present when the run matched the head against the checked commit CI passed (`LAST_CHECKED_COMMIT`), kept even if the run then errored |
-| `jenkins` | `object \| null` | `{ job, build, url }` from Jenkins env (`JOB_NAME`/`BUILD_NUMBER`/`BUILD_URL`), or null off-CI — maps a run to its build/artifact |
-| `trigger` | `object` \| absent | `{ event, comment_author }` — raw trimmed values from `--event`/`--comment-author` (or `TRIGGER_EVENT`/`TRIGGER_COMMENT_AUTHOR`), null for the one not given. The key is absent when neither was given, so those records serialize as before. See [review/skip-logic.md §7](../context/review/skip-logic.md) |
+| `jenkins` | `object \| null` | `{ job, build, url }` from the `JOB_NAME`/`BUILD_NUMBER`/`BUILD_URL` env vars, whatever the CI (Jenkins sets them; any other CI can export them from its own run ids), or null when all three are empty — maps a run to its build/artifact. The name predates other CIs |
+| `trigger` | `object` \| absent | `{ event, comment_author }` — raw trimmed values from `--event`/`--comment-author` (or `TRIGGER_EVENT`/`TRIGGER_COMMENT_AUTHOR`), null for the one not given, plus `event_kind` (`comment` \| `other`, from 0.0.46) only when `--event-kind`/`TRIGGER_EVENT_KIND` was given with a valid value. The key is absent when neither event nor author was given, so those records serialize as before. See [review/skip-logic.md §7](../context/review/skip-logic.md) |
 | `error` | `object \| null` | `{ type, message, status }` on failure. On a max-tokens truncation, `type` is `TruncatedResponseError` and `tokens.*` still hold the real spend (not zeros). A reviewer response whose `findings` is null or not a list gives `Structured output missing required field(s): findings` (`type` `Error`, the same as a missing key) and also keeps the spend |
 
 ### Action Values
@@ -168,7 +169,7 @@ There is no distinct exit code for a skip:
 - `1` for argument/config errors, with no record written.
 - `--benchmark` always exits 0.
 
-Read `action` from **this build's** record in `results.jsonl` instead: the line whose `jenkins.job` / `jenkins.build` equal `$JOB_NAME` / `$BUILD_NUMBER`. The file is appended in the working directory and accumulates when the Jenkins workspace is reused, and a run that fails before writing (argument/config error, crash) leaves an earlier build's record as the last line, so the last line alone can describe the wrong run. Off Jenkins (`jenkins: null`) the last line is the only option. The same JSON is printed to stdout under `=== Usage ===` regardless of `--log-usage`.
+Read `action` from **this run's** record instead (next section). The same JSON is printed to stdout under `=== Usage ===` regardless of `--log-usage`, pretty-printed over many lines, so prefer a record file.
 
 | `action` | Posted? |
 |---|---|
@@ -179,25 +180,41 @@ Read `action` from **this build's** record in `results.jsonl` instead: the line 
 
 With `dry_run: true` nothing is posted, whatever the `action`. Tell the allow-list and ignored-author skips apart by `skip_reason` (it contains `ONLY_TARGET_BRANCHES` or `IGNORE_COMMENT_AUTHORS`).
 
+### Finding this run's record
+
+`results.jsonl` is appended in the working directory and accumulates when that directory is reused (a Jenkins workspace, a self-hosted runner or agent). A run that fails before writing (argument/config error, crash) leaves an earlier run's record as the last line, so the last line alone can describe the wrong run. Any of these works, on any CI:
+
+| Option | How | Notes |
+|---|---|---|
+| Match the run ids | The line whose `jenkins.job` / `jenkins.build` equal `$JOB_NAME` / `$BUILD_NUMBER`, last match | Jenkins sets both. Another CI exports `JOB_NAME` / `BUILD_NUMBER` / `BUILD_URL` from its own run ids (per provider in [skip-logic.md §9](../context/review/skip-logic.md)); the `jenkins` field is built from exactly these, and the footer's `Review #N` then links to the run |
+| Fresh file | Run in a fresh working directory, or `rm -f results.jsonl` before the run; read the single line and check its key (`vcs`, `workspace`, `repo_slug`, `pr_id`) | Empty file = the run wrote no record |
+| Own file (from 0.0.46) | `USAGE_RECORD_FILE=<path>`; `rm -f <path>` before the run; read that file | Holds only this run's record (overwritten). Needs `--log-usage` on. A bundle older than the variable writes no file, so CI reads nothing (fail open) |
+
 ```sh
-# This build's record (empty when the run wrote none); REVIEW|RE_REVIEW|REPLY = posted; SKIP|DEDUP_SKIP|NO_CHANGE|NO_NEW_FINDINGS = nothing posted
+# This run's record by run ids (empty when the run wrote none); REVIEW|RE_REVIEW|REPLY = posted; SKIP|DEDUP_SKIP|NO_CHANGE|NO_NEW_FINDINGS = nothing posted
 RECORD=$(jq -c --arg job "$JOB_NAME" --arg build "$BUILD_NUMBER" 'select(.jenkins.job == $job and .jenkins.build == $build)' results.jsonl | tail -n 1)
+# Or, with USAGE_RECORD_FILE (deleted before the run)
+RECORD=$(cat "$USAGE_RECORD_FILE" 2>/dev/null)
 ACTION=$(printf '%s' "$RECORD" | jq -r '.action // empty')
 ```
 
 ### Storing `checked_commit` for the Next Run
 
 To skip re-reviews of a head that was already checked without a post, CI stores `checked_commit` per PR and passes it back as `LAST_CHECKED_COMMIT` (full contract in [skip-logic.md §8](../context/review/skip-logic.md)):
-- Read **this build's** record (`jenkins.job`/`jenkins.build` equal `$JOB_NAME`/`$BUILD_NUMBER`), not just the last line: a crashed run writes nothing.
-- Key by `vcs` + `workspace` + `repo_slug` + `pr_id`. If the record has `checked_commit`, overwrite the stored value; otherwise store nothing. Ignore `action` and the exit code.
+- Read **this run's** record (above), not just the last line: a crashed run writes nothing.
+- Key by `vcs` + `workspace` + `repo_slug` + `pr_id`, and check that the key is this PR's. `workspace` is the Bitbucket workspace, the Azure org or the GitHub owner (record schema above). If the record has a non-empty `checked_commit`, overwrite the stored value; otherwise store nothing. Ignore `action` and the exit code.
 - Fail open: a missing, unreadable or malformed value means pass nothing.
 
 It is a separate field, not an `action`, because `NO_CHANGE`, `REPLY` and `DEDUP_SKIP` each mix trustworthy endings (structured `NO_CHANGE`, quiet reply, recognised head) with untrustworthy ones (regex `NO_CHANGE`, a reply that still owes a confirmation post, a reply limit after a regex `NO_CHANGE`), and a `SKIP` or `ERROR` never means the head was reviewed.
 
+From 0.0.46 the agent emits `checked_commit` only as a 12–64 hex head, but filter on a non-empty value anyway: `select(.checked_commit)` is also true for `""` in jq, which a record from an older bundle could carry.
+
 ```sh
-# This build's record, last match; prints nothing when there is nothing to store
+# This run's record, last match; prints nothing when there is nothing to store
 jq -c --arg job "$JOB_NAME" --arg build "$BUILD_NUMBER" 'select(.jenkins.job == $job and .jenkins.build == $build)' results.jsonl | tail -n 1 \
-  | jq -c 'select(.checked_commit) | {vcs, workspace, repo_slug, pr_id, checked_commit}'
+  | jq -c 'select((.checked_commit // "") != "") | {vcs, workspace, repo_slug, pr_id, checked_commit}'
+# The same from USAGE_RECORD_FILE, for this PR only
+jq -c --arg pr "$PR_ID" 'select(.pr_id == $pr and (.checked_commit // "") != "") | {vcs, workspace, repo_slug, pr_id, checked_commit}' "$USAGE_RECORD_FILE" 2>/dev/null
 ```
 
 ### Cost Estimation
@@ -222,7 +239,7 @@ jq -s '[.[] | select(.action=="REVIEW") | .tokens.input] | add/length' results.j
 jq -s '{total: length, dedup: [.[] | select(.action=="DEDUP_SKIP")] | length}' results.jsonl
 
 # Checked heads to store per PR, and runs the checked commit deduped
-jq -c 'select(.checked_commit) | {vcs, workspace, repo_slug, pr_id, checked_commit}' results.jsonl
+jq -c 'select((.checked_commit // "") != "") | {vcs, workspace, repo_slug, pr_id, checked_commit}' results.jsonl
 jq -s '[.[] | select(.dedup_source=="checked_commit")] | length' results.jsonl
 
 # Error rate

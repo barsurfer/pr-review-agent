@@ -7,6 +7,8 @@
 #   Repo → Branches → {target branch} ⋯ → Branch policies → Build Validation →
 #   "+ Add" → pick this pipeline. Set the policy to **Optional** so a failed/blocked
 #   agent run never blocks the PR from merging.
+# The agent's branch lists come from pr-review-settings.yml (agent defaults, trunk
+# alternative commented there), so the reply pipeline applies the same policy.
 #
 # ── PREREQUISITES ────────────────────────────────────────────────────────────
 #   1. "Allow scripts to access the OAuth token" must be enabled for the job, so
@@ -18,6 +20,8 @@
 #      agent can post review threads/comments.
 #   3. Add ANTHROPIC_API_KEY as a **secret** pipeline variable (secrets are NOT
 #      auto-injected into the script env — they must be mapped explicitly, see below).
+#   4. Keep pr-review-settings.yml next to this file (agent version + branch policy,
+#      shared with azure-reply-pipeline.yml).
 #
 # ── AUTH (pick one) ──────────────────────────────────────────────────────────
 #   • Zero-PAT (recommended in pipelines): AZURE_ACCESS_TOKEN = $(System.AccessToken)
@@ -32,11 +36,13 @@ pool:
   vmImage: ubuntu-latest
 
 variables:
-  # Pin to an immutable release tag — raw.githubusercontent serves the committed
-  # bundle at any ref, so the tag IS the version selector. Bump to roll forward.
-  AGENT_TAG: v0.0.4
+  - template: pr-review-settings.yml   # AGENT_TAG + branch policy, shared with the reply pipeline
 
 steps:
+  # The agent reads the PR through the REST API; a checkout would only put the reviewed repo's
+  # git state into the footer's Build: field and its .env (if any) into the agent's config.
+  - checkout: none
+
   - task: NodeTool@0
     displayName: 'Use Node.js 22'
     inputs:
@@ -44,6 +50,9 @@ steps:
 
   - script: |
       set -euo pipefail
+
+      # A reused workspace (self-hosted agent) would otherwise leave an older run's record last.
+      rm -f results.jsonl
 
       curl -fsSL "https://raw.githubusercontent.com/barsurfer/pr-review-agent/$(AGENT_TAG)/dist/pr-review-agent.cjs" -o agent.cjs
 
@@ -66,6 +75,12 @@ steps:
       AZURE_ACCESS_TOKEN: $(System.AccessToken)
       AZURE_PROJECT: $(System.TeamProject)
       ANTHROPIC_API_KEY: $(ANTHROPIC_API_KEY)   # secret pipeline variable — mapped explicitly
+      # No branch lists here: a mapping would override pr-review-settings.yml in this pipeline only.
+      # Run linkage under the names the agent reads: the record's `jenkins` field and the footer's
+      # "Review #N" build link. BUILD_NUMBER is the BuildId (unique), not the run name.
+      JOB_NAME: $(Build.DefinitionName)
+      BUILD_NUMBER: $(Build.BuildId)
+      BUILD_URL: $(System.CollectionUri)$(System.TeamProjectId)/_build/results?buildId=$(Build.BuildId)
 
   - task: PublishPipelineArtifact@1
     displayName: 'Archive results.jsonl'

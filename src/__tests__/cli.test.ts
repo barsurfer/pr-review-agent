@@ -4,6 +4,7 @@ import { spawnSync } from 'child_process'
 import { spawn, type ChildProcess } from 'child_process'
 import { mkdtempSync } from 'fs'
 import { readdirSync, rmSync } from 'fs'
+import { readFileSync } from 'fs'
 import { createServer } from 'http'
 import type { AddressInfo } from 'net'
 import { createRequire } from 'module'
@@ -26,6 +27,7 @@ function runCli(args: string[], extraEnv: Record<string, string> = {}) {
       VCS_PROVIDER: 'bitbucket', LLM_PROVIDER: 'anthropic', ANTHROPIC_API_KEY: 'test-key',
       BITBUCKET_WORKSPACE: 'w', BITBUCKET_USERNAME: 'u', BITBUCKET_TOKEN: 'invalid', BITBUCKET_BASE_URL: 'http://127.0.0.1:9',
       TRIGGER_EVENT: '', TRIGGER_COMMENT_AUTHOR: '', IGNORE_COMMENT_AUTHORS: '',
+      TRIGGER_EVENT_KIND: '', USAGE_RECORD_FILE: '',
       ...extraEnv,
     },
   })
@@ -72,6 +74,106 @@ describe('CLI trigger wiring (src/index.ts)', () => {
     expect(stdout).toContain('Fetching PR info...')
     expect(status).toBe(1)
     expect('trigger' in record).toBe(false)
+  }, TIMEOUT)
+})
+
+describe('CLI event-kind wiring (src/index.ts)', () => {
+  const kindWarnings = (stderr: string) => stderr.split('\n').filter(l => l.includes('ignoring the event kind')).length
+
+  it('--event-kind comment makes a non-comment-named event skippable for a listed author, exit 0, no VCS call', () => {
+    const { status, stdout, record } = runCli(['--event', 'relay:mr-note', '--comment-author', '{BOT}', '--event-kind', 'comment'], { IGNORE_COMMENT_AUTHORS: 'bot', TRIGGER_EVENT_KIND: '' })
+
+    expect(status).toBe(0)
+    expect(stdout).toContain('Trigger: relay:mr-note by {BOT} (event kind: comment)')
+    expect(stdout).not.toContain('Fetching PR info')
+    expect(record).toMatchObject({ action: 'SKIP', trigger: { event: 'relay:mr-note', comment_author: '{BOT}', event_kind: 'comment' } })
+  }, TIMEOUT)
+
+  it('TRIGGER_EVENT_KIND=other makes a comment event by a listed author run', () => {
+    const { status, stdout, record } = runCli(['--event', 'pullrequest:comment_created', '--comment-author', '{BOT}'], { IGNORE_COMMENT_AUTHORS: 'bot', TRIGGER_EVENT_KIND: 'other' })
+
+    expect(stdout).toContain('Fetching PR info...')
+    expect(status).toBe(1)
+    expect(record.trigger).toEqual({ event: 'pullrequest:comment_created', comment_author: '{BOT}', event_kind: 'other' })
+  }, TIMEOUT)
+
+  it('an empty --event-kind falls back to TRIGGER_EVENT_KIND', () => {
+    const { status, record } = runCli(['--event', 'relay:mr-note', '--comment-author', '{BOT}', '--event-kind', ''], { IGNORE_COMMENT_AUTHORS: 'bot', TRIGGER_EVENT_KIND: 'comment' })
+
+    expect(status).toBe(0)
+    expect(record).toMatchObject({ action: 'SKIP', trigger: { event_kind: 'comment' } })
+  }, TIMEOUT)
+
+  it('an invalid TRIGGER_EVENT_KIND warns once and is ignored: the name rule decides', () => {
+    const { status, stderr, record } = runCli(['--event', 'pullrequest:comment_created', '--comment-author', '{BOT}'], { IGNORE_COMMENT_AUTHORS: 'bot', TRIGGER_EVENT_KIND: 'bogus' })
+
+    expect(kindWarnings(stderr)).toBe(1)
+    expect(status).toBe(0)
+    expect(record.action).toBe('SKIP')
+    expect('event_kind' in record.trigger).toBe(false)
+  }, TIMEOUT)
+})
+
+describe('CLI --vcs gitlab (src/index.ts)', () => {
+  it.each([
+    ['--vcs gitlab', ['--vcs', 'gitlab'], {}],
+    ['VCS_PROVIDER=gitlab', [], { VCS_PROVIDER: 'gitlab' }],
+  ] as Array<[string, string[], Record<string, string>]>)('%s fails fast with one message, exit 1, no run and no record', (_name, args, env) => {
+    const { status, stdout, stderr, record } = runCli([...args, '--event', 'pullrequest:comment_created', '--comment-author', '{BOT}'], { ...env, IGNORE_COMMENT_AUTHORS: 'bot' })
+
+    expect(status).toBe(1)
+    expect(stderr).toContain('Error: VCS provider gitlab is not implemented yet - use bitbucket, github or azure')
+    expect(stderr.split('\n').filter(l => l.includes('VCS provider gitlab')).length).toBe(1)
+    expect(stdout).not.toContain('Trigger:')
+    expect(stdout).not.toContain('Fetching PR info')
+    expect(record).toBeNull()
+  }, TIMEOUT)
+})
+
+describe('USAGE_RECORD_FILE (src/review/usage.ts)', () => {
+  // runCli disables results.jsonl, so these runs log usage into a cwd of their own and stop at the trigger skip (exit 0, no VCS call).
+  const runLogged = (cwd: string, prId: string, extraEnv: Record<string, string>) => spawnSync(process.execPath, [TSX_CLI, INDEX, '--repo-slug', 'r', '--pr-id', prId, '--dry-run', '--event', 'pullrequest:comment_created', '--comment-author', 'bot'], {
+    cwd, encoding: 'utf-8',
+    env: {
+      ...process.env,
+      VCS_PROVIDER: 'bitbucket', LLM_PROVIDER: 'anthropic', ANTHROPIC_API_KEY: 'test-key',
+      BITBUCKET_WORKSPACE: 'w', BITBUCKET_USERNAME: 'u', BITBUCKET_TOKEN: 'invalid', BITBUCKET_BASE_URL: 'http://127.0.0.1:9',
+      TRIGGER_EVENT: '', TRIGGER_COMMENT_AUTHOR: '', TRIGGER_EVENT_KIND: '', IGNORE_COMMENT_AUTHORS: 'bot', USAGE_RECORD_FILE: '',
+      ...extraEnv,
+    },
+  })
+  const lines = (path: string) => readFileSync(path, 'utf-8').split('\n').filter(Boolean).map(l => JSON.parse(l))
+
+  it('holds only the latest run record while results.jsonl keeps appending; a bad path warns without changing the exit code', () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'pr-agent-cli-'))
+    try {
+      const file = join(cwd, 'record.json')
+      expect(runLogged(cwd, '1', { USAGE_RECORD_FILE: file }).status).toBe(0)
+      expect(lines(file).map(r => r.pr_id)).toEqual(['1'])
+      expect(runLogged(cwd, '2', { USAGE_RECORD_FILE: file }).status).toBe(0)
+      expect(lines(file).map(r => r.pr_id)).toEqual(['2'])
+      expect(lines(join(cwd, 'results.jsonl')).map(r => r.pr_id)).toEqual(['1', '2'])
+      expect(lines(file)[0]).toEqual(lines(join(cwd, 'results.jsonl'))[1])
+
+      const bad = runLogged(cwd, '3', { USAGE_RECORD_FILE: join(cwd, 'missing', 'record.json') })
+      expect(bad.status).toBe(0)
+      expect(bad.stderr).toContain('Warning: could not write USAGE_RECORD_FILE')
+      expect(lines(join(cwd, 'results.jsonl')).map(r => r.pr_id)).toEqual(['1', '2', '3'])
+    } finally {
+      rmSync(cwd, { recursive: true, force: true, maxRetries: 5 })
+    }
+  }, TIMEOUT * 2)
+
+  it('unset: only results.jsonl is written', () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'pr-agent-cli-'))
+    try {
+      const run = runLogged(cwd, '1', {})
+      expect(run.status).toBe(0)
+      expect(run.stderr).not.toContain('USAGE_RECORD_FILE')
+      expect(readdirSync(cwd)).toEqual(['results.jsonl'])
+    } finally {
+      rmSync(cwd, { recursive: true, force: true, maxRetries: 5 })
+    }
   }, TIMEOUT)
 })
 
@@ -165,6 +267,7 @@ async function runAgainstPr(pr: { source: string; target: string }, args: string
       BITBUCKET_WORKSPACE: 'w', BITBUCKET_USERNAME: 'u', BITBUCKET_TOKEN: 'invalid',
       BITBUCKET_BASE_URL: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
       TRIGGER_EVENT: '', TRIGGER_COMMENT_AUTHOR: '', IGNORE_COMMENT_AUTHORS: '', LAST_CHECKED_COMMIT: '',
+      TRIGGER_EVENT_KIND: '', USAGE_RECORD_FILE: '',
       NO_PROXY: '127.0.0.1,localhost', no_proxy: '127.0.0.1,localhost',
     }
     // axios honours proxy variables, which on a proxied runner would route the local call away from this server.

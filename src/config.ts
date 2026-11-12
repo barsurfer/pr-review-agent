@@ -179,6 +179,8 @@ export const config = {
     ignoreCommentAuthors: parseBranchList(optional('IGNORE_COMMENT_AUTHORS', '')),
   },
 
+  triggerEventKind: optional('TRIGGER_EVENT_KIND', '').trim(),
+
   review: {
     maxFindings: parseInt(optional('MAX_FINDINGS', '0'), 10),   // 0 = unlimited
     splitCheck: optional('ENABLE_SPLIT_CHECK', 'true') !== 'false',
@@ -210,6 +212,8 @@ export const config = {
   onlyTargetBranches: parseBranchList(optional('ONLY_TARGET_BRANCHES', '')),
 
   lastCheckedCommit: optional('LAST_CHECKED_COMMIT', '').trim(),
+
+  usageRecordFile: optional('USAGE_RECORD_FILE', '').trim(),
 
   diffExcludePatterns: optional('DIFF_EXCLUDE_PATTERNS', '*.lock,package-lock.json,yarn.lock,pnpm-lock.yaml,*.json,*.spec.ts')
     .split(',')

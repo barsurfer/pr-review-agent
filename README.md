@@ -137,7 +137,7 @@ cp .env.example .env
 Open `.env` and fill in your values:
 
 ```env
-# VCS provider — 'bitbucket' (production); 'azure' and 'github' (experimental); 'gitlab' (stub)
+# VCS provider — 'bitbucket' (production); 'azure' and 'github' (experimental); 'gitlab' is not implemented (exits 1)
 VCS_PROVIDER=bitbucket
 
 # Bitbucket Cloud only — Server/DC uses a different (v1) REST API and is not supported
@@ -337,7 +337,7 @@ bundle build on every push to `main` and every PR — the gate that keeps `main`
 | `--pr-id <id>` | **Yes**\* | Pull request ID to review |
 | `--repo-slug <slug>` | **Yes** (Bitbucket, Azure, GitHub) | Repository slug (Azure: repo name or GUID; GitHub: repo name) |
 | `--workspace <workspace>` | No | Overrides `BITBUCKET_WORKSPACE` (or `AZURE_ORG` when `--vcs azure`, `GITHUB_OWNER` when `--vcs github`) |
-| `--vcs <provider>` | No | `bitbucket` \| `azure` (WIP) \| `github` (experimental) \| `gitlab` (stub) — overrides `VCS_PROVIDER` env var (default: `bitbucket`) |
+| `--vcs <provider>` | No | `bitbucket` \| `azure` (WIP) \| `github` (experimental) — overrides `VCS_PROVIDER` env var (default: `bitbucket`). `gitlab` is not implemented: from 0.0.46 it exits 1 at startup with one error line |
 | `--dry-run` | No | Print the review to stdout instead of posting to the PR |
 | `--force [mode]` | No | Bypass dedup. Bare or `re-review`: keep prior context; `clean`: drop prior context; an empty value (`--force=`) means not forced |
 | `--log-usage [bool]` | No | Log usage record to `results.jsonl` (default: `true`, use `--log-usage false` to disable). See [docs/reference/usage-logging.md](docs/reference/usage-logging.md) for schema. |
@@ -364,6 +364,7 @@ bundle build on every push to `main` and every PR — the gate that keeps `main`
 | `--proposals` | No | Add a concise fix proposal to each kept finding in `results.jsonl` `anchored_findings` (overrides `ENABLE_JUDGE_PROPOSALS`; requires a judge) |
 | `--event <name>` | No | What started the run, e.g. `pullrequest:comment_created` (overrides `TRIGGER_EVENT`); logged and recorded, and a comment event is checked against `IGNORE_COMMENT_AUTHORS`. An empty value falls back to the env |
 | `--comment-author <id>` | No | Account id of the event actor, e.g. the Bitbucket `actor.uuid` — never the PR author (overrides `TRIGGER_COMMENT_AUTHOR`) |
+| `--event-kind <kind>` | No | From 0.0.46. `comment` \| `other`: whether the event is a comment event, whatever its name (overrides `TRIGGER_EVENT_KIND`). Without it, a name containing `comment`, or exactly `note` / `Note Hook` / `pull_request_review`, is a comment event. An invalid value warns once and is ignored. In CI prefer the env var. See [skip-logic.md §7](docs/context/review/skip-logic.md) |
 | `--checked-commit <hash>` | No | Head an earlier run reported as `checked_commit` for this PR; a run on that same head skips the re-review (overrides `LAST_CHECKED_COMMIT`). In CI prefer the env var: a bundle without this flag exits 1 on it. If you use the flag, write `--checked-commit="$X"`: an unquoted empty value swallows the next argument |
 | `--benchmark` | No | ReviewBench mode — read the PR from `RB_*` env + mounted files, write findings JSON to `RB_OUT`, never post; always exits 0. See [reviewbench/README.md](reviewbench/README.md) |
 
@@ -389,7 +390,7 @@ All credentials and settings are provided via environment variables.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `VCS_PROVIDER` | `bitbucket` | Which VCS adapter to use — `bitbucket` (production), `azure`/`github` (experimental), `gitlab` (stub) |
+| `VCS_PROVIDER` | `bitbucket` | Which VCS adapter to use — `bitbucket` (production), `azure`/`github` (experimental); `gitlab` is not implemented (from 0.0.46 it exits 1 at startup) |
 | `BITBUCKET_BASE_URL` | `https://api.bitbucket.org/2.0` | Bitbucket Cloud API base URL (Server/DC is not supported — different v1 API) |
 | `LLM_PROVIDER` | `anthropic` | Model backend: `anthropic` or `openrouter` (see [OpenRouter](#openrouter-optional-model-backend)) |
 | `OPENROUTER_API_KEY` | — | Used when `LLM_PROVIDER=openrouter`; falls back to the `ANTHROPIC_API_KEY` slot if unset |
@@ -416,8 +417,10 @@ All credentials and settings are provided via environment variables.
 | `MAX_REPLY_COMMENTS` | `5` | Max agent replies per PR (0 = unlimited) |
 | `SKIP_SOURCE_BRANCHES` / `SKIP_TARGET_BRANCHES` | `main,master,release/*,hotfix/*` / `main,master` | Branch-exclusion globs; per repo via `--skip-source-branches=` / `--skip-target-branches=` |
 | `ONLY_TARGET_BRANCHES` | — (off) | When set, skip PRs whose target matches none of these globs (e.g. stacked PRs until retargeted); the skip lists win on overlap. Main-only repo: `SKIP_TARGET_BRANCHES=` + `ONLY_TARGET_BRANCHES=main` + `SKIP_SOURCE_BRANCHES=main,master`. See [skip-logic.md](docs/context/review/skip-logic.md) |
-| `IGNORE_COMMENT_AUTHORS` | — (off) | Actor ids whose **comment** events skip the run before any VCS call (needs `--event`/`--comment-author`); pushes are never skipped. An ignored event never catches up a push a skip-if-locked CI lock dropped, so list an actor only when CI queues `pullrequest:updated`. See [skip-logic.md](docs/context/review/skip-logic.md) |
+| `IGNORE_COMMENT_AUTHORS` | — (off) | Actor ids whose **comment** events skip the run before any VCS call (needs `--event`/`--comment-author`); pushes are never skipped. An ignored event never catches up a push a skip-if-locked CI lock dropped, so list an actor only when CI queues push events (Bitbucket `pullrequest:updated`). See [skip-logic.md](docs/context/review/skip-logic.md) |
+| `TRIGGER_EVENT_KIND` | — (name rule) | From 0.0.46. `comment` \| `other`: overrides whether the event counts as a comment event. Set it per event, not job-wide, unless the job receives only comment events. See [skip-logic.md §7](docs/context/review/skip-logic.md) |
 | `LAST_CHECKED_COMMIT` | — (off) | The `checked_commit` an earlier run reported for this PR; CI stores it per PR and passes it back, and a run on that same head goes to the reply check like a footer match. Prefer it over `--checked-commit` in CI. See [skip-logic.md §8](docs/context/review/skip-logic.md) |
+| `USAGE_RECORD_FILE` | — (off) | From 0.0.46. A path that receives only this run's usage record (overwritten each run), so any CI can find it without Jenkins env vars; delete it before the run. See [usage-logging.md](docs/reference/usage-logging.md#finding-this-runs-record) |
 | `DIFF_EXCLUDE_PATTERNS` | `*.lock,package-lock.json,yarn.lock,pnpm-lock.yaml,*.json,*.spec.ts` | Globs excluded from the reviewable diff |
 | `ANTHROPIC_WORKSPACE_ID` | — | Sets the `anthropic-workspace-id` header; required for a user-scoped key (`sk-ant-usr-…`) that isn't bound to a workspace, unneeded for a workspace-scoped key |
 
@@ -475,6 +478,7 @@ Setup:
    **"Contribute to Pull Requests" = Allow** on the repo so it can post review comments.
 4. **Secret** — add `ANTHROPIC_API_KEY` as a secret pipeline variable (mapped explicitly in
    the YAML `env:`; secrets are not auto-injected).
+5. **Settings template** — keep [`azure/pr-review-settings.yml`](azure/pr-review-settings.yml) in the same folder as the pipeline YAML: both include it as `template: pr-review-settings.yml` (relative to the including file) for `AGENT_TAG` and the branch policy.
 
 Prefer a stored PAT instead of the OAuth token? Swap `AZURE_ACCESS_TOKEN: $(System.AccessToken)`
 for `AZURE_PAT: $(AZURE_PAT)` in the pipeline's `env:` block.
@@ -504,17 +508,23 @@ or a 25 MB diff the run is a clean **skip** (never an error — an AI review nev
 
 The GitHub-native equivalent of the Jenkins hook is
 [`.github/workflows/pr-review.yml`](.github/workflows/pr-review.yml). It reviews on
-`pull_request` (opened / synchronize / reopened) and replies on `issue_comment` (created),
-building and running the agent against the PR.
+`pull_request` (opened / synchronize / reopened, and `edited` when the base branch changed) and
+replies on `issue_comment` (created), building and running the agent against the PR. Full wiring:
+[docs/reference/github-actions.md](docs/reference/github-actions.md).
 
 Key points:
 
-- **Guards** — runs only on same-repo PRs (`head.repo.full_name == github.repository`) and, for
-  comments, only PR comments from a non-`Bot` user (skips plain issues and the agent's own
-  comments).
-- **Permissions** — `pull-requests: write` + `contents: read`; one run per PR via `concurrency`
-  with `cancel-in-progress`.
-- **Secrets** — `ANTHROPIC_API_KEY` plus the workflow-provided `GITHUB_TOKEN`.
+- **Guards (job `if:`)** — `pull_request` only for same-repo heads whose PR author is `OWNER` /
+  `MEMBER` / `COLLABORATOR`; `issue_comment` only on an open PR, from a non-`Bot` commenter who is
+  `OWNER` / `MEMBER` / `COLLABORATOR`, then an API check that the head is in this repo (fork PRs are
+  skipped). PRs opened by `dependabot[bot]` are never reviewed; PRs opened by other bots or
+  non-collaborators wait for a trusted person's comment.
+- **Own comments** — a comment posted with `GITHUB_TOKEN` starts no workflow run, so the agent does
+  not re-trigger itself; the `Bot` guard also covers an agent posting through an App token.
+- **Permissions** — `pull-requests: write` + `contents: read`; job-level `concurrency` per PR
+  without `cancel-in-progress` (one running, one pending; a paid review is never cancelled).
+- **Secrets** — `OPENROUTER_API_KEY` (the workflow sets `LLM_PROVIDER: openrouter`; with the
+  default provider it is `ANTHROPIC_API_KEY`) plus the workflow-provided `GITHUB_TOKEN`.
 - **`AGENT_IDENTITY: github-actions[bot]`** — the name shown in review/reply footers.
 - **`SKIP_TARGET_BRANCHES: ""`** — the GitHub flow targets `main` directly, so the `main,master`
   default would skip every PR; it is emptied for this path.

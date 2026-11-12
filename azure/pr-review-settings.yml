@@ -1,0 +1,33 @@
+# PR Review Agent — settings shared by azure-pipelines.yml (reviews) and azure-reply-pipeline.yml
+# (replies). Both include this file, so they run the same agent version and the same branch policy.
+# Keep it in the same folder as both pipeline files (template paths are relative to the includer).
+#
+# Build validation reads this file from the PR's SOURCE branch, the reply pipeline from the DEFAULT
+# branch: a change reaches an open PR's reviews only once its source branch contains it.
+#
+# Details: docs/reference/azure-devops.md ("Agent version", "Branch policy").
+
+variables:
+  # Immutable release tag of the agent bundle; >= v0.0.43 for every setting below. The fixes the doc
+  # lists for v0.0.46 need a bump once that tag exists.
+  - name: AGENT_TAG
+    value: v0.0.45
+
+  # Branch policy. Azure exports pipeline variables to the agent's env under the same name, and none
+  # is defined here, so both pipelines run the agent defaults: skip PRs into main,master and from
+  # main,master,release/*,hotfix/*. A defined '' turns that list OFF instead of restoring the default,
+  # so delete an entry to get the default back. Branch matching is case-sensitive.
+  # Trunk alternative (uncomment all three). ONLY_TARGET_BRANCHES must list exactly the branches that
+  # carry the build-validation policy, or a comment makes the reply pipeline review PRs build
+  # validation never runs on:
+  # - name: ONLY_TARGET_BRANCHES
+  #   value: main
+  # - name: SKIP_TARGET_BRANCHES
+  #   value: ''
+  # - name: SKIP_SOURCE_BRANCHES
+  #   value: main,master
+
+  # Reply pipeline only (-> IGNORE_COMMENT_AUTHORS): comment-author GUIDs whose comment events exit
+  # before any Azure call. Typically the "{Project} Build Service ({Org})" identity; see the doc.
+  - name: prReviewIgnoreCommentAuthors
+    value: ''

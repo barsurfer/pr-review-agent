@@ -68,7 +68,7 @@ describe('getDiff / getCommitDiff', () => {
 
     expect(diff).toBe('delta')
     expect(clientMock.get).toHaveBeenCalledWith('/repos/org/repo/compare/old1...new2', {
-      headers: { Accept: 'application/vnd.github.diff' }, responseType: 'text',
+      headers: { Accept: 'application/vnd.github.diff' }, responseType: 'text', timeout: 120_000,
     })
   })
 
@@ -360,5 +360,69 @@ describe('getRepliesToReviewComments — timestamp model', () => {
     const result = await makeAdapter().getRepliesToReviewComments('7', [])
 
     expect(result).toEqual({ replies: [], agentReplyCount: 0 })
+  })
+})
+
+describe('getRepliesToReviewComments — bot comments', () => {
+  const asBot = (c: ReturnType<typeof comment>) => ({ ...c, user: { login: c.user.login, type: 'Bot' } })
+  const asUser = (c: ReturnType<typeof comment>) => ({ ...c, user: { login: c.user.login, type: 'User' } })
+  const thread = [
+    asBot(comment(1, REVIEW_BODY, '2026-07-01T10:00:00Z', 'github-actions[bot]')),
+    asUser(comment(2, 'Why is this null?', '2026-07-01T11:00:00Z')),
+    asBot(comment(3, AGENT_REPLY_BODY, '2026-07-01T12:00:00Z', 'github-actions[bot]')),
+    asBot(comment(4, 'Coverage: 91.2% (+0.1%)', '2026-07-01T13:00:00Z', 'codecov[bot]')),
+    asUser(comment(5, 'Thanks, one more thing', '2026-07-01T14:00:00Z')),
+  ]
+
+  it('ignores a bot comment and returns the human one after the latest agent comment', async () => {
+    clientMock.get.mockResolvedValue({ headers: {}, data: thread })
+
+    const result = await makeAdapter().getRepliesToReviewComments('7', ['1'])
+
+    expect(result.replies.map(r => [r.id, r.author])).toEqual([['5', 'dev1']])
+    expect(result.replies[0].parentId).toBe('1')
+  })
+
+  it('returns nothing when the only comment after the agent is a bot comment', async () => {
+    clientMock.get.mockResolvedValue({ headers: {}, data: thread.slice(0, 4) })
+
+    const result = await makeAdapter().getRepliesToReviewComments('7', ['1'])
+
+    expect(result.replies).toEqual([])
+  })
+
+  it('still counts agent reviews and replies posted by a Bot-type identity', async () => {
+    const data = [...thread, asBot(comment(6, AGENT_REPLY_BODY, '2026-07-01T15:00:00Z', 'github-actions[bot]'))]
+    clientMock.get.mockResolvedValue({ headers: {}, data })
+
+    const result = await makeAdapter().getRepliesToReviewComments('7', ['1'])
+
+    expect(result.agentReplyCount).toBe(2)
+    expect(result.replies).toEqual([])
+  })
+
+  it('a human comment from a User-type account is returned exactly as before', async () => {
+    const plain = [comment(1, REVIEW_BODY, '2026-07-01T10:00:00Z', 'github-actions[bot]'), comment(2, 'Why?', '2026-07-01T11:00:00Z')]
+    clientMock.get.mockResolvedValue({ headers: {}, data: plain.map(asUser) })
+
+    const result = await makeAdapter().getRepliesToReviewComments('7', ['1'])
+
+    expect(result).toEqual({
+      replies: [{ id: '2', parentId: '1', author: 'dev1', body: 'Why?', createdOn: '2026-07-01T11:00:00Z' }],
+      agentReplyCount: 0,
+    })
+  })
+
+  it('includeAnswered drops bot comments but keeps humans and the labeled agent replies', async () => {
+    clientMock.get.mockResolvedValue({ headers: {}, data: thread })
+
+    const result = await makeAdapter().getRepliesToReviewComments('7', ['1'], true)
+
+    expect(result.replies.map(r => [r.id, r.author])).toEqual([
+      ['2', 'dev1'],
+      ['3', 'Agent (prior reply)'],
+      ['5', 'dev1'],
+    ])
+    expect(result.agentReplyCount).toBe(1)
   })
 })
