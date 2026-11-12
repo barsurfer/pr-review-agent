@@ -5,3 +5,11 @@
 # byte-compare in the hook is stable and doesn't rewrite CLAUDE.md on every commit.
 AGENTS.md text eol=lf
 CLAUDE.md text eol=lf
+
+# Prompt text reaches the model byte-for-byte (read from disk or embedded in the bundle); keep it LF.
+src/prompt/**/*.txt text eol=lf
+prompts/** text eol=lf
+
+# Vitest and esbuild write LF; a CRLF checkout makes every regeneration show as modified.
+*.snap text eol=lf
+dist/*.cjs text eol=lf

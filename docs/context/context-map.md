@@ -10,7 +10,7 @@ Rule: Each entry has a 1-sentence summary: key concepts, keywords, tech; ends wi
 
 - [summary.md](summary.md) — One-paragraph snapshot of the agent: what it does, stack, VCS support, model; read for orientation.
 - [terminology.md](terminology.md) — Domain glossary: PR Review, Delta Review, NO_CHANGE, commit hash dedup, checked commit, generator-verifier, repo prompt sections; read when vocabulary is ambiguous.
-- [practices.md](practices.md) — Project-wide patterns: stateless design (plus the optional CI-held checked commit), FSM orchestration, API-only, footer-based dedup, generator-verifier, VCS adapter, reply bundling, FORBIDDEN rules, bundle/deploy, versioning/releases (raw-URL by tag), CI test gate; read before making architectural decisions.
+- [practices.md](practices.md) — Project-wide patterns: stateless design (plus the optional CI-held checked commit), FSM orchestration, API-only, footer-based dedup, generator-verifier, VCS adapter, reply bundling, FORBIDDEN rules, bundle/deploy (LF-normalised embedded prompts, `.gitattributes` eol pins), versioning/releases (raw-URL by tag), CI test gate; read before making architectural decisions.
 - [../../AGENTS.md](../../AGENTS.md) — code conventions: comments (WHY-not-WHAT, one line, no ticket numbers, no breadcrumbs/commented-out code) and commits (stop at the edit, stage by path, single-line `<KEY> -> type(scope): summary`, no trailers); read before writing code or committing. `/deslop` enforces the comment rules.
 
 ---

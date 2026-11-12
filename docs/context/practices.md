@@ -65,7 +65,9 @@ See [prompt/composition.md](prompt/composition.md).
 > [!NOTE]
 > Tooling is managed by mise. Run `mise install` to download and install it. In non-interactive environments (CI/CD or AI agents), use `mise exec -- npm …`.
 
-The agent ships as a single-file CJS bundle (`dist/pr-review-agent.cjs`) built with esbuild. All dependencies are baked in; only Node.js 22+ is required on the host. Rebuild with `npm run bundle` after source changes. The bundle is committed to the repo so Jenkins requires no `npm install`.
+The agent ships as a single-file CJS bundle (`dist/pr-review-agent.cjs`) built with esbuild. All dependencies are baked in; only Node.js 22+ is required on the host. Rebuild with `npm run bundle` after source changes (`npm run bundle -- --outfile <path>` builds elsewhere without touching `dist/`). The bundle is committed to the repo so Jenkins requires no `npm install`.
+
+**Line endings:** `scripts/bundle.mjs` normalises the embedded prompt text (`src/prompt/*.txt`, `stacks/*.txt`) to LF, so the bundle carries the same prompt bytes whatever OS or `core.autocrlf` built it. **Why:** on Windows, autocrlf checks the prompts out as CRLF, so every bundle up to v0.0.44 (built on Windows by `npm version`) sent `\r\n` prompts to the model, while the ReviewBench image (built on Linux) embedded LF — prod and benchmark ran different prompt bytes and different `*prompt_hash` values. `.gitattributes` also pins LF for prompt files, `*.snap` and `dist/*.cjs`, so the tsx/`npm run build` paths read LF and local vitest runs stop rewriting snapshots; a clone made before that keeps its CRLF copies until they are checked out again (delete them, then `git checkout -- <paths>`).
 
 ## Versioning & Releases
 

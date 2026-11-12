@@ -1,13 +1,26 @@
 import { build } from 'esbuild'
 import { readFileSync, readdirSync } from 'fs'
+import { join } from 'path'
+import { parseArgs } from 'util'
 import { execSync } from 'child_process'
 
-const basePrompt = readFileSync('src/prompt/base-prompt.txt', 'utf-8')
-const replyPrompt = readFileSync('src/prompt/reply-prompt.txt', 'utf-8')
-const judgePrompt = readFileSync('src/prompt/judge-prompt.txt', 'utf-8')
+const { values: args } = parseArgs({
+  options: {
+    outfile: { type: 'string', default: 'dist/pr-review-agent.cjs' },
+    'prompt-dir': { type: 'string', default: 'src/prompt' },
+  },
+})
+const promptDir = args['prompt-dir']
+
+// A Windows checkout (core.autocrlf) holds CRLF prompts; embed LF so the model gets the same bytes as from a Linux build.
+const readPrompt = file => readFileSync(join(promptDir, file), 'utf-8').replace(/\r\n?/g, '\n')
+
+const basePrompt = readPrompt('base-prompt.txt')
+const replyPrompt = readPrompt('reply-prompt.txt')
+const judgePrompt = readPrompt('judge-prompt.txt')
 const stackPrompts = Object.fromEntries(
-  readdirSync('src/prompt/stacks').filter(f => f.endsWith('.txt'))
-    .map(f => [f.replace(/\.txt$/, ''), readFileSync(`src/prompt/stacks/${f}`, 'utf-8')]),
+  readdirSync(join(promptDir, 'stacks')).filter(f => f.endsWith('.txt'))
+    .map(f => [f.replace(/\.txt$/, ''), readPrompt(join('stacks', f))]),
 )
 const pkg = JSON.parse(readFileSync('package.json', 'utf-8'))
 
@@ -22,7 +35,7 @@ await build({
   platform: 'node',
   target: 'node22',
   format: 'cjs',
-  outfile: 'dist/pr-review-agent.cjs',
+  outfile: args.outfile,
   minify: false,          // keep readable for debugging
   sourcemap: false,
   define: {
@@ -40,4 +53,4 @@ await build({
   external: [],
 })
 
-console.log('Bundled → dist/pr-review-agent.cjs')
+console.log(`Bundled → ${args.outfile}`)
