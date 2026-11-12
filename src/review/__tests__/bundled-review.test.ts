@@ -34,7 +34,8 @@ import { config } from '../../config.js'
 import { runReview, runJudge } from '../client.js'
 import { loadPrompt } from '../../prompt/loader.js'
 import { fetchContext } from '../../context/fetcher.js'
-import { renderReview, type ReviewObject } from '../formatter.js'
+import { renderReview, buildReviewFooter, type ReviewObject } from '../formatter.js'
+import { renderFixBlock, SUGGESTED_FIX_MARKER } from '../suggested-fix.js'
 import { applyJudgeDecisions } from '../judge-decisions.js'
 import { createProvider } from '../../llm/provider.js'
 import { logUsageRecord } from '../usage.js'
@@ -410,6 +411,28 @@ describe('bundled review: checked_commit mark', () => {
       }
     } finally {
       warn.mockRestore()
+    }
+  }))
+
+  it('BR6 suggested fixes on: bundle judges get no proposal options, nothing is spliced in, and every bundle reviewer sees the prior review stripped', quietRun(async () => {
+    const actual = await vi.importActual<typeof import('../client.js')>('../client.js')
+    const completeStructured = vi.fn().mockResolvedValue({ object: obj('Alpha problem', 'a/one.ts'), usage })
+    vi.mocked(createProvider).mockReturnValue({ complete: vi.fn(), completeStructured } as never)
+    mockRunReview.mockReset().mockImplementation(actual.runReview)
+    const prior = '### Summary\ns\n\n### Findings\n- **MEDIUM – Old** (`a/one.ts:5`)\n  bad' + renderFixBlock('fix()', '```') + buildReviewFooter('test-bot', 'm', 'repo', 1, '111111111111', 'b')
+    const a = { ...reReview(BIG_DIFF, FILES), getPreviousReviewComments: vi.fn().mockResolvedValue([{ id: '200', body: prior, createdOn: '2026-03-09T10:00:00Z' }]) } as unknown as VCSAdapter
+    cfg.judge.suggestedFixes = true
+    try {
+      const record = await review(a, '1', false)
+      const inputs = completeStructured.mock.calls.map(c => c[1] as string)
+      expect(inputs.length).toBeGreaterThan(1)
+      expect(inputs.every(m => m.includes('- **MEDIUM – Old** (`a/one.ts:5`)\n  bad\n\n---\n*Reviewed by') && !m.includes(SUGGESTED_FIX_MARKER))).toBe(true)
+      expect(mockRunJudge.mock.calls.length).toBe(inputs.length)
+      expect(mockRunJudge.mock.calls.every(c => c.length === 10)).toBe(true)
+      expect(vi.mocked(a.postComment).mock.calls[0][1]).not.toContain(SUGGESTED_FIX_MARKER)
+      expect(record!.suggested_fixes).toBeNull()
+    } finally {
+      cfg.judge.suggestedFixes = false
     }
   }))
 })

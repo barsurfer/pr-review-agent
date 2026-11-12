@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
-  REASON_CATEGORIES, REWRITE_CAP, DEFAULT_JUDGE_POLICY, applyJudgeDecisions, policyAction, renderCandidatesForJudge, locateInDiff,
+  REASON_CATEGORIES, REWRITE_CAP, DEFAULT_JUDGE_POLICY, applyJudgeDecisions, policyAction, renderCandidatesForJudge, renderJudgedReview, locateInDiff,
   type JudgeDecision, type JudgeOutput, type ReasonCategory,
 } from '../judge-decisions.js'
 import type { ReviewFinding } from '../formatter.js'
@@ -396,5 +396,32 @@ describe('rendered judged review', () => {
     const md = renderCandidatesForJudge({ summary: 's', findings: [finding(), finding({ title: 'B', file: undefined, lines: undefined })], behavioral_diff: [], production_risk: [], unresolved_questions: [] })
     expect(md).toContain('- [c0] **MEDIUM – Race on conns** (`src/pool.ts:2-3`)')
     expect(md).toContain('- [c1] **MEDIUM – B**\n')
+  })
+})
+
+describe('renderJudgedReview suffixes and renderWith', () => {
+  const cands = [finding({ severity: 'HIGH' }), finding({ title: 'Dropped one', lines: '9' }), finding({ title: 'Third', lines: '4' })]
+  const out = output([decision(), decision({ candidate_id: 'c1', reason_category: 'style_only' }), decision({ candidate_id: 'c2', question: 'q?', reason_category: 'framework_uncertainty' })])
+
+  it('no suffix map and an empty map render the bytes applyJudgeDecisions posts today', () => {
+    const r = applyJudgeDecisions(cands, out, DEFAULT_JUDGE_POLICY, ['Split me'])
+    expect(renderJudgedReview(r.kept, out, ['q?'], ['Split me'])).toBe(r.markdown)
+    expect(renderJudgedReview(r.kept, out, ['q?'], ['Split me'], new Map())).toBe(r.markdown)
+  })
+
+  it('renderWith exists only with codeProposals and re-renders the same review, suffixes keyed by kept index', () => {
+    expect('renderWith' in applyJudgeDecisions(cands, out, DEFAULT_JUDGE_POLICY, ['Split me'], '', Infinity, { proposals: true })).toBe(false)
+    const r = applyJudgeDecisions(cands, out, DEFAULT_JUDGE_POLICY, ['Split me'], '', Infinity, { proposals: true, codeProposals: true })
+    expect(r.renderWith!(new Map())).toBe(r.markdown)
+    expect(r.markdown).toContain('- q?')
+    expect(r.renderWith!(new Map([[0, '\n\nBLOCK']]))).toBe(r.markdown.replace('  get/put race.', '  get/put race.\n\nBLOCK'))
+  })
+
+  it('codeProposals dedents a kept proposal where prose mode trims it', () => {
+    const raw = '    try {\n      q()\n    } finally {'
+    const code = applyJudgeDecisions([finding()], output([decision({ proposal: raw })]), DEFAULT_JUDGE_POLICY, [], '', Infinity, { proposals: true, codeProposals: true })
+    const prose = applyJudgeDecisions([finding()], output([decision({ proposal: raw })]), DEFAULT_JUDGE_POLICY, [], '', Infinity, { proposals: true })
+    expect(code.kept[0].proposal).toBe('try {\n  q()\n} finally {')
+    expect(prose.kept[0].proposal).toBe(raw.trim())
   })
 })

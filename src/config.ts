@@ -139,6 +139,8 @@ export const config = {
     shownAnchors: optional('ENABLE_JUDGE_SHOWN_CONTEXT_ANCHORS', 'false') === 'true',
     // Off by default: extra judge output tokens per kept finding.
     proposals: optional('ENABLE_JUDGE_PROPOSALS', 'false') === 'true',
+    // Off by default: it changes the judge prompt and posts code whose fix quality is unmeasured.
+    suggestedFixes: optional('ENABLE_SUGGESTED_FIXES', 'false') === 'true',
   },
 
   // Off by default: a second reviewer-sized call. The model is resolved at run time (empty → the judge model) so benchmark labels apply.

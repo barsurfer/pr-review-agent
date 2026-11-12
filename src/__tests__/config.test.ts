@@ -282,6 +282,14 @@ describe('recall-lever flags', () => {
     expect((await load({ ENABLE_JUDGE_PROPOSALS: '1' })).judge.proposals).toBe(false)
   })
 
+  it('ENABLE_SUGGESTED_FIXES defaults off, turns on only from the exact string true, and leaves proposals alone', async () => {
+    expect((await load({})).judge.suggestedFixes).toBe(false)
+    const on = await load({ ENABLE_SUGGESTED_FIXES: 'true' })
+    expect(on.judge.suggestedFixes).toBe(true)
+    expect(on.judge.proposals).toBe(false)
+    expect((await load({ ENABLE_SUGGESTED_FIXES: 'TRUE' })).judge.suggestedFixes).toBe(false)
+  })
+
   it('each turns on only from the exact string true, independently', async () => {
     expect((await load({ ENABLE_JUDGE_QUALITY: 'true' })).judge).toMatchObject({ quality: true, shownAnchors: false })
     expect((await load({ ENABLE_JUDGE_SHOWN_CONTEXT_ANCHORS: 'true' })).judge).toMatchObject({ quality: false, shownAnchors: true })

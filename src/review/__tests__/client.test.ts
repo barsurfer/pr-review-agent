@@ -10,7 +10,8 @@ vi.mock('../../llm/provider.js', () => ({
 import { createHash } from 'crypto'
 import { runReview, runJudge, runCommentResponse, runLens, runBreadth, reviewOutputSchema, REVIEW_OUTPUT_SCHEMA, JUDGE_OUTPUT_SCHEMA, BREADTH_OUTPUT_SCHEMA } from '../client.js'
 import { LENS_REGISTRY } from '../lenses.js'
-import { renderReview, type ReviewObject, type ReviewFinding } from '../formatter.js'
+import { renderReview, buildReviewFooter, buildReplyFooter, type ReviewObject, type ReviewFinding } from '../formatter.js'
+import { renderFixBlock, SUGGESTED_FIX_MARKER } from '../suggested-fix.js'
 import { REASON_CATEGORIES } from '../judge-decisions.js'
 import type { PRInfo, ReviewComment, CommentReply } from '../../vcs/adapter.js'
 import type { LoadedPrompt } from '../../prompt/loader.js'
@@ -272,6 +273,48 @@ describe('runReview user message (re-review context)', () => {
     expect(userMessage).not.toContain('Changes Since Your Last Review')
     expect(userMessage).not.toContain('DELTA DIFF')
     expect(userMessage).not.toContain('Developer Discussion')
+  })
+})
+
+describe('runReview user message: suggested-fix blocks', () => {
+  beforeEach(() => { complete.mockReset(); completeStructured.mockReset() })
+
+  const object: ReviewObject = { summary: 's', findings: [], behavioral_diff: [], production_risk: [], unresolved_questions: [] }
+  const BLOCK = renderFixBlock('fix()', '```')
+  const PLAIN = '### Summary\ns\n\n### Findings\n- **HIGH – a** (`a.ts:1`)\n  b1'
+  const REVIEW_FOOTER = buildReviewFooter('bot', 'm', 'repo', 1, 'aaa111222333', 'b1')
+  const at = '2026-03-10T10:00:00Z'
+  const reply = (id: string, author: string, body: string): CommentReply => ({ id, parentId: '2', author, body, createdOn: at })
+  const message = async (reviewBody: string, replies: CommentReply[]) => {
+    completeStructured.mockReset()
+    completeStructured.mockResolvedValue({ object, usage })
+    await runReview('key', 'model', 3, 16000, '', prInfo, 'FULL DIFF', [], prompt, [{ id: '2', body: reviewBody, createdOn: at }], replies)
+    return completeStructured.mock.calls[0][1] as string
+  }
+
+  it('strips blocks from the prior review and agent replies, never from a human reply', async () => {
+    const human = reply('4', 'Fernando', `Your fix:${BLOCK}\n\ndoes not compile`)
+    const withBlocks = await message(PLAIN + BLOCK + REVIEW_FOOTER, [reply('3', 'Agent', `Ok.${BLOCK}${buildReplyFooter('bot', 'm')}`), human])
+    const without = await message(PLAIN + REVIEW_FOOTER, [reply('3', 'Agent', `Ok.${buildReplyFooter('bot', 'm')}`), human])
+    expect(withBlocks).toBe(without)
+    expect(withBlocks.split(SUGGESTED_FIX_MARKER)).toHaveLength(2)
+    expect(withBlocks).toContain(`> ${human.body}`)
+  })
+
+  it('with no marker anywhere the message is byte-identical to the pre-change template', async () => {
+    const msg = await message(PLAIN + REVIEW_FOOTER, [reply('3', 'Fernando', 'Fixed in d4f2b43e.'), reply('4', 'Agent', `Ok.${buildReplyFooter('bot', 'm')}`)])
+    expect(msg).toBe([
+      '## Pull Request: t',
+      '## Branch: s → m',
+      '## Previous Review by This Agent (latest of 1 total):',
+      'This is the most recent review posted on an earlier revision of this PR. Acknowledge what was fixed, do not repeat issues that are now resolved, and call out anything still unaddressed.',
+      `### Review from ${at}:\n${PLAIN}${REVIEW_FOOTER}`,
+      '## Developer Discussion on Previous Review(s):',
+      'Below is the conversation thread from previous reviews, including developer replies and the agent\'s own prior responses. IMPORTANT: If the agent previously acknowledged a finding as a false positive or accepted a developer\'s explanation, do NOT re-raise that finding. Treat the agent\'s prior conclusions as settled unless the new code changes invalidate them.',
+      `**Fernando** (${at}):\n> Fixed in d4f2b43e.`,
+      `**Agent** (${at}):\n> Ok.${buildReplyFooter('bot', 'm')}`,
+      '## Diff:\n```diff\nFULL DIFF\n```',
+    ].join('\n\n'))
   })
 })
 

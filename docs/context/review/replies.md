@@ -49,6 +49,8 @@ Payload to Claude:
 
 The agent reply is posted as a **threaded reply** under the review comment (parent ID = review comment ID), not as a new top-level comment.
 
+**Suggested fixes** (`ENABLE_SUGGESTED_FIXES`): the reply model sees the review raw, `suggested-fix-v1` blocks included, because a developer answers what they see ("your fix doesn't compile"). Reply output never feeds the judge, metrics or dedup. For the next *reviewer* call, blocks are stripped from the agent's own review and from agent replies (footer as the last non-empty line, so a reply that echoes a block, even at its very start, loses it); human replies are never stripped. A proposal line shaped like a review or reply footer is rejected at render time, so a reply that copies a block cannot pass `hasReviewFooter`. See [prompt/judge.md](../prompt/judge.md#suggested-fixes-in-the-posted-review-enable_suggested_fixes).
+
 ---
 
 ## Reply Footer

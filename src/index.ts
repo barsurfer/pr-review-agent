@@ -49,6 +49,7 @@ program
   .option('--lenses <list>', 'Concern-specific reviewer passes, e.g. reliability+security (overrides ENABLE_LENSES/LENSES; requires a judge)')
   .option('--lens-recommendation', 'Log which lenses the first-pass reviewer recommends for this PR; never gates a lens (overrides ENABLE_LENS_RECOMMENDATION)')
   .option('--proposals', 'Add a concise fix proposal to each kept finding in results.jsonl anchored_findings (overrides ENABLE_JUDGE_PROPOSALS; requires a judge)')
+  .option('--suggested-fixes', 'Post a code fix block under each kept finding that has one; implies code-only proposals (overrides ENABLE_SUGGESTED_FIXES; requires a judge)')
   .option('--event <name>', 'What started this run, e.g. pullrequest:comment_created (overrides TRIGGER_EVENT); logged, and enables IGNORE_COMMENT_AUTHORS on comment events')
   .option('--comment-author <id>', 'Account id of the event actor, e.g. the Bitbucket actor uuid (overrides TRIGGER_COMMENT_AUTHOR)')
   .option('--event-kind <kind>', 'comment | other: whether the --event is a comment event, whatever its name (overrides TRIGGER_EVENT_KIND)')
@@ -85,6 +86,7 @@ const opts = program.opts<{
   lenses?: string
   lensRecommendation?: boolean
   proposals?: boolean
+  suggestedFixes?: boolean
   event?: string
   commentAuthor?: string
   eventKind?: string
@@ -95,6 +97,7 @@ const opts = program.opts<{
 async function main(): Promise<void> {
   // Applied before the benchmark dispatch, which returns early.
   if (opts.proposals) config.judge.proposals = true
+  if (opts.suggestedFixes) config.judge.suggestedFixes = true
   if (opts.benchmark) {
     await runBenchmark()
     return
@@ -221,7 +224,8 @@ async function main(): Promise<void> {
   if (opts.secondLook) config.review.secondLook = true
   if (opts.lenses) { config.lenses.enabled = true; config.lenses.list = opts.lenses }
   if (opts.lensRecommendation) config.lenses.recommend = true
-  if (config.judge.proposals && !config.judge.model) console.warn('Warning: proposals requested but the judge is disabled (JUDGING_MODEL empty) - no proposals will be produced.')
+  const fixOutput = config.judge.suggestedFixes ? 'suggested fixes' : 'proposals'
+  if ((config.judge.proposals || config.judge.suggestedFixes) && !config.judge.model) console.warn(`Warning: ${fixOutput} requested but the judge is disabled (JUDGING_MODEL empty) - no ${fixOutput} will be produced.`)
   if (opts.repoSlug) config.repoSlug = opts.repoSlug
   const trigger = resolveTrigger(opts, { ...config.trigger, eventKind: config.triggerEventKind })
   if (!trigger && config.trigger.ignoreCommentAuthors.length) console.warn('Warning: IGNORE_COMMENT_AUTHORS is set but no --event/--comment-author (TRIGGER_EVENT/TRIGGER_COMMENT_AUTHOR) was given - the ignore list is inactive.')

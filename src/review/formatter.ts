@@ -82,6 +82,8 @@ export function hasReviewFooter(body: string): boolean {
   return /^\*Reviewed by .+ \(.+\) \| Prompt: .+ \| (?:Review #\d+|\[Review #\d+\]\([^)]+\)) \| Commit: [0-9a-f]+( \| Build: [\w.-]+)?\*$/m.test(body)
 }
 
+export const REPLY_FOOTER_SOURCE = String.raw`^\*(?:Reply by .+ \(.+\)|\[Reply by .+ \(.+\)\]\([^)]+\))\*$`
+
 /** Detect the agent's exact reply footer line (plain or CI-linked). */
 export function hasReplyFooter(body: string): boolean {
   return /^\*(?:Reply by .+ \(.+\)|\[Reply by .+ \(.+\)\]\([^)]+\))\*$/m.test(body)
@@ -138,13 +140,13 @@ const listOrNone = (items: string[]): string => (items.length ? bullets(items) :
 /** Render the reviewer's structured output into the posted markdown. The reviewer emits typed
  *  fields, not prose, so preamble/tone/footer can't leak in — this owns the shape the judge,
  *  dedup, and metrics parse. Merge Confidence is added downstream by the judge, not here. */
-export function renderReview(r: ReviewObject, opts: { emptyFindings?: string; tag?: (index: number) => string } = {}): string {
+export function renderReview(r: ReviewObject, opts: { emptyFindings?: string; tag?: (index: number) => string; suffix?: (index: number) => string } = {}): string {
   if (r.no_change) return 'NO_CHANGE'
 
   const findings = r.findings.length
     ? r.findings.map((f, i) => {
         const loc = f.file ? ` (\`${f.file}${f.lines ? `:${f.lines}` : ''}\`)` : ''
-        return `- ${opts.tag?.(i) ?? ''}**${f.severity} – ${f.title}**${loc}\n  ${f.body}`
+        return `- ${opts.tag?.(i) ?? ''}**${f.severity} – ${f.title}**${loc}\n  ${f.body}${opts.suffix?.(i) ?? ''}`
       }).join('\n\n')
     : opts.emptyFindings ?? 'No findings.'
 

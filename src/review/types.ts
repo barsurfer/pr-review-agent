@@ -7,7 +7,8 @@ import type { LoadedPrompt } from '../prompt/loader.js'
 import type { FileContext } from '../context/fetcher.js'
 import type { ReviewObject, ReviewFinding, FindingScore } from './formatter.js'
 import type { KeptFinding } from './findings-output.js'
-import type { AppliedDecision, JudgeAnomalies } from './judge-decisions.js'
+import type { AppliedDecision, JudgeAnomalies, RenderJudged } from './judge-decisions.js'
+import type { SuggestedFixStats } from './suggested-fix.js'
 import type { BreadthStatus, SecondLookStatus, LensStatus, CandidateOrigin, BreadthPlan } from './breadth.js'
 import type { ShownSource } from './shown-anchors.js'
 import type { LensRecommendation } from './lenses.js'
@@ -108,6 +109,9 @@ export interface ReviewContext {
   judgeDecisions?: AppliedDecision[]
   judgeAnomalies?: JudgeAnomalies
   judgedFindings?: KeptFinding[]
+  // Set only under ENABLE_SUGGESTED_FIXES, so blocks are spliced in at POST_REVIEW and never enter reviewText.
+  renderJudged?: RenderJudged
+  suggestedFixes?: SuggestedFixStats
   // Kept apart from reviewObject so reviewer metrics and the judge-failure fallback stay reviewer-only.
   breadthFindings?: ReviewFinding[]
   breadthStatus?: BreadthStatus

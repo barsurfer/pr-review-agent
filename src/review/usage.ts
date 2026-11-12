@@ -17,6 +17,7 @@ import { candidateId, type AppliedDecision, type JudgeAnomalies } from './judge-
 import { MAX_UNTOUCHED_LISTED, type BreadthStatus, type SecondLookStatus, type LensStatus, type CandidateOrigin } from './breadth.js'
 import { activeLenses, type LensRecommendation } from './lenses.js'
 import { isCheckedCommitHash } from './checked-commit.js'
+import type { SuggestedFixStats } from './suggested-fix.js'
 import type { ReviewContext, LensRun, EventKind } from './types.js'
 
 // 12 hex chars of sha256 — enough to tell prompt/code versions apart across runs without bloating the record.
@@ -97,6 +98,7 @@ export interface UsageRecord {
   second_look_cost_usd: number | null
   lens_runs?: Array<{ name: string; status: LensStatus; model: string; prompt_hash: string | null; tokens: { input: number; output: number } | null; cost_usd: number | null; findings: number }> | null
   lens_recommendations?: LensRecommendation[] | null
+  suggested_fixes?: SuggestedFixStats | null
   untouched_files: { count: number; paths: string[]; cut: number; deprioritized?: number } | null
   recall_levers: { j_quality: boolean; sl_breadth: boolean; j_shown_anchor: boolean; b_priority: boolean }
   touch_rate: number | null
@@ -345,6 +347,7 @@ export function buildUsageRecord(
     // Absent, not null, when lenses are off, so a lens-off record serializes byte-identical to one from before lenses existed.
     ...(lenses.length ? { lens_runs: lensRuns } : {}),
     ...(config.lenses.recommend ? { lens_recommendations: ctx.lensRecommendations ?? null } : {}),
+    ...(config.judge.suggestedFixes ? { suggested_fixes: ctx.suggestedFixes ?? null } : {}),
     untouched_files: ctx.untouchedFiles
       ? ctx.breadthPlan
         ? { count: ctx.untouchedFiles.length, paths: ctx.breadthPlan.selected, cut: ctx.breadthPlan.omitted, deprioritized: ctx.breadthPlan.deprioritizedReleaseEntries }

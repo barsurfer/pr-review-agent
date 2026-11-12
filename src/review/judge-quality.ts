@@ -31,7 +31,11 @@ const PROPOSAL = `## PROPOSAL
 
 For each candidate you keep, give \`proposal\`: the specific code change that resolves it, written as an instruction to the person or agent who will make the edit ("Wrap X in try/finally and release the client in finally."). It must be standalone - understandable without the finding text - and must not repeat the problem or why it matters (that is \`body\`/\`rewritten_body\`). At most 2 sentences plus one optional fenced snippet of up to 4 lines, under ~500 characters total. If you cannot name a concrete change from the code you were shown, omit \`proposal\`; never write "consider", "verify" or "ensure". Dropped candidates get no proposal.`
 
-export function composeJudgePrompt(base: string, opts: { quality: boolean; shownAnchors: boolean; proposals?: boolean }): string {
+const PROPOSAL_CODE = `## PROPOSAL
+
+For each candidate you keep, give \`proposal\`: only the corrected code for the lines that change, as they should read after the fix. No prose, no markdown fences, no diff markers, no line-number gutter. Copy the original indentation. At most 5 lines and under ~400 characters. If the fix is not a local edit of at most 5 lines that you can write from the code you were shown, omit \`proposal\`. Dropped candidates get no proposal.`
+
+export function composeJudgePrompt(base: string, opts: { quality: boolean; shownAnchors: boolean; proposals?: boolean; codeProposals?: boolean }): string {
   let out = base
   if (opts.shownAnchors) {
     if (!out.includes(ANCHOR_SENTENCE)) throw new Error('Judge prompt anchor sentence not found')
@@ -41,7 +45,7 @@ export function composeJudgePrompt(base: string, opts: { quality: boolean; shown
     out = swapLine(out, '- `duplicate`', DUPLICATE)
     out = `${out.trimEnd()}\n\n${LOW_VALUE_EVIDENCE}\n\n${MULTI_FILE}\n`
   }
-  if (opts.proposals) out = `${out.trimEnd()}\n\n${PROPOSAL}\n`
+  if (opts.proposals) out = `${out.trimEnd()}\n\n${opts.codeProposals ? PROPOSAL_CODE : PROPOSAL}\n`
   return out
 }
 
@@ -72,6 +76,10 @@ export const QUALITY_DECISION_PROPERTIES = {
 
 export const PROPOSAL_DECISION_PROPERTIES = {
   proposal: { type: 'string', description: 'Only for a candidate you keep: the concrete change that fixes it, as an imperative instruction a developer or coding agent can apply without re-reading the finding. 1-2 sentences, optionally one minimal fenced snippet of at most 4 lines. Name the exact function/symbol to change. Do not restate the problem or its impact. Keep it under ~500 characters; omit when no concrete fix can be determined from the code you were shown.' },
+} as const
+
+export const PROPOSAL_CODE_DECISION_PROPERTIES = {
+  proposal: { type: 'string', description: 'Only for a candidate you keep: the corrected code for the lines that change, as they read after the fix. No prose, fences, diff markers or line numbers. At most 5 lines, under ~400 characters. Omit when the fix is not a small local edit you can write from the code you were shown.' },
 } as const
 
 export interface AdditionalLocation {
