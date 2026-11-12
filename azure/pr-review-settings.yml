@@ -1,0 +1,33 @@
+# PR Review Agent — settings shared by azure-pipelines.yml (reviews) and azure-reply-pipeline.yml
+# (replies). Both include this file, so they run the same agent version and the same branch policy.
+# Keep it in the same folder as both pipeline files (template paths are relative to the includer).
+#
+# Each pipeline maps these into the agent's env with compile-time ${{ variables.x }}: an entry
+# missing here compiles to '' — never to a literal "$(x)" — and '' turns that list OFF (it does not
+# restore the agent default). So keep every entry. Branch matching is case-sensitive.
+#
+# Build validation reads this file from the PR's SOURCE branch, the reply pipeline from the DEFAULT
+# branch: a change reaches an open PR's reviews only once its source branch contains it.
+#
+# Details: docs/reference/azure-devops.md ("Agent version", "Branch policy").
+
+variables:
+  # Immutable release tag of the agent bundle; >= v0.0.43 for every env var below.
+  - name: AGENT_TAG
+    value: v0.0.45
+
+  # Branch policy, trunk recipe. ONLY_TARGET_BRANCHES must list exactly the branches that carry the
+  # build-validation policy; otherwise a comment makes the reply pipeline review PRs build validation
+  # never runs on. Git-flow: only = develop,release/*  skipTarget = main,master
+  # skipSource = main,master,release/*,hotfix/*
+  - name: prReviewOnlyTargetBranches     # -> ONLY_TARGET_BRANCHES
+    value: main
+  - name: prReviewSkipTargetBranches     # -> SKIP_TARGET_BRANCHES
+    value: ''
+  - name: prReviewSkipSourceBranches     # -> SKIP_SOURCE_BRANCHES
+    value: main,master
+
+  # Reply pipeline only (-> IGNORE_COMMENT_AUTHORS): comment-author GUIDs whose comment events exit
+  # before any Azure call. Typically the "{Project} Build Service ({Org})" identity; see the doc.
+  - name: prReviewIgnoreCommentAuthors
+    value: ''

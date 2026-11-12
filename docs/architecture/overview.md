@@ -76,7 +76,7 @@ pr-review-agent/
 │   ├── ci.yml                    # Typecheck + tests + bundle build (the release gate)
 │   ├── pr-review.yml             # GitHub Actions trigger: review on PR events, reply on PR comments
 │   └── reviewbench-image.yml     # Builds/publishes the ReviewBench GHCR image on v* tags
-├── azure/                        # Azure DevOps pipelines (review + reply)
+├── azure/                        # Azure DevOps pipelines (review + reply) + shared settings template
 ├── jenkins/                      # Jenkins pipeline
 ├── reviewbench/                  # ReviewBench Docker image + harness
 ├── scripts/

@@ -157,6 +157,12 @@ describe('getPullRequestInfo', () => {
       sourceCommit: 'HEAD',
     })
   })
+
+  it('throws instead of returning an empty source commit', async () => {
+    clientMock.get.mockResolvedValue({ data: { ...PR, lastMergeSourceCommit: undefined } })
+
+    await expect(makeAdapter().getPullRequestInfo('42')).rejects.toThrow(/lastMergeSourceCommit/)
+  })
 })
 
 // --- Changed files ---------------------------------------------------------
@@ -227,6 +233,97 @@ describe('getCommitDiff — two-dot diff between arbitrary commits', () => {
 
     expect(diff).toContain('diff --git a/src/app.ts b/src/app.ts')
     expect(countChangedLines(diff)).toBe(8)
+  })
+})
+
+describe('getCommitDiff — resolving the abbreviated footer commit', () => {
+  const OLD = 'aabbcc112233' + '4'.repeat(28)
+  const NEWER = 'ffeedd998877' + '6'.repeat(28)
+  const FIRST = '0123456789ab' + '5'.repeat(28)
+  const ITEMS = Array(7).fill('/items')
+
+  function routeDelta(commits: string[], iterations: string[] | Error) {
+    return (url: string, cfg: any = {}): Promise<any> => {
+      if (url.endsWith('/iterations')) {
+        if (iterations instanceof Error) return Promise.reject(iterations)
+        return Promise.resolve({ data: { value: iterations.map(commitId => ({ sourceRefCommit: { commitId } })) } })
+      }
+      if (url.endsWith('/commits') && !url.includes('/diffs/')) {
+        return Promise.resolve({ data: { value: commits.map(commitId => ({ commitId })) } })
+      }
+      return routeGet(url, cfg)
+    }
+  }
+
+  async function adapterAfterPrInfo(commits: string[], iterations: string[] | Error): Promise<AzureDevOpsAdapter> {
+    clientMock.get.mockImplementation(routeDelta(commits, iterations))
+    const a = makeAdapter()
+    await a.getPullRequestInfo('42')   // as the FSM does before any delta
+    clientMock.get.mockClear()
+    return a
+  }
+
+  const requested = () => clientMock.get.mock.calls.map(([url]) => String(url).replace('/repositories/repo', ''))
+  const diffBase = () => clientMock.get.mock.calls.find(([url]) => String(url).includes('/diffs/commits'))?.[1].params.baseVersion
+
+  it('prefix among reachable commits: same requests as before, no iterations call', async () => {
+    const a = await adapterAfterPrInfo([NEWER, OLD], [FIRST, OLD])
+
+    const diff = await a.getCommitDiff(OLD.slice(0, 12), 'HEAD')
+
+    expect(requested()).toEqual(['/commits', '/diffs/commits', ...ITEMS])
+    expect(diffBase()).toBe(OLD)
+    expect(countChangedLines(diff)).toBe(8)
+  })
+
+  it('prefix rebased away: resolved from the PR iterations, then diffed', async () => {
+    const a = await adapterAfterPrInfo([NEWER], [FIRST, OLD, NEWER])
+
+    const diff = await a.getCommitDiff(OLD.slice(0, 12), 'HEAD')
+
+    expect(requested()).toEqual(['/commits', '/pullRequests/42/iterations', '/diffs/commits', ...ITEMS])
+    expect(diffBase()).toBe(OLD)
+    expect(countChangedLines(diff)).toBe(8)
+  })
+
+  it('prefix found nowhere: throws as before, no diff fetched', async () => {
+    const a = await adapterAfterPrInfo([NEWER], [FIRST, NEWER])
+
+    await expect(a.getCommitDiff(OLD.slice(0, 12), 'HEAD')).rejects.toThrow(/cannot resolve abbreviated commit aabbcc112233/)
+    expect(requested()).toEqual(['/commits', '/pullRequests/42/iterations'])
+  })
+
+  it('iterations call failing: throws as before, no diff fetched', async () => {
+    const a = await adapterAfterPrInfo([NEWER], Object.assign(new Error('Request failed with status code 403'), { isAxiosError: true }))
+
+    await expect(a.getCommitDiff(OLD.slice(0, 12), 'HEAD')).rejects.toThrow(/cannot resolve abbreviated commit aabbcc112233.*status code 403/)
+    expect(requested()).toEqual(['/commits', '/pullRequests/42/iterations'])
+  })
+})
+
+describe('blob 404 on a file the change list says exists', () => {
+  function routeMissing(missingKey: string) {
+    return (url: string, cfg: any = {}): Promise<any> => {
+      if (url.includes('/items') && `${cfg.params.path}@${cfg.params['versionDescriptor.version']}` === missingKey) {
+        return Promise.reject({ isAxiosError: true, response: { status: 404 } })
+      }
+      return routeGet(url, cfg)
+    }
+  }
+
+  it('fails the delta, so the FSM falls back instead of marking a head with a dropped file', async () => {
+    clientMock.get.mockImplementation(routeMissing('/src/app.ts@HEAD'))
+
+    await expect(makeAdapter().getCommitDiff('BASE', 'HEAD')).rejects.toThrow(/src\/app\.ts .*404/)
+  })
+
+  it('still skips the file on the full PR diff, as before', async () => {
+    clientMock.get.mockImplementation(routeMissing('/src/app.ts@HEAD'))
+
+    const diff = await makeAdapter().getDiff('42')
+
+    expect(diff).not.toContain('src/app.ts')
+    expect(diff).toContain('diff --git a/src/new.ts b/src/new.ts')
   })
 })
 
