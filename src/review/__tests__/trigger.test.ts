@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest'
+import { vi, afterEach } from 'vitest'
 import { isCommentEvent, normalizeAuthorId, resolveTrigger, ignoredCommentAuthor } from '../trigger.js'
+import { isCommentTrigger } from '../trigger.js'
 import { cliOrEnv } from '../cli-value.js'
 
 const comment = (commentAuthor: string) => ({ event: 'pullrequest:comment_created', commentAuthor })
@@ -95,5 +97,91 @@ describe('ignoredCommentAuthor', () => {
     expect(ignoredCommentAuthor(comment('bot2'), ['bot'])).toBeNull()
     expect(ignoredCommentAuthor(comment('bot'), ['bot2'])).toBeNull()
     expect(ignoredCommentAuthor(comment('xbot'), ['*bot'])).toBeNull()
+  })
+})
+
+describe('isCommentEvent: provider event names', () => {
+  const legacy = (event: string) => /comment/i.test(event)
+  const NEWLY_COMMENT = ['note', 'Note Hook', 'pull_request_review']
+  const TABLE: Array<[provider: string, event: string, comment: boolean]> = [
+    ...['pullrequest:comment_created', 'pullrequest:comment_updated', 'pullrequest:comment_deleted', 'pullrequest:comment_resolved', 'pullrequest:comment_reopened']
+      .map(e => ['bitbucket', e, true] as [string, string, boolean]),
+    ...['pullrequest:created', 'pullrequest:updated', 'pullrequest:approved', 'pullrequest:unapproved', 'pullrequest:changes_request_created',
+      'pullrequest:changes_request_removed', 'pullrequest:fulfilled', 'pullrequest:rejected', 'repo:push']
+      .map(e => ['bitbucket', e, false] as [string, string, boolean]),
+    ...['pr:comment:added', 'pr:comment:edited', 'pr:comment:deleted'].map(e => ['bitbucket-dc', e, true] as [string, string, boolean]),
+    ...['pr:opened', 'pr:from_ref_updated', 'pr:modified', 'pr:merged', 'pr:declined', 'pr:reviewer:approved'].map(e => ['bitbucket-dc', e, false] as [string, string, boolean]),
+    ...['issue_comment', 'pull_request_review_comment', 'pull_request_review'].map(e => ['github', e, true] as [string, string, boolean]),
+    ...['pull_request', 'pull_request_target', 'push', 'pull_request_review_thread', 'pull_request_review.submitted', 'opened', 'synchronize', 'edited', 'reopened']
+      .map(e => ['github', e, false] as [string, string, boolean]),
+    ['azure', 'ms.vss-code.git-pullrequest-comment-event', true],
+    ...['git.pullrequest.created', 'git.pullrequest.updated', 'git.pullrequest.merged', 'git.push', 'PullRequest'].map(e => ['azure', e, false] as [string, string, boolean]),
+    ...['note', 'Note Hook', 'note hook', 'NOTE'].map(e => ['gitlab', e, true] as [string, string, boolean]),
+    ...['merge_request_event', 'Merge Request Hook', 'merge_request', 'push', 'Push Hook', 'Tag Push Hook', 'trigger', 'notes', 'note_hook']
+      .map(e => ['gitlab', e, false] as [string, string, boolean]),
+  ]
+
+  it.each(TABLE)('%s %s → comment=%s', (_provider, event, expected) => {
+    expect(isCommentEvent(event)).toBe(expected)
+  })
+
+  it('only the GitLab note and GitHub review names change class; every other name keeps the substring rule', () => {
+    for (const [, event] of TABLE) {
+      const changed = NEWLY_COMMENT.some(n => n.toLowerCase() === event.toLowerCase())
+      expect(isCommentEvent(event), event).toBe(changed ? true : legacy(event))
+      if (changed) expect(legacy(event), event).toBe(false)
+    }
+  })
+})
+
+describe('event kind override (--event-kind / TRIGGER_EVENT_KIND)', () => {
+  afterEach(() => { vi.restoreAllMocks() })
+  const NONE = { event: '', commentAuthor: '' }
+
+  it('kind decides over the name, both ways; no kind keeps the name rule', () => {
+    expect(isCommentTrigger({ event: 'relay:pr-note', commentAuthor: 'a', kind: 'comment' })).toBe(true)
+    expect(isCommentTrigger({ event: 'pullrequest:comment_created', commentAuthor: 'a', kind: 'other' })).toBe(false)
+    expect(isCommentTrigger({ event: '', commentAuthor: 'a', kind: 'comment' })).toBe(true)
+    expect(isCommentTrigger({ event: 'pullrequest:comment_created', commentAuthor: 'a' })).toBe(true)
+    expect(isCommentTrigger({ event: 'relay:pr-note', commentAuthor: 'a' })).toBe(false)
+  })
+
+  it('ignoredCommentAuthor follows the kind', () => {
+    expect(ignoredCommentAuthor({ event: 'relay:pr-note', commentAuthor: '{BOT}', kind: 'comment' }, ['bot'])).toBe('bot')
+    expect(ignoredCommentAuthor({ event: 'pullrequest:comment_created', commentAuthor: '{BOT}', kind: 'other' }, ['bot'])).toBeNull()
+    expect(ignoredCommentAuthor({ event: 'relay:pr-note', commentAuthor: '{BOT}' }, ['bot'])).toBeNull()
+  })
+
+  it('resolves CLI over env, an empty CLI value falls back, and the value is trimmed and case-insensitive', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(resolveTrigger({ event: 'e', eventKind: 'other' }, { ...NONE, eventKind: 'comment' })).toEqual({ event: 'e', commentAuthor: '', kind: 'other' })
+    expect(resolveTrigger({ event: 'e', eventKind: ' ' }, { ...NONE, eventKind: 'comment' })).toEqual({ event: 'e', commentAuthor: '', kind: 'comment' })
+    expect(resolveTrigger({ commentAuthor: 'a', eventKind: ' Comment ' }, NONE)).toEqual({ event: '', commentAuthor: 'a', kind: 'comment' })
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('no kind given: the result has no kind key, exactly as before', () => {
+    const r = resolveTrigger({ event: 'e' }, { ...NONE, eventKind: '' })
+    expect(r).toEqual({ event: 'e', commentAuthor: '' })
+    expect('kind' in r!).toBe(false)
+  })
+
+  it('a kind alone, without event or author, gives no trigger', () => {
+    expect(resolveTrigger({ eventKind: 'comment' }, NONE)).toBeUndefined()
+  })
+
+  it('an invalid kind warns once and is ignored', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const r = resolveTrigger({ event: 'pullrequest:comment_created', commentAuthor: 'a' }, { ...NONE, eventKind: 'Comments' })
+    expect(r).toEqual({ event: 'pullrequest:comment_created', commentAuthor: 'a' })
+    expect('kind' in r!).toBe(false)
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn).toHaveBeenCalledWith('Warning: ignoring the event kind "comments" (--event-kind/TRIGGER_EVENT_KIND) - expected comment or other')
+  })
+
+  it('an invalid kind warns even when no event or author was given', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(resolveTrigger({ eventKind: 'yes' }, NONE)).toBeUndefined()
+    expect(warn).toHaveBeenCalledTimes(1)
   })
 })

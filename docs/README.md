@@ -40,10 +40,13 @@ structured review as a PR comment.
 | Doc | Contents |
 |-----|----------|
 | [reference/env-vars.md](reference/env-vars.md) | All environment variables across phases |
-| [reference/usage-logging.md](reference/usage-logging.md) | Usage logging, record schema, cost estimates, and analytics queries |
+| [reference/usage-logging.md](reference/usage-logging.md) | Usage logging, record schema (per-provider `workspace`), finding this run's record on any CI (run ids, fresh file, `USAGE_RECORD_FILE`), storing `checked_commit`, cost estimates, and analytics queries |
 | [reference/copilot-integration.md](reference/copilot-integration.md) | Sharing prompt files with GitHub Copilot |
 | [reference/azure-devops.md](reference/azure-devops.md) | Azure DevOps CI wiring and the reply-flow trigger (experimental) |
 | [reference/jenkins.md](reference/jenkins.md) | Jenkins + Bitbucket Cloud wiring: webhook variables, bot-comment filter, per-PR lock, checked-commit store, build status, troubleshooting |
+| [reference/github-actions.md](reference/github-actions.md) | GitHub Actions wiring: guarded workflow, job-level concurrency, checked-commit store, limitations |
+
+Per-provider trigger wiring (comment and push event names, actor ids, retarget, checked-commit store, record lookup) is summarised in [context/review/skip-logic.md §9](context/review/skip-logic.md).
 
 ---
 

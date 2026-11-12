@@ -60,9 +60,12 @@ export interface LensRun {
 
 export type OutcomeSink = (outcome: ReviewOutcome) => void | Promise<void>
 
+export type EventKind = 'comment' | 'other'
+
 export interface TriggerInfo {
   event: string
   commentAuthor: string
+  kind?: EventKind
 }
 
 /** Accumulated data shared across states. */

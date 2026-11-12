@@ -75,17 +75,17 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
 
     case State.CHECK_TRIGGER: {
       if (!ctx.trigger) return State.FETCH_PR_INFO
-      const { event, commentAuthor } = ctx.trigger
+      const { event, commentAuthor, kind } = ctx.trigger
       const ignoreList = config.trigger.ignoreCommentAuthors
-      console.log(`Trigger: ${event || 'unknown event'}${commentAuthor ? ` by ${commentAuthor}` : ''}`)
-      if (commentAuthor && !event && ignoreList.length) console.warn('  Comment author given without an event - IGNORE_COMMENT_AUTHORS not applied (every PR event carries an actor)')
+      console.log(`Trigger: ${event || 'unknown event'}${commentAuthor ? ` by ${commentAuthor}` : ''}${kind ? ` (event kind: ${kind})` : ''}`)
+      if (commentAuthor && !event && !kind && ignoreList.length) console.warn('  Comment author given without an event - IGNORE_COMMENT_AUTHORS not applied (every PR event carries an actor)')
       if (!ignoredCommentAuthor(ctx.trigger, ignoreList)) return State.FETCH_PR_INFO
       if (forced(ctx)) {
         console.log(`  ${commentAuthor} matches IGNORE_COMMENT_AUTHORS - running anyway (--force)`)
         return State.FETCH_PR_INFO
       }
       ctx.action = 'SKIP'
-      ctx.skipReason = `${event} by "${commentAuthor}" matches IGNORE_COMMENT_AUTHORS`
+      ctx.skipReason = `${event || 'comment event'} by "${commentAuthor}" matches IGNORE_COMMENT_AUTHORS`
       return State.SKIP
     }
 
