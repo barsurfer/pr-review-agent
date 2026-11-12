@@ -348,7 +348,7 @@ bundle build on every push to `main` and every PR — the gate that keeps `main`
 | `--judge-effort <level>` | No | Judge thinking effort (overrides `JUDGE_EFFORT`) |
 | `--skip-directed-replies` | No | Skip replying to dev comments @-directed at someone else (Bitbucket only; overrides `SKIP_DIRECTED_REPLIES`) |
 | `--second-look` | No | Second reviewer pass over already-flagged files to lift recall (overrides `ENABLE_SECOND_LOOK`; requires a judge) |
-| `--lenses <list>` | No | Concern-specific reviewer passes, e.g. `reliability+security` — any of `reliability`, `security`, `testing`, `performance`, `architecture` (overrides `ENABLE_LENSES`/`LENSES`; requires a judge) |
+| `--lenses <list>` | No | Concern-specific reviewer passes, e.g. `reliability+security` — any of `reliability`, `security`, `testing`, `performance`, `architecture`, or the aliases `rel`, `sec`, `test`, `perf`, `arch` (overrides `ENABLE_LENSES`/`LENSES`; requires a judge) |
 | `--lens-recommendation` | No | Log which lenses the first-pass reviewer recommends for the PR to `results.jsonl` `lens_recommendations`; log-only, never enables or skips a lens (overrides `ENABLE_LENS_RECOMMENDATION`) |
 | `--proposals` | No | Add a concise fix proposal to each kept finding in `results.jsonl` `anchored_findings` (overrides `ENABLE_JUDGE_PROPOSALS`; requires a judge) |
 | `--benchmark` | No | ReviewBench mode — read the PR from `RB_*` env + mounted files, write findings JSON to `RB_OUT`, never post |

@@ -817,6 +817,17 @@ describe('lenses (end-to-end)', () => {
     expect(warnSpy.mock.calls.map(c => c.join(' ')).join('\n')).toContain('RB_CONFIG_LENSES=relability names no known lens')
     warnSpy.mockRestore()
   })
+
+  it('RB_CONFIG_LENSES=rel+perf enables reliability and performance and echoes the value as given', async () => {
+    respond()
+
+    await runBenchmark({ ...fixture(), RB_CONFIG_LENSES: 'rel+perf' })
+
+    expect(cfg.lenses).toMatchObject({ enabled: true, list: 'rel+perf' })
+    expect(lensCalls().map(c => (c[0] as string).match(/## (\w+) LENS/)![1])).toEqual(['RELIABILITY', 'PERFORMANCE'])
+    expect(stdout()).toContain('j_proposal=0 lenses=rel+perf')
+    expect(usageRecord().lens_runs.map((r: any) => r.name)).toEqual(['reliability', 'performance'])
+  })
 })
 
 describe('lens recommendation (end-to-end)', () => {

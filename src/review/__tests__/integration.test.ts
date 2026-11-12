@@ -1835,6 +1835,19 @@ describe('lens review and the judge in normal mode', () => {
     warnSpy.mockRestore()
   })
 
+  it('runs aliased lenses under their canonical names: run labels, lens_runs and candidate origins', async () => {
+    cfg.lenses.list = 'rel+perf'
+    reviewWithContexts(reviewWith([A_BUG]))
+    mockLenses({ reliability: [C_LEAK] })
+    mockJudgeKeepsAll()
+
+    const record = await review(bigAdapter(), '100', false)
+
+    expect(lensLabels()).toEqual(['lens:reliability', 'lens:performance'])
+    expect(record!.lens_runs!.map(r => r.name)).toEqual(['reliability', 'performance'])
+    expect(record!.review_candidates!.map(c => c.origin)).toEqual(['review', 'lens:reliability'])
+  })
+
   it('J_SHOWN_ANCHOR on: hands the judge one full-PR lens source with lensFrom; no lens findings leaves the options unchanged', async () => {
     cfg.judge.shownAnchors = true
     reviewWithContexts(reviewWith([A_BUG]))

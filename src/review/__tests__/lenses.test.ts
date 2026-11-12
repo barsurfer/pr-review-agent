@@ -1,5 +1,9 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
+
+vi.mock('../../llm/provider.js', () => ({ createProvider: vi.fn() }))
+
 import { LENS_REGISTRY, LENS_REASON_CAP, parseLensList, lensSystemPrompt, lensBriefing, sanitizeLensRecommendations } from '../lenses.js'
+import { reviewOutputSchema } from '../client.js'
 import { breadthSystemPrompt, BREADTH_LENS, SHOWN_LINE_CLAUSE } from '../breadth.js'
 import type { ReviewFinding } from '../formatter.js'
 
@@ -63,6 +67,33 @@ describe('parseLensList', () => {
 
   it('does not resolve inherited object keys', () => {
     expect(parseLensList('constructor+toString')).toEqual({ lenses: [], unknown: ['constructor', 'tostring'] })
+  })
+
+  it.each([['rel', 'reliability'], ['sec', 'security'], ['test', 'testing'], ['perf', 'performance'], ['arch', 'architecture']])('alias %s resolves to %s', (alias, name) => {
+    expect(parseLensList(alias)).toEqual({ lenses: [LENS_REGISTRY[name]], unknown: [] })
+  })
+
+  it('dedupes an alias with its full name on the canonical lens, keeping first-seen order', () => {
+    expect(names('rel+reliability')).toEqual(['reliability'])
+    expect(names('performance+sec,perf+security+rel')).toEqual(['performance', 'security', 'reliability'])
+  })
+
+  it('mixes aliases and full names across separators, case and whitespace', () => {
+    expect(names('rel,performance')).toEqual(['reliability', 'performance'])
+    expect(names(' REL , testing+ Sec ,,ARCH+ ')).toEqual(['reliability', 'testing', 'security', 'architecture'])
+  })
+
+  it('treats near-miss aliases and inherited keys as unknown', () => {
+    expect(parseLensList('reli+performanc+constructor+perf')).toEqual({ lenses: [LENS_REGISTRY.performance], unknown: ['reli', 'performanc', 'constructor'] })
+  })
+})
+
+describe('lens aliases stay input-only', () => {
+  it('registry keys and the recommendation schema enum are exactly the five canonical names', () => {
+    expect(Object.keys(LENS_REGISTRY)).toEqual(NAMES)
+    const schema = reviewOutputSchema(true) as unknown as { properties: { lens_recommendations: { items: { properties: { lens: { enum: string[] } } } } } }
+    expect(schema.properties.lens_recommendations.items.properties.lens.enum).toEqual(NAMES)
+    expect(sanitizeLensRecommendations([{ lens: 'rel', reason: 'x' }, { lens: 'perf', reason: 'y' }])).toEqual([])
   })
 })
 

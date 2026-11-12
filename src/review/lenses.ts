@@ -55,13 +55,17 @@ const LENSES: Lens[] = [
 
 export const LENS_REGISTRY: Readonly<Record<string, Lens>> = Object.freeze(Object.fromEntries(LENSES.map(l => [l.name, l])))
 
+// ReviewBench builds a run's row id from label values and rejects ids over 64 chars, so the LENSES value needs short forms.
+const LENS_ALIASES: Readonly<Record<string, string>> = Object.freeze({ rel: 'reliability', sec: 'security', test: 'testing', perf: 'performance', arch: 'architecture' })
+
 export function activeLenses(settings: { enabled: boolean; list: string }): Lens[] {
   return settings.enabled ? parseLensList(settings.list).lenses : []
 }
 
 export function parseLensList(value: string): { lenses: Lens[]; unknown: string[] } {
-  const names = [...new Set(value.split(/[,+]/).map(s => s.trim().toLowerCase()).filter(Boolean))]
   // hasOwn, not `in`: inherited keys like "constructor" must not resolve to a lens.
+  const canonical = (n: string) => (Object.hasOwn(LENS_ALIASES, n) ? LENS_ALIASES[n] : n)
+  const names = [...new Set(value.split(/[,+]/).map(s => canonical(s.trim().toLowerCase())).filter(Boolean))]
   return {
     lenses: names.filter(n => Object.hasOwn(LENS_REGISTRY, n)).map(n => LENS_REGISTRY[n]),
     unknown: names.filter(n => !Object.hasOwn(LENS_REGISTRY, n)),
