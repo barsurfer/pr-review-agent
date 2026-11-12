@@ -68,7 +68,7 @@ describe('getDiff / getCommitDiff', () => {
 
     expect(diff).toBe('delta')
     expect(clientMock.get).toHaveBeenCalledWith('/repos/org/repo/compare/old1...new2', {
-      headers: { Accept: 'application/vnd.github.diff' }, responseType: 'text',
+      headers: { Accept: 'application/vnd.github.diff' }, responseType: 'text', timeout: 120_000,
     })
   })
 
