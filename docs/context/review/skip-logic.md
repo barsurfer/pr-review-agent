@@ -76,9 +76,9 @@ A PR whose diff is 100% excluded files exits earlier, in `FETCH_DIFF`, with
 | `MAX_CHANGED_FILES` | `200` | Skip if PR has more files |
 | `MIN_CHANGED_LINES` | `0` (disabled) | Skip if PR has fewer lines |
 | `MAX_CHANGED_LINES` | `3000` | Skip if PR has more lines |
-| `MAX_INPUT_TOKENS` | `250000` | Skip if estimated input tokens exceed this (after dropping file contexts) |
+| `MAX_INPUT_TOKENS` | `250000` | Skip if estimated input tokens exceed the budget (this or the context window minus `MAX_OUTPUT_TOKENS`, whichever is smaller) after dropping file contexts |
 
-All can be overridden via CLI flags (`--min-changed-files`, etc.). `0` disables the threshold.
+All can be overridden via CLI flags (`--min-changed-files`, etc.). `0` disables the threshold. With `ENABLE_BUNDLED_REVIEW` on, `MAX_CHANGED_FILES`/`MAX_CHANGED_LINES` don't skip, and a PR still over the input budget is reviewed in directory bundles instead (skipped only past `MAX_BUNDLES`; see [fsm.md](fsm.md)).
 
 **Rationale for upper bounds:** Very large PRs (>200 files, >3000 lines) produce unreliable reviews and high token costs. Teams should split such PRs.
 

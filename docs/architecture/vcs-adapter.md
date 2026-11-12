@@ -31,6 +31,7 @@ interface VCSAdapter {
   // Phase 1b — Comment replies
   getRepliesToReviewComments(prId: string, reviewCommentIds: string[], includeAnswered?: boolean): Promise<ReplyResult>  // ReplyResult = { replies: CommentReply[]; agentReplyCount: number }
   postReply(prId: string, parentId: string, body: string): Promise<void>
+  filterAddressedToAgent?(replies: CommentReply[], agentIds: ReadonlySet<string>): Promise<CommentReply[]>  // optional, Bitbucket only (SKIP_DIRECTED_REPLIES)
 }
 ```
 

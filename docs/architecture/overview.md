@@ -30,6 +30,11 @@ pr-review-agent/
 │   │   ├── formatter.ts          # Structured review object → markdown, footer builders, hash extraction
 │   │   ├── usage.ts              # UsageRecord type, cost estimation (MODEL_PRICING), record builder
 │   │   ├── findings-output.ts    # Benchmark findings: judge-markdown + structured-recovery merge
+│   │   ├── breadth.ts            # Breadth + second-look prompts, file coverage, stage statuses
+│   │   ├── lenses.ts             # Lens registry + aliases, lens prompts, lens recommendations
+│   │   ├── judge-decisions.ts    # Judge decision contract: policy table, anchors, kept findings
+│   │   ├── judge-quality.ts      # ENABLE_JUDGE_QUALITY / proposals prompt and schema additions
+│   │   ├── shown-anchors.ts      # What each pass was shown, for ENABLE_JUDGE_SHOWN_CONTEXT_ANCHORS
 │   │   ├── aggregate.ts          # Merge/dedupe findings across bundles
 │   │   ├── bundler.ts            # Split an over-budget PR into directory bundles
 │   │   ├── bundled.ts            # Per-bundle reviewer+judge orchestration
@@ -45,6 +50,7 @@ pr-review-agent/
 │   │   ├── azure.ts              # Azure DevOps implementation (experimental, live on cloud)
 │   │   ├── reviewbench.ts        # Filesystem adapter for --benchmark
 │   │   ├── github.ts             # GitHub implementation (experimental, same-repo PRs via Actions)
+│   │   ├── mention-filter.ts     # Drop rule for replies @-directed at someone else (SKIP_DIRECTED_REPLIES)
 │   │   └── gitlab.ts             # GitLab stub (backlog)
 │   ├── prompt/
 │   │   ├── loader.ts             # Loads base template, parses repo sections, composes stacks, fills placeholders
@@ -134,6 +140,8 @@ separate judge model (`JUDGING_MODEL`) that validates each finding against the a
 before posting. When no judge is configured, this state is a no-op passthrough. The optional
 `BREADTH_REVIEW` state (`ENABLE_BREADTH_REVIEW`) runs a second reviewer pass focused on files
 the first pass left without findings and appends its findings to the judge's candidates.
+The optional `SECOND_LOOK` state (`ENABLE_SECOND_LOOK`) re-reads only the files that already
+have a finding, looking for what the first pass missed there, and appends to the same candidates.
 The optional `LENS_REVIEW` state (`ENABLE_LENSES` + `LENSES`) runs one concern-specific
 reviewer pass per listed lens (reliability, security, testing, performance, architecture)
 over the full diff and appends their findings to the same judge call.

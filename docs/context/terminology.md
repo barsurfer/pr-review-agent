@@ -34,7 +34,7 @@ Focus on shared vocabulary used across code, docs, and prompts.
 | **Repo Prompt** | `.agent-review-instructions.md` fetched from the target repo via API; provides ROLE, REVIEW PRIORITIES, EXCEPTIONS, MENTAL MODEL | Custom prompt |
 | **Repo Prompt Sections** | The five injectable sections: ROLE, REVIEW PRIORITIES, SECURITY, MENTAL MODEL, EXCEPTIONS | Prompt sections |
 | **Generator-Verifier** | Two-model pattern: the reviewer model proposes candidate findings, the judge model filters them against the diff before posting | Judge pattern |
-| **Judge Model** | Second Claude instance (`JUDGING_MODEL`) that validates MEDIUM/HIGH findings and produces a Merge Confidence score | Verifier, reviewer |
+| **Judge Model** | Second model call (`JUDGING_MODEL`) that classifies every candidate finding against the diff and produces a Merge Confidence score | Verifier, reviewer |
 | **Merge Confidence** | Holistic merge-safety score (0–100%) produced by the judge model; not arithmetic — considers findings, scope, and critical path | Score, confidence |
 
 ## Relationships

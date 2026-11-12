@@ -31,6 +31,7 @@ credentials in source code or commit them to version control.**
 | `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | OpenRouter API base URL (`/chat/completions` is appended) |
 | `OPENROUTER_REFERER` | `https://github.com/barsurfer/pr-review-agent` | Sent as `HTTP-Referer` — **required** for the run to appear in the OpenRouter dashboard/rankings; set empty to opt out of attribution |
 | `OPENROUTER_TITLE` | `pr-review-agent` | Sent as `X-OpenRouter-Title` — the app's display name in OpenRouter analytics; set empty to omit |
+| `REPO_SLUG` | *(unset)* | Sent as OpenRouter's `user` field for per-repo segmentation. `--repo-slug` overrides it, so it only matters for runs without that flag (e.g. `--benchmark`) |
 | `MAX_RETRIES` | `3` | Max retries on 429/5xx errors (SDK built-in exponential backoff). Default: `3` |
 | `MAX_INPUT_TOKENS` | `250000` | If estimated input exceeds this, first drop file contexts and review diff-only; skip only if the diff alone still exceeds it (0 = disabled). `ESTIMATE_TOKENS` logs a per-section breakdown (prompt / diff / delta / file-contexts / prev-reviews / replies) so you can see what drove the size |
 | `MAX_OUTPUT_TOKENS` | `32000` | Output-token cap for reviewer + judge (raised from 16k because the Claude 5 family thinks by default and thinking counts against this). Requests stream, so large caps don't hit the HTTP timeout. **Effort coupling:** thinking counts against this cap, so `REVIEW_EFFORT`/`JUDGE_EFFORT` at `xhigh`/`max` can exceed 32k on a non-trivial PR and truncate the response (the run errors rather than posting a cut-off review) — raise to ~`64000` when using high effort. Default/`high` effort fits 32k. |
@@ -53,6 +54,8 @@ credentials in source code or commit them to version control.**
 | `ENABLE_JUDGE_KEEP_UNVERIFIED` | `false` | Post candidates the judge classifies `unverifiable` or `framework_uncertainty` (score capped at 5) instead of dropping / moving them to Unresolved Questions. |
 | `ENABLE_JUDGE_PROPOSALS` | `false` | Judge adds a concise fix `proposal` to each kept finding, emitted in `results.jsonl` `anchored_findings[]` and `--benchmark` findings JSON (never the posted comment). Extra judge output tokens; needs a judge. CLI: `--proposals`. |
 | `ENABLE_JUDGE_FILE_CONTEXT` | `false` | Send the judge the same full-file context the reviewer got, not just the diff. Roughly doubles judge input tokens. |
+| `ENABLE_JUDGE_QUALITY` | `false` | Judge recall lever, still one judge call: a narrow evidence check that lets a `low_value` candidate with a concrete failing scenario be `validated`, stricter same-file `duplicate` validation, guarded per-file expansion, and an app-side dedup of mechanical double counts (`quality_action` markers). Changes the judge prompt and schema. ReviewBench label `J_QUALITY`. See [prompt/judge.md](../context/prompt/judge.md). |
+| `ENABLE_JUDGE_SHOWN_CONTEXT_ANCHORS` | `false` | Accept a numeric anchor on an unchanged line when the pass that produced the candidate (breadth, second-look, lens) or the judge was shown that line; reviewer anchors stay ungated. Logs `anchor_basis` on each decision; not applied in bundled review. ReviewBench label `J_SHOWN_ANCHOR`. |
 | `MAX_REPLY_COMMENTS` | `5` | Max agent reply comments per PR (0 = unlimited). Prevents runaway token usage on extended conversations. Default: `5` |
 | `SKIP_DIRECTED_REPLIES` | `false` | Skip replying to a dev comment `@`-directed solely at someone else (a human/team, not the agent). Bitbucket only; fail-safe keeps all on any uncertainty. CLI: `--skip-directed-replies`. |
 | `MAX_FINDINGS` | `0` | Cap the number of findings the reviewer reports (0 = unlimited). When set, appends a findings-limit instruction to the reviewer prompt. |
@@ -62,10 +65,13 @@ credentials in source code or commit them to version control.**
 | `ENABLE_LINE_NUMBERS` | `true` | Prefix every added/context diff line (new-file numbering) and every file-context line with its line number in what the reviewer and judge see, and tell the reviewer to cite them. Without it ~40% of findings came back with no `lines`, because models can't count lines from `@@` headers. Costs a few input tokens per line (counted in the token budget and bundle planning); the raw diff used for anchoring is untouched. On by default because the benchmark UI allows only 6 config labels; set `false` to send the raw diff. See [fetching/strategy.md](../context/fetching/strategy.md). |
 | `ENABLE_BREADTH_REVIEW` | `false` | Second reviewer pass for changed files the first pass left without a finding (same defect elsewhere, changed-together inconsistencies, incomplete changes); its findings are judged together with the reviewer's. First, single-pass reviews only; needs a judge. See [review/fsm.md](../context/review/fsm.md). |
 | `BREADTH_MODEL` | *(unset → `JUDGING_MODEL`)* | Model for the breadth pass. |
-| `REPLY_MODEL` | *(unset → reviewer model)* | Model for developer-reply responses — answering a question needs less depth than a review, so a cheaper model (e.g. `claude-haiku-5-5`) cuts reply cost. Empty uses `CLAUDE_MODEL`. A reply-only run logs + costs at this model. |
+| `REPLY_MODEL` | *(unset → reviewer model)* | Model for developer-reply responses — answering a question needs less depth than a review, so a cheaper model (e.g. `claude-haiku-5-5`) cuts reply cost. Empty uses `CLAUDE_MODEL`. A reply-only run logs + costs at this model. CLI: `--reply-model`. |
 | `BREADTH_EFFORT` | *(unset → `JUDGE_EFFORT` when falling back to the judge model)* | Effort for the breadth pass. |
 | `BREADTH_MIN_FILES` | `5` | Skip breadth below this many reviewable changed files. |
 | `BREADTH_MIN_UNTOUCHED` | `3` | Skip breadth when fewer reviewable files than this have no reviewer finding. An empty or non-numeric `BREADTH_MIN_FILES` / `BREADTH_MIN_UNTOUCHED` falls back to the default. |
+| `ENABLE_BREADTH_PRIORITY_TARGETS` | `false` | Pick the breadth pass's 40 listed untouched files by subsystem diversity and nearness to a finding instead of diff order, leaving release-entry `.changeset/*.md` files out of the briefing; `untouched_files` logs the selection. ReviewBench label `B_PRIORITY`. |
+| `ENABLE_SECOND_LOOK` | `false` | Second reviewer pass over the changed files that already have a reviewer finding, shown only those files' diff sections and contexts plus the known findings, to find what the first pass missed there; runs on `CLAUDE_MODEL` at `REVIEW_EFFORT`, and its findings are judged with the reviewer's (`origin` `second_look`). First, single-pass reviews only; needs a judge. CLI: `--second-look`; ReviewBench label `SECOND_LOOK`. See [review/fsm.md](../context/review/fsm.md). |
+| `ENABLE_SECOND_LOOK_BREADTH_TARGETS` | `false` | Second-look also re-reads files that only the breadth pass flagged (targets come from reviewer + breadth findings). ReviewBench label `SL_BREADTH`. |
 | `ENABLE_LENSES` | `false` | Run the concern-specific reviewer passes named in `LENSES` after second-look; their findings are judged together with the reviewer's (`origin` `lens:<name>`). Each lens is another reviewer-sized call (full diff + file contexts). First, single-pass reviews only; needs a judge. Only the exact string `true` enables it. CLI: `--lenses <list>` (sets `LENSES` and enables). Benchmark: label `LENSES`. See [review/fsm.md](../context/review/fsm.md). |
 | `LENSES` | *(empty)* | Comma- or plus-separated lens names, run in order: `reliability`, `security`, `testing`, `performance`, `architecture`, or the aliases `rel`, `sec`, `test`, `perf`, `arch` (case-insensitive; an alias resolves to its full name, deduped on that). Unknown names are warned about and ignored; with no known name no lens runs. |
 | `LENS_MODEL` | *(unset → `CLAUDE_MODEL`)* | Model for lens passes. Unset uses the reviewer model at `REVIEW_EFFORT`; set, the lens runs at that model's default effort. |
@@ -75,7 +81,7 @@ credentials in source code or commit them to version control.**
 
 > Threshold variables can also be set via CLI flags (`--min-changed-files`, etc.)
 > which override the env var values. Model/token/effort too: `CLAUDE_MODEL`/`JUDGING_MODEL`
-> → `--model`/`--judge-model`; `MAX_INPUT_TOKENS`/`MAX_OUTPUT_TOKENS` →
+> → `--model`/`--judge-model`; `REPLY_MODEL` → `--reply-model`; `MAX_INPUT_TOKENS`/`MAX_OUTPUT_TOKENS` →
 > `--max-input-tokens`/`--max-output-tokens`; `REVIEW_EFFORT`/`JUDGE_EFFORT` →
 > `--effort`/`--judge-effort`. CLI always wins over env.
 >
@@ -172,70 +178,4 @@ needed when the GitLab adapter is implemented.
 
 ## `.env.example`
 
-```env
-# VCS
-VCS_PROVIDER=bitbucket
-BITBUCKET_BASE_URL=https://api.bitbucket.org/2.0
-BITBUCKET_WORKSPACE=
-BITBUCKET_USERNAME=
-BITBUCKET_TOKEN=
-
-# Azure DevOps (experimental / WIP) — set VCS_PROVIDER=azure to use.
-# Provide ONE credential: AZURE_ACCESS_TOKEN (Bearer, e.g. pipeline System.AccessToken)
-# OR AZURE_PAT (Basic). Access token wins if both are set.
-# AZURE_BASE_URL=https://dev.azure.com
-# AZURE_ORG=
-# AZURE_PROJECT=
-# AZURE_ACCESS_TOKEN=
-# AZURE_PAT=
-
-# GitHub (experimental — same-repo PRs) — set VCS_PROVIDER=github to use.
-# Triggered via GitHub Actions (.github/workflows/pr-review.yml); fork PRs out of scope.
-# GITHUB_BASE_URL=https://api.github.com   # GitHub Enterprise: https://<host>/api/v3
-# GITHUB_OWNER=                            # org or user (can also use --workspace)
-# GITHUB_TOKEN=
-
-# Claude
-ANTHROPIC_API_KEY=
-CLAUDE_MODEL=claude-haiku-4-5-20251001
-# LLM_PROVIDER=anthropic   # 'anthropic' | 'openrouter'
-# OPENROUTER_API_KEY=      # used when LLM_PROVIDER=openrouter; falls back to the ANTHROPIC_API_KEY slot if unset
-# OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
-# OPENROUTER_REFERER=      # HTTP-Referer; defaults to the repo URL (needed for dashboard attribution)
-# OPENROUTER_TITLE=        # X-OpenRouter-Title; defaults to pr-review-agent
-MAX_RETRIES=3
-# MAX_INPUT_TOKENS=250000
-
-# Agent identity (defaults to BITBUCKET_USERNAME, then 'Claude')
-# AGENT_IDENTITY=
-
-# Reply limit — max agent reply comments per PR (0 = unlimited)
-# MAX_REPLY_COMMENTS=5
-
-# Skip replying to dev comments @-directed at someone else (Bitbucket only)
-# SKIP_DIRECTED_REPLIES=false
-
-# Context limits
-MAX_CONTEXT_FILES=20
-MAX_FILE_LINES=500
-
-# PR size thresholds (0 = disabled)
-MIN_CHANGED_FILES=0
-MAX_CHANGED_FILES=200
-MIN_CHANGED_LINES=0
-MAX_CHANGED_LINES=3000
-
-# Branch exclusion — skip reviews for merge-back / release PRs
-# SKIP_SOURCE_BRANCHES=main,master,release/*,hotfix/*
-# SKIP_TARGET_BRANCHES=main,master
-
-# Diff exclusion patterns (comma-separated, default includes lock files, .json, .spec.ts)
-# DIFF_EXCLUDE_PATTERNS=*.lock,package-lock.json,yarn.lock,pnpm-lock.yaml,*.json,*.spec.ts
-
-# Judge model (on by default — validates findings before posting; set empty to skip)
-# JUDGING_MODEL=claude-sonnet-5
-
-# Surface real-but-minor findings (dead code, stale docs/comments, misleading names,
-# duplicated logic, vacuous tests). They reach the PR only with ENABLE_JUDGE_KEEP_MINOR.
-# ENABLE_NITPICKS=false
-```
+The repo-root [`.env.example`](../../.env.example) is the copy-and-edit template (`cp .env.example .env`): the Bitbucket and Anthropic values to fill in, plus the optional settings commented out at their defaults. This page stays the complete reference.

@@ -137,7 +137,7 @@ cp .env.example .env
 Open `.env` and fill in your values:
 
 ```env
-# Which VCS to use — only 'bitbucket' is implemented
+# VCS provider — 'bitbucket' (production); 'azure' and 'github' (experimental); 'gitlab' (stub)
 VCS_PROVIDER=bitbucket
 
 # Bitbucket Cloud only — Server/DC uses a different (v1) REST API and is not supported
@@ -184,9 +184,10 @@ The context fetcher is selective about which files get full content:
 ### Judge Model (on by default)
 
 The judge runs by default (`JUDGING_MODEL=claude-sonnet-5`; set it empty to disable). The review output goes through a second validation pass before
-posting. The judge model receives the diff + review text and validates each MEDIUM/HIGH
-finding against the actual code. Invalid or fabricated findings are dropped. The judge
-produces a clean final comment with only validated findings and a verdict score.
+posting. The judge model receives the diff + the candidate findings and classifies each one
+against the actual code (MEDIUM/HIGH with quoted evidence, LOW more briefly). Invalid or
+fabricated findings are dropped. The agent then renders the final comment from the kept
+findings and the judge's Merge Confidence score.
 
 This is the **generator-verifier** pattern: the reviewer proposes candidate findings and the
 judge filters them. The judge never adds findings, so the reviewer model sets the recall
@@ -338,10 +339,10 @@ bundle build on every push to `main` and every PR — the gate that keeps `main`
 | `--model <id>` | No | Claude model ID (overrides `CLAUDE_MODEL` env var) |
 | `--judge-model <id>` | No | Judge model ID (overrides `JUDGING_MODEL` env var) |
 | `--reply-model <id>` | No | Model ID for developer replies (overrides `REPLY_MODEL`; empty = reviewer model) |
-| `--min-changed-files <n>` | No | Skip review if PR has fewer changed files (overrides `MIN_CHANGED_FILES`) |
-| `--max-changed-files <n>` | No | Skip review if PR has more changed files (overrides `MAX_CHANGED_FILES`) |
-| `--min-changed-lines <n>` | No | Skip review if PR has fewer changed lines (overrides `MIN_CHANGED_LINES`) |
-| `--max-changed-lines <n>` | No | Skip review if PR has more changed lines (overrides `MAX_CHANGED_LINES`) |
+| `--min-changed-files <n>` | No | Skip review if PR has fewer reviewable files (overrides `MIN_CHANGED_FILES`) |
+| `--max-changed-files <n>` | No | Skip review if PR has more reviewable files (overrides `MAX_CHANGED_FILES`) |
+| `--min-changed-lines <n>` | No | Skip review if PR has fewer reviewable lines (overrides `MIN_CHANGED_LINES`) |
+| `--max-changed-lines <n>` | No | Skip review if PR has more reviewable lines (overrides `MAX_CHANGED_LINES`) |
 | `--max-input-tokens <n>` | No | Input-token budget before degrade/skip (overrides `MAX_INPUT_TOKENS`) |
 | `--max-output-tokens <n>` | No | Max output tokens for reviewer + judge (overrides `MAX_OUTPUT_TOKENS`) |
 | `--effort <level>` | No | Reviewer thinking effort `low`\|`medium`\|`high`\|`xhigh`\|`max` (overrides `REVIEW_EFFORT`) |
@@ -351,7 +352,7 @@ bundle build on every push to `main` and every PR — the gate that keeps `main`
 | `--lenses <list>` | No | Concern-specific reviewer passes, e.g. `reliability+security` — any of `reliability`, `security`, `testing`, `performance`, `architecture`, or the aliases `rel`, `sec`, `test`, `perf`, `arch` (overrides `ENABLE_LENSES`/`LENSES`; requires a judge) |
 | `--lens-recommendation` | No | Log which lenses the first-pass reviewer recommends for the PR to `results.jsonl` `lens_recommendations`; log-only, never enables or skips a lens (overrides `ENABLE_LENS_RECOMMENDATION`) |
 | `--proposals` | No | Add a concise fix proposal to each kept finding in `results.jsonl` `anchored_findings` (overrides `ENABLE_JUDGE_PROPOSALS`; requires a judge) |
-| `--benchmark` | No | ReviewBench mode — read the PR from `RB_*` env + mounted files, write findings JSON to `RB_OUT`, never post |
+| `--benchmark` | No | ReviewBench mode — read the PR from `RB_*` env + mounted files, write findings JSON to `RB_OUT`, never post; always exits 0. See [reviewbench/README.md](reviewbench/README.md) |
 
 \* Not required when using `--validate-prompt --prompt <path>` (local file validation).
 
@@ -402,7 +403,7 @@ All credentials and settings are provided via environment variables.
 | `MAX_REPLY_COMMENTS` | `5` | Max agent replies per PR (0 = unlimited) |
 | `SKIP_SOURCE_BRANCHES` / `SKIP_TARGET_BRANCHES` | `main,master,release/*,hotfix/*` / `main,master` | Branch-exclusion globs |
 | `DIFF_EXCLUDE_PATTERNS` | `*.lock,package-lock.json,yarn.lock,pnpm-lock.yaml,*.json,*.spec.ts` | Globs excluded from the reviewable diff |
-| `ANTHROPIC_WORKSPACE_ID` | — | Sets the `anthropic-workspace-id` header (required for workspace-scoped / user keys) |
+| `ANTHROPIC_WORKSPACE_ID` | — | Sets the `anthropic-workspace-id` header; required for a user-scoped key (`sk-ant-usr-…`) that isn't bound to a workspace, unneeded for a workspace-scoped key |
 
 See [docs/reference/env-vars.md](docs/reference/env-vars.md) for the complete list.
 

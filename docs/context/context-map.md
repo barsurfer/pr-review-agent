@@ -18,7 +18,7 @@ Rule: Each entry has a 1-sentence summary: key concepts, keywords, tech; ends wi
 ## Domain Specs
 
 - [review/](review/)
-  - [review/fsm.md](review/fsm.md) — 20-state FSM: all states, transitions, 10 skip/review outcomes, BREADTH_REVIEW second pass (ENABLE_BREADTH_REVIEW, untouched-files trigger, BREADTH_MODEL → judge model), LENS_REVIEW concern-specific lenses (ENABLE_LENSES/LENSES/LENS_MODEL, reliability/security/testing/performance/architecture, per-lens skip statuses, budget/deadline), log-only lens recommendation at CALL_MODEL (ENABLE_LENS_RECOMMENDATION, first single-pass review), BUNDLED_REVIEW big-PR path (directory bundles, per-bundle reviewer+judge, merge/dedupe, ENABLE_BUNDLED_REVIEW/MAX_BUNDLES), ReviewContext interface, POST_REVIEW safety guards; read when changing orchestration logic.
+  - [review/fsm.md](review/fsm.md) — 20-state FSM: all states, transitions, 10 skip/review outcomes, BREADTH_REVIEW second pass (ENABLE_BREADTH_REVIEW, untouched-files trigger, BREADTH_MODEL → judge model), SECOND_LOOK re-read of already-flagged files (ENABLE_SECOND_LOOK, restricted diff, reviewer model, second_look_status values), LENS_REVIEW concern-specific lenses (ENABLE_LENSES/LENSES/LENS_MODEL, reliability/security/testing/performance/architecture + aliases rel/sec/test/perf/arch, per-lens skip statuses, budget/deadline, experimental status with no repeatable recall gain), log-only lens recommendation at CALL_MODEL (ENABLE_LENS_RECOMMENDATION, first single-pass review), BUNDLED_REVIEW big-PR path (directory bundles, per-bundle reviewer+judge, merge/dedupe, ENABLE_BUNDLED_REVIEW/MAX_BUNDLES), abridged ReviewContext interface, POST_REVIEW safety guards; read when changing orchestration logic.
   - [review/skip-logic.md](review/skip-logic.md) — All skip mechanisms: commit hash dedup, delta diff pre-check, branch exclusion, size thresholds, reply limit, oversized-diff fetch failure (`PrTooLargeError` → SKIP, GitHub); read when debugging unexpected skips.
   - [review/replies.md](review/replies.md) — Reply detection algorithm, recursive parent tracking, stale-reply loop fix, bundled response, reply footer, reply limit; read when working on comment threading.
 
@@ -34,6 +34,17 @@ Rule: Each entry has a 1-sentence summary: key concepts, keywords, tech; ends wi
 
 - [fetching/](fetching/)
   - [fetching/strategy.md](fetching/strategy.md) — Two-form diff (raw vs filtered), full file context exclusion rules, high-churn priority, MAX_CONTEXT_FILES/MAX_FILE_LINES, why local testing runs deliberately low limits (drift observation), full payload format for review and reply, numbered diff/file-context gutter (ENABLE_LINE_NUMBERS); read when changing what context is sent to Claude.
+
+---
+
+## Reference
+
+- [../reference/env-vars.md](../reference/env-vars.md) — Every environment variable with its default (VCS/Azure/GitHub credentials, LLM_PROVIDER/OpenRouter, models and effort, token budgets, thresholds, judge policy flags, breadth/second-look/lens/recall levers, BENCHMARK_DEADLINE_SECONDS) and its CLI override; read when adding, renaming or defaulting a setting.
+- [../reference/usage-logging.md](../reference/usage-logging.md) — results.jsonl record schema (tokens summed over all calls, cost_usd actual-or-estimated, per-stage breadth/second_look/lens_runs cost and status, judge_decisions with flag-gated extras, recall_levers), action values, MODEL_PRICING cost estimation, jq queries incl. cost by stage; read when adding a usage field or analysing runs.
+- [../../reviewbench/README.md](../../reviewbench/README.md) — ReviewBench image: --benchmark flow, fail-safe/deadline entrypoint, every RB_CONFIG_* label and its env var, 6-label manifest cap and 64-char row-id limit (short keys, lens aliases, omit MODEL when baked), Dockerfile baked ENV/build-arg defaults, Benchmark settings echo line; read before configuring or interpreting a benchmark run.
+- [../reference/azure-devops.md](../reference/azure-devops.md) — Azure DevOps CI wiring: build-validation pipeline, System.AccessToken auth, first-setup gotchas, Service Hook → Incoming Webhook reply pipeline; read when setting up or debugging the Azure trigger.
+- [../reference/copilot-integration.md](../reference/copilot-integration.md) — Sharing one prompt file between the agent (.agent-review-instructions.md sections) and GitHub Copilot (.prompt.md) via symlinks; read when authoring a repo prompt for both tools.
+- [../architecture/overview.md](../architecture/overview.md) — Repository structure (src/ module map, prompts/, workflows, reviewbench/), tech stack, condensed FSM and out-of-scope list; read for orientation on where code lives.
 
 
 ## Session greeting (read-proof)

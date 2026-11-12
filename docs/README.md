@@ -42,6 +42,7 @@ structured review as a PR comment.
 | [reference/env-vars.md](reference/env-vars.md) | All environment variables across phases |
 | [reference/usage-logging.md](reference/usage-logging.md) | Usage logging, record schema, cost estimates, and analytics queries |
 | [reference/copilot-integration.md](reference/copilot-integration.md) | Sharing prompt files with GitHub Copilot |
+| [reference/azure-devops.md](reference/azure-devops.md) | Azure DevOps CI wiring and the reply-flow trigger (experimental) |
 
 ---
 
