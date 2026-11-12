@@ -17,7 +17,7 @@ credentials in source code or commit them to version control.**
 
 | Variable | Example | Description |
 |----------|---------|-------------|
-| `VCS_PROVIDER` | `bitbucket` | Which VCS adapter to use. `bitbucket` is production; `azure` and `github` are experimental (see below); `gitlab` is not implemented: selecting it (or `--vcs gitlab`) exits 1 at startup with one error line. |
+| `VCS_PROVIDER` | `bitbucket` | Which VCS adapter to use. `bitbucket` is production; `azure` and `github` are experimental (see below); `gitlab` is not implemented: from 0.0.46 selecting it (or `--vcs gitlab`) exits 1 at startup with one error line. |
 | `BITBUCKET_BASE_URL` | `https://api.bitbucket.org/2.0` | Bitbucket Cloud API base URL (Server/DC is not supported — different v1 API) |
 | `BITBUCKET_WORKSPACE` | `my-workspace` | Bitbucket workspace slug |
 | `BITBUCKET_USERNAME` | `you@company.com` | Your Atlassian account email (used for HTTP Basic Auth) |
@@ -47,12 +47,12 @@ credentials in source code or commit them to version control.**
 | `SKIP_SOURCE_BRANCHES` | `main,master,release/*` | Comma-separated branch patterns. Skip review if PR source branch matches. Default: `main,master,release/*,hotfix/*`. CLI: `--skip-source-branches=<list>` (empty value = off) |
 | `SKIP_TARGET_BRANCHES` | `main,master` | Comma-separated branch patterns. Skip review if PR target branch matches. Default: `main,master`. An explicitly empty value disables the default, so don't pass it as an always-on job parameter shared by every repo. CLI: `--skip-target-branches=<list>` (per repo; `--skip-target-branches=` = off) |
 | `ONLY_TARGET_BRANCHES` | `develop,release/*` | Comma-separated branch patterns, same `*` wildcard. When set, skip review if PR target branch matches **none** of them (e.g. stacked PRs until retargeted). Checked after both skip lists, which win on overlap (a target in both `SKIP_TARGET_BRANCHES` and this list logs one warning). Default: empty (off). CLI: `--only-target-branches=<list>`. Main-only recipe: `SKIP_TARGET_BRANCHES=` + `ONLY_TARGET_BRANCHES=main` + `SKIP_SOURCE_BRANCHES=main,master`, or per repo `--skip-target-branches= --only-target-branches=main --skip-source-branches=main,master`. See [review/skip-logic.md §3](../context/review/skip-logic.md) |
-| `TRIGGER_EVENT` | `pullrequest:comment_created` | What started the run: Bitbucket `X-Event-Key`, GitHub `${{ github.event_name }}`, the Azure service hook's `eventType` (per provider in [review/skip-logic.md §9](../context/review/skip-logic.md)). Logged and recorded as `trigger.event`; only a comment event is checked against `IGNORE_COMMENT_AUTHORS`. Default: empty. CLI: `--event` |
+| `TRIGGER_EVENT` | `pullrequest:comment_created` | What started the run: Bitbucket `X-Event-Key`, GitHub `${{ github.event_name }}`, Azure `ms.vss-code.git-pullrequest-comment-event`, the comment service hook's event, which the sample reply pipeline passes as a literal (per provider in [review/skip-logic.md §9](../context/review/skip-logic.md)). Logged and recorded as `trigger.event`; only a comment event is checked against `IGNORE_COMMENT_AUTHORS`. Default: empty. CLI: `--event` |
 | `TRIGGER_COMMENT_AUTHOR` | `{a1b2c3…}` | Account id of the event **actor** — Bitbucket `$.actor.uuid` (or `account_id`), GitHub `sender.login` / `sender.id`, Azure `resource.comment.author.id` — never the PR author, never the display name. Logged and recorded as `trigger.comment_author`. Default: empty. CLI: `--comment-author` |
-| `TRIGGER_EVENT_KIND` | `comment` | `comment` or `other`: whether this event is a comment event, overriding the name rule (a name containing `comment`, or exactly `note`, `Note Hook` or `pull_request_review`). Case-insensitive; any other value logs one warning and is ignored. Recorded as `trigger.event_kind` only when given. Set it per event, not job-wide, unless the job receives only comment events: `comment` on a job that also runs on pushes makes a listed author's push skippable. Default: empty (name rule). CLI: `--event-kind` |
+| `TRIGGER_EVENT_KIND` | `comment` | From 0.0.46. `comment` or `other`: whether this event is a comment event, overriding the name rule (a name containing `comment`, or exactly `note`, `Note Hook` or `pull_request_review`). Case-insensitive; any other value logs one warning and is ignored. Recorded as `trigger.event_kind` only when given. Set it per event, not job-wide, unless the job receives only comment events: `comment` on a job that also runs on pushes makes a listed author's push skippable. Default: empty (name rule). CLI: `--event-kind` |
 | `IGNORE_COMMENT_AUTHORS` | `{bot-uuid}` | Comma-separated actor ids. A comment event by a listed actor skips before any VCS or model call (exit 0, `action: SKIP`); push/created/updated events are never comment events by name, so they are never skipped, whatever the actor. Matching is exact after trim, `{}` strip and lowercase. `--force` overrides it. Default: empty (off). **Caveat:** an ignored event never catches up a push that a skip-if-locked CI lock dropped, so that head stays unreviewed until the next non-ignored event — list an actor only when CI queues push events (Bitbucket `pullrequest:updated`), prefer bots that never comment in response to a push, and don't list the agent's own id under a dropping lock. On GitHub Actions filter commenters in the job `if:` instead. See [review/skip-logic.md §7](../context/review/skip-logic.md) |
 | `LAST_CHECKED_COMMIT` | `0123456789ab…` | The `checked_commit` an earlier run reported for this PR (from that run's `results.jsonl` record). When the head equals it (12–64 hex, so SHA-256 heads work too; prefix match, case-insensitive), a re-review on that head goes to `CHECK_REPLIES` like a footer match instead of re-paying the review. Malformed → one warning, treated as unset. Default: empty (off). CLI: `--checked-commit`. **Rollout:** an older bundle exits 1 on the unknown `--checked-commit` flag, so CI should pass this env var instead. See [review/skip-logic.md §8](../context/review/skip-logic.md) |
-| `USAGE_RECORD_FILE` | `/tmp/pr-review-record.json` | A path that receives only this run's usage record, overwritten on every run, so any CI can read "this run's record" without matching on `JOB_NAME` / `BUILD_NUMBER`. Written next to the `results.jsonl` append, so not with `--log-usage false`; a failed write logs one warning and changes nothing else. Delete the file before the run: a run that fails before writing leaves the previous one. Default: empty (off). No CLI flag. See [usage-logging.md](usage-logging.md#finding-this-runs-record) |
+| `USAGE_RECORD_FILE` | `/tmp/pr-review-record.json` | From 0.0.46. A path that receives only this run's usage record, overwritten on every run, so any CI can read "this run's record" without matching on `JOB_NAME` / `BUILD_NUMBER`. Written next to the `results.jsonl` append, so not with `--log-usage false`; a failed write logs one warning and changes nothing else. Delete the file before the run: a run that fails before writing leaves the previous one. Default: empty (off). No CLI flag. See [usage-logging.md](usage-logging.md#finding-this-runs-record) |
 | `DIFF_EXCLUDE_PATTERNS` | `*.lock,*.json,*.spec.ts` | Comma-separated file patterns to strip from diff before sending to Claude. Default: `*.lock,package-lock.json,yarn.lock,pnpm-lock.yaml,*.json,*.spec.ts` |
 | `JUDGING_MODEL` | `claude-sonnet-5` | Judge model for finding validation — **on by default**. Set empty to disable the judge pass. With `LLM_PROVIDER=openrouter` this takes an OpenRouter slug and may be a different vendor than the reviewer. |
 | `REVIEW_EFFORT` | *(unset)* | Reviewer thinking effort: `low`\|`medium`\|`high`\|`xhigh`\|`max`. Unset = model default (a strong model like Opus 4.8 at its adaptive default needs no effort flag). Only the 5-family / Opus-4.6+ / Sonnet-5 support it; models that don't (e.g. Haiku 4.5) are retried without it. `xhigh`/`max` need a larger `MAX_OUTPUT_TOKENS` (~64k) — thinking counts against the output cap and otherwise truncates the review. |
@@ -160,7 +160,7 @@ Reviews and replies are flat issue comments (no threading); no inline comments y
 | Variable | Example | Description |
 |----------|---------|-------------|
 | `GITHUB_BASE_URL` | `https://api.github.com` | API base URL. Point at `https://<host>/api/v3` for GitHub Enterprise Server. |
-| `GITHUB_OWNER` | `my-org` | Repository owner (org or user). Required. Can also be set via `--workspace`. Logged as the usage record's `workspace`. |
+| `GITHUB_OWNER` | `my-org` | Repository owner (org or user). Required. Can also be set via `--workspace`. Logged as the usage record's `workspace` from 0.0.46. |
 | `GITHUB_TOKEN` | `ghp_…` / `github_pat_…` | Token with PR read/write on the repo. Required. In Actions, the workflow-provided `GITHUB_TOKEN` secret is used. |
 
 `validateGitHubConfig()` requires `GITHUB_OWNER` and `GITHUB_TOKEN`. Repository is passed via
@@ -169,13 +169,16 @@ endpoint; past 3000 changed files or a 25 MB diff the run is a clean SKIP, never
 
 **GitHub Actions trigger.** [`.github/workflows/pr-review.yml`](../../.github/workflows/pr-review.yml)
 is the GitHub-native equivalent of the Jenkins/Azure pipelines. It reviews on `pull_request`
-(opened/synchronize/reopened) and replies on `issue_comment` (created), guarded to same-repo
-PRs and non-bot commenters, with `permissions: pull-requests: write` / `contents: read`. It sets
-two env values worth noting:
+(opened/synchronize/reopened, and `edited` on a base change) and replies on `issue_comment`
+(created), guarded in the job `if:` to same-repo PRs and trusted non-bot commenters, with
+`permissions: pull-requests: write` / `contents: read` and job-level `concurrency` per PR without
+`cancel-in-progress`. Its LLM secret is `OPENROUTER_API_KEY` (`LLM_PROVIDER: openrouter`). Details:
+[github-actions.md](github-actions.md). It sets two env values worth noting:
 
 - `AGENT_IDENTITY: github-actions[bot]` — the name shown in review/reply footers. (The agent
-  doesn't answer itself: the `issue_comment` guard drops `Bot` authors, and the adapter also
-  detects its own comments by footer, not author.)
+  doesn't re-trigger itself because a comment posted with `GITHUB_TOKEN` starts no workflow run;
+  the adapter detects its own comments by footer, not author, and from 0.0.46 never treats a
+  `Bot` account's comment as a reply.)
 - `SKIP_TARGET_BRANCHES: ""` — the GitHub flow targets `main` directly, so the `main,master`
   default would skip every PR; it must be emptied for the Actions path.
 
@@ -193,8 +196,8 @@ two env values worth noting:
 ## Backlog — GitLab Adapter
 
 See [phases/phase-3-multi-vcs.md](../phases/phase-3-multi-vcs.md) for env vars
-needed when the GitLab adapter is implemented. Today `--vcs gitlab` / `VCS_PROVIDER=gitlab` exits 1
-at startup. A real adapter also needs a working `getCommitDiff` before the checked commit saves
+needed when the GitLab adapter is implemented. From 0.0.46 `--vcs gitlab` / `VCS_PROVIDER=gitlab`
+exits 1 at startup. A real adapter also needs a working `getCommitDiff` before the checked commit saves
 anything: a failed delta fetch withholds `checked_commit` for the run, and GitLab's compare API
 returns JSON diffs, so the unified diff must be reconstructed as on Azure.
 

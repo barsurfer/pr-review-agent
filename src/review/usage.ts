@@ -361,7 +361,7 @@ export function buildUsageRecord(
       still_open: deltaStats?.still_open ?? 0,
       new_findings: deltaStats?.new_findings ?? 0,
     } : null,
-    // Present only when the head was really checked and the run did not fail afterwards; CI stores exactly this value, so it must pass the LAST_CHECKED_COMMIT rule too (Azure can report an empty head).
+    // Present only when the head was really checked and the run did not fail afterwards; CI stores exactly this value, so it must pass the LAST_CHECKED_COMMIT rule too, whatever head the adapter reported.
     ...(ctx.headChecked && !error && isCheckedCommitHash(ctx.prInfo!.sourceCommit) ? { checked_commit: ctx.prInfo!.sourceCommit } : {}),
     ...(ctx.dedupHit === 'checked_commit' ? { dedup_source: 'checked_commit' as const } : {}),
     jenkins: getJenkinsMeta(),

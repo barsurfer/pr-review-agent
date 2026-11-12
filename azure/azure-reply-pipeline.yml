@@ -80,10 +80,7 @@ steps:
       AZURE_ACCESS_TOKEN: $(System.AccessToken)
       AZURE_PROJECT: $(System.TeamProject)
       ANTHROPIC_API_KEY: $(ANTHROPIC_API_KEY)   # secret pipeline variable — mapped explicitly
-      # Branch policy from pr-review-settings.yml — same lines as the review pipeline.
-      ONLY_TARGET_BRANCHES: ${{ variables.prReviewOnlyTargetBranches }}
-      SKIP_TARGET_BRANCHES: ${{ variables.prReviewSkipTargetBranches }}
-      SKIP_SOURCE_BRANCHES: ${{ variables.prReviewSkipSourceBranches }}
+      # No branch lists here: a mapping would override pr-review-settings.yml in this pipeline only.
       # Run linkage — same as the review pipeline.
       JOB_NAME: $(Build.DefinitionName)
       BUILD_NUMBER: $(Build.BuildId)

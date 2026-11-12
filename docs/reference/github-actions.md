@@ -110,7 +110,8 @@ The agent-side list (skip-logic §7) is a poor fit on GitHub:
   exit without looking at the PR, leaving the new head unreviewed until the next event (the
   dropped-push caveat in skip-logic §7).
 - The flat reply model reads comments, not triggers: the next run still answers a listed `User`
-  account's comments. Comments from `Bot` accounts are never treated as replies by the adapter.
+  account's comments. Comments from `Bot` accounts are never treated as replies by the adapter
+  (from 0.0.46).
 
 Filter in the job `if:` instead. It costs no runner and never joins the group. Illustrative, untested
 (a repository variable holding a JSON array of logins; `contains` compares case-insensitively):
@@ -123,21 +124,28 @@ Filter in the job `if:` instead. It costs no runner and never joins the group. I
 ```
 
 `TRIGGER_EVENT: ${{ github.event_name }}` and `TRIGGER_COMMENT_AUTHOR: ${{ github.event.sender.login }}`
-are safe to pass for logging (the record's `trigger` field) as long as the list is unset. Pass
-`github.event_name`, not `github.event.action` alone. `pull_request_review` is not classed as a
-comment event, and the shipped workflow does not subscribe to it.
+are safe to pass for logging (the record's `trigger` field) as long as the list is unset; the
+shipped workflow passes neither. Pass `github.event_name`, not `github.event.action` alone. From
+0.0.46 `pull_request_review` counts as a comment event by name; `pull_request_review_thread` does
+not, and `TRIGGER_EVENT_KIND` (`comment` / `other`, 0.0.46+) overrides the name rule per event.
+Never set `TRIGGER_EVENT_KIND: comment` job-wide in a workflow that also runs on `pull_request`
+(skip-logic §7). The shipped workflow subscribes to none of the `pull_request_review*` events.
 
 ## Finding this run's record
 
 On Actions the record's `jenkins` field is null, so the Jenkins recipes in
 [`usage-logging.md`](usage-logging.md) that match `jenkins.job` / `jenkins.build` find nothing. Within
-one repository, `vcs` + `repo_slug` + `pr_id` identify the PR (check `workspace` in usage-logging.md
-before relying on it for GitHub). Two ways to find this run's line:
+one repository, `vcs` + `repo_slug` + `pr_id` identify the PR; from 0.0.46 the record's `workspace`
+is the owner (`--workspace`, which the shipped workflow passes, else `GITHUB_OWNER`), so the full
+per-PR key works too. Three ways to find this run's line:
 
 - **Fresh runner, single line.** On a GitHub-hosted runner the workspace is new, and
   `results.jsonl` is not tracked, so after the agent step it holds at most this run's line. It does
   not exist after an argument error, config error or crash. Check `pr_id` before using it. Add
   `rm -f results.jsonl` before the agent on self-hosted runners that reuse a workspace.
+- **Own file (0.0.46+).** Set `USAGE_RECORD_FILE` in the agent step's `env:` to a path such as
+  `${{ runner.temp }}/pr-review-record.json`, `rm -f` it before the agent, and read it after: it
+  holds only this run's record ([usage-logging.md](usage-logging.md#finding-this-runs-record)).
 - **Export the Jenkins variables from the run.** The `jenkins` field (the name is historical) is
   filled from `JOB_NAME`, `BUILD_NUMBER` and `BUILD_URL`, so the documented `jq` recipes work
   unchanged. `BUILD_URL` also links the footer's `Review #N` and the reply footer to the run; footer
@@ -226,8 +234,11 @@ agent. A repository that downloads `dist/pr-review-agent.cjs` from a pinned tag 
 exit 1 and writes no record.
 
 - Pass newer inputs as env vars: `LAST_CHECKED_COMMIT`, `TRIGGER_EVENT`, `TRIGGER_COMMENT_AUTHOR`,
-  `ONLY_TARGET_BRANCHES`, `SKIP_*`. An older bundle ignores unknown env vars, so the feature is
-  simply off. YAML `env:` empty strings stay empty and disable a list.
+  `TRIGGER_EVENT_KIND`, `USAGE_RECORD_FILE`, `ONLY_TARGET_BRANCHES`, `SKIP_*`. An older bundle
+  ignores unknown env vars, so the feature is simply off. YAML `env:` empty strings stay empty and
+  disable a list.
+- A pinned bundle needs 0.0.46 for `TRIGGER_EVENT_KIND`, `USAGE_RECORD_FILE`, `workspace` = owner
+  in the record and the `Bot`-reply filter.
 - Remove flags before rolling the pin back.
 - `${{ }}` is substituted before the shell runs, so `--force ${{ inputs.force }}` with an empty input
   becomes a bare `--force` (re-review on every event). Write `--force="${{ inputs.force }}"`, and pass

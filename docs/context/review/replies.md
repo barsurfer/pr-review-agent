@@ -22,7 +22,7 @@ The agent scans all PR comments recursively to find unanswered developer questio
 
 This recursive parent tracking finds developer questions at any nesting depth.
 
-**Adapter note:** the `parent.id` recursion applies to Bitbucket. Azure uses thread membership instead: every comment in a review's thread other than the review itself is a reply (agent replies recognised by footer), whatever its `parentCommentId`, and the composite `threadId:commentId` id carries the thread to `postReply`. GitHub issue comments are flat (no `parent.id`), so `GitHubAdapter` treats the whole PR as one thread — a reply is any non-agent comment newer than the agent's latest comment, except comments from `Bot`-type accounts (see [vcs/adapter.md](../vcs/adapter.md)).
+**Adapter note:** the `parent.id` recursion applies to Bitbucket. Azure uses thread membership instead: every comment in a review's thread other than the review itself is a reply (agent replies recognised by footer), whatever its `parentCommentId`, and the composite `threadId:commentId` id carries the thread to `postReply`. GitHub issue comments are flat (no `parent.id`), so `GitHubAdapter` treats the whole PR as one thread — a reply is any non-agent comment newer than the agent's latest comment, except (from 0.0.46) comments from `Bot`-type accounts (see [vcs/adapter.md](../vcs/adapter.md)).
 
 ---
 

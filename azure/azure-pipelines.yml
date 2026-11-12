@@ -7,8 +7,8 @@
 #   Repo → Branches → {target branch} ⋯ → Branch policies → Build Validation →
 #   "+ Add" → pick this pipeline. Set the policy to **Optional** so a failed/blocked
 #   agent run never blocks the PR from merging.
-# List exactly the branches that carry this policy in pr-review-settings.yml
-# (prReviewOnlyTargetBranches), so the reply pipeline applies the same policy.
+# The agent's branch lists come from pr-review-settings.yml (agent defaults, trunk
+# alternative commented there), so the reply pipeline applies the same policy.
 #
 # ── PREREQUISITES ────────────────────────────────────────────────────────────
 #   1. "Allow scripts to access the OAuth token" must be enabled for the job, so
@@ -75,11 +75,7 @@ steps:
       AZURE_ACCESS_TOKEN: $(System.AccessToken)
       AZURE_PROJECT: $(System.TeamProject)
       ANTHROPIC_API_KEY: $(ANTHROPIC_API_KEY)   # secret pipeline variable — mapped explicitly
-      # Branch policy from pr-review-settings.yml — same lines in the reply pipeline. Compile-time
-      # ${{ }}, so a missing entry is '' and never a literal "$(x)".
-      ONLY_TARGET_BRANCHES: ${{ variables.prReviewOnlyTargetBranches }}
-      SKIP_TARGET_BRANCHES: ${{ variables.prReviewSkipTargetBranches }}
-      SKIP_SOURCE_BRANCHES: ${{ variables.prReviewSkipSourceBranches }}
+      # No branch lists here: a mapping would override pr-review-settings.yml in this pipeline only.
       # Run linkage under the names the agent reads: the record's `jenkins` field and the footer's
       # "Review #N" build link. BUILD_NUMBER is the BuildId (unique), not the run name.
       JOB_NAME: $(Build.DefinitionName)

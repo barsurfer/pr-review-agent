@@ -50,9 +50,11 @@ What the sample steps do, and why:
 - **Run linkage:** see [Run linkage and this run's record](#run-linkage-and-this-runs-record).
 
 ### First-setup gotchas
-- **`AGENT_TAG`** lives in `pr-review-settings.yml` and is pinned to `v0.0.45`. Pin an immutable
-  release tag and bump it to pick up fixes; see [Agent version](#agent-version) for the minimum
-  per feature. Sanity-check a ref with
+- **`AGENT_TAG`** lives in `pr-review-settings.yml` and is pinned to `v0.0.45`, the latest
+  published tag. The fixes marked v0.0.46 in [Agent version](#agent-version) are not in it: bump
+  the pin once the `v0.0.46` tag exists (the pipeline downloads the bundle from that tag, so a pin
+  to a tag that does not exist yet fails every run). Pin an immutable release tag. Sanity-check a
+  ref with
   `curl …/<ref>/dist/pr-review-agent.cjs | grep -c AzureDevOpsAdapter` (must be > 0).
 - **YAML location** — build validation resolves the pipeline YAML **and** the settings template
   from the PR's *source branch*, so that branch must contain both (merge the target in if the
@@ -70,7 +72,8 @@ The bundle is downloaded at `AGENT_TAG`. Minimum version for what this doc uses:
 | Run linkage from `JOB_NAME` / `BUILD_NUMBER` / `BUILD_URL` (record `jenkins`, footer build link) | v0.0.4 |
 | Deleted Azure comments ignored | v0.0.34 |
 | `ONLY_TARGET_BRANCHES`, `TRIGGER_EVENT` / `TRIGGER_COMMENT_AUTHOR` / `IGNORE_COMMENT_AUTHORS`, `LAST_CHECKED_COMMIT` + `checked_commit` | v0.0.43 |
-| Delta after a rebase / force-push (old head found in the PR's iterations); a blob 404 fails the delta instead of dropping the file | first release after v0.0.45 |
+| Delta after a rebase / force-push (old head found in the PR's iterations); a blob 404 fails the delta instead of dropping the file; a PR without `lastMergeSourceCommit` fails the run instead of posting a footer with an empty commit | v0.0.46 |
+| `TRIGGER_EVENT_KIND`, `USAGE_RECORD_FILE`; `checked_commit` only for a 12–64 hex head | v0.0.46 |
 
 The samples pass every setting as an **env var**, never a flag: an older bundle ignores an
 unknown env var (for example v0.0.42 ignores `ONLY_TARGET_BRANCHES` and reviews every PR), but
@@ -79,20 +82,31 @@ issues" and no review.
 
 ### Branch policy (both pipelines)
 
-Both pipelines map the same three entries from `pr-review-settings.yml` into
-`ONLY_TARGET_BRANCHES` / `SKIP_TARGET_BRANCHES` / `SKIP_SOURCE_BRANCHES`. They must agree because
-the comment Service Hook fires for **every PR in the repo**, and a comment on a PR that has no
-review yet gets a **first review**. With different lists, a comment reviews PRs build validation
-skips: a release PR into `main`, or a stacked PR into a feature branch (which, once reviewed at
-a head, is a `DEDUP_SKIP` after it is retargeted at that head, so the review against the real
-target never happens).
+The branch lists are pipeline variables in `pr-review-settings.yml`, named exactly like the
+agent's env vars (`ONLY_TARGET_BRANCHES` / `SKIP_TARGET_BRANCHES` / `SKIP_SOURCE_BRANCHES`).
+Azure exports non-secret pipeline variables to every script step's environment, so both pipelines
+get the same lists without mapping them in `env:`. They must agree because the comment Service Hook
+fires for **every PR in the repo**, and a comment on a PR that has no review yet gets a **first
+review**. With different lists, a comment reviews PRs build validation skips: a release PR into
+`main`, or a stacked PR into a feature branch (which, once reviewed at a head, is a `DEDUP_SKIP`
+after it is retargeted at that head, so the review against the real target never happens).
 
-- Set `prReviewOnlyTargetBranches` to **exactly the branches that carry the build-validation
-  policy**. That keeps the reply pipeline inside the same scope.
-- Shipped recipe (trunk): `only = main`, `skipTarget = ''`, `skipSource = main,master`. Git-flow:
-  `only = develop,release/*`, `skipTarget = main,master`, `skipSource = main,master,release/*,hotfix/*`.
+- **Shipped (active): the agent defaults.** The template defines none of the three, so the agent
+  skips PRs into `main` / `master` and from `main`, `master`, `release/*`, `hotfix/*`, and
+  `ONLY_TARGET_BRANCHES` is off. If your build-validation policy sits on `main`, every run is a
+  `SKIP` until you switch to the trunk alternative. With the defaults the reply pipeline can also
+  first-review a PR into a branch that has no build-validation policy (a stacked PR); add
+  `ONLY_TARGET_BRANCHES` listing exactly the policy branches (git-flow: `develop,release/*`) to
+  keep it inside the same scope.
+- **Trunk alternative (commented in the template):** `ONLY_TARGET_BRANCHES: main`,
+  `SKIP_TARGET_BRANCHES: ''`, `SKIP_SOURCE_BRANCHES: main,master`. Uncomment all three, with
+  `ONLY_TARGET_BRANCHES` listing exactly the branches that carry the build-validation policy.
   Precedence and recipes: [skip-logic §3](../context/review/skip-logic.md).
-- An empty value turns that list **off**; it does not restore the agent default. Keep every entry.
+- **Unset vs empty:** a list that is not defined keeps the agent default; a defined `''` turns that
+  list **off**. To return to a default, delete the entry, never empty it.
+- Do not also map a branch list in a step's `env:`: it overrides the template in that pipeline only.
+  Variables of the same name set in the pipeline UI or a variable group apply when the template
+  defines none, and a template definition overrides them.
 - Build validation reads the settings from the PR's source branch, the reply pipeline from the
   default branch. After a policy change the two can disagree on an open PR until its source
   branch contains the change.
@@ -116,9 +130,11 @@ Inside a bash script body an unresolved `$(x)` is command substitution instead: 
 collapses to a bare `--force` = re-review on every event.
 
 How the samples avoid it:
-- Branch lists and the ignore list use **compile-time** `${{ variables.x }}` from the settings
-  template. A missing entry compiles to `''`, never to a literal. This only sees variables
-  defined in YAML, not UI, queue-time or variable-group variables.
+- Branch lists are not mapped at all: they reach the agent as exported pipeline variables
+  ([Branch policy](#branch-policy-both-pipelines)), so a missing one is unset, never a literal.
+- The ignore list uses **compile-time** `${{ variables.x }}` from the settings template. A missing
+  entry compiles to `''` (list off), never to a literal. This only sees variables defined in YAML,
+  not UI, queue-time or variable-group variables.
 - Webhook payload values use `${{ parameters.prComment.* }}` (compile-time as well).
 - `$(…)` macros are used only for predefined variables (`System.*`, `Build.*`), which always
   exist, and for `ANTHROPIC_API_KEY` (a missing secret fails the run loudly).
@@ -147,6 +163,11 @@ the same script step (the mapped names are step env vars there):
 ```sh
 RECORD=$(jq -c --arg job "$JOB_NAME" --arg build "$BUILD_NUMBER" 'select(.jenkins.job == $job and .jenkins.build == $build)' results.jsonl | tail -n 1)
 ```
+
+From v0.0.46 there is also `USAGE_RECORD_FILE`: set it in the step `env:` to a path, `rm -f` it
+before the run, and read that file, which holds only this run's record
+([usage-logging.md](usage-logging.md#finding-this-runs-record)). The samples do not set it,
+because the v0.0.45 pin ignores it.
 
 The record's head is `source_commit` = the PR's `lastMergeSourceCommit` (the source branch head),
 which matches the pipeline variable `System.PullRequest.SourceCommitId`. Never compare it with
@@ -189,9 +210,9 @@ PR and passes it back as `LAST_CHECKED_COMMIT` (needs `AGENT_TAG` ≥ v0.0.43). 
 - **Force-push.** Up to v0.0.45 a rebase or force-push made every later Azure delta fail (the
   footer's abbreviated hash could only be expanded from commits still reachable from the head),
   and a run with a failed delta never reports `checked_commit`, so the feature stayed off until a
-  review posted. From the first release after v0.0.45 the adapter also looks the hash up in the
-  PR's iterations. If Azure still refuses to diff that commit (unverified), the run falls back
-  to the full diff and withholds `checked_commit`, as before.
+  review posted. From v0.0.46 the adapter also looks the hash up in the PR's iterations. If Azure
+  still refuses to diff that commit (unverified), the run falls back to the full diff and
+  withholds `checked_commit`, as before.
 
 Illustrative, **untested** replacement for the `node agent.cjs …` line of the reply pipeline
 (needs `jq`, preinstalled on Microsoft-hosted Ubuntu images). In build validation use
@@ -294,7 +315,9 @@ The reply pipeline passes `TRIGGER_EVENT` (a literal `ms.vss-code.git-pullreques
 because only that hook fires it) and `TRIGGER_COMMENT_AUTHOR` (the payload's
 `resource.comment.author.id`, a GUID; never `displayName`, which is mutable and may contain
 commas). A comment whose author is listed in `IGNORE_COMMENT_AUTHORS` then exits before any
-Azure call ([skip-logic §7](../context/review/skip-logic.md)).
+Azure call ([skip-logic §7](../context/review/skip-logic.md)). The event name already counts as a
+comment event by name, so `TRIGGER_EVENT_KIND` (v0.0.46+) is not needed; `comment` would be safe
+here because this pipeline only receives comment events, but never set it in build validation.
 
 1. Find the agent's GUID: leave `prReviewIgnoreCommentAuthors` empty, let a review post, and
    read `trigger.comment_author` from the record of the reply-pipeline run that the review's own
@@ -318,8 +341,8 @@ the env route keeps a `SKIP` record per run.
   (mapped from the payload via `${{ parameters.prComment.* }}`); in bash that's `$PR_ID` /
   `$REPO_NAME`. `$(PR_ID)` is Azure's *pipeline-variable* macro — it doesn't resolve step env vars
   and fails **silently** (empty → "--pr-id is required").
-- **Branch policy comes from `pr-review-settings.yml`**, as in the review pipeline. Do not add a
-  branch env var to one pipeline only: the old `SKIP_TARGET_BRANCHES: ''` here made comments
+- **Branch policy comes from `pr-review-settings.yml`**, as in the review pipeline. Do not map a
+  branch env var in one pipeline only: the old `SKIP_TARGET_BRANCHES: ''` here made comments
   review PRs into `main` that build validation skipped.
 - **The `webhook:` alias must be hyphen-free** (`prComment`) — it's used as
   `${{ parameters.<alias>.* }}` and a hyphen parses as *minus* in Azure expressions. Hyphens are
@@ -360,12 +383,16 @@ JSON. Confirmed present: `resource.pullRequest.pullRequestId`, `resource.pullReq
 Nothing below has been run against a live Azure org:
 
 1. The new sample YAML as a whole: the `variables: - template:` include, compile-time
-   `${{ variables.x }}` in step `env:`, `checkout: none` with `Build.Repository.Name` /
-   `System.PullRequest.PullRequestId` still set, and `PublishPipelineArtifact` finding
-   `results.jsonl` in the default working directory. YAML syntax was checked with a parser only.
-2. That an empty compile-time value (`SKIP_TARGET_BRANCHES: ${{ … }}` → `''`) reaches the agent
-   as an empty variable, like the literal `''` that was validated on a Linux hosted agent, and on
-   every agent OS.
+   `${{ variables.x }}` in step `env:`, template variables exported to the script's environment,
+   `checkout: none` with `Build.Repository.Name` / `System.PullRequest.PullRequestId` still set,
+   and `PublishPipelineArtifact` finding `results.jsonl` in the default working directory. YAML
+   syntax was checked with a parser only.
+2. That a pipeline variable defined as `''` (the trunk alternative's `SKIP_TARGET_BRANCHES`)
+   reaches the agent as an empty env var, like the literal step-`env:` `''` that was validated on
+   a Linux hosted agent, rather than not at all, and on every agent OS. If it does not arrive, the
+   `main,master` default stays on and PRs into `main` are skipped (visible in `skip_reason`, with a
+   warning that the target is in both lists); map `SKIP_TARGET_BRANCHES: ''` in the step `env:` of
+   **both** pipelines instead.
 3. That `$(System.CollectionUri)$(System.TeamProjectId)/_build/results?buildId=…` opens the run
    (project GUID in the URL).
 4. That the agent's comment author id in the payload is the Build Service GUID, and which
