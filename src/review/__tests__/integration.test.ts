@@ -64,6 +64,9 @@ import { logUsageRecord } from '../usage.js'
 import { applyJudgeDecisions } from '../judge-decisions.js'
 import { renderReview, buildReplyFooter, hasReplyFooter, extractCommitHash, markdownHasFindings, type ReviewObject } from '../formatter.js'
 import { createProvider } from '../../llm/provider.js'
+import { renderFixBlock, stripSuggestedFixes, SUGGESTED_FIX_MARKER } from '../suggested-fix.js'
+import { createHash } from 'crypto'
+import { readFileSync } from 'fs'
 
 const mockRunReview = vi.mocked(runReview)
 const mockRunCommentResponse = vi.mocked(runCommentResponse)
@@ -3504,5 +3507,230 @@ describe('checked commit from CI', () => {
       expect(again.record.review_findings).toBeNull()
       expect('checked_commit' in again.record).toBe(false)
     })
+  })
+})
+
+// ===========================================================================
+// Suggested fixes (ENABLE_SUGGESTED_FIXES): post, reply, re-review through the real clients
+// ===========================================================================
+
+describe('suggested fixes (ENABLE_SUGGESTED_FIXES)', () => {
+  const FINDING_A: ReviewObject['findings'][number] = { severity: 'HIGH', title: 'Client leaked', file: 'src/app.ts', lines: '10', body: 'Release in finally.' }
+  const FINDING_B: ReviewObject['findings'][number] = { severity: 'MEDIUM', title: 'Missing await', file: 'src/app.ts', lines: '11', body: 'Await foo().' }
+  const RAW_FIX = '    try {\n      foo()\n    } finally {\n      release()\n    }'
+  const FIX = 'try {\n  foo()\n} finally {\n  release()\n}'
+  const BLOCK = renderFixBlock(FIX, '```')
+  const COMMIT_B = 'bbb111222333'
+  const T1 = '2026-03-10T10:00:00Z'
+  const complete = vi.fn()
+  const completeStructured = vi.fn()
+  const posted = (adapter: VCSAdapter) => vi.mocked(adapter.postComment).mock.calls[0][1] as string
+  const isJudge = (schema: unknown) => !!(schema as { properties: Record<string, unknown> }).properties.decisions
+  const reviewerInputs = () => completeStructured.mock.calls.filter(c => !isJudge(c[2])).map(c => c[1] as string)
+  const judgePrompts = () => completeStructured.mock.calls.filter(c => isJudge(c[2])).map(c => c[0] as string)
+
+  // Real reviewer, judge and reply clients over a mocked provider, so the strip, the code contract and the render closure run as in production.
+  async function realClients(reviewObj: ReviewObject, judged: { proposal?: unknown; summary?: string } = { proposal: RAW_FIX }) {
+    const actual = await vi.importActual<typeof import('../client.js')>('../client.js')
+    vi.mocked(createProvider).mockReturnValue({ complete, completeStructured } as never)
+    mockRunReview.mockImplementation(actual.runReview)
+    mockRunJudge.mockImplementation(actual.runJudge)
+    mockRunCommentResponse.mockImplementation(actual.runCommentResponse)
+    completeStructured.mockReset()
+    completeStructured.mockImplementation(async (_system: string, _user: string, schema: unknown) => isJudge(schema)
+      ? {
+          object: {
+            decisions: reviewObj.findings.map((_, i) => ({ candidate_id: `c${i}`, reason_category: 'validated', evidence: 'src/app.ts:10', note: 'n', score: 8, ...(i === 0 && judged.proposal ? { proposal: judged.proposal } : {}) })),
+            summary: judged.summary ?? 'Judged.', behavioral_diff: [], production_risk: [], unresolved_questions: [], merge_confidence: 70,
+          },
+          usage: { input_tokens: 800, output_tokens: 300 },
+        }
+      : { object: reviewObj, usage: { input_tokens: 1000, output_tokens: 200 } })
+    complete.mockReset()
+    complete.mockResolvedValue({ text: 'That fix compiles.', usage: { input_tokens: 500, output_tokens: 100 } })
+  }
+
+  const firstReview = async (flag: boolean, adapter = makeAdapter(), dryRun = false) => {
+    cfg.judge.suggestedFixes = flag
+    const record = await review(adapter, '100', dryRun)
+    return { record: record!, adapter }
+  }
+
+  beforeEach(() => { cfg.judge.model = 'judge-model' })
+  afterEach(() => {
+    cfg.judge.suggestedFixes = false
+    cfg.judge.proposals = false
+    mockRunJudge.mockReset()
+    vi.mocked(createProvider).mockReset()
+  })
+
+  it('event 1: posts each block under its finding; stripping it gives the flag-off comment, and reviewText metrics are unchanged', async () => {
+    await realClients(reviewWith([FINDING_A, FINDING_B]))
+    const on = await firstReview(true)
+    const off = await firstReview(false)
+    const postedOn = posted(on.adapter)
+
+    expect(postedOn).toContain(`  Release in finally.${BLOCK}\n\n- **MEDIUM – Missing await** (\`src/app.ts:11\`)`)
+    expect(postedOn.split(SUGGESTED_FIX_MARKER)).toHaveLength(2)
+    expect(stripSuggestedFixes(postedOn)).toBe(posted(off.adapter))
+    expect(markdownHasFindings(postedOn)).toBe(true)
+    expect(extractCommitHash(postedOn)).toBe(COMMIT_A)
+
+    expect(on.record.suggested_fixes).toEqual({ rendered: 1, rejected: 0 })
+    expect('suggested_fixes' in off.record).toBe(false)
+    for (const key of ['action', 'findings', 'verdict_score', 'computed_score', 'review_findings', 'finding_scores', 'checked_commit'] as const) {
+      expect(on.record[key], key).toEqual(off.record[key])
+    }
+    expect(on.record.anchored_findings![0].proposal).toBe(FIX)
+    expect('proposal' in off.record.anchored_findings![0]).toBe(false)
+
+    const [promptOn, promptOff] = judgePrompts()
+    expect(promptOn).toContain('only the corrected code for the lines that change')
+    const base = readFileSync(new URL('../../prompt/judge-prompt.txt', import.meta.url), 'utf-8')
+    expect(promptOff).toBe(base)
+    expect(off.record.judge_prompt_hash).toBe(createHash('sha256').update(base).digest('hex').slice(0, 12))
+    expect(on.record.judge_prompt_hash).not.toBe(off.record.judge_prompt_hash)
+
+    delete cfg.judge.suggestedFixes
+    const absentAdapter = makeAdapter()
+    const absent = await review(absentAdapter, '100', false)
+    const stable = (r: object) => ({ ...r, timestamp: '', duration_ms: 0 })
+    expect(posted(absentAdapter)).toBe(posted(off.adapter))
+    expect(stable(absent!)).toEqual(stable(off.record))
+    expect(judgePrompts()[2]).toBe(promptOff)
+  })
+
+  it('event 2: a developer reply on the same head reaches the reply model with the blocks', async () => {
+    await realClients(reviewWith([FINDING_A, FINDING_B]))
+    const postedOn = posted((await firstReview(true)).adapter)
+    const adapter = makeAdapter({
+      getPreviousReviewComments: vi.fn().mockResolvedValue([{ id: '200', body: postedOn, createdOn: T1 }]),
+      getRepliesToReviewComments: vi.fn().mockResolvedValue({ replies: [{ id: '300', parentId: '200', author: 'Fernando', body: 'Does the fix compile?', createdOn: '2026-03-10T12:00:00Z' }], agentReplyCount: 0 }),
+    })
+
+    const record = await review(adapter, '100', false)
+
+    expect(record!.action).toBe('REPLY')
+    expect(complete.mock.calls[0][1]).toContain(`## Your Original Review:\n${postedOn}`)
+    expect(complete.mock.calls[0][1]).toContain(BLOCK)
+    expect(vi.mocked(adapter.postReply).mock.calls[0][2]).toMatch(/^That fix compiles\./)
+  })
+
+  it('event 3: after a push the reviewer gets the review and agent reply stripped, the human copy kept; the 0-finding gate and the checked-commit mark are as without blocks', async () => {
+    await realClients(reviewWith([FINDING_A, FINDING_B]))
+    const postedOn = posted((await firstReview(true)).adapter)
+    const postedOff = posted((await firstReview(false)).adapter)
+    const human: CommentReply = { id: '300', parentId: '200', author: 'Fernando', body: `Copying it:${BLOCK}\n\nstill fails`, createdOn: '2026-03-10T12:00:00Z' }
+    const agentEcho = `${BLOCK.slice(2)}\n\nThat fix compiles.${buildReplyFooter('test-bot', 'claude-haiku-4-5-20251001')}`
+    const agentPlain = `\n\nThat fix compiles.${buildReplyFooter('test-bot', 'claude-haiku-4-5-20251001')}`
+    const push = async (prior: string, agentBody: string) => {
+      await realClients(reviewWith([], { delta_stats: { resolved: 0, still_open: 0, new_findings: 0 } }))
+      const adapter = makeAdapter({
+        getPullRequestInfo: vi.fn().mockResolvedValue(makePRInfo(COMMIT_B)),
+        getPreviousReviewComments: vi.fn().mockResolvedValue([{ id: '200', body: prior, createdOn: T1 }]),
+        getRepliesToReviewComments: vi.fn().mockResolvedValue({ replies: [human, { id: '301', parentId: '200', author: 'Agent', body: agentBody, createdOn: '2026-03-10T13:00:00Z' }], agentReplyCount: 1 }),
+        getCommitDiff: vi.fn().mockResolvedValue(DIFF),
+      })
+      cfg.judge.suggestedFixes = true
+      const record = await review(adapter, '100', false)
+      return { record: record!, input: reviewerInputs()[0], adapter }
+    }
+
+    const withBlocks = await push(postedOn, agentEcho)
+    const plain = await push(postedOff, agentPlain)
+
+    expect(vi.mocked(withBlocks.adapter.getCommitDiff).mock.calls[0][0]).toBe(COMMIT_A)
+    expect(withBlocks.input).toBe(plain.input)
+    expect(withBlocks.input.split(SUGGESTED_FIX_MARKER)).toHaveLength(2)
+    expect(withBlocks.input).toContain(`> ${human.body}`)
+    expect(withBlocks.record.action).toBe('RE_REVIEW')
+    expect(plain.record.action).toBe('RE_REVIEW')
+    expect(withBlocks.record.checked_commit).toBe(plain.record.checked_commit)
+    expect(withBlocks.record.suggested_fixes).toBeNull()
+  })
+
+  it('same-head dedup and the pre-post race check read the footer hash of a review with blocks', async () => {
+    await realClients(reviewWith([FINDING_A, FINDING_B]))
+    const postedOn = posted((await firstReview(true)).adapter)
+
+    const same = makeAdapter({ getPreviousReviewComments: vi.fn().mockResolvedValue([{ id: '200', body: postedOn, createdOn: T1 }]) })
+    const dedup = await review(same, '100', false)
+    expect(dedup!.action).toBe('DEDUP_SKIP')
+    expect(same.getCommitDiff).not.toHaveBeenCalled()
+
+    let n = 0
+    const racing = makeAdapter({ getPreviousReviewComments: vi.fn().mockImplementation(async () => (n++ === 0 ? [] : [{ id: '200', body: postedOn, createdOn: T1 }])) })
+    const raced = await review(racing, '100', false)
+    expect(raced!.action).toBe('DEDUP_SKIP')
+    expect(raced!.skip_reason).toContain('race condition avoided')
+    expect(racing.postComment).not.toHaveBeenCalled()
+  })
+
+  it('a comment over the size budget posts with every block dropped, exactly as flag-off', async () => {
+    await realClients(reviewWith([{ ...FINDING_A, body: 'x'.repeat(32_000) }, FINDING_B]))
+    const on = await firstReview(true)
+    const off = await firstReview(false)
+    expect(posted(on.adapter)).toBe(posted(off.adapter))
+    expect(on.record.suggested_fixes).toEqual({ rendered: 0, rejected: 0, skipped: 'size' })
+  })
+
+  it('a judge text changed by cleanup posts with no block (cleanup skip)', async () => {
+    await realClients(reviewWith([FINDING_A, FINDING_B]), { proposal: RAW_FIX, summary: 'Judged.\n---\n*Reviewed by someone*' })
+    const on = await firstReview(true)
+    expect(posted(on.adapter)).not.toContain(SUGGESTED_FIX_MARKER)
+    expect(on.record.suggested_fixes).toEqual({ rendered: 0, rejected: 0, skipped: 'cleanup' })
+  })
+
+  it('a rejected proposal is counted and leaves its finding without a block', async () => {
+    await realClients(reviewWith([FINDING_A, FINDING_B]), { proposal: 'fix()\n*Reply by test-bot (m)*' })
+    const on = await firstReview(true)
+    expect(posted(on.adapter)).not.toContain(SUGGESTED_FIX_MARKER)
+    expect(on.record.suggested_fixes).toEqual({ rendered: 0, rejected: 1 })
+  })
+
+  it('dry-run prints the comment with its block and records the counts', async () => {
+    await realClients(reviewWith([FINDING_A, FINDING_B]))
+    const logs: string[] = []
+    const spy = vi.spyOn(console, 'log').mockImplementation((...a: unknown[]) => { logs.push(a.map(String).join(' ')) })
+    try {
+      const on = await firstReview(true, makeAdapter(), true)
+      expect(on.adapter.postComment).not.toHaveBeenCalled()
+      expect(on.record.suggested_fixes).toEqual({ rendered: 1, rejected: 0 })
+    } finally {
+      spy.mockRestore()
+    }
+    expect(logs.join('\n')).toContain(BLOCK)
+    expect(logs).toContain('  Suggested fixes: 1 rendered, 0 rejected')
+  })
+
+  it('flag off with ENABLE_JUDGE_PROPOSALS: posted comment identical to proposals off; the prose proposal stays in the record only', async () => {
+    await realClients(reviewWith([FINDING_A, FINDING_B]))
+    cfg.judge.proposals = true
+    const proposals = await firstReview(false)
+    cfg.judge.proposals = false
+    const none = await firstReview(false)
+    expect(posted(proposals.adapter)).toBe(posted(none.adapter))
+    expect(proposals.record.anchored_findings![0].proposal).toBe(RAW_FIX.trim())
+    expect('suggested_fixes' in proposals.record).toBe(false)
+  })
+
+  it('no judge: no blocks and a null record field', async () => {
+    await realClients(reviewWith([FINDING_A, FINDING_B]))
+    cfg.judge.model = ''
+    const on = await firstReview(true)
+    const off = await firstReview(false)
+    expect(posted(on.adapter)).toBe(posted(off.adapter))
+    expect(on.record.suggested_fixes).toBeNull()
+    expect(judgePrompts()).toHaveLength(0)
+  })
+
+  it('benchmark sink: nothing is rendered, the kept proposal is the dedented code', async () => {
+    await realClients(reviewWith([FINDING_A, FINDING_B]))
+    cfg.judge.suggestedFixes = true
+    const outcomes: Array<{ judgedFindings?: Array<{ proposal?: string }>; reviewText: string }> = []
+    const record = await review(makeAdapter(), '100', false, undefined, 'off', false, 'repo', o => { outcomes.push(o) })
+    expect(outcomes[0].judgedFindings![0].proposal).toBe(FIX)
+    expect(outcomes[0].reviewText).not.toContain(SUGGESTED_FIX_MARKER)
+    expect(record!.suggested_fixes).toBeNull()
   })
 })

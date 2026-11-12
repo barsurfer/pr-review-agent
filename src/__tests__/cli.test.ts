@@ -218,6 +218,22 @@ describe('CLI checked-commit wiring (src/index.ts)', () => {
   }, TIMEOUT)
 })
 
+describe('CLI --suggested-fixes wiring (src/index.ts)', () => {
+  it('the flag sets the record key and, without a judge, warns once; the --proposals warning keeps its text', () => {
+    const flagged = runCli(['--suggested-fixes'], { JUDGING_MODEL: '', ENABLE_SUGGESTED_FIXES: '', ENABLE_JUDGE_PROPOSALS: '' })
+    expect(flagged.stderr.split('\n').filter(l => l.includes('Warning: suggested fixes requested but the judge is disabled (JUDGING_MODEL empty) - no suggested fixes will be produced.'))).toHaveLength(1)
+    expect(flagged.record.suggested_fixes).toBeNull()
+
+    const plain = runCli([], { JUDGING_MODEL: 'claude-sonnet-5', ENABLE_SUGGESTED_FIXES: '', ENABLE_JUDGE_PROPOSALS: '' })
+    expect('suggested_fixes' in plain.record).toBe(false)
+    expect(plain.stderr).not.toContain('requested but the judge is disabled')
+
+    const proposals = runCli(['--proposals'], { JUDGING_MODEL: '', ENABLE_SUGGESTED_FIXES: '', ENABLE_JUDGE_PROPOSALS: '' })
+    expect(proposals.stderr).toContain('Warning: proposals requested but the judge is disabled (JUDGING_MODEL empty) - no proposals will be produced.')
+    expect('suggested_fixes' in proposals.record).toBe(false)
+  }, TIMEOUT * 3)
+})
+
 describe('CLI --force normalisation (src/index.ts)', () => {
   const forceOf = (args: string[]) => runCli(args).record.force
 

@@ -7,9 +7,10 @@ import { renderReview, ISSUE_TYPES, type ReviewObject, type ReviewFinding, type 
 import type { KeptFinding } from './findings-output.js'
 import {
   REASON_CATEGORIES, DEFAULT_JUDGE_POLICY, applyJudgeDecisions, renderCandidatesForJudge, summarizeDecisions,
-  type JudgeOutput, type JudgePolicy, type JudgeOptions, type AppliedDecision, type JudgeAnomalies,
+  type JudgeOutput, type JudgePolicy, type JudgeOptions, type AppliedDecision, type JudgeAnomalies, type RenderJudged,
 } from './judge-decisions.js'
-import { composeJudgePrompt, QUALITY_DECISION_PROPERTIES, PROPOSAL_DECISION_PROPERTIES, SHOWN_ANCHOR_DESCRIPTIONS } from './judge-quality.js'
+import { composeJudgePrompt, QUALITY_DECISION_PROPERTIES, PROPOSAL_DECISION_PROPERTIES, PROPOSAL_CODE_DECISION_PROPERTIES, SHOWN_ANCHOR_DESCRIPTIONS } from './judge-quality.js'
+import { stripOwnSuggestedFixes } from './suggested-fix.js'
 import { numberDiffLines, numberFileLines } from './parsers.js'
 import { LENS_REGISTRY, sanitizeLensRecommendations, type LensRecommendation } from './lenses.js'
 import type { PRInfo, ReviewComment, CommentReply } from '../vcs/adapter.js'
@@ -36,6 +37,7 @@ export interface JudgeResult extends ModelResult {
   decisions?: AppliedDecision[]
   anomalies?: JudgeAnomalies
   kept?: KeptFinding[]
+  renderWith?: RenderJudged
 }
 
 // The judge rules on candidate ids and the app renders the comment, so reasoning can't leak; the judge only anchors candidates whose reviewer location has no numeric line.
@@ -76,9 +78,10 @@ export const JUDGE_OUTPUT_SCHEMA = {
 const schemaVariants = new Map<string, Record<string, unknown>>()
 
 // Flag-off returns the shared constant itself, so the model-facing schema (and any identity check on it) is unchanged.
-export function judgeOutputSchema(quality: boolean, shownAnchors: boolean, proposals = false): Record<string, unknown> {
+export function judgeOutputSchema(quality: boolean, shownAnchors: boolean, proposals = false, code = false): Record<string, unknown> {
   if (!quality && !shownAnchors && !proposals) return JUDGE_OUTPUT_SCHEMA
-  const key = `${quality}:${shownAnchors}:${proposals}`
+  const codeProposals = proposals && code
+  const key = `${quality}:${shownAnchors}:${proposals}${codeProposals ? ':code' : ''}`
   const cached = schemaVariants.get(key)
   if (cached) return cached
   const schema = structuredClone(JUDGE_OUTPUT_SCHEMA) as unknown as { properties: { decisions: { items: { properties: Record<string, unknown> } } } }
@@ -88,7 +91,7 @@ export function judgeOutputSchema(quality: boolean, shownAnchors: boolean, propo
     props.anchor_lines.description = SHOWN_ANCHOR_DESCRIPTIONS.anchor_lines
   }
   if (quality) Object.assign(props, structuredClone(QUALITY_DECISION_PROPERTIES))
-  if (proposals) Object.assign(props, structuredClone(PROPOSAL_DECISION_PROPERTIES))
+  if (proposals) Object.assign(props, structuredClone(codeProposals ? PROPOSAL_CODE_DECISION_PROPERTIES : PROPOSAL_DECISION_PROPERTIES))
   schemaVariants.set(key, schema)
   return schema
 }
@@ -287,14 +290,15 @@ function buildUserMessage(
     const latest = previousReviews[previousReviews.length - 1]
     parts.push(`## Previous Review by This Agent (latest of ${previousReviews.length} total):`)
     parts.push('This is the most recent review posted on an earlier revision of this PR. Acknowledge what was fixed, do not repeat issues that are now resolved, and call out anything still unaddressed.')
-    parts.push(`### Review from ${latest.createdOn}:\n${latest.body}`)
+    // The reviewer must not treat the posted suggested fixes as review text; the reply model still sees them.
+    parts.push(`### Review from ${latest.createdOn}:\n${stripOwnSuggestedFixes(latest.body, 'review')}`)
   }
 
   if (developerReplies.length > 0) {
     parts.push(`## Developer Discussion on Previous Review(s):`)
     parts.push('Below is the conversation thread from previous reviews, including developer replies and the agent\'s own prior responses. IMPORTANT: If the agent previously acknowledged a finding as a false positive or accepted a developer\'s explanation, do NOT re-raise that finding. Treat the agent\'s prior conclusions as settled unless the new code changes invalidate them.')
     for (const r of developerReplies) {
-      parts.push(`**${r.author}** (${r.createdOn}):\n> ${r.body}`)
+      parts.push(`**${r.author}** (${r.createdOn}):\n> ${stripOwnSuggestedFixes(r.body, 'reply')}`)
     }
   }
 
@@ -356,8 +360,9 @@ export async function runJudge(
   const quality = !!options?.quality
   const shownAnchors = !!options?.shownAnchors
   const proposals = !!options?.proposals
-  const judgePrompt = quality || shownAnchors || proposals ? composeJudgePrompt(getJudgePrompt(), { quality, shownAnchors, proposals }) : getJudgePrompt()
-  const schema = judgeOutputSchema(quality, shownAnchors, proposals)
+  const codeProposals = proposals && !!options?.codeProposals
+  const judgePrompt = quality || shownAnchors || proposals ? composeJudgePrompt(getJudgePrompt(), { quality, shownAnchors, proposals, codeProposals }) : getJudgePrompt()
+  const schema = judgeOutputSchema(quality, shownAnchors, proposals, codeProposals)
   const callOpts = { model, maxTokens, maxRetries, effort: effort || undefined }
   console.log(`Sending to judge (${model}, maxRetries: ${maxRetries}${fileContexts.length ? `, ${fileContexts.length} context file(s)` : ''})...`)
   const { object, usage } = await createProvider(apiKey).completeStructured<JudgeOutput>(judgePrompt, userMessage, schema, callOpts)
@@ -370,6 +375,7 @@ export async function runJudge(
   return {
     text: judged.markdown, usage, notes: summarizeDecisions(judged.decisions), scores: judged.scores, promptHash,
     decisions: judged.decisions, anomalies: judged.anomalies, kept: judged.kept,
+    ...(judged.renderWith ? { renderWith: judged.renderWith } : {}),
   }
 }
 

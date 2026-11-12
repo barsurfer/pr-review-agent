@@ -88,7 +88,10 @@ export interface JudgeOptions {
   quality?: boolean
   shownAnchors?: ShownAnchors
   proposals?: boolean
+  codeProposals?: boolean
 }
+
+export type RenderJudged = (suffixes: ReadonlyMap<number, string>) => string
 
 export interface JudgedReview {
   kept: KeptFinding[]
@@ -96,6 +99,7 @@ export interface JudgedReview {
   anomalies: JudgeAnomalies
   scores: FindingScore[]
   markdown: string
+  renderWith?: RenderJudged
 }
 
 export const candidateId = (index: number): string => `c${index}`
@@ -113,6 +117,26 @@ export function sanitizeProposal(raw: unknown): string | undefined {
   const lines = s.split(/\r\n|\r|\n/).filter(l => l.trim())
   if (lines.length > PROPOSAL_MAX_LINES) return undefined
   return s
+}
+
+// Code is pasted as-is: dedent, since trim breaks the first line's relative indent, and count blank lines so padding cannot escape the caps.
+export function sanitizeCodeProposal(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined
+  let s = raw.replace(/\r\n?/g, '\n').trimEnd()
+  const fenced = s.match(/^\s*(`{3,}|~{3,})[^\n]*\n([\s\S]*?)\n[ \t]*\1$/)
+  if (fenced) s = fenced[2]
+  const lines = s.split('\n')
+  while (lines.length && !lines[0].trim()) lines.shift()
+  while (lines.length && !lines[lines.length - 1].trim()) lines.pop()
+  const indents = lines.filter(l => l.trim()).map(l => /^[ \t]*/.exec(l)![0])
+  const common = indents.reduce((prefix, w) => {
+    let n = 0
+    while (n < prefix.length && prefix[n] === w[n]) n++
+    return prefix.slice(0, n)
+  }, indents[0] ?? '')
+  const code = lines.map(l => (l.trim() ? l.slice(common.length) : '')).join('\n')
+  if (!code || code.length > PROPOSAL_CAP || lines.length > PROPOSAL_MAX_LINES) return undefined
+  return code
 }
 const UNVERIFIED_SCORE_CAP = 5
 const NEEDS_EVIDENCE: ReadonlySet<ReasonCategory> = new Set(['incorrect', 'already_handled'])
@@ -308,7 +332,7 @@ export function applyJudgeDecisions(candidates: readonly ReviewFinding[], output
     if (given.length > 1) anomalies.duplicate_ids++
     const resolved = given.map(d => {
       const r = resolve(d, candidate, policy, idx, i >= breadthFrom, shownFor(i))
-      const proposal = proposals ? sanitizeProposal(d.proposal) : undefined
+      const proposal = proposals ? (options?.codeProposals ? sanitizeCodeProposal(d.proposal) : sanitizeProposal(d.proposal)) : undefined
       return { r: proposal ? { ...r, proposal } : r, d }
     })
     const chosen = resolved.find(x => x.r.action === 'drop') ?? resolved[0]
@@ -358,7 +382,10 @@ export function applyJudgeDecisions(candidates: readonly ReviewFinding[], output
   if (options?.quality) dedupKept(kept, rows, decisions, idx)
 
   const scores: FindingScore[] = kept.map(k => ({ title: k.title, severity: k.severity, score: k.score!, file: k.file, lines: k.lines }))
-  return { kept, decisions, anomalies, scores, markdown: renderJudgedReview(kept, output, moved, canBeSplit) }
+  return {
+    kept, decisions, anomalies, scores, markdown: renderJudgedReview(kept, output, moved, canBeSplit),
+    ...(options?.codeProposals ? { renderWith: (suffixes: ReadonlyMap<number, string>) => renderJudgedReview(kept, output, moved, canBeSplit, suffixes) } : {}),
+  }
 }
 
 type Entry = { i: number; candidate: ReviewFinding; r: Resolved; d: JudgeDecision } | null
@@ -486,7 +513,7 @@ function expandLocations(candidate: ReviewFinding, locations: readonly Additiona
 }
 
 // Must stay byte-compatible with what the judge used to write: Findings bullets and the Merge Confidence line are re-parsed downstream.
-export function renderJudgedReview(kept: readonly KeptFinding[], output: JudgeOutput, movedQuestions: readonly string[] = [], canBeSplit: readonly string[] = []): string {
+export function renderJudgedReview(kept: readonly KeptFinding[], output: JudgeOutput, movedQuestions: readonly string[] = [], canBeSplit: readonly string[] = [], suffixes?: ReadonlyMap<number, string>): string {
   const questions = [...(output.unresolved_questions ?? [])]
   for (const q of movedQuestions) if (!questions.includes(q)) questions.push(q)
   const review: ReviewObject = {
@@ -498,7 +525,7 @@ export function renderJudgedReview(kept: readonly KeptFinding[], output: JudgeOu
     can_be_split: canBeSplit.length ? [...canBeSplit] : undefined,
   }
   const confidence = Math.max(0, Math.min(100, Math.round(Number(output.merge_confidence) || 0)))
-  return `${renderReview(review, { emptyFindings: 'No actionable findings.' })}\n\n### Merge Confidence: ${confidence}%\n\n${DISCLAIMER}`
+  return `${renderReview(review, { emptyFindings: 'No actionable findings.', suffix: suffixes && (i => suffixes.get(i) ?? '') })}\n\n### Merge Confidence: ${confidence}%\n\n${DISCLAIMER}`
 }
 
 export function renderCandidatesForJudge(review: ReviewObject): string {

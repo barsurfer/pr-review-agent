@@ -230,4 +230,47 @@ describe('runJudge proposals', () => {
     expect(JSON.stringify(completeStructured.mock.calls[0][2])).toContain('"proposal"')
     expect(res.kept![0].proposal).toBe(FIX)
   })
+
+  it('proposals alone return no renderWith and keep the prose contract', async () => {
+    const res = await call(ON)
+    expect('renderWith' in res).toBe(false)
+    expect(completeStructured.mock.calls[0][0]).not.toContain('only the corrected code')
+  })
+
+  it('codeProposals sends the code contract and schema, dedents the proposal and returns renderWith', async () => {
+    completeStructured.mockResolvedValue({ object: out([dec({ proposal: '    try {\n      q()\n    } finally {' })]), usage: { input_tokens: 10, output_tokens: 5 } })
+    const res = await runJudge('k', 'm', 2, 1000, '', DIFF, review, [], policy, false, undefined, { proposals: true, codeProposals: true })
+    const [prompt, , schema] = completeStructured.mock.calls[0]
+    expect(prompt).toBe(composeJudgePrompt(baseText, { quality: false, shownAnchors: false, proposals: true, codeProposals: true }))
+    expect(schema).toBe(judgeOutputSchema(false, false, true, true))
+    expect(res.kept![0].proposal).toBe('try {\n  q()\n} finally {')
+    expect(res.renderWith!(new Map())).toBe(res.text)
+    expect(res.promptHash).not.toBe((await call(ON)).promptHash)
+  })
+})
+
+describe('code proposal contract (ENABLE_SUGGESTED_FIXES)', () => {
+  const base = readFileSync(new URL('../../prompt/judge-prompt.txt', import.meta.url), 'utf-8')
+  type Props = { properties: { decisions: { items: { properties: Record<string, { description: string }>; required: string[] } } } }
+
+  it('the prompt swaps in the code-only PROPOSAL section, last, and only when proposals are on', () => {
+    const code = composeJudgePrompt(base, { quality: true, shownAnchors: false, proposals: true, codeProposals: true })
+    expect(code).toContain('## PROPOSAL\n\nFor each candidate you keep, give `proposal`: only the corrected code for the lines that change')
+    expect(code).not.toContain('written as an instruction')
+    expect(code.indexOf('## PROPOSAL')).toBeGreaterThan(code.indexOf('## MULTI-FILE FINDINGS'))
+    expect(code.trimEnd().endsWith('Dropped candidates get no proposal.')).toBe(true)
+    expect(composeJudgePrompt(base, { quality: false, shownAnchors: false, proposals: false, codeProposals: true })).toBe(base)
+    expect(composeJudgePrompt(base, { quality: false, shownAnchors: false, proposals: true, codeProposals: false })).toBe(composeJudgePrompt(base, { quality: false, shownAnchors: false, proposals: true }))
+  })
+
+  it('the schema variant carries the code description, is cached under its own key and leaves the others untouched', () => {
+    const code = judgeOutputSchema(false, false, true, true) as Props
+    expect(code.properties.decisions.items.properties.proposal.description).toMatch(/^Only for a candidate you keep: the corrected code/)
+    expect(code.properties.decisions.items.required).not.toContain('proposal')
+    expect(judgeOutputSchema(false, false, true, true)).toBe(code)
+    expect(judgeOutputSchema(false, false, true)).not.toBe(code)
+    expect(judgeOutputSchema(false, false, true, false)).toBe(judgeOutputSchema(false, false, true))
+    expect((judgeOutputSchema(false, false, true) as Props).properties.decisions.items.properties.proposal.description).toMatch(/imperative instruction/)
+    for (const q of [false, true]) for (const a of [false, true]) expect(judgeOutputSchema(q, a, false, true)).toBe(judgeOutputSchema(q, a, false))
+  })
 })

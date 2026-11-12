@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildReviewFooter, buildReplyFooter, stripPreviousFooter, stripDeltaStats, stripJudgeNotes, stripJenkinsMeta, stripPreamble, isNoChange, extractCommitHash, legacyCommitHash, REVIEW_FOOTER_SOURCE, hasReviewFooter, hasReplyFooter, renderReview, countFindings, markdownHasFindings, type ReviewObject } from '../formatter.js'
+import { buildReviewFooter, buildReplyFooter, stripPreviousFooter, stripDeltaStats, stripJudgeNotes, stripJenkinsMeta, stripPreamble, isNoChange, extractCommitHash, legacyCommitHash, REVIEW_FOOTER_SOURCE, REPLY_FOOTER_SOURCE, hasReviewFooter, hasReplyFooter, renderReview, countFindings, markdownHasFindings, type ReviewObject } from '../formatter.js'
 import { parseFindings } from '../parsers.js'
 
 // ---------------------------------------------------------------------------
@@ -423,6 +423,33 @@ describe('renderReview', () => {
     expect(renderReview(base)).not.toContain('Can Be Split')
     const md = renderReview({ ...base, can_be_split: ['Auth refactor', 'Logging change'] })
     expect(md).toContain('### Can Be Split\n- Auth refactor\n- Logging change')
+  })
+
+  const two: ReviewObject = { ...base, findings: [{ severity: 'HIGH', title: 'a', file: 'x.ts', lines: '1', body: 'b1' }, { severity: 'LOW', title: 'c', body: 'b2' }] }
+
+  it('no suffix, an undefined suffix and an empty suffix render the same bytes', () => {
+    expect(renderReview(two, { suffix: undefined })).toBe(renderReview(two))
+    expect(renderReview(two, { suffix: () => '' })).toBe(renderReview(two))
+  })
+
+  it('a suffix lands right after its own finding body', () => {
+    const md = renderReview(two, { suffix: i => (i === 1 ? '\n\nSUFFIX' : '') })
+    expect(md).toBe(renderReview(two).replace('  b2', '  b2\n\nSUFFIX'))
+  })
+})
+
+describe('REPLY_FOOTER_SOURCE vs hasReplyFooter', () => {
+  const literal = /^\*(?:Reply by .+ \(.+\)|\[Reply by .+ \(.+\)\]\([^)]+\))\*$/m
+  const bodies = [
+    buildReplyFooter('bot', 'm').trim(), buildReplyFooter('bot', 'm', 'http://ci/1').trim(),
+    `Answer.${buildReplyFooter('bot', 'm')}`, `Answer.\r\n*Reply by bot (m)*\r\n`,
+    '*Reply by bot*', '*Reply by bot (m)* trailing', 'x *Reply by bot (m)*', '*[Reply by bot (m)]()*', 'Reply by bot (m)', '',
+  ]
+  it('accepts and rejects the same bodies', () => {
+    for (const b of bodies) {
+      expect(new RegExp(REPLY_FOOTER_SOURCE, 'm').test(b)).toBe(literal.test(b))
+      expect(hasReplyFooter(b)).toBe(literal.test(b))
+    }
   })
 })
 

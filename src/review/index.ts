@@ -15,6 +15,7 @@ import { normalizeFindingPath } from './findings-output.js'
 import { filterDiff, countChangedLines, parseVerdictScore, isPathExcluded, scanTodos, isContextLengthError, shownLength } from './parsers.js'
 import { buildReviewFooter, buildReplyFooter, stripPreviousFooter, stripDeltaStats, stripJudgeNotes, stripJenkinsMeta, stripPreamble, isNoChange, extractCommitHash, legacyCommitHash, countFindings, markdownHasFindings, hasReplyFooter } from './formatter.js'
 import { runBundledReview, addUsage } from './bundled.js'
+import { composeSuggestedFixes, COMMENT_BUDGET } from './suggested-fix.js'
 import { buildUsageRecord, logUsageRecord, getBuildCommit, getJobUrl } from './usage.js'
 import { ignoredCommentAuthor } from './trigger.js'
 import { headMatches } from './checked-commit.js'
@@ -782,7 +783,8 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       const judgeInput = extra ? { ...ctx.reviewObject!, findings: [...firstPass, ...breadth, ...secondLook, ...lens] } : ctx.reviewObject!
 
       ctx.reviewTextBeforeJudge = ctx.reviewText
-      const judgeOptions: JudgeOptions | undefined = config.judge.quality || config.judge.shownAnchors || config.judge.proposals
+      const suggestedFixes = !!config.judge.suggestedFixes
+      const judgeOptions: JudgeOptions | undefined = config.judge.quality || config.judge.shownAnchors || config.judge.proposals || suggestedFixes
         ? {
             quality: config.judge.quality,
             proposals: config.judge.proposals,
@@ -792,6 +794,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
                   ...(lens.length ? { lens: ctx.shownLens, lensFrom: firstPass.length + breadth.length + secondLook.length } : {}),
                 }
               : undefined,
+            ...(suggestedFixes ? { proposals: true, codeProposals: true } : {}),
           }
         : undefined
       const judgeTail: [JudgeOptions?] = judgeOptions ? [judgeOptions] : []
@@ -816,6 +819,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         ctx.judgeDecisions = result.decisions
         ctx.judgeAnomalies = result.anomalies
         ctx.judgedFindings = result.kept
+        if (suggestedFixes && result.renderWith) ctx.renderJudged = result.renderWith
         if (result.notes) {
           console.log(`  Judge notes (not posted): ${result.notes}`)
         }
@@ -930,7 +934,16 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
 
       const commitShort = ctx.prInfo!.sourceCommit.slice(0, 12)
       const footer = buildReviewFooter(config.agentIdentity, config.anthropic.model, ctx.prompt!.source, ctx.reviewNumber, commitShort, getBuildCommit(), getJobUrl())
-      const comment = cleaned + todoSection + footer
+      let body = cleaned
+      // After every guard and parser has read the plain text, so no reviewText consumer ever sees a block.
+      if (config.judge.suggestedFixes && ctx.renderJudged) {
+        const composed = composeSuggestedFixes(ctx.judgedFindings ?? [], ctx.renderJudged, cleaned, COMMENT_BUDGET - todoSection.length - footer.length)
+        body = composed.text
+        ctx.suggestedFixes = composed.stats
+        const { rendered, rejected, skipped } = composed.stats
+        console.log(`  Suggested fixes: ${rendered} rendered, ${rejected} rejected${skipped ? `, all skipped (${skipped})` : ''}`)
+      }
+      const comment = body + todoSection + footer
 
       if (ctx.dryRun) {
         console.log('\n=== DRY RUN — Review output (not posted) ===\n')

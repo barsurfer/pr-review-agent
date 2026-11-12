@@ -511,6 +511,35 @@ describe('buildUsageRecord lens_recommendations', () => {
   })
 })
 
+describe('buildUsageRecord suggested_fixes', () => {
+  const baseCtx = (over: Partial<ReviewContext> = {}): ReviewContext => ({
+    adapter: {}, prId: '7', dryRun: false, force: 'off', logUsage: false, repoSlug: 'repo',
+    usage: { input_tokens: 3_000, output_tokens: 1_000, cache_read: 0, cache_write: 0 },
+    estimatedInputTokens: 10, action: 'REVIEW', reviewNumber: 1,
+    ...over,
+  } as unknown as ReviewContext)
+  const stats = { rendered: 2, rejected: 1, skipped: 'size' as const }
+  beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(new Date('2026-01-01T00:00:00Z')) })
+  afterEach(() => { config.judge.suggestedFixes = false; vi.useRealTimers() })
+
+  it('flag off: no key, even when the context carries stats', () => {
+    config.judge.suggestedFixes = false
+    const r = buildUsageRecord(baseCtx({ suggestedFixes: stats }), 1, null)
+    expect('suggested_fixes' in r).toBe(false)
+    expect(JSON.stringify(r)).toBe(JSON.stringify(buildUsageRecord(baseCtx(), 1, null)))
+  })
+
+  it('flag on: null until POST_REVIEW composed, then the stats; the rest of the record is unchanged', () => {
+    config.judge.suggestedFixes = false
+    const off = buildUsageRecord(baseCtx(), 1, null)
+    config.judge.suggestedFixes = true
+    expect(buildUsageRecord(baseCtx(), 1, null).suggested_fixes).toBeNull()
+    const { suggested_fixes, ...rest } = buildUsageRecord(baseCtx({ suggestedFixes: stats }), 1, null)
+    expect(suggested_fixes).toEqual(stats)
+    expect(JSON.stringify(rest)).toBe(JSON.stringify(off))
+  })
+})
+
 describe('buildUsageRecord J_QUALITY fields', () => {
   type Judge = typeof import('../judge-decisions.js')
   let applyJudgeDecisions: Judge['applyJudgeDecisions']
