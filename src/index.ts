@@ -9,7 +9,6 @@ import { config, parseBranchList, validateBitbucketConfig, validateAzureConfig, 
 import { BitbucketAdapter } from './vcs/bitbucket.js'
 import { AzureDevOpsAdapter } from './vcs/azure.js'
 import { GitHubAdapter } from './vcs/github.js'
-import { GitLabAdapter } from './vcs/gitlab.js'
 import { review } from './review/index.js'
 import { resolveTrigger } from './review/trigger.js'
 import { resolveCheckedCommit } from './review/checked-commit.js'
@@ -25,7 +24,7 @@ program
   .option('--pr-id <id>', 'Pull request ID')
   .option('--workspace <workspace>', 'VCS workspace / org (overrides BITBUCKET_WORKSPACE)')
   .option('--repo-slug <slug>', 'Repository slug')
-  .option('--vcs <provider>', 'VCS provider: bitbucket | azure (WIP) | github | gitlab (overrides VCS_PROVIDER)')
+  .option('--vcs <provider>', 'VCS provider: bitbucket | azure (WIP) | github (overrides VCS_PROVIDER); gitlab is not implemented and exits 1')
   .option('--dry-run', 'Print the review to stdout without posting to the PR')
   .option('--force [mode]', 'Force review: "clean" (no prior context) or "re-review" (keep context, bypass dedup)')
   .option('--log-usage [bool]', 'Log usage data to results.jsonl (default: true)', (v: string) => v !== 'false', true)
@@ -52,6 +51,7 @@ program
   .option('--proposals', 'Add a concise fix proposal to each kept finding in results.jsonl anchored_findings (overrides ENABLE_JUDGE_PROPOSALS; requires a judge)')
   .option('--event <name>', 'What started this run, e.g. pullrequest:comment_created (overrides TRIGGER_EVENT); logged, and enables IGNORE_COMMENT_AUTHORS on comment events')
   .option('--comment-author <id>', 'Account id of the event actor, e.g. the Bitbucket actor uuid (overrides TRIGGER_COMMENT_AUTHOR)')
+  .option('--event-kind <kind>', 'comment | other: whether the --event is a comment event, whatever its name (overrides TRIGGER_EVENT_KIND)')
   .option('--checked-commit <hash>', 'Head an earlier run reported as checked_commit for this PR; a run on that same head skips the re-review (overrides LAST_CHECKED_COMMIT)')
   .option('--benchmark', 'ReviewBench mode: read the PR from RB_* env + mounted files, write findings JSON to RB_OUT instead of posting; always exits 0')
   .parse(process.argv)
@@ -87,6 +87,7 @@ const opts = program.opts<{
   proposals?: boolean
   event?: string
   commentAuthor?: string
+  eventKind?: string
   checkedCommit?: string
   benchmark?: boolean
 }>()
@@ -175,7 +176,9 @@ async function main(): Promise<void> {
     gh.setRepoSlug(opts.repoSlug)
     adapter = gh
   } else if (provider === 'gitlab') {
-    adapter = new GitLabAdapter()
+    // The GitLab adapter is a stub whose every call throws, so a run could only end in ERROR.
+    console.error('Error: VCS provider gitlab is not implemented yet - use bitbucket, github or azure')
+    process.exit(1)
   } else {
     console.error(`Unknown VCS provider: ${provider}`)
     process.exit(1)
@@ -220,7 +223,7 @@ async function main(): Promise<void> {
   if (opts.lensRecommendation) config.lenses.recommend = true
   if (config.judge.proposals && !config.judge.model) console.warn('Warning: proposals requested but the judge is disabled (JUDGING_MODEL empty) - no proposals will be produced.')
   if (opts.repoSlug) config.repoSlug = opts.repoSlug
-  const trigger = resolveTrigger(opts, config.trigger)
+  const trigger = resolveTrigger(opts, { ...config.trigger, eventKind: config.triggerEventKind })
   if (!trigger && config.trigger.ignoreCommentAuthors.length) console.warn('Warning: IGNORE_COMMENT_AUTHORS is set but no --event/--comment-author (TRIGGER_EVENT/TRIGGER_COMMENT_AUTHOR) was given - the ignore list is inactive.')
   const checkedCommit = resolveCheckedCommit(opts.checkedCommit, config.lastCheckedCommit)
 

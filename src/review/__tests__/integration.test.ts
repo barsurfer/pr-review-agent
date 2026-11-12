@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { PrTooLargeError } from '../../vcs/adapter.js'
 import type { VCSAdapter, PRInfo, ReviewComment, CommentReply } from '../../vcs/adapter.js'
+import type { TriggerInfo } from '../types.js'
 
 // ---------------------------------------------------------------------------
 // Mocks — vi.mock factories are hoisted, so no external refs allowed
@@ -2755,6 +2756,93 @@ describe('trigger pre-check (IGNORE_COMMENT_AUTHORS) runs before any VCS call', 
     expect(logs.some(l => l.startsWith('Trigger:'))).toBe(false)
     expect(adapter.getPullRequestInfo).toHaveBeenCalledTimes(1)
     expect(record.action).toBe('REVIEW')
+  })
+})
+
+describe('trigger pre-check: event kind override and provider comment names', () => {
+  const runCapturing = async (adapter: VCSAdapter, trigger: TriggerInfo) => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const record = await review(adapter, '100', false, undefined, 'off', true, 'repo', undefined, trigger)
+      return { record: record!, logs: [...logSpy.mock.calls, ...warnSpy.mock.calls].map(c => c.join(' ')) }
+    } finally {
+      logSpy.mockRestore(); warnSpy.mockRestore()
+    }
+  }
+
+  beforeEach(() => { cfg.trigger.ignoreCommentAuthors = ['bot'] })
+
+  it('kind comment makes a non-comment-named event skippable for a listed author, before any VCS call', async () => {
+    const adapter = makeAdapter()
+
+    const { record, logs } = await runCapturing(adapter, { event: 'relay:mr-note', commentAuthor: '{BOT}', kind: 'comment' })
+
+    for (const fn of Object.values(adapter)) expect(fn).not.toHaveBeenCalled()
+    expect(mockRunReview).not.toHaveBeenCalled()
+    expect(record.action).toBe('SKIP')
+    expect(record.skip_reason).toBe('relay:mr-note by "{BOT}" matches IGNORE_COMMENT_AUTHORS')
+    expect(record.trigger).toEqual({ event: 'relay:mr-note', comment_author: '{BOT}', event_kind: 'comment' })
+    expect(logs).toContain('Trigger: relay:mr-note by {BOT} (event kind: comment)')
+  })
+
+  it('kind other makes a comment-named event non-skippable for a listed author', async () => {
+    const adapter = makeAdapter()
+
+    const { record } = await runCapturing(adapter, { event: 'pullrequest:comment_created', commentAuthor: '{BOT}', kind: 'other' })
+
+    expect(adapter.getPullRequestInfo).toHaveBeenCalledTimes(1)
+    expect(record.action).toBe('REVIEW')
+    expect(record.trigger).toEqual({ event: 'pullrequest:comment_created', comment_author: '{BOT}', event_kind: 'other' })
+  })
+
+  it('kind comment with no event name skips without the missing-event warning', async () => {
+    const adapter = makeAdapter()
+
+    const { record, logs } = await runCapturing(adapter, { event: '', commentAuthor: '{BOT}', kind: 'comment' })
+
+    expect(adapter.getPullRequestInfo).not.toHaveBeenCalled()
+    expect(record.skip_reason).toBe('comment event by "{BOT}" matches IGNORE_COMMENT_AUTHORS')
+    expect(record.trigger).toEqual({ event: null, comment_author: '{BOT}', event_kind: 'comment' })
+    expect(logs.some(l => l.includes('without an event'))).toBe(false)
+  })
+
+  it.each(['note', 'Note Hook', 'pull_request_review'])('without a kind, %s by a listed author is skipped and records no event_kind', async (event) => {
+    const adapter = makeAdapter()
+
+    const { record } = await runCapturing(adapter, { event, commentAuthor: '{BOT}' })
+
+    expect(adapter.getPullRequestInfo).not.toHaveBeenCalled()
+    expect(record.action).toBe('SKIP')
+    expect(record.trigger).toEqual({ event, comment_author: '{BOT}' })
+    expect('event_kind' in record.trigger!).toBe(false)
+  })
+
+  it.each(['merge_request_event', 'Merge Request Hook', 'pull_request_review_thread', 'pull_request'])('without a kind, %s by a listed author is reviewed', async (event) => {
+    const adapter = makeAdapter()
+
+    const { record } = await runCapturing(adapter, { event, commentAuthor: '{BOT}' })
+
+    expect(adapter.getPullRequestInfo).toHaveBeenCalledTimes(1)
+    expect(record.action).toBe('REVIEW')
+  })
+})
+
+describe('checked_commit output: only a storable head', () => {
+  it.each(['', 'HEAD', 'abc123', 'zz'.repeat(20)])('a marked run whose adapter reports head %j carries no checked_commit', async (sourceCommit) => {
+    const adapter = makeAdapter({ getPullRequestInfo: vi.fn().mockResolvedValue(makePRInfo(sourceCommit)) })
+
+    const record = await review(adapter, '100', false, undefined, 'off', true, 'repo')
+
+    expect(record!.action).toBe('REVIEW')
+    expect(adapter.postComment).toHaveBeenCalledTimes(1)
+    expect('checked_commit' in record!).toBe(false)
+  })
+
+  it('the same run on a hex head carries it unchanged', async () => {
+    const record = await review(makeAdapter(), '100', false, undefined, 'off', true, 'repo')
+
+    expect(record!.checked_commit).toBe(COMMIT_A)
   })
 })
 

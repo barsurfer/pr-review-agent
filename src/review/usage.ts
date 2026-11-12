@@ -2,7 +2,7 @@
 // Usage record — type, cost estimation, record builder, file logging
 // ---------------------------------------------------------------------------
 
-import { appendFileSync, readFileSync } from 'fs'
+import { appendFileSync, readFileSync, writeFileSync } from 'fs'
 import { execSync, type ExecSyncOptions } from 'child_process'
 import { createHash } from 'crypto'
 import { dirname } from 'path'
@@ -16,7 +16,8 @@ import { isAnchored, parseLineRange, normalizeFindingPath } from './findings-out
 import { candidateId, type AppliedDecision, type JudgeAnomalies } from './judge-decisions.js'
 import { MAX_UNTOUCHED_LISTED, type BreadthStatus, type SecondLookStatus, type LensStatus, type CandidateOrigin } from './breadth.js'
 import { activeLenses, type LensRecommendation } from './lenses.js'
-import type { ReviewContext, LensRun } from './types.js'
+import { isCheckedCommitHash } from './checked-commit.js'
+import type { ReviewContext, LensRun, EventKind } from './types.js'
 
 // 12 hex chars of sha256 — enough to tell prompt/code versions apart across runs without bloating the record.
 function hash12(s: string): string {
@@ -103,7 +104,7 @@ export interface UsageRecord {
   checked_commit?: string
   dedup_source?: 'checked_commit'
   jenkins: { job: string; build: string; url: string } | null
-  trigger?: { event: string | null; comment_author: string | null }
+  trigger?: { event: string | null; comment_author: string | null; event_kind?: EventKind }
   error: { type: string; message: string; status: number | null } | null
 }
 
@@ -258,7 +259,7 @@ export function buildUsageRecord(
     timestamp: new Date().toISOString(),
     agent_version: getAgentVersion(),
     vcs: config.vcsProvider,
-    workspace: config.vcsProvider === 'azure' ? config.azure.org : config.bitbucket.workspace,
+    workspace: config.vcsProvider === 'azure' ? config.azure.org : config.vcsProvider === 'github' ? config.github.owner : config.bitbucket.workspace,
     repo_slug: ctx.repoSlug,
     pr_id: ctx.prId,
     pr_author: ctx.prInfo?.author ?? 'unknown',
@@ -360,12 +361,12 @@ export function buildUsageRecord(
       still_open: deltaStats?.still_open ?? 0,
       new_findings: deltaStats?.new_findings ?? 0,
     } : null,
-    // Present only when the head was really checked and the run did not fail afterwards; CI stores exactly this value.
-    ...(ctx.headChecked && !error ? { checked_commit: ctx.prInfo!.sourceCommit } : {}),
+    // Present only when the head was really checked and the run did not fail afterwards; CI stores exactly this value, so it must pass the LAST_CHECKED_COMMIT rule too (Azure can report an empty head).
+    ...(ctx.headChecked && !error && isCheckedCommitHash(ctx.prInfo!.sourceCommit) ? { checked_commit: ctx.prInfo!.sourceCommit } : {}),
     ...(ctx.dedupHit === 'checked_commit' ? { dedup_source: 'checked_commit' as const } : {}),
     jenkins: getJenkinsMeta(),
     // Absent when CI passed no trigger, so those records serialize exactly as before.
-    ...(ctx.trigger ? { trigger: { event: ctx.trigger.event || null, comment_author: ctx.trigger.commentAuthor || null } } : {}),
+    ...(ctx.trigger ? { trigger: { event: ctx.trigger.event || null, comment_author: ctx.trigger.commentAuthor || null, ...(ctx.trigger.kind ? { event_kind: ctx.trigger.kind } : {}) } } : {}),
     error,
   }
 }
@@ -375,6 +376,14 @@ export function buildUsageRecord(
 // ---------------------------------------------------------------------------
 
 export function logUsageRecord(record: UsageRecord): void {
-  appendFileSync('results.jsonl', JSON.stringify(record) + '\n')
+  const line = JSON.stringify(record) + '\n'
+  appendFileSync('results.jsonl', line)
   console.log('Usage appended to results.jsonl')
+  if (!config.usageRecordFile) return
+  // Overwritten, not appended, so CI reads this run's record alone without matching on Jenkins env vars.
+  try {
+    writeFileSync(config.usageRecordFile, line)
+  } catch (err: unknown) {
+    console.warn(`Warning: could not write USAGE_RECORD_FILE "${config.usageRecordFile}": ${(err as Error).message}`)
+  }
 }
