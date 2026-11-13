@@ -234,7 +234,7 @@ describe('runJudge proposals', () => {
   it('proposals alone return no renderWith and keep the prose contract', async () => {
     const res = await call(ON)
     expect('renderWith' in res).toBe(false)
-    expect(completeStructured.mock.calls[0][0]).not.toContain('only the corrected code')
+    expect(completeStructured.mock.calls[0][0]).not.toContain('copyable plain-text block')
   })
 
   it('codeProposals sends the code contract and schema, dedents the proposal and returns renderWith', async () => {
@@ -255,7 +255,7 @@ describe('code proposal contract (ENABLE_SUGGESTED_FIXES)', () => {
 
   it('the prompt swaps in the code-only PROPOSAL section, last, and only when proposals are on', () => {
     const code = composeJudgePrompt(base, { quality: true, shownAnchors: false, proposals: true, codeProposals: true })
-    expect(code).toContain('## PROPOSAL\n\nFor each candidate you keep, give `proposal`: only the corrected code for the lines that change')
+    expect(code).toContain('## PROPOSAL\n\nFor each candidate you keep, give `proposal`: the fix, posted to the developer as a copyable plain-text block')
     expect(code).not.toContain('written as an instruction')
     expect(code.indexOf('## PROPOSAL')).toBeGreaterThan(code.indexOf('## MULTI-FILE FINDINGS'))
     expect(code.trimEnd().endsWith('Dropped candidates get no proposal.')).toBe(true)
@@ -265,7 +265,7 @@ describe('code proposal contract (ENABLE_SUGGESTED_FIXES)', () => {
 
   it('the schema variant carries the code description, is cached under its own key and leaves the others untouched', () => {
     const code = judgeOutputSchema(false, false, true, true) as Props
-    expect(code.properties.decisions.items.properties.proposal.description).toMatch(/^Only for a candidate you keep: the corrected code/)
+    expect(code.properties.decisions.items.properties.proposal.description).toMatch(/^Only for a candidate you keep: the fix as a copyable plain-text block/)
     expect(code.properties.decisions.items.required).not.toContain('proposal')
     expect(judgeOutputSchema(false, false, true, true)).toBe(code)
     expect(judgeOutputSchema(false, false, true)).not.toBe(code)
