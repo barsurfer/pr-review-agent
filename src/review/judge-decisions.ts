@@ -101,6 +101,7 @@ export interface JudgedReview {
   markdown: string
   render: RenderJudged
   renderWith?: RenderJudged
+  proposalsDropped?: number
 }
 
 export const candidateId = (index: number): string => `c${index}`
@@ -123,6 +124,8 @@ export function sanitizeProposal(raw: unknown): string | undefined {
 // Code is pasted as-is: dedent, since trim breaks the first line's relative indent, and count blank lines so padding cannot escape the caps.
 export function sanitizeCodeProposal(raw: unknown): string | undefined {
   if (typeof raw !== 'string') return undefined
+  // The fence-unwrap regex below backtracks in O(run × length) on an unclosed backtick run, so bound the input first.
+  if (raw.length > 4 * PROPOSAL_CAP) return undefined
   let s = raw.replace(/\r\n?/g, '\n').trimEnd()
   const fenced = s.match(/^\s*(`{3,}|~{3,})[^\n]*\n([\s\S]*?)\n[ \t]*\1$/)
   if (fenced) s = fenced[2]
@@ -347,6 +350,7 @@ export function applyJudgeDecisions(candidates: readonly ReviewFinding[], output
   const kept: KeptFinding[] = []
   const moved: string[] = []
   const rows: KeptRow[] = []
+  const sanitizerDropped: number[] = []
   candidates.forEach((candidate, i) => {
     const id = candidateId(i)
     const entry = entries[i]
@@ -360,6 +364,7 @@ export function applyJudgeDecisions(candidates: readonly ReviewFinding[], output
     const { question, body, anchor, proposal, ...applied } = entry.r
     const isKept = entry.r.action === 'keep' || entry.r.action === 'downgrade'
     const keptProposal = proposals && isKept && proposal ? { proposal } : {}
+    if (proposals && options?.codeProposals && isKept && !proposal && typeof entry.d.proposal === 'string' && entry.d.proposal.trim()) sanitizerDropped.push(i)
     const expansion = options?.quality && isKept && entry.d.additional_locations?.length
       ? expandLocations(candidate, entry.d.additional_locations, anchor, idx)
       : null
@@ -387,7 +392,7 @@ export function applyJudgeDecisions(candidates: readonly ReviewFinding[], output
   return {
     kept, decisions, anomalies, scores, markdown: renderJudgedReview(kept, output, moved, canBeSplit), render,
     // Kept as the code-proposal contract callers check for; POST_REVIEW reads render, which every judged review has.
-    ...(options?.codeProposals ? { renderWith: render } : {}),
+    ...(options?.codeProposals ? { renderWith: render, proposalsDropped: sanitizerDropped.filter(i => decisions[i].quality_action !== 'dedup_suppressed').length } : {}),
   }
 }
 

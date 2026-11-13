@@ -109,9 +109,10 @@ export interface ReviewContext {
   judgeDecisions?: AppliedDecision[]
   judgeAnomalies?: JudgeAnomalies
   judgedFindings?: KeptFinding[]
-  // Set only under ENABLE_SUGGESTED_FIXES, so blocks are spliced in at POST_REVIEW and never enter reviewText.
+  // A render closure, so POST_REVIEW orders findings and splices blocks into the posted comment while reviewText stays plain.
   renderJudged?: RenderJudged
   suggestedFixes?: SuggestedFixStats
+  proposalsDropped?: number
   // Kept apart from reviewObject so reviewer metrics and the judge-failure fallback stay reviewer-only.
   breadthFindings?: ReviewFinding[]
   breadthStatus?: BreadthStatus

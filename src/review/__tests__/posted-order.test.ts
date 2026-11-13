@@ -167,4 +167,27 @@ describe('orderPosted with suggested fixes', () => {
     expect(composed).toEqual({ text: posted.text, stats: { rendered: 0, rejected: 0, skipped: 'size' } })
     expect(posted.text).not.toBe(plain)
   })
+
+  const orderThenCompose = (fs: KeptFinding[]) => {
+    const r = (s: ReadonlyMap<number, string>, order?: readonly number[]) => renderJudgedReview(fs, OUT, [], [], s, order)
+    const posted = orderPosted(r(new Map()), fs, order => r(new Map(), order))
+    return { posted, unordered: r(new Map()), composed: composeSuggestedFixes(fs, s => r(s, posted.order), posted.text, 32_000) }
+  }
+
+  it('a fence opened in one finding and closed in the next: no reordering, and the block check skips the blocks whether or not the order would change', () => {
+    for (const [first, second] of [['LOW', 'HIGH'], ['HIGH', 'LOW']] as const) {
+      const fs = [{ ...kept(first, 'Open', 'fix()'), body: 'see\n```ts\nfoo()' }, { ...kept(second, 'Closer'), body: 'more\n```' }]
+      const { posted, unordered, composed } = orderThenCompose(fs)
+      expect(posted, first).toEqual({ text: unordered })
+      expect(composed, first).toEqual({ text: unordered, stats: { rendered: 0, rejected: 0, skipped: 'unbalanced' } })
+    }
+  })
+
+  it('fenced bodies that let the findings move also let every block stand alone', () => {
+    const fs = [{ ...kept('LOW', 'A', 'a()'), body: 'see\n```ts\nfoo()\n```' }, { ...kept('HIGH', 'B', 'b()'), body: 'ex:\n```\nbar()\n```' }]
+    const { posted, composed } = orderThenCompose(fs)
+    expect(posted.order).toEqual([1, 0])
+    expect(composed.stats).toEqual({ rendered: 2, rejected: 0 })
+    expect(stripSuggestedFixes(composed.text)).toBe(posted.text)
+  })
 })

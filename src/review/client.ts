@@ -39,6 +39,7 @@ export interface JudgeResult extends ModelResult {
   kept?: KeptFinding[]
   render?: RenderJudged
   renderWith?: RenderJudged
+  proposalsDropped?: number
 }
 
 // The judge rules on candidate ids and the app renders the comment, so reasoning can't leak; the judge only anchors candidates whose reviewer location has no numeric line.
@@ -376,7 +377,7 @@ export async function runJudge(
   return {
     text: judged.markdown, usage, notes: summarizeDecisions(judged.decisions), scores: judged.scores, promptHash,
     decisions: judged.decisions, anomalies: judged.anomalies, kept: judged.kept, render: judged.render,
-    ...(judged.renderWith ? { renderWith: judged.renderWith } : {}),
+    ...(judged.renderWith ? { renderWith: judged.renderWith, proposalsDropped: judged.proposalsDropped } : {}),
   }
 }
 

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
-  REASON_CATEGORIES, REWRITE_CAP, DEFAULT_JUDGE_POLICY, applyJudgeDecisions, policyAction, renderCandidatesForJudge, renderJudgedReview, locateInDiff,
+  REASON_CATEGORIES, REWRITE_CAP, PROPOSAL_CAP, DEFAULT_JUDGE_POLICY, applyJudgeDecisions, policyAction, renderCandidatesForJudge, renderJudgedReview, locateInDiff,
   type JudgeDecision, type JudgeOutput, type ReasonCategory,
 } from '../judge-decisions.js'
 import type { ReviewFinding } from '../formatter.js'
@@ -423,5 +423,18 @@ describe('renderJudgedReview suffixes and renderWith', () => {
     const prose = applyJudgeDecisions([finding()], output([decision({ proposal: raw })]), DEFAULT_JUDGE_POLICY, [], '', Infinity, { proposals: true })
     expect(code.kept[0].proposal).toBe('try {\n  q()\n} finally {')
     expect(prose.kept[0].proposal).toBe(raw.trim())
+  })
+
+  it('codeProposals counts the kept proposals the sanitizer omits; absent, blank and dropped-candidate proposals are not counted', () => {
+    const over = 'x'.repeat(PROPOSAL_CAP + 1)
+    const cands = [finding(), finding({ title: 'B', lines: '3' }), finding({ title: 'C', lines: '4' }), finding({ title: 'D', lines: '5' }), finding({ title: 'E', lines: '6' })]
+    const out = output([
+      decision({ proposal: over }), decision({ candidate_id: 'c1', proposal: '  \n ' }), decision({ candidate_id: 'c2' }),
+      decision({ candidate_id: 'c3', reason_category: 'style_only', proposal: over }), decision({ candidate_id: 'c4', proposal: 'a()\n'.repeat(8) }),
+    ])
+    const r = applyJudgeDecisions(cands, out, DEFAULT_JUDGE_POLICY, [], '', Infinity, { proposals: true, codeProposals: true })
+    expect(r.kept.map(k => k.title)).toEqual(['Race on conns', 'B', 'C', 'E'])
+    expect(r.proposalsDropped).toBe(2)
+    expect('proposalsDropped' in applyJudgeDecisions(cands, out, DEFAULT_JUDGE_POLICY, [], '', Infinity, { proposals: true })).toBe(false)
   })
 })

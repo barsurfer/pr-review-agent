@@ -821,6 +821,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         ctx.judgeAnomalies = result.anomalies
         ctx.judgedFindings = result.kept
         if (result.render) ctx.renderJudged = result.render
+        if (result.proposalsDropped) ctx.proposalsDropped = result.proposalsDropped
         if (result.notes) {
           console.log(`  Judge notes (not posted): ${result.notes}`)
         }
@@ -946,9 +947,10 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       if (config.judge.suggestedFixes && judgedRender) {
         const composed = composeSuggestedFixes(ctx.judgedFindings ?? [], s => judgedRender(s, posted.order), body, COMMENT_BUDGET - todoSection.length - footer.length)
         body = composed.text
-        ctx.suggestedFixes = composed.stats
+        const dropped = ctx.proposalsDropped
+        ctx.suggestedFixes = dropped ? { ...composed.stats, dropped } : composed.stats
         const { rendered, rejected, skipped } = composed.stats
-        console.log(`  Suggested fixes: ${rendered} rendered, ${rejected} rejected${skipped ? `, all skipped (${skipped})` : ''}`)
+        console.log(`  Suggested fixes: ${rendered} rendered, ${rejected} rejected${dropped ? `, ${dropped} dropped by the sanitizer` : ''}${skipped ? `, all skipped (${skipped})` : ''}`)
       }
       const comment = body + todoSection + footer
 
@@ -969,6 +971,8 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
             console.log(`  Commit ${commitShort} already reviewed by another run — skipping post`)
             ctx.action = 'DEDUP_SKIP'
             ctx.skipReason = 'Another agent run already reviewed this commit (race condition avoided)'
+            // Nothing is posted, so the record must not report composed blocks as rendered.
+            ctx.suggestedFixes = undefined
             markHeadChecked(ctx)
             return State.SKIP
           }
