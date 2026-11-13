@@ -36335,7 +36335,8 @@ var config = {
     // Off by default: each keeps findings today's judge drops, so turning one on means more (mostly LOW) comments.
     policy: {
       keepMinor: optional("ENABLE_JUDGE_KEEP_MINOR", "false") === "true",
-      keepUnverified: optional("ENABLE_JUDGE_KEEP_UNVERIFIED", "false") === "true"
+      keepUnverified: optional("ENABLE_JUDGE_KEEP_UNVERIFIED", "false") === "true",
+      keepTestGaps: optional("ENABLE_JUDGE_KEEP_TEST_GAPS", "false") === "true"
     },
     // Off by default: sending the reviewer's file context roughly doubles judge input tokens.
     fileContext: optional("ENABLE_JUDGE_FILE_CONTEXT", "false") === "true",
@@ -36412,6 +36413,7 @@ var config = {
   onlyTargetBranches: parseBranchList(optional("ONLY_TARGET_BRANCHES", "")),
   lastCheckedCommit: optional("LAST_CHECKED_COMMIT", "").trim(),
   usageRecordFile: optional("USAGE_RECORD_FILE", "").trim(),
+  benchmarkCounterpartRows: optional("ENABLE_BENCHMARK_COUNTERPART_ROWS", "false") === "true",
   diffExcludePatterns: optional("DIFF_EXCLUDE_PATTERNS", "*.lock,package-lock.json,yarn.lock,pnpm-lock.yaml,*.json,*.spec.ts").split(",").map((p) => p.trim()).filter(Boolean),
   thresholds: {
     minChangedFiles: parseInt(optional("MIN_CHANGED_FILES", "0"), 10),
@@ -44694,6 +44696,54 @@ function anchorToFile(kept, firstAdded, changedFiles = []) {
     return line ? { ...k, file, lines: String(line), anchorSource: "file" } : k;
   });
 }
+var FILE_LINE = /(?<![\w./:-])([\w./-]*[\w-]\.[A-Za-z][A-Za-z0-9]{0,5})[`'"]?(?::L?|#L|,?\s+lines?\s+|\s+\(lines?\s+|\s+L(?=\d))(\d{1,5})(?:\s*(?:-|–|to)\s*L?(\d{1,5}))?/g;
+var CUT_SHORT = /\d|\.\d|\s*(?:-|–|to)\s*L?\d/y;
+var MAX_COUNTERPARTS = 3;
+function resolveMention(token, changedFiles) {
+  const name = normalizeFindingPath(token);
+  const exact = name.includes("/") ? changedFiles.find((f) => f.path === name) ?? (/^[ab]\//.test(name) ? changedFiles.find((f) => f.path === name.slice(2)) : void 0) : void 0;
+  if (exact) return exact;
+  const hits = changedFiles.filter((f) => f.path === name || f.path.endsWith("/" + name));
+  return hits.length === 1 ? hits[0] : void 0;
+}
+function counterpartMentions(texts, ownFile, changedFiles, addedFileLength = /* @__PURE__ */ new Map()) {
+  const out = [];
+  for (const raw of texts) {
+    const text = String(raw ?? "");
+    let scanned = 0, inAddress = false;
+    for (const m of text.matchAll(FILE_LINE)) {
+      const start = Number(m[2]), end = m[3] === void 0 ? start : Number(m[3]);
+      const lines = start === end ? String(start) : `${start}-${end}`;
+      const hit = resolveMention(m[1], changedFiles);
+      if (!hit || hit.status === "deleted" || hit.path === ownFile || !start || end < start || !parseLineRange(lines)) continue;
+      if (out.some((c) => c.file === hit.path && c.lines === lines)) continue;
+      for (; scanned < m.index; scanned++) {
+        if (/\s/.test(text[scanned])) inAddress = false;
+        else if (text[scanned] === "@" || text.startsWith("://", scanned)) inAddress = true;
+      }
+      CUT_SHORT.lastIndex = m.index + m[0].length;
+      if (inAddress || CUT_SHORT.test(text)) continue;
+      if (hit.status === "added" && end > (addedFileLength.get(hit.path) ?? 0)) continue;
+      out.push({ file: hit.path, lines });
+      if (out.length === MAX_COUNTERPARTS) return out;
+    }
+  }
+  return out;
+}
+function counterpartFindings(placed, changedFiles, diff) {
+  const paths = changedFiles.map((f) => f.path);
+  const addedFileLength = /* @__PURE__ */ new Map();
+  for (const { file, line } of addedLines(diff)) addedFileLength.set(normalizeFindingPath(file), line);
+  return placed.flatMap((k) => {
+    if (!isAnchored(k) || k.reviewerBody === void 0) return [];
+    const { proposal: _ownFix, ...copy } = k;
+    return counterpartMentions([k.title, k.reviewerBody], normalizeFindingPath(k.file, paths), changedFiles, addedFileLength).map((c) => ({ ...copy, ...c, anchorSource: "mention" }));
+  });
+}
+function withCounterparts(placed, changedFiles, diff, producer, changedPaths = []) {
+  const findings = keptToReportFindings([...placed, ...counterpartFindings(placed, changedFiles, diff)], producer, changedPaths);
+  return { findings, added: findings.length - keptToReportFindings(placed, producer, changedPaths).length };
+}
 function keptToReportFindings(kept, producer, changedPaths = []) {
   const out = [];
   const seen = /* @__PURE__ */ new Set();
@@ -44913,6 +44963,16 @@ function policyAction(reason, severity, policy) {
 }
 var NUMERIC_LINES = /^\s*L?\d+(?:\s*[-–—,]\s*L?\d+)*\s*$/i;
 var isNumericLines = (lines) => NUMERIC_LINES.test(String(lines ?? ""));
+var TEST_GAP_EXPLICIT = /\b(untested|(not|never) tested|no (unit |regression |automated |integration )?tests?\b|missing tests?|without tests?|lacks? (a )?tests?|ha(s|ve) no (unit |regression )?tests?|no test (covers|exercises|for|asserts)|test coverage)/i;
+var TEST_GAP_GENERIC = /\b(never (exercis|test)|no coverage|not covered|cannot fail|can't fail|tautolog|trivially pass|does not (exercise|cover|assert|test)|doesn't (exercise|cover|assert|test)|never asserts?)/gi;
+var TESTING_CONTEXT = /\b(tests?|tested|testing|mocks?|mocked|fixtures?)\b/i;
+function isTestGap(title, body) {
+  const text = `${title}
+${body}`;
+  if (TEST_GAP_EXPLICIT.test(text)) return true;
+  const rest = text.replace(TEST_GAP_GENERIC, " ");
+  return rest !== text && TESTING_CONTEXT.test(rest);
+}
 var MIN_QUOTE_LEN = 12;
 function buildDiffIndex(diff) {
   const byFile = /* @__PURE__ */ new Map();
@@ -44992,13 +45052,14 @@ function resolve2(d, candidate, policy, idx, breadthOrigin, shown = {}) {
     reclassified_from = reason;
     reason = "unverifiable";
   }
-  const { action, severity } = policyAction(reason, candidate.severity, policy);
+  const anchor = resolveAnchor(candidate, d, idx, breadthOrigin, shown);
+  const testGap = !!policy.keepTestGaps && reason === "low_value" && isAnchored({ ...candidate, file: anchor.file, lines: anchor.lines, anchorSource: anchor.source }) && isTestGap(candidate.title, candidate.body);
+  const { action, severity } = testGap ? downgradeTo(candidate.severity, "LOW") : policyAction(reason, candidate.severity, policy);
   const kept = action === "keep" || action === "downgrade";
   const unproven = reason === "unverifiable" || reason === "framework_uncertainty";
   const score = kept && unproven ? Math.min(clampScore(d.score), UNVERIFIED_SCORE_CAP) : clampScore(d.score);
   const rewrite = String(d.rewritten_body ?? "").trim();
   const rewritten = kept && rewrite.length > 0 && rewrite.length <= REWRITE_CAP;
-  const anchor = resolveAnchor(candidate, d, idx, breadthOrigin, shown);
   return {
     candidate_id: "",
     reason_category: reason,
@@ -45014,6 +45075,7 @@ function resolve2(d, candidate, policy, idx, breadthOrigin, shown = {}) {
     anchor_file: anchor.file ?? null,
     anchor_lines: anchor.lines ?? null,
     ...anchor.basis ? { anchor_basis: anchor.basis } : {},
+    ...testGap ? { policy_override: "test_gap" } : {},
     question: String(d.question ?? "").trim() || void 0,
     body: rewritten ? rewrite : candidate.body,
     anchor
@@ -45102,7 +45164,8 @@ function applyJudgeDecisions(candidates, output, policy = DEFAULT_JUDGE_POLICY, 
         anchorSource: anchor.source,
         ...keptProposal,
         ...withoutFix ? { bodyWithoutFix: withoutFix } : {},
-        ...entry.r.quality_action ? { quality_action: entry.r.quality_action } : {}
+        ...entry.r.quality_action ? { quality_action: entry.r.quality_action } : {},
+        ...options?.counterparts ? { reviewerBody: candidate.body } : {}
       });
       rows.push({ candidate: i, expansion: false, validated: entry.r.reason_category === "validated", evidenced: !!entry.r.evidence, rescueOf: entry.r.invalid_duplicate ? index.get(normalizeId(String(entry.r.duplicate_of ?? ""))) : void 0 });
       for (const x of expansion?.accepted ?? []) {
@@ -46531,8 +46594,8 @@ var import_meta3 = {};
 function hash12(s) {
   return (0, import_crypto3.createHash)("sha256").update(s).digest("hex").slice(0, 12);
 }
-function candidateRows(list) {
-  return list.map((f, i) => ({ id: candidateId(i), origin: f.origin, severity: f.severity, title: f.title, file: f.file ?? null, lines: f.lines ?? null, body: f.body }));
+function candidateRows(list, withType) {
+  return list.map((f, i) => ({ id: candidateId(i), origin: f.origin, severity: f.severity, ...withType ? { type: f.type ? normalizeIssueType(f.type) : null } : {}, title: f.title, file: f.file ?? null, lines: f.lines ?? null, body: f.body }));
 }
 function firstSentence(body) {
   const s = body.trim();
@@ -46574,7 +46637,7 @@ function getAgentVersion() {
     const pkg = JSON.parse((0, import_fs4.readFileSync)(pkgPath, "utf-8"));
     return pkg.version;
   } catch {
-    if (true) return "0.0.50";
+    if (true) return "0.0.51";
     return "unknown";
   }
 }
@@ -46586,7 +46649,7 @@ function getBuildCommit() {
     const dirty = (0, import_child_process.execSync)("git status --porcelain", opts2).toString().trim() ? "-dirty" : "";
     return hash + dirty;
   } catch {
-    if (true) return "45555a6";
+    if (true) return "d5e0ba2";
     return "unknown";
   }
 }
@@ -46711,12 +46774,12 @@ function buildUsageRecord(ctx, durationMs, error) {
         ...k.quality_action ? { quality_action: k.quality_action } : {}
       };
     }) : null,
-    review_candidates: ctx.judgeDecisions && ctx.reviewObject ? candidateRows(ctx.judgeCandidates ?? ctx.reviewObject.findings.map((f) => ({ ...f, origin: "review" }))) : null,
+    review_candidates: ctx.judgeDecisions && ctx.reviewObject ? candidateRows(ctx.judgeCandidates ?? ctx.reviewObject.findings.map((f) => ({ ...f, origin: "review" })), !!ctx.outcomeSink) : null,
     // Only when the judge threw and the run failed, so findings that were never judged or posted stay diagnosable.
-    ...error && ctx.judgeStatus === "failed" && ctx.judgeCandidates ? { unjudged_candidates: candidateRows(ctx.judgeCandidates) } : {},
+    ...error && ctx.judgeStatus === "failed" && ctx.judgeCandidates ? { unjudged_candidates: candidateRows(ctx.judgeCandidates, !!ctx.outcomeSink) } : {},
     judge_decisions: ctx.judgeDecisions ?? null,
     judge_anomalies: ctx.judgeAnomalies ?? null,
-    judge_policy: judgeModel && judgeTokens ? { keep_minor: config.judge.policy.keepMinor, keep_unverified: config.judge.policy.keepUnverified, file_context: config.judge.fileContext } : null,
+    judge_policy: judgeModel && judgeTokens ? { keep_minor: config.judge.policy.keepMinor, keep_unverified: config.judge.policy.keepUnverified, file_context: config.judge.fileContext, ...config.judge.policy.keepTestGaps ? { keep_test_gaps: true } : {} } : null,
     breadth_status: breadthStatus,
     breadth_model: ctx.breadthModel ?? null,
     breadth_prompt_hash: ctx.breadthPromptHash ?? null,
@@ -46730,6 +46793,7 @@ function buildUsageRecord(ctx, durationMs, error) {
     ...lenses.length ? { lens_runs: lensRuns } : {},
     ...config.lenses.recommend ? { lens_recommendations: ctx.lensRecommendations ?? null } : {},
     ...config.judge.suggestedFixes ? { suggested_fixes: ctx.suggestedFixes ?? null } : {},
+    ...ctx.counterpartRows !== void 0 ? { counterpart_rows: ctx.counterpartRows } : {},
     untouched_files: ctx.untouchedFiles ? ctx.breadthPlan ? { count: ctx.untouchedFiles.length, paths: ctx.breadthPlan.selected, cut: ctx.breadthPlan.omitted, deprioritized: ctx.breadthPlan.deprioritizedReleaseEntries } : { count: ctx.untouchedFiles.length, paths: ctx.untouchedFiles.slice(0, MAX_UNTOUCHED_LISTED), cut: Math.max(0, ctx.untouchedFiles.length - MAX_UNTOUCHED_LISTED) } : null,
     recall_levers: { j_quality: !!config.judge.quality, sl_breadth: !!config.review.secondLookBreadthTargets, j_shown_anchor: !!config.judge.shownAnchors, b_priority: !!config.breadth.priorityTargets },
     touch_rate: ctx.reviewNumber > 1 && deltaStats ? (() => {
@@ -47510,7 +47574,8 @@ If this PR spans multiple independent themes that could each be a separate, inde
       const judgeInput = extra ? { ...ctx.reviewObject, findings: [...firstPass, ...breadth, ...secondLook, ...lens] } : ctx.reviewObject;
       ctx.reviewTextBeforeJudge = ctx.reviewText;
       const suggestedFixes = !!config.judge.suggestedFixes;
-      const judgeOptions = config.judge.quality || config.judge.shownAnchors || config.judge.proposals || suggestedFixes ? {
+      const counterparts = !!ctx.outcomeSink && config.benchmarkCounterpartRows;
+      const judgeOptions = config.judge.quality || config.judge.shownAnchors || config.judge.proposals || suggestedFixes || counterparts ? {
         quality: config.judge.quality,
         proposals: config.judge.proposals,
         shownAnchors: config.judge.shownAnchors ? {
@@ -47520,7 +47585,8 @@ If this PR spans multiple independent themes that could each be a separate, inde
           secondLookFrom: firstPass.length + breadth.length,
           ...lens.length ? { lens: ctx.shownLens, lensFrom: firstPass.length + breadth.length + secondLook.length } : {}
         } : void 0,
-        ...suggestedFixes ? { proposals: true, codeProposals: true } : {}
+        ...suggestedFixes ? { proposals: true, codeProposals: true } : {},
+        ...counterparts ? { counterparts: true } : {}
       } : void 0;
       const judgeTail = judgeOptions ? [judgeOptions] : [];
       try {
@@ -47589,7 +47655,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
     }
     case 18 /* POST_REVIEW */: {
       if (ctx.outcomeSink) {
-        await ctx.outcomeSink({
+        const sunk = await ctx.outcomeSink({
           review: ctx.reviewObject,
           reviewText: ctx.reviewText,
           judged: ctx.judgeUsage !== void 0,
@@ -47599,6 +47665,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
           secondLookFindings: ctx.secondLookFindings,
           ...ctx.lensRuns ? { lensFindings: ctx.lensRuns.flatMap((r) => r.findings) } : {}
         });
+        if (sunk && sunk.counterpartRows !== void 0) ctx.counterpartRows = sunk.counterpartRows;
         ctx.action = "REVIEW";
         return 20 /* DONE */;
       }
@@ -47865,6 +47932,9 @@ var CONFIG_LABELS = {
   J_UNVER: flag((on) => {
     config.judge.policy.keepUnverified = on;
   }),
+  J_TGAP: flag((on) => {
+    config.judge.policy.keepTestGaps = on;
+  }),
   J_CTX: flag((on) => {
     config.judge.fileContext = on;
   }),
@@ -47901,6 +47971,9 @@ var CONFIG_LABELS = {
   LENS_REC: flag((on) => {
     config.lenses.recommend = on;
   }),
+  XROWS: flag((on) => {
+    config.benchmarkCounterpartRows = on;
+  }),
   // One value label doubles as the on/off switch because the manifest caps labels at 6.
   LENSES: (v, name) => {
     const on = parseLensList(v).lenses.length > 0;
@@ -47928,7 +48001,7 @@ function applyBenchmarkConfig(env) {
   if (!env.MAX_CHANGED_LINES) config.thresholds.maxChangedLines = 0;
   config.review.splitCheck = false;
   applyConfigLabels(env);
-  console.log(`Benchmark settings: model=${config.anthropic.model} effort=${config.review.effort || "default"} judge_model=${config.judge.model || "off"} judge_effort=${config.judge.effort || "default"} nits=${bit(config.review.enableNitpicks)} j_minor=${bit(config.judge.policy.keepMinor)} j_unver=${bit(config.judge.policy.keepUnverified)} j_ctx=${bit(config.judge.fileContext)} lnum=${bit(config.review.lineNumbers)} breadth=${bit(config.breadth.enabled)} b_files=${config.breadth.minFiles} b_untch=${config.breadth.minUntouched} second_look=${bit(config.review.secondLook)} j_quality=${bit(config.judge.quality)} sl_breadth=${bit(config.review.secondLookBreadthTargets)} j_shown_anchor=${bit(config.judge.shownAnchors)} b_priority=${bit(config.breadth.priorityTargets)} sfx=${bit(config.judge.suggestedFixes)} j_proposal=${bit(config.judge.proposals)}${activeLenses(config.lenses).length ? ` lenses=${config.lenses.list}` : ""}${config.lenses.recommend ? " lens_rec=1" : ""}`);
+  console.log(`Benchmark settings: model=${config.anthropic.model} effort=${config.review.effort || "default"} judge_model=${config.judge.model || "off"} judge_effort=${config.judge.effort || "default"} nits=${bit(config.review.enableNitpicks)} j_minor=${bit(config.judge.policy.keepMinor)} j_unver=${bit(config.judge.policy.keepUnverified)} j_ctx=${bit(config.judge.fileContext)} lnum=${bit(config.review.lineNumbers)} breadth=${bit(config.breadth.enabled)} b_files=${config.breadth.minFiles} b_untch=${config.breadth.minUntouched} second_look=${bit(config.review.secondLook)} j_quality=${bit(config.judge.quality)} sl_breadth=${bit(config.review.secondLookBreadthTargets)} j_shown_anchor=${bit(config.judge.shownAnchors)} b_priority=${bit(config.breadth.priorityTargets)} sfx=${bit(config.judge.suggestedFixes)} j_proposal=${bit(config.judge.proposals)}${activeLenses(config.lenses).length ? ` lenses=${config.lenses.list}` : ""}${config.lenses.recommend ? " lens_rec=1" : ""}${config.judge.policy.keepTestGaps ? " j_tgap=1" : ""}${config.benchmarkCounterpartRows ? " xrows=1" : ""}`);
   if (config.judge.proposals && !config.judge.model) console.warn("  J_PROPOSAL=1 but the judge is off - no proposals will be produced.");
   if (config.review.enableNitpicks && !config.judge.policy.keepMinor) {
     console.warn("  NITS=1 but J_MINOR=0 \u2014 nitpicks are logged for offline scoring only; set J_MINOR=1 to post them.");
@@ -47942,22 +48015,30 @@ async function runBenchmark(env = process.env) {
   try {
     applyBenchmarkConfig(env);
     const adapter2 = new ReviewBenchAdapter(rb);
-    const outcomes = [];
-    await review(adapter2, prNumber, false, void 0, "off", false, rb.nwo, (o) => {
-      outcomes.push(o);
-    });
-    const outcome = outcomes[0];
-    if (outcome) {
+    let reviewed = false;
+    await review(adapter2, prNumber, false, void 0, "off", false, rb.nwo, async (outcome) => {
+      reviewed = true;
       const changedFiles = await adapter2.getChangedFiles(prNumber);
       const changedPaths = changedFiles.map((f) => f.path);
       if (outcome.judgedFindings) {
-        const placed = anchorToFile(outcome.judgedFindings, firstAddedLines(await adapter2.getDiff(prNumber)), changedFiles);
-        findings = keptToReportFindings(placed, rb.agent, changedPaths);
+        const diff = await adapter2.getDiff(prNumber);
+        const placed = anchorToFile(outcome.judgedFindings, firstAddedLines(diff), changedFiles);
+        let extra;
+        if (config.benchmarkCounterpartRows) {
+          try {
+            extra = withCounterparts(placed, changedFiles, diff, rb.agent, changedPaths);
+          } catch (err) {
+            console.warn(`  Counterpart rows skipped, original rows kept: ${err.message}`);
+            extra = { findings: keptToReportFindings(placed, rb.agent, changedPaths), added: 0 };
+          }
+        }
+        findings = extra ? extra.findings : keptToReportFindings(placed, rb.agent, changedPaths);
         const fileLevel = placed.filter((k) => k.anchorSource === "file");
         console.log(`Benchmark findings: reviewer ${outcome.review.findings.length}, breadth ${outcome.breadthFindings?.length ?? 0}, second-look ${outcome.secondLookFindings?.length ?? 0}${outcome.lensFindings ? `, lens ${outcome.lensFindings.length}` : ""}, judge kept ${outcome.judgedFindings.length}, line-anchored ${findings.length} (${fileLevel.length} placed on the file's first changed line)`);
         if (fileLevel.length > 0) console.log(`  File-level findings: ${fileLevel.map((k) => `${k.file}:${k.lines} ${k.title}`).join(" | ")}`);
         const unanchored = placed.filter((k) => !isAnchored(k));
         if (unanchored.length > 0) console.warn(`  Parse check: ${unanchored.length} kept finding(s) with no usable file:line, dropped from findings.json: ${unanchored.map((k) => k.title).join(" | ")}`);
+        if (extra) return { counterpartRows: extra.added };
       } else if (outcome.judged) {
         const { findings: judged, stats: s } = mergeJudgedFindingsWithStats(outcome.reviewText, outcome.review.findings, outcome.judgeScores, rb.agent, changedPaths);
         findings = judged;
@@ -47972,9 +48053,8 @@ async function runBenchmark(env = process.env) {
         findings = mapFindings(outcome.review.findings, rb.agent, changedPaths);
         console.log(`Benchmark findings: reviewer ${outcome.review.findings.length}, judge skipped, line-anchored ${findings.length}`);
       }
-    } else {
-      console.log("Benchmark: review skipped \u2014 writing empty findings");
-    }
+    });
+    if (!reviewed) console.log("Benchmark: review skipped \u2014 writing empty findings");
   } catch (err) {
     findings = [];
     console.error(`Benchmark review failed \u2014 writing empty findings: ${err.message}`);
@@ -48000,11 +48080,12 @@ if (major < 22) {
   process.exit(1);
 }
 var program2 = new Command();
-program2.name("pr-review-agent").description("Automated PR code review powered by Claude").option("--pr-id <id>", "Pull request ID").option("--workspace <workspace>", "VCS workspace / org (overrides BITBUCKET_WORKSPACE)").option("--repo-slug <slug>", "Repository slug").option("--vcs <provider>", "VCS provider: bitbucket | azure (WIP) | github (overrides VCS_PROVIDER); gitlab is not implemented and exits 1").option("--dry-run", "Print the review to stdout without posting to the PR").option("--force [mode]", 'Force review: "clean" (no prior context) or "re-review" (keep context, bypass dedup)').option("--log-usage [bool]", "Log usage data to results.jsonl (default: true)", (v) => v !== "false", true).option("--prompt <path>", "Path to a local prompt file (overrides repo .agent-review-instructions.md)").option("--validate-prompt", "Validate prompt and exit (local via --prompt, or repo via --pr-id)").option("--model <id>", "Claude model ID (overrides CLAUDE_MODEL)").option("--judge-model <id>", "Judge model ID (overrides JUDGING_MODEL)").option("--reply-model <id>", "Model ID for developer replies (overrides REPLY_MODEL; empty = reviewer model)").option("--min-changed-files <n>", "Skip review if fewer files changed (overrides MIN_CHANGED_FILES)").option("--max-changed-files <n>", "Skip review if more files changed (overrides MAX_CHANGED_FILES)").option("--min-changed-lines <n>", "Skip review if fewer lines changed (overrides MIN_CHANGED_LINES)").option("--max-changed-lines <n>", "Skip review if more lines changed (overrides MAX_CHANGED_LINES)").option("--skip-source-branches <list>", "Comma list of source-branch globs to skip (overrides SKIP_SOURCE_BRANCHES); an empty value (--skip-source-branches=) disables the check").option("--skip-target-branches <list>", "Comma list of target-branch globs to skip (overrides SKIP_TARGET_BRANCHES); an empty value (--skip-target-branches=) disables the check").option("--only-target-branches <list>", "Comma list of target-branch globs to review, skipping all others (overrides ONLY_TARGET_BRANCHES); an empty value (--only-target-branches=) disables the check").option("--max-input-tokens <n>", "Max estimated input tokens before degrade/skip (overrides MAX_INPUT_TOKENS)").option("--max-output-tokens <n>", "Max output tokens for reviewer + judge (overrides MAX_OUTPUT_TOKENS)").option("--effort <level>", "Reviewer thinking effort: low|medium|high|xhigh|max (overrides REVIEW_EFFORT; ignored by models without effort)").option("--judge-effort <level>", "Judge thinking effort (overrides JUDGE_EFFORT)").option("--skip-directed-replies", "Skip replying to dev comments @-directed at someone else (Bitbucket only; overrides SKIP_DIRECTED_REPLIES)").option("--second-look", "Second reviewer pass over already-flagged files to lift recall (overrides ENABLE_SECOND_LOOK; requires a judge)").option("--lenses <list>", "Concern-specific reviewer passes, e.g. reliability+security (overrides ENABLE_LENSES/LENSES; requires a judge)").option("--lens-recommendation", "Log which lenses the first-pass reviewer recommends for this PR; never gates a lens (overrides ENABLE_LENS_RECOMMENDATION)").option("--proposals", "Add a concise fix proposal to each kept finding in results.jsonl anchored_findings (overrides ENABLE_JUDGE_PROPOSALS; requires a judge)").option("--suggested-fixes", "Post a code fix block under each kept finding that has one; implies code-only proposals (overrides ENABLE_SUGGESTED_FIXES; requires a judge)").option("--event <name>", "What started this run, e.g. pullrequest:comment_created (overrides TRIGGER_EVENT); logged, and enables IGNORE_COMMENT_AUTHORS on comment events").option("--comment-author <id>", "Account id of the event actor, e.g. the Bitbucket actor uuid (overrides TRIGGER_COMMENT_AUTHOR)").option("--event-kind <kind>", "comment | other: whether the --event is a comment event, whatever its name (overrides TRIGGER_EVENT_KIND)").option("--checked-commit <hash>", "Head an earlier run reported as checked_commit for this PR; a run on that same head skips the re-review (overrides LAST_CHECKED_COMMIT)").option("--benchmark", "ReviewBench mode: read the PR from RB_* env + mounted files, write findings JSON to RB_OUT instead of posting; always exits 0").parse(process.argv);
+program2.name("pr-review-agent").description("Automated PR code review powered by Claude").option("--pr-id <id>", "Pull request ID").option("--workspace <workspace>", "VCS workspace / org (overrides BITBUCKET_WORKSPACE)").option("--repo-slug <slug>", "Repository slug").option("--vcs <provider>", "VCS provider: bitbucket | azure (WIP) | github (overrides VCS_PROVIDER); gitlab is not implemented and exits 1").option("--dry-run", "Print the review to stdout without posting to the PR").option("--force [mode]", 'Force review: "clean" (no prior context) or "re-review" (keep context, bypass dedup)').option("--log-usage [bool]", "Log usage data to results.jsonl (default: true)", (v) => v !== "false", true).option("--prompt <path>", "Path to a local prompt file (overrides repo .agent-review-instructions.md)").option("--validate-prompt", "Validate prompt and exit (local via --prompt, or repo via --pr-id)").option("--model <id>", "Claude model ID (overrides CLAUDE_MODEL)").option("--judge-model <id>", "Judge model ID (overrides JUDGING_MODEL)").option("--reply-model <id>", "Model ID for developer replies (overrides REPLY_MODEL; empty = reviewer model)").option("--min-changed-files <n>", "Skip review if fewer files changed (overrides MIN_CHANGED_FILES)").option("--max-changed-files <n>", "Skip review if more files changed (overrides MAX_CHANGED_FILES)").option("--min-changed-lines <n>", "Skip review if fewer lines changed (overrides MIN_CHANGED_LINES)").option("--max-changed-lines <n>", "Skip review if more lines changed (overrides MAX_CHANGED_LINES)").option("--skip-source-branches <list>", "Comma list of source-branch globs to skip (overrides SKIP_SOURCE_BRANCHES); an empty value (--skip-source-branches=) disables the check").option("--skip-target-branches <list>", "Comma list of target-branch globs to skip (overrides SKIP_TARGET_BRANCHES); an empty value (--skip-target-branches=) disables the check").option("--only-target-branches <list>", "Comma list of target-branch globs to review, skipping all others (overrides ONLY_TARGET_BRANCHES); an empty value (--only-target-branches=) disables the check").option("--max-input-tokens <n>", "Max estimated input tokens before degrade/skip (overrides MAX_INPUT_TOKENS)").option("--max-output-tokens <n>", "Max output tokens for reviewer + judge (overrides MAX_OUTPUT_TOKENS)").option("--effort <level>", "Reviewer thinking effort: low|medium|high|xhigh|max (overrides REVIEW_EFFORT; ignored by models without effort)").option("--judge-effort <level>", "Judge thinking effort (overrides JUDGE_EFFORT)").option("--skip-directed-replies", "Skip replying to dev comments @-directed at someone else (Bitbucket only; overrides SKIP_DIRECTED_REPLIES)").option("--second-look", "Second reviewer pass over already-flagged files to lift recall (overrides ENABLE_SECOND_LOOK; requires a judge)").option("--lenses <list>", "Concern-specific reviewer passes, e.g. reliability+security (overrides ENABLE_LENSES/LENSES; requires a judge)").option("--lens-recommendation", "Log which lenses the first-pass reviewer recommends for this PR; never gates a lens (overrides ENABLE_LENS_RECOMMENDATION)").option("--proposals", "Add a concise fix proposal to each kept finding in results.jsonl anchored_findings (overrides ENABLE_JUDGE_PROPOSALS; requires a judge)").option("--suggested-fixes", "Post a code fix block under each kept finding that has one; implies code-only proposals (overrides ENABLE_SUGGESTED_FIXES; requires a judge)").option("--keep-test-gaps", "Keep a candidate the judge files as low_value when it names a test gap and has a placeable line, as LOW (overrides ENABLE_JUDGE_KEEP_TEST_GAPS; requires a judge)").option("--event <name>", "What started this run, e.g. pullrequest:comment_created (overrides TRIGGER_EVENT); logged, and enables IGNORE_COMMENT_AUTHORS on comment events").option("--comment-author <id>", "Account id of the event actor, e.g. the Bitbucket actor uuid (overrides TRIGGER_COMMENT_AUTHOR)").option("--event-kind <kind>", "comment | other: whether the --event is a comment event, whatever its name (overrides TRIGGER_EVENT_KIND)").option("--checked-commit <hash>", "Head an earlier run reported as checked_commit for this PR; a run on that same head skips the re-review (overrides LAST_CHECKED_COMMIT)").option("--benchmark", "ReviewBench mode: read the PR from RB_* env + mounted files, write findings JSON to RB_OUT instead of posting; always exits 0").parse(process.argv);
 var opts = program2.opts();
 async function main() {
   if (opts.proposals) config.judge.proposals = true;
   if (opts.suggestedFixes) config.judge.suggestedFixes = true;
+  if (opts.keepTestGaps) config.judge.policy.keepTestGaps = true;
   if (opts.benchmark) {
     await runBenchmark();
     return;
