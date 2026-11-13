@@ -1,4 +1,4 @@
-import { REVIEW_FOOTER_SOURCE, REPLY_FOOTER_SOURCE } from './formatter.js'
+import { REVIEW_FOOTER_SOURCE, REPLY_FOOTER_SOURCE, isNoChange, stripPreviousFooter, stripDeltaStats, stripJudgeNotes, stripJenkinsMeta } from './formatter.js'
 import { PROPOSAL_CAP, type RenderJudged } from './judge-decisions.js'
 import type { KeptFinding } from './findings-output.js'
 
@@ -13,8 +13,11 @@ export interface SuggestedFixStats {
   rendered: number
   rejected: number
   dropped?: number
+  fix_free?: number
   skipped?: 'cleanup' | 'unbalanced' | 'fence' | 'size'
 }
+
+export type RenderFixFree = (suffixes: ReadonlyMap<number, string>, fixFree: ReadonlySet<number>) => string
 
 const FENCE_LINE = /^[ \t]*(`{3,}|~{3,})/
 const BLOCK_OPENER = new RegExp(`^(\`{3,})${SUGGESTED_FIX_MARKER}$`)
@@ -32,6 +35,12 @@ export function fixCodeContent(proposal: string): string | null {
     if (review.test(t) || reply.test(t)) return null
   }
   return proposal
+}
+
+// Spliced in after cleanup, so text that cleanup would have changed or skipped is refused; without fence lines it cannot pair with a fence elsewhere.
+export function fixFreeContent(text: string): string | null {
+  if (fixCodeContent(text) === null || isNoChange(text)) return null
+  return stripJenkinsMeta(stripJudgeNotes(stripDeltaStats(stripPreviousFooter(text)))) === text ? text : null
 }
 
 export const longestRun = (s: string): number => (s.match(/`+/g) ?? []).reduce((n, r) => Math.max(n, r.length), 0)
@@ -123,7 +132,23 @@ function blocksStandAlone(text: string, plain: string, codes: readonly string[])
   return own.length === want.length && own.every((c, n) => c === want[n])
 }
 
-export function composeSuggestedFixes(kept: readonly KeptFinding[], renderWith: RenderJudged, plain: string, budget: number): { text: string; stats: SuggestedFixStats } {
+type Skip = NonNullable<SuggestedFixStats['skipped']>
+
+// `base` is the block-free text the blocks go into: every check is made against it, so the strip must give it back exactly.
+function placeBlocks(fixes: ReadonlyArray<[number, string]>, base: string, render: (suffixes: ReadonlyMap<number, string>) => string, budget: number): { text: string } | { skipped: Skip } {
+  const suffixes = new Map<number, string>()
+  for (const [i, code] of fixes) {
+    const fence = fenceFor(code, base)
+    if (fence.length > MAX_FENCE) return { skipped: 'fence' }
+    suffixes.set(i, renderFixBlock(code, fence))
+  }
+  const text = render(suffixes)
+  if (text.length > budget) return { skipped: 'size' }
+  if (!blocksStandAlone(text, base, fixes.map(([, code]) => code))) return { skipped: 'unbalanced' }
+  return { text }
+}
+
+export function composeSuggestedFixes(kept: readonly KeptFinding[], renderWith: RenderJudged, plain: string, budget: number, renderFixFree?: RenderFixFree): { text: string; stats: SuggestedFixStats } {
   const fixes: Array<[number, string]> = []
   let rejected = 0
   kept.forEach((k, i) => {
@@ -138,16 +163,16 @@ export function composeSuggestedFixes(kept: readonly KeptFinding[], renderWith: 
   // Blocks are spliced into the judge's render, so any cleanup edit to that text would be silently undone.
   if (renderWith(new Map()) !== plain) return skip('cleanup')
   if (hasUnclosedFence(plain)) return skip('unbalanced')
-  const suffixes = new Map<number, string>()
-  for (const [i, code] of fixes) {
-    const fence = fenceFor(code, plain)
-    if (fence.length > MAX_FENCE) return skip('fence')
-    suffixes.set(i, renderFixBlock(code, fence))
+  // Only findings that get a block may drop their fix sentence; the identity render proves the closure is the cleaned text's.
+  const fixFree = new Set(fixes.filter(([i]) => kept[i].bodyWithoutFix && fixFreeContent(kept[i].bodyWithoutFix!) !== null).map(([i]) => i))
+  if (renderFixFree && fixFree.size && renderFixFree(new Map(), new Set()) === plain) {
+    const base = renderFixFree(new Map(), fixFree)
+    const placed = hasUnclosedFence(base) ? null : placeBlocks(fixes, base, s => renderFixFree(s, fixFree), budget)
+    if (placed && 'text' in placed) return { text: placed.text, stats: { rendered: fixes.length, rejected, fix_free: fixFree.size } }
   }
-  const text = renderWith(suffixes)
-  if (text.length > budget) return skip('size')
-  if (!blocksStandAlone(text, plain, fixes.map(([, code]) => code))) return skip('unbalanced')
-  return { text, stats: { rendered: suffixes.size, rejected } }
+  // A fix-free text that breaks a check falls back to the normal texts, so the blocks still post as they would without it.
+  const placed = placeBlocks(fixes, plain, renderWith, budget)
+  return 'text' in placed ? { text: placed.text, stats: { rendered: fixes.length, rejected } } : skip(placed.skipped)
 }
 
 // The first line that could close the opener under any reading must be the exact fence, so every renderer agrees where the block ends.

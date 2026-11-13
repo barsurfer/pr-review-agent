@@ -124,9 +124,9 @@ unanswered developer questions and responds conversationally.
 The agent scans all PR comments looking for replies to its review comments:
 
 1. Start with the set of **review comment IDs** (comments containing `"Reviewed by"`)
-2. For each comment with a matching `parent.id`:
-   - If it contains `"Reply by"` → it's an **agent reply** — add its ID to the parent set
-     (so replies-to-replies are also discovered) and track the timestamp
+2. Keep every live comment whose `parent.id` chain reaches a review comment, through human
+   and agent comments alike, whatever the API order (a deleted or missing link ends the chain):
+   - If it contains `"Reply by"` → it's an **agent reply** — count it and track the timestamp
    - Otherwise → it's a **human reply** — collect it
 3. Filter human replies to only those posted **after** the agent's latest reply
    (already-answered questions are excluded)
@@ -134,9 +134,10 @@ The agent scans all PR comments looking for replies to its review comments:
    review supersedes the prior discussion thread. This prevents stale replies from a
    previous review cycle from re-triggering a reply loop (a production reply-loop incident).
 
-This recursive parent tracking means the agent finds developer questions at any nesting
-depth — not just direct replies to the review, but also follow-ups to the agent's own
-replies.
+So the agent finds developer questions at any nesting depth: direct replies to the review,
+follow-ups to its own replies, and questions nested under other developers' replies that
+`@`-mention it (Bitbucket; other nested discussion is context only; details in
+[review/replies.md](../context/review/replies.md)).
 
 ### One Reply per Trigger
 
@@ -144,7 +145,7 @@ Each trigger produces **at most one agent reply** that answers all pending quest
 
 - All unanswered developer questions are bundled into a single Claude API call
 - Claude receives the original review, the diff, and all pending questions
-- The response is posted as a **threaded reply** under the review comment
+- The response is posted as a **threaded reply** under the parent of the newest pending question
 
 On the next trigger:
 - New unanswered questions → reply again (one response)

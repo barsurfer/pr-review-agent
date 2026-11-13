@@ -30,6 +30,7 @@ export interface KeptFinding {
   type?: IssueType   // carried from the reviewer finding; analytics only
   anchorSource?: 'reviewer' | 'judge' | 'diff' | 'file' | 'mention' | 'none'   // where file/lines came from, so a consumer can trust only what it wants
   proposal?: string
+  bodyWithoutFix?: string
   quality_action?: string
   reviewerBody?: string
 }

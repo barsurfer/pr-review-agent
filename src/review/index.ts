@@ -49,6 +49,13 @@ async function dropRepliesDirectedElsewhere(ctx: ReviewContext, replies: Comment
   }
 }
 
+// Nested human-to-human discussion stays reviewer context; answering it would spend the reply budget on chatter.
+function questionsForAgent(replies: CommentReply[]): CommentReply[] {
+  const questions = replies.filter(r => !r.contextOnly)
+  if (questions.length < replies.length) console.log(`  Skipped ${replies.length - questions.length} nested reply(s) to a human that don't @-mention the agent`)
+  return questions
+}
+
 // The CLI maps an empty --force to 'off', but review() is also called directly, so '' or an unknown mode must not count as forced.
 const forced = (ctx: ReviewContext): boolean => ctx.force === 'clean' || ctx.force === 're-review'
 
@@ -291,7 +298,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       }
 
       // Before the reply-limit check: all-directed-elsewhere becomes the normal "no unanswered questions" skip.
-      ctx.replies = await dropRepliesDirectedElsewhere(ctx, ctx.replies)
+      ctx.replies = await dropRepliesDirectedElsewhere(ctx, questionsForAgent(ctx.replies))
 
       if (ctx.replies.length > 0) {
         if (config.reply.maxComments > 0 && agentReplyCount >= config.reply.maxComments) {
@@ -719,8 +726,8 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         const replies = ctx.replies ?? []
         const lastAgentReplyAt = replies.filter(r => hasReplyFooter(r.body))
           .reduce((max, r) => (r.createdOn > max ? r.createdOn : max), '')
-        const unanswered = await dropRepliesDirectedElsewhere(ctx, replies.filter(r =>
-          !hasReplyFooter(r.body) && !!lastReview && r.createdOn > lastReview.createdOn && r.createdOn > lastAgentReplyAt))
+        const unanswered = await dropRepliesDirectedElsewhere(ctx, questionsForAgent(replies.filter(r =>
+          !hasReplyFooter(r.body) && !!lastReview && r.createdOn > lastReview.createdOn && r.createdOn > lastAgentReplyAt)))
 
         const priorHadFindings = !!lastReview && markdownHasFindings(lastReview.body)
         const stillOpen = (ctx.reviewObject?.delta_stats?.still_open ?? 0) > 0
@@ -937,7 +944,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       let body = posted.text
       // After every guard and parser has read the plain text, so no reviewText consumer ever sees a block.
       if (config.judge.suggestedFixes && judgedRender) {
-        const composed = composeSuggestedFixes(ctx.judgedFindings ?? [], s => judgedRender(s, posted.order), body, COMMENT_BUDGET - todoSection.length - footer.length)
+        const composed = composeSuggestedFixes(ctx.judgedFindings ?? [], s => judgedRender(s, posted.order), body, COMMENT_BUDGET - todoSection.length - footer.length, (s, fixFree) => judgedRender(s, posted.order, fixFree))
         body = composed.text
         const dropped = ctx.proposalsDropped
         ctx.suggestedFixes = dropped ? { ...composed.stats, dropped } : composed.stats
