@@ -1,7 +1,7 @@
 // The judge only classifies; policy lives here so one judged run can be re-scored offline under any flag combination.
 
 import { renderReview, type ReviewFinding, type ReviewObject, type FindingScore } from './formatter.js'
-import { normalizeFindingPath, parseLineRange, titlesOverlap, normTitle, type KeptFinding } from './findings-output.js'
+import { normalizeFindingPath, parseLineRange, titlesOverlap, normTitle, isAnchored, type KeptFinding } from './findings-output.js'
 import { addedLines, type AddedLine } from './parsers.js'
 import { coversRange, shownFile, type ShownAnchors, type ShownSource } from './shown-anchors.js'
 import type { AdditionalLocation } from './judge-quality.js'
@@ -44,6 +44,7 @@ export interface JudgeOutput {
 export interface JudgePolicy {
   keepMinor: boolean
   keepUnverified: boolean
+  keepTestGaps?: boolean
 }
 
 export const DEFAULT_JUDGE_POLICY: JudgePolicy = { keepMinor: false, keepUnverified: false }
@@ -69,6 +70,7 @@ export interface AppliedDecision {
   anchor_lines: string | null
   // Present only under the matching opt-in flag, so flag-off records are unchanged.
   anchor_basis?: AnchorBasis
+  policy_override?: 'test_gap'
   duplicate_of?: string
   invalid_duplicate?: boolean
   expansions?: Array<{ file: string; accepted: boolean; suppressed_by?: string }>
@@ -91,6 +93,7 @@ export interface JudgeOptions {
   shownAnchors?: ShownAnchors
   proposals?: boolean
   codeProposals?: boolean
+  counterparts?: boolean
 }
 
 export type RenderJudged = (suffixes: ReadonlyMap<number, string>, order?: readonly number[], fixFree?: ReadonlySet<number>) => string
@@ -177,6 +180,18 @@ export function policyAction(reason: ReasonCategory, severity: Severity, policy:
 // Digits only: a symbol that merely contains a digit ("Phase 4", "_F2C_RETURN_TYPES") is not a line and must not anchor.
 const NUMERIC_LINES = /^\s*L?\d+(?:\s*[-–—,]\s*L?\d+)*\s*$/i
 const isNumericLines = (lines: string | undefined): boolean => NUMERIC_LINES.test(String(lines ?? ''))
+
+const TEST_GAP_EXPLICIT = /\b(untested|(not|never) tested|no (unit |regression |automated |integration )?tests?\b|missing tests?|without tests?|lacks? (a )?tests?|ha(s|ve) no (unit |regression )?tests?|no test (covers|exercises|for|asserts)|test coverage)/i
+const TEST_GAP_GENERIC = /\b(never (exercis|test)|no coverage|not covered|cannot fail|can't fail|tautolog|trivially pass|does not (exercise|cover|assert|test)|doesn't (exercise|cover|assert|test)|never asserts?)/gi
+const TESTING_CONTEXT = /\b(tests?|tested|testing|mocks?|mocked|fixtures?)\b/i
+
+// "Cannot fail" or "does not cover" also describe code and docs, so they count only with a testing word outside the phrase itself.
+export function isTestGap(title: string, body: string): boolean {
+  const text = `${title}\n${body}`
+  if (TEST_GAP_EXPLICIT.test(text)) return true
+  const rest = text.replace(TEST_GAP_GENERIC, ' ')
+  return rest !== text && TESTING_CONTEXT.test(rest)
+}
 
 interface Anchor { file?: string; lines?: string; source: AnchorSource; basis?: AnchorBasis }
 
@@ -299,19 +314,22 @@ function resolve(d: JudgeDecision, candidate: ReviewFinding, policy: JudgePolicy
     reclassified_from = reason as 'incorrect' | 'already_handled'
     reason = 'unverifiable'
   }
-  const { action, severity } = policyAction(reason, candidate.severity, policy)
+  const anchor = resolveAnchor(candidate, d, idx, breadthOrigin, shown)
+  // The judge files named test gaps as low_value "add a test" requests, yet offline they match golden bugs about as often as kept findings.
+  const testGap = !!policy.keepTestGaps && reason === 'low_value' && isAnchored({ ...candidate, file: anchor.file, lines: anchor.lines, anchorSource: anchor.source }) && isTestGap(candidate.title, candidate.body)
+  const { action, severity } = testGap ? downgradeTo(candidate.severity, 'LOW') : policyAction(reason, candidate.severity, policy)
   const kept = action === 'keep' || action === 'downgrade'
   const unproven = reason === 'unverifiable' || reason === 'framework_uncertainty'
   const score = kept && unproven ? Math.min(clampScore(d.score), UNVERIFIED_SCORE_CAP) : clampScore(d.score)
   const rewrite = String(d.rewritten_body ?? '').trim()
   const rewritten = kept && rewrite.length > 0 && rewrite.length <= REWRITE_CAP
-  const anchor = resolveAnchor(candidate, d, idx, breadthOrigin, shown)
   return {
     candidate_id: '', reason_category: reason, reclassified_from, action,
     original_severity: candidate.severity, final_severity: severity, score,
     evidence, note: String(d.note ?? '').trim(), rewritten,
     anchor_source: anchor.source, anchor_file: anchor.file ?? null, anchor_lines: anchor.lines ?? null,
     ...(anchor.basis ? { anchor_basis: anchor.basis } : {}),
+    ...(testGap ? { policy_override: 'test_gap' as const } : {}),
     question: String(d.question ?? '').trim() || undefined,
     body: rewritten ? rewrite : candidate.body,
     anchor,
@@ -388,6 +406,7 @@ export function applyJudgeDecisions(candidates: readonly ReviewFinding[], output
         severity: entry.r.final_severity!, title: candidate.title, body, file: anchor.file, lines: anchor.lines,
         score: entry.r.score!, type: candidate.type, anchorSource: anchor.source, ...keptProposal, ...(withoutFix ? { bodyWithoutFix: withoutFix } : {}),
         ...(entry.r.quality_action ? { quality_action: entry.r.quality_action } : {}),
+        ...(options?.counterparts ? { reviewerBody: candidate.body } : {}),
       })
       rows.push({ candidate: i, expansion: false, validated: entry.r.reason_category === 'validated', evidenced: !!entry.r.evidence, rescueOf: entry.r.invalid_duplicate ? index.get(normalizeId(String(entry.r.duplicate_of ?? ''))) : undefined })
       for (const x of expansion?.accepted ?? []) {

@@ -26,8 +26,8 @@ function hash12(s: string): string {
   return createHash('sha256').update(s).digest('hex').slice(0, 12)
 }
 
-function candidateRows(list: Array<ReviewFinding & { origin: CandidateOrigin }>): NonNullable<UsageRecord['review_candidates']> {
-  return list.map((f, i) => ({ id: candidateId(i), origin: f.origin, severity: f.severity, title: f.title, file: f.file ?? null, lines: f.lines ?? null, body: f.body }))
+function candidateRows(list: Array<ReviewFinding & { origin: CandidateOrigin }>, withType: boolean): NonNullable<UsageRecord['review_candidates']> {
+  return list.map((f, i) => ({ id: candidateId(i), origin: f.origin, severity: f.severity, ...(withType ? { type: f.type ? normalizeIssueType(f.type) : null } : {}), title: f.title, file: f.file ?? null, lines: f.lines ?? null, body: f.body }))
 }
 
 function firstSentence(body: string): string {
@@ -88,11 +88,11 @@ export interface UsageRecord {
   // One compact read-only row per anchored kept finding; null when the structured judge didn't run.
   anchored_findings: Array<{ anchor: string; severity: ReviewFinding['severity']; type: IssueType; description: string; proposal?: string; quality_action?: string }> | null
   // Candidates are stored once; judge_decisions join to them by candidate_id.
-  review_candidates: Array<{ id: string; origin: CandidateOrigin; severity: ReviewFinding['severity']; title: string; file: string | null; lines: string | null; body: string }> | null
+  review_candidates: Array<{ id: string; origin: CandidateOrigin; severity: ReviewFinding['severity']; type?: IssueType | null; title: string; file: string | null; lines: string | null; body: string }> | null
   unjudged_candidates?: NonNullable<UsageRecord['review_candidates']>
   judge_decisions: AppliedDecision[] | null
   judge_anomalies: JudgeAnomalies | null
-  judge_policy: { keep_minor: boolean; keep_unverified: boolean; file_context: boolean } | null
+  judge_policy: { keep_minor: boolean; keep_unverified: boolean; file_context: boolean; keep_test_gaps?: boolean } | null
   breadth_status: BreadthStatus | null
   breadth_model: string | null
   breadth_prompt_hash: string | null
@@ -105,6 +105,7 @@ export interface UsageRecord {
   lens_runs?: Array<{ name: string; status: LensStatus; model: string; prompt_hash: string | null; tokens: { input: number; output: number } | null; cost_usd: number | null; findings: number }> | null
   lens_recommendations?: LensRecommendation[] | null
   suggested_fixes?: SuggestedFixStats | null
+  counterpart_rows?: number
   untouched_files: { count: number; paths: string[]; cut: number; deprioritized?: number } | null
   recall_levers: { j_quality: boolean; sl_breadth: boolean; j_shown_anchor: boolean; b_priority: boolean }
   touch_rate: number | null
@@ -339,14 +340,14 @@ export function buildUsageRecord(
         })
       : null,
     review_candidates: ctx.judgeDecisions && ctx.reviewObject
-      ? candidateRows(ctx.judgeCandidates ?? ctx.reviewObject.findings.map(f => ({ ...f, origin: 'review' as const })))
+      ? candidateRows(ctx.judgeCandidates ?? ctx.reviewObject.findings.map(f => ({ ...f, origin: 'review' as const })), !!ctx.outcomeSink)
       : null,
     // Only when the judge threw and the run failed, so findings that were never judged or posted stay diagnosable.
-    ...(error && ctx.judgeStatus === 'failed' && ctx.judgeCandidates ? { unjudged_candidates: candidateRows(ctx.judgeCandidates) } : {}),
+    ...(error && ctx.judgeStatus === 'failed' && ctx.judgeCandidates ? { unjudged_candidates: candidateRows(ctx.judgeCandidates, !!ctx.outcomeSink) } : {}),
     judge_decisions: ctx.judgeDecisions ?? null,
     judge_anomalies: ctx.judgeAnomalies ?? null,
     judge_policy: judgeModel && judgeTokens
-      ? { keep_minor: config.judge.policy.keepMinor, keep_unverified: config.judge.policy.keepUnverified, file_context: config.judge.fileContext }
+      ? { keep_minor: config.judge.policy.keepMinor, keep_unverified: config.judge.policy.keepUnverified, file_context: config.judge.fileContext, ...(config.judge.policy.keepTestGaps ? { keep_test_gaps: true } : {}) }
       : null,
     breadth_status: breadthStatus,
     breadth_model: ctx.breadthModel ?? null,
@@ -361,6 +362,7 @@ export function buildUsageRecord(
     ...(lenses.length ? { lens_runs: lensRuns } : {}),
     ...(config.lenses.recommend ? { lens_recommendations: ctx.lensRecommendations ?? null } : {}),
     ...(config.judge.suggestedFixes ? { suggested_fixes: ctx.suggestedFixes ?? null } : {}),
+    ...(ctx.counterpartRows !== undefined ? { counterpart_rows: ctx.counterpartRows } : {}),
     untouched_files: ctx.untouchedFiles
       ? ctx.breadthPlan
         ? { count: ctx.untouchedFiles.length, paths: ctx.breadthPlan.selected, cut: ctx.breadthPlan.omitted, deprioritized: ctx.breadthPlan.deprioritizedReleaseEntries }

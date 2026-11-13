@@ -785,7 +785,8 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
 
       ctx.reviewTextBeforeJudge = ctx.reviewText
       const suggestedFixes = !!config.judge.suggestedFixes
-      const judgeOptions: JudgeOptions | undefined = config.judge.quality || config.judge.shownAnchors || config.judge.proposals || suggestedFixes
+      const counterparts = !!ctx.outcomeSink && config.benchmarkCounterpartRows
+      const judgeOptions: JudgeOptions | undefined = config.judge.quality || config.judge.shownAnchors || config.judge.proposals || suggestedFixes || counterparts
         ? {
             quality: config.judge.quality,
             proposals: config.judge.proposals,
@@ -796,6 +797,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
                 }
               : undefined,
             ...(suggestedFixes ? { proposals: true, codeProposals: true } : {}),
+            ...(counterparts ? { counterparts: true } : {}),
           }
         : undefined
       const judgeTail: [JudgeOptions?] = judgeOptions ? [judgeOptions] : []
@@ -872,10 +874,11 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
     case State.POST_REVIEW: {
       // The sink takes the structured review instead of a posted comment, so cleanup, cut guard and footer don't apply.
       if (ctx.outcomeSink) {
-        await ctx.outcomeSink({
+        const sunk = await ctx.outcomeSink({
           review: ctx.reviewObject!, reviewText: ctx.reviewText!, judged: ctx.judgeUsage !== undefined, judgeScores: ctx.judgeScores, judgedFindings: ctx.judgedFindings, breadthFindings: ctx.breadthFindings, secondLookFindings: ctx.secondLookFindings,
           ...(ctx.lensRuns ? { lensFindings: ctx.lensRuns.flatMap(r => r.findings) } : {}),
         })
+        if (sunk && sunk.counterpartRows !== undefined) ctx.counterpartRows = sunk.counterpartRows
         ctx.action = 'REVIEW'
         return State.DONE
       }

@@ -59,7 +59,11 @@ export interface LensRun {
   usage?: { input_tokens: number; output_tokens: number; cost_usd?: number }
 }
 
-export type OutcomeSink = (outcome: ReviewOutcome) => void | Promise<void>
+export interface SinkResult {
+  counterpartRows?: number
+}
+
+export type OutcomeSink = (outcome: ReviewOutcome) => void | SinkResult | Promise<void | SinkResult>
 
 export type EventKind = 'comment' | 'other'
 
@@ -113,6 +117,7 @@ export interface ReviewContext {
   renderJudged?: RenderJudged
   suggestedFixes?: SuggestedFixStats
   proposalsDropped?: number
+  counterpartRows?: number
   // Kept apart from reviewObject so reviewer metrics and the judge-failure fallback stay reviewer-only.
   breadthFindings?: ReviewFinding[]
   breadthStatus?: BreadthStatus

@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest'
 import { mkdtempSync, readFileSync, existsSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { parseLineRange, normalizeFindingPath, findingsFromJudgedMarkdown, mapFindings, resolveKeptFindings, keptToReportFindings, mergeJudgedFindings, mergeJudgedFindingsWithStats, buildFindingsReport, writeFindingsReport, countFindingBullets, firstAddedLines, anchorToFile, type KeptFinding } from '../findings-output.js'
+import { parseLineRange, normalizeFindingPath, findingsFromJudgedMarkdown, mapFindings, resolveKeptFindings, keptToReportFindings, mergeJudgedFindings, mergeJudgedFindingsWithStats, buildFindingsReport, writeFindingsReport, countFindingBullets, firstAddedLines, anchorToFile, counterpartMentions, counterpartFindings, withCounterparts, type KeptFinding } from '../findings-output.js'
+import type { ChangedFile } from '../../vcs/adapter.js'
 import { renderReview, type ReviewFinding, type ReviewObject, type FindingScore } from '../formatter.js'
 
 const finding = (over: Partial<ReviewFinding> = {}): ReviewFinding =>
@@ -545,5 +546,165 @@ describe('file-level fallback anchor', () => {
     const out = anchorToFile([anchored, kept({}), kept({ file: 'deleted.ts' }), kept({ file: 'not/in/pr.ts' })], firstAddedLines(DIFF), files)
     expect(out[0]).toBe(anchored)
     expect(out.slice(1).map(k => k.anchorSource)).toEqual(['none', 'none', 'none'])
+  })
+})
+
+describe('counterpart mentions (benchmark-only extra rows)', () => {
+  const modified = (...paths: string[]) => paths.map(path => ({ path, status: 'modified' as const }))
+  const at = (text: string, own: string, files: ChangedFile[], added?: Map<string, number>) => counterpartMentions([text], own, files, added)
+
+  it.each([
+    ['session.go lines 111-115 skip verifyPKCE when CodeChallenge is empty.', 'internal/oauth/handler.go', 'internal/oauth/session.go', '111-115'],
+    ['the Sync form stores accessKeyId and secretAccessKey (WorkspaceManagerModal.tsx lines 227-228).', 'client/src/utils/storageDriver.ts', 'client/src/components/WorkspaceManagerModal.tsx', '227-228'],
+    ['the call in path/to/file.ts:42 passes null', 'src/other.ts', 'path/to/file.ts', '42'],
+    ['as documented in docs/setup.md#L10', 'src/other.ts', 'docs/setup.md', '10'],
+    ['the debounced save (store.tsx line 662) overwrites the file', 'client/src/utils/storageDriver.ts', 'client/src/store.tsx', '662'],
+    ['The same logic is at packages/pg-pool/diagnostics.js lines 31-33.', 'packages/pg/lib/diagnostics.js', 'packages/pg-pool/diagnostics.js', '31-33'],
+    ['The JFIF branch (jpeg.rb:36-42) likewise returns [0, 0]', 'lib/fastimage/fastimage_parsing/exif.rb', 'lib/fastimage/fastimage_parsing/jpeg.rb', '36-42'],
+    ['copied verbatim from packages/pg/lib/diagnostics.js (lines 8-29).', 'packages/pg-pool/diagnostics.js', 'packages/pg/lib/diagnostics.js', '8-29'],
+    ['the duplicate wire:key msg-{id} (body.blade.php L286) causes morph glitches', 'src/Livewire/Chat/Chat.php', 'resources/views/livewire/chat/partials/body.blade.php', '286'],
+    ['Removing x-persist (pages/chats.blade.php, line 6) means this x-init', 'resources/views/livewire/chats/chats.blade.php', 'resources/views/livewire/pages/chats.blade.php', '6'],
+    ['columns enc_dim/auprc (model_helper.py:26-27, 32)', 'src/protrider/plots.py', 'src/protrider/model_helper.py', '26-27'],
+    ['the store writes it (`src/cache.ts` lines 2-3)', 'src/pool.ts', 'src/cache.ts', '2-3'],
+    ['the store writes it ("src/cache.ts" line 2)', 'src/pool.ts', 'src/cache.ts', '2'],
+    ['see src/cache.ts:L2-L3', 'src/pool.ts', 'src/cache.ts', '2-3'],
+    ['see src/cache.ts:L2.', 'src/pool.ts', 'src/cache.ts', '2'],
+  ])('%s', (text, own, file, lines) => {
+    expect(at(text, own, modified(own, file, 'unrelated/x.ts'))).toEqual([{ file, lines }])
+  })
+
+  const FILES: ChangedFile[] = [
+    ...modified('src/pool.ts', 'src/cache.ts', 'packages/pg/lib/diagnostics.js', 'packages/pg-pool/diagnostics.js', 'packages/pg-pool/index.js', 'config/x.y', 'client/src/components/WorkspaceManagerModal.tsx'),
+    { path: 'src/old.ts', status: 'deleted' },
+  ]
+  it('control: a bare cache.ts resolves to the one changed cache.ts', () => {
+    expect(at('cache.ts:3', 'src/pool.ts', FILES)).toEqual([{ file: 'src/cache.ts', lines: '3' }])
+  })
+  it.each([
+    ['same file', 'get() at pool.ts:4 and src/pool.ts lines 2-3'],
+    ['bare line N', 'see line 49 and lines 3-4'],
+    ['ambiguous basename', 'per the comment at diagnostics.js:27-30, so every pool.connect'],
+    ['file not in the PR', 'the call at fastimage.rb:510 raises NoMethodError'],
+    ['deleted file', 'unlike src/old.ts:1'],
+    ['version-like', 'pinned to v1.2:3 upstream'],
+    ['URL host', 'calls http://x.y:8080/health first'],
+    ['URL with user@host', 'calls http://user@cache.ts:8080/health first'],
+    ['URL query', 'see https://example.com/?f=cache.ts:3'],
+    ['address', 'mail me@cache.ts:3'],
+    ['decimal', 'ratio cache.ts:3.14'],
+    ['time of day', 'the job runs at 12:30 daily'],
+    ['extensionless stem', 'WorkspaceManagerModal lines 303-304'],
+    ['line 0', 'packages/pg-pool/index.js:0'],
+    ['more than 5 digits', 'cache.ts:123456'],
+    ['range end over 5 digits', 'cache.ts:5-123456'],
+    ['reversed range', 'cache.ts:9-3'],
+    ['reversed range in words', 'cache.ts lines 9 to 3'],
+  ])('%s gives none', (_case, text) => {
+    expect(at(text, 'src/pool.ts', FILES)).toEqual([])
+  })
+
+  it('rejects a scoped package path, with or without a version', () => {
+    const files = modified('src/pool.ts', 'packages/scope/cache.ts')
+    expect(at('scope/cache.ts:3', 'src/pool.ts', files)).toEqual([{ file: 'packages/scope/cache.ts', lines: '3' }])
+    expect(at('from @scope/cache.ts:3.0.0', 'src/pool.ts', files)).toEqual([])
+    expect(at('from @scope/cache.ts:3', 'src/pool.ts', files)).toEqual([])
+  })
+
+  it('resolves against every changed file: an exact path wins, a bare name must be unique, deleted files count', () => {
+    const rootAndNested = modified('cache.ts', 'src/cache.ts', 'src/pool.ts')
+    expect(at('cache.ts:5', 'src/pool.ts', rootAndNested)).toEqual([])
+    expect(at('src/cache.ts:5', 'src/pool.ts', rootAndNested)).toEqual([{ file: 'src/cache.ts', lines: '5' }])
+    const withDeleted: ChangedFile[] = [...modified('src/cache.ts', 'src/pool.ts'), { path: 'lib/cache.ts', status: 'deleted' }]
+    expect(at('cache.ts:5', 'src/pool.ts', withDeleted)).toEqual([])
+    expect(at('lib/cache.ts:5', 'src/pool.ts', withDeleted)).toEqual([])
+    expect(at('src/cache.ts:5', 'src/pool.ts', withDeleted)).toEqual([{ file: 'src/cache.ts', lines: '5' }])
+    expect(at('src/cache.ts:5', 'src/pool.ts', modified('src/cache.ts', 'pkg/src/cache.ts'))).toEqual([{ file: 'src/cache.ts', lines: '5' }])
+  })
+
+  it('unprefixes a diff-style a/ or b/ path only when the rest is a changed file', () => {
+    const files = modified('src/cache.ts', 'src/pool.ts')
+    expect(at('see b/src/cache.ts:3', 'src/pool.ts', files)).toEqual([{ file: 'src/cache.ts', lines: '3' }])
+    expect(at('see a/src/cache.ts:3', 'src/pool.ts', files)).toEqual([{ file: 'src/cache.ts', lines: '3' }])
+    expect(at('see b/lib/cache.ts:3', 'src/pool.ts', files)).toEqual([])
+    expect(at('see a/src/cache.ts:3', 'src/pool.ts', modified('a/src/cache.ts', 'src/cache.ts', 'src/pool.ts'))).toEqual([{ file: 'a/src/cache.ts', lines: '3' }])
+  })
+
+  it('coerces non-string text from malformed provider output instead of throwing', () => {
+    const files = modified('src/cache.ts', 'src/pool.ts')
+    expect(counterpartMentions([null, 42, { a: 1 }, 'src/cache.ts:3'] as unknown as string[], 'src/pool.ts', files)).toEqual([{ file: 'src/cache.ts', lines: '3' }])
+  })
+
+  it('stays linear on a long body with no whitespace and still finds the mention', () => {
+    const files = modified('src/cache.ts', 'src/pool.ts')
+    const body = 'x@y,' + Array.from({ length: 4500 }, (_, i) => `cache.ts:${i + 1},`).join('') + 'cache.ts:3.1,'.repeat(500) + ' cache.ts:7'
+    expect(body.length).toBeGreaterThan(50_000)
+    const t0 = performance.now()
+    expect(at(body, 'src/pool.ts', files)).toEqual([{ file: 'src/cache.ts', lines: '7' }])
+    expect(performance.now() - t0).toBeLessThan(500)
+  })
+
+  it('stops at 3 in order of first mention, title before body, deduped by file and range', () => {
+    const files = modified('a.ts', 'b.ts', 'c.ts', 'd.ts', 'e.ts')
+    expect(counterpartMentions(['Breaks c.ts:9', 'b.ts:1, c.ts line 9, b.ts lines 1-2, d.ts:4, e.ts:5'], 'a.ts', files)).toEqual([
+      { file: 'c.ts', lines: '9' }, { file: 'b.ts', lines: '1' }, { file: 'b.ts', lines: '1-2' },
+    ])
+  })
+
+  it('keeps an added file’s lines within its length, which the diff carries in full', () => {
+    const files: ChangedFile[] = [{ path: 'src/cache.ts', status: 'added' }, ...modified('src/pool.ts', 'src/big.ts')]
+    const len = new Map([['src/cache.ts', 4]])
+    expect(at('cache.ts:4, src/cache.ts lines 3-5, cache.ts:9, big.ts:900', 'src/pool.ts', files, len)).toEqual([{ file: 'src/cache.ts', lines: '4' }, { file: 'src/big.ts', lines: '900' }])
+  })
+
+  describe('counterpartFindings and withCounterparts', () => {
+    const DIFF = ['diff --git a/src/cache.ts b/src/cache.ts', 'new file mode 100644', '--- /dev/null', '+++ b/src/cache.ts', '@@ -0,0 +1,2 @@', '+a', '+b', ''].join('\n')
+    const files: ChangedFile[] = [...modified('src/pool.ts', 'src/b.ts'), { path: 'src/cache.ts', status: 'added' }]
+    const kept = (over: Partial<KeptFinding> = {}): KeptFinding => ({
+      severity: 'HIGH', title: 'Race on conns', body: 'Judge rewrite naming cache.ts:1.', file: 'src/pool.ts', lines: '2-3', score: 8, type: 'reliability', anchorSource: 'reviewer', proposal: 'Lock it.',
+      reviewerBody: 'take() in cache.ts line 2 hands out the same conn; cache.ts:7 too.', ...over,
+    })
+
+    it('copies the finding to each counterpart from the reviewer text, never the judge rewrite, and never its proposal', () => {
+      const k = kept()
+      const { proposal: _fix, ...noFix } = k
+      const [copy] = counterpartFindings([k], files, DIFF)
+      expect(copy).toStrictEqual({ ...noFix, file: 'src/cache.ts', lines: '2', anchorSource: 'mention' })
+      expect('proposal' in copy).toBe(false)
+      const { findings, added } = withCounterparts([k], files, DIFF, 'p')
+      expect(findings).toStrictEqual([
+        { file: 'src/pool.ts', start_line: 2, end_line: 3, message: 'Race on conns: Judge rewrite naming cache.ts:1.', producer: 'p', proposal: 'Lock it.' },
+        { file: 'src/cache.ts', start_line: 2, end_line: 2, message: 'Race on conns: Judge rewrite naming cache.ts:1.', producer: 'p' },
+      ])
+      expect(added).toBe(1)
+    })
+
+    it('writes the originals when the title or reviewer body is not a string', () => {
+      const odd = kept({ title: null as unknown as string, reviewerBody: 42 as unknown as string })
+      expect(() => withCounterparts([odd, kept({ reviewerBody: { x: 1 } as unknown as string })], files, DIFF, 'p')).not.toThrow()
+      expect(withCounterparts([odd], files, DIFF, 'p')).toEqual({ findings: keptToReportFindings([odd], 'p'), added: 0 })
+    })
+
+    it('adds nothing for a finding without the reviewer body (option off, expansion rows) or without a placement', () => {
+      expect(counterpartFindings([kept({ reviewerBody: undefined }), kept({ lines: undefined, anchorSource: 'none' })], files, DIFF)).toEqual([])
+    })
+
+    it('never displaces an original: a counterpart on a same-title original’s location is dropped and not counted', () => {
+      const a = kept({ title: 'Same title', body: 'A body', reviewerBody: 'Also b.ts:5.' })
+      const b = kept({ title: 'Same title', body: 'B body', file: 'src/b.ts', lines: '5', reviewerBody: 'Own text.' })
+      expect(withCounterparts([a, b], files, DIFF, 'p')).toEqual({
+        findings: keptToReportFindings([a, b], 'p'),
+        added: 0,
+      })
+      expect(keptToReportFindings([a, b], 'p').map(r => r.message)).toEqual(['Same title: A body', 'Same title: B body'])
+    })
+
+    it('appends counterparts after every original, and counts exactly the rows it adds', () => {
+      const a = kept({ title: 'A', reviewerBody: 'Same in cache.ts:2 and b.ts:9.' })
+      const b = kept({ title: 'B', body: 'b', file: 'src/b.ts', lines: '5', reviewerBody: 'Also cache.ts:2.' })
+      const { findings, added } = withCounterparts([a, b], files, DIFF, 'p')
+      expect(findings.map(r => `${r.file}:${r.start_line} ${r.message.split(':')[0]}`)).toEqual(['src/pool.ts:2 A', 'src/b.ts:5 B', 'src/cache.ts:2 A', 'src/b.ts:9 A', 'src/cache.ts:2 B'])
+      expect(added).toBe(findings.length - 2)
+      expect(withCounterparts([], files, DIFF, 'p')).toEqual({ findings: [], added: 0 })
+    })
   })
 })

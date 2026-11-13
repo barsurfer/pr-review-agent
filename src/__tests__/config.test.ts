@@ -282,6 +282,12 @@ describe('recall-lever flags', () => {
     expect((await load({ ENABLE_JUDGE_PROPOSALS: '1' })).judge.proposals).toBe(false)
   })
 
+  it('ENABLE_JUDGE_KEEP_TEST_GAPS defaults off, turns on only from the exact string true, and leaves the other policy flags alone', async () => {
+    expect((await load({})).judge.policy.keepTestGaps).toBe(false)
+    expect((await load({ ENABLE_JUDGE_KEEP_TEST_GAPS: 'true' })).judge.policy).toEqual({ keepMinor: false, keepUnverified: false, keepTestGaps: true })
+    expect((await load({ ENABLE_JUDGE_KEEP_TEST_GAPS: '1' })).judge.policy.keepTestGaps).toBe(false)
+  })
+
   it('ENABLE_SUGGESTED_FIXES defaults off, turns on only from the exact string true, and leaves proposals alone', async () => {
     expect((await load({})).judge.suggestedFixes).toBe(false)
     const on = await load({ ENABLE_SUGGESTED_FIXES: 'true' })

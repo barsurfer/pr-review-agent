@@ -303,11 +303,35 @@ describe('buildUsageRecord judge decision fields', () => {
     expect(r.judge_policy).toEqual({ keep_minor: true, keep_unverified: false, file_context: true })
   })
 
+  it('logs each candidate’s reviewer type in a benchmark run only, normalized, null when the reviewer gave none', () => {
+    const typed = { ...reviewObject, findings: [{ ...reviewObject.findings[0], type: 'reliability' }, { ...reviewObject.findings[1], type: 'not-a-type' }, { severity: 'LOW', title: 'Untyped', body: 'b' }] }
+    const bench = buildUsageRecord(judged({ reviewObject: typed, outcomeSink: () => {} } as Partial<ReviewContext>), 1, null)
+    expect(bench.review_candidates!.map(c => c.type)).toEqual(['reliability', 'other', null])
+    const prod = buildUsageRecord(judged({ reviewObject: typed } as Partial<ReviewContext>), 1, null)
+    expect(prod.review_candidates!.every(c => !('type' in c))).toBe(true)
+  })
+
+  it('logs counterpart_rows only when the benchmark writer reported a count, 0 included', () => {
+    Object.assign(cfg, { benchmarkCounterpartRows: true })
+    try {
+      expect('counterpart_rows' in buildUsageRecord(judged(), 1, null)).toBe(false)
+      expect(buildUsageRecord(judged({ counterpartRows: 0 } as Partial<ReviewContext>), 1, null).counterpart_rows).toBe(0)
+      expect(buildUsageRecord(judged({ counterpartRows: 3 } as Partial<ReviewContext>), 1, null).counterpart_rows).toBe(3)
+    } finally { Object.assign(cfg, { benchmarkCounterpartRows: false }) }
+  })
+
   it('leaves every decision field null when the judge never ran or failed', () => {
     for (const judgeStatus of ['disabled', 'skipped_no_findings', 'failed'] as const) {
       const r = buildUsageRecord(baseCtx({ reviewObject, judgeStatus } as Partial<ReviewContext>), 1, null)
       expect([r.review_candidates, r.judge_decisions, r.judge_anomalies, r.judge_policy]).toEqual([null, null, null, null])
     }
+  })
+
+  it('adds keep_test_gaps: true to the policy only when ENABLE_JUDGE_KEEP_TEST_GAPS is on', () => {
+    Object.assign(cfg.judge.policy, { keepTestGaps: true })
+    expect(buildUsageRecord(judged(), 1, null).judge_policy).toStrictEqual({ keep_minor: false, keep_unverified: false, file_context: false, keep_test_gaps: true })
+    Object.assign(cfg.judge.policy, { keepTestGaps: false })
+    expect(buildUsageRecord(judged(), 1, null).judge_policy).toStrictEqual({ keep_minor: false, keep_unverified: false, file_context: false })
   })
 
   it('logs no policy when the judge is configured off', () => {
