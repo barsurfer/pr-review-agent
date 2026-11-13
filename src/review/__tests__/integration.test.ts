@@ -3734,3 +3734,45 @@ describe('suggested fixes (ENABLE_SUGGESTED_FIXES)', () => {
     expect(record!.suggested_fixes).toBeNull()
   })
 })
+
+describe('reply authors in the usage record', () => {
+  it('REPLY run: reply_authors lists the distinct ids of the people who asked', async () => {
+    const adapter = makeAdapter({
+      getPreviousReviewComments: vi.fn().mockResolvedValue([{ id: '200', body: '### Review' + footer(1, COMMIT_A), createdOn: '2026-03-10T10:00:00Z' }]),
+      getRepliesToReviewComments: vi.fn().mockResolvedValue({
+        replies: [
+          { id: '300', parentId: '200', author: 'Vadim', authorId: '{v-1}', body: 'Why HIGH?', createdOn: '2026-03-10T14:00:00Z' },
+          { id: '301', parentId: '200', author: 'Vadim', authorId: '{v-1}', body: 'And the cache?', createdOn: '2026-03-10T15:00:00Z' },
+          { id: '302', parentId: '200', author: 'Ann', body: 'Same here', createdOn: '2026-03-10T16:00:00Z' },
+        ],
+        agentReplyCount: 0,
+      }),
+    })
+    setupModelMocks()
+
+    const record = await review(adapter, '100', true)
+
+    expect(record!.action).toBe('REPLY')
+    expect(record!.reply_authors).toEqual(['{v-1}', 'Ann'])
+  })
+
+  it('re-review with mixed human and agent replies: counts split, agent excluded from authors', async () => {
+    const adapter = reReviewAdapter(FLAGGED_PRIOR, [
+      { ...devReply('2026-03-09T12:00:00Z'), authorId: 'acc-f' },
+      agentReply('2026-03-09T13:00:00Z'),
+      devReply('2026-03-09T14:00:00Z'),
+    ])
+    mockReviewer(reviewWith([NEW_FINDING], { delta_stats: { resolved: 0, still_open: 1, new_findings: 1 } }))
+
+    const record = await review(adapter, '100', true)
+
+    expect(record!.review_number).toBe(2)
+    expect(record!.delta).toMatchObject({ developer_replies: 3, human_replies: 2, agent_replies: 1 })
+    expect(record!.reply_authors).toEqual(['acc-f', 'Fernando'])
+  })
+
+  it('a run with no replies carries no reply_authors key', async () => {
+    const record = await review(makeAdapter(), '100', true)
+    expect('reply_authors' in record!).toBe(false)
+  })
+})

@@ -610,3 +610,47 @@ describe('buildUsageRecord J_QUALITY fields', () => {
     expect(JSON.stringify(onRest)).toBe(JSON.stringify(offRest))
   })
 })
+
+describe('buildUsageRecord reply authors', () => {
+  const at = '2026-03-10T12:00:00Z'
+  const human = (id: string, author: string, authorId?: string) => ({ id, parentId: '1', author, ...(authorId ? { authorId } : {}), body: 'q', createdOn: at })
+  const agent = (id: string) => ({ id, parentId: '1', author: 'Agent (prior reply)', body: 'a', createdOn: at })
+  const ctxWith = (replies: unknown[], reviewNumber = 2) => ({
+    adapter: {}, prId: '7', dryRun: false, force: 'off', logUsage: false, repoSlug: 'repo',
+    usage: { input_tokens: 10, output_tokens: 5, cache_read: 0, cache_write: 0 },
+    estimatedInputTokens: 10, action: 'RE_REVIEW', reviewNumber, reviewObject: { findings: [] }, replies,
+  } as unknown as ReviewContext)
+
+  it('splits developer_replies into human and agent counts that sum to it', () => {
+    const r = buildUsageRecord(ctxWith([human('2', 'Ann'), agent('3'), human('4', 'Bob'), agent('5'), agent('6')]), 1, null)
+    expect(r.delta).toMatchObject({ developer_replies: 5, human_replies: 2, agent_replies: 3 })
+    expect(Object.keys(r.delta!).slice(0, 3)).toEqual(['developer_replies', 'human_replies', 'agent_replies'])
+  })
+
+  it('lists distinct authors in first-seen order, preferring the account id over the name', () => {
+    const r = buildUsageRecord(ctxWith([human('2', 'Ann', '{u-1}'), human('3', 'Bob'), human('4', 'Ann', '{u-1}'), human('5', 'Bob')]), 1, null)
+    expect(r.reply_authors).toEqual(['{u-1}', 'Bob'])
+  })
+
+  it('excludes agent replies from authors', () => {
+    expect(buildUsageRecord(ctxWith([agent('2'), human('3', 'Ann')]), 1, null).reply_authors).toEqual(['Ann'])
+  })
+
+  it('omits reply_authors when there is no human reply, keeping counts where delta exists', () => {
+    const onlyAgent = buildUsageRecord(ctxWith([agent('2')]), 1, null)
+    expect('reply_authors' in onlyAgent).toBe(false)
+    expect(onlyAgent.delta).toMatchObject({ developer_replies: 1, human_replies: 0, agent_replies: 1 })
+    expect('reply_authors' in buildUsageRecord(ctxWith([]), 1, null)).toBe(false)
+  })
+
+  it('keeps delta null on a first review and still reports authors of a reply run', () => {
+    const r = buildUsageRecord(ctxWith([human('2', 'Ann', 'acc-1')], 1), 1, null)
+    expect(r.delta).toBeNull()
+    expect(r.reply_authors).toEqual(['acc-1'])
+  })
+
+  it('places reply_authors right after delta, before jenkins', () => {
+    const keys = Object.keys(buildUsageRecord(ctxWith([human('2', 'Ann')]), 1, null))
+    expect(keys.slice(keys.indexOf('delta'), keys.indexOf('delta') + 3)).toEqual(['delta', 'reply_authors', 'jenkins'])
+  })
+})

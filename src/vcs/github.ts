@@ -2,6 +2,7 @@ import axios, { AxiosInstance } from 'axios'
 import { hasReviewFooter, hasReplyFooter } from '../review/formatter.js'
 import { PrTooLargeError } from './adapter.js'
 import type { VCSAdapter, PRInfo, ChangedFile, ReviewComment, CommentReply, ReplyResult } from './adapter.js'
+import { AGENT_REPLY_AUTHOR } from './adapter.js'
 
 // Fail a hung request fast instead of stalling the whole run.
 const REQUEST_TIMEOUT_MS = 30_000
@@ -168,7 +169,7 @@ export class GitHubAdapter implements VCSAdapter {
       if (hasReplyFooter(body)) {
         // For delta reviews, include agent replies so the model sees its own prior conclusions
         if (includeAnswered) {
-          humanReplies.push({ id: String(c.id), parentId, author: 'Agent (prior reply)', body, createdOn: c.created_at })
+          humanReplies.push({ id: String(c.id), parentId, author: AGENT_REPLY_AUTHOR, body, createdOn: c.created_at })
         }
         continue
       }

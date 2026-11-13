@@ -426,3 +426,14 @@ describe('getRepliesToReviewComments — bot comments', () => {
     expect(result.agentReplyCount).toBe(1)
   })
 })
+
+describe('getRepliesToReviewComments — author identity', () => {
+  it('carries no separate authorId: author is already the stable login', async () => {
+    clientMock.get.mockResolvedValue({ headers: {}, data: [comment(1, REVIEW_BODY, '2026-07-01T10:00:00Z', 'github-actions[bot]'), comment(2, 'Why?', '2026-07-01T11:00:00Z', 'dev1')] })
+
+    const { replies } = await makeAdapter().getRepliesToReviewComments('7', ['1'])
+
+    expect(replies[0].author).toBe('dev1')
+    expect('authorId' in replies[0]).toBe(false)
+  })
+})

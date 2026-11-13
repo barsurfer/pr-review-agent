@@ -146,7 +146,8 @@ interface ReviewComment {
 interface CommentReply {
   id: string
   parentId: string       // ID of the review comment this replies to
-  author: string         // display name of the reply author
+  author: string         // display name of the reply author (`Agent (prior reply)` for the agent's own earlier replies)
+  authorId?: string      // stable account id for usage records only, never in model input: Bitbucket `user.uuid` (else `account_id`), Azure comment author `id`; absent when the payload lacks it and always on GitHub, where `author` is already the `login`
   body: string
   createdOn: string      // ISO timestamp, used for reply dedup
 }

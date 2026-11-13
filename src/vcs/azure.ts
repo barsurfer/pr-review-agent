@@ -17,6 +17,7 @@ import axios, { AxiosInstance } from 'axios'
 import { structuredPatch } from 'diff'
 import { hasReviewFooter, hasReplyFooter } from '../review/formatter.js'
 import type { VCSAdapter, PRInfo, ChangedFile, ReviewComment, CommentReply, ReplyResult } from './adapter.js'
+import { AGENT_REPLY_AUTHOR, authorIdOf } from './adapter.js'
 
 // Skip content-diffing files past this size — huge blobs blow up the diff and the
 // size thresholds without adding review value (mirrors the context-fetch caps).
@@ -183,11 +184,11 @@ export class AzureDevOpsAdapter implements VCSAdapter {
           agentReplyCount++
           if (createdOn > latestAgentReply) latestAgentReply = createdOn
           if (includeAnswered) {
-            humanReplies.push({ id: compositeId, parentId: parentReviewId, author: 'Agent (prior reply)', body, createdOn })
+            humanReplies.push({ id: compositeId, parentId: parentReviewId, author: AGENT_REPLY_AUTHOR, body, createdOn })
           }
           continue
         }
-        humanReplies.push({ id: compositeId, parentId: parentReviewId, author: c.author?.displayName ?? 'Unknown', body, createdOn })
+        humanReplies.push({ id: compositeId, parentId: parentReviewId, author: c.author?.displayName ?? 'Unknown', ...authorIdOf(c.author?.id), body, createdOn })
       }
     }
 

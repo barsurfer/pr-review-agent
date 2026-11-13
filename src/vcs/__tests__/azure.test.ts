@@ -491,3 +491,21 @@ describe('postComment / postReply request shapes', () => {
     expect(body).toEqual({ content: 'the answer', parentCommentId: 5, commentType: 1 })
   })
 })
+
+describe('getRepliesToReviewComments — authorId', () => {
+  const withAuthor = (author: object) => ({ ...comment(2, 'q', '2026-07-01T11:00:00Z', 'Ann', 1), author })
+  const fetchReply = async (author: object) => {
+    clientMock.get.mockResolvedValue({ data: { value: [{ id: 10, comments: [comment(1, REVIEW_BODY, '2026-07-01T10:00:00Z', 'Review Bot'), withAuthor(author)] }] } })
+    return (await makeAdapter().getRepliesToReviewComments('42', ['10:1'])).replies[0]
+  }
+
+  it('uses the comment author id', async () => {
+    expect((await fetchReply({ displayName: 'Ann', id: 'guid-1' })).authorId).toBe('guid-1')
+  })
+
+  it('leaves authorId absent when the payload has no id', async () => {
+    const reply = await fetchReply({ displayName: 'Ann' })
+    expect('authorId' in reply).toBe(false)
+    expect(reply.author).toBe('Ann')
+  })
+})
