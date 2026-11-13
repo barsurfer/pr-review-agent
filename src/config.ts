@@ -1,5 +1,5 @@
 import 'dotenv/config'
-import { baseModelId } from './llm/model-id.js'
+import { tableContextWindow } from './llm/model-id.js'
 
 function required(name: string): string {
   const value = process.env[name]
@@ -26,27 +26,9 @@ export function parseBranchList(value: string): string[] {
   return value.split(',').map(p => p.trim()).filter(Boolean)
 }
 
-// Context windows (max_input_tokens, from the Models API): 4.5-gen = 200K, 4.6+/5.x = 1M; matched by id prefix, unknown models fall back to 200K.
-const MODEL_CONTEXT_WINDOWS: readonly [string, number][] = [
-  ['claude-haiku-4-5', 200_000],
-  ['claude-sonnet-4-5', 200_000],
-  ['claude-opus-4-5', 200_000],
-  ['claude-haiku-5', 1_000_000],
-  ['claude-sonnet-4-6', 1_000_000],
-  ['claude-sonnet-5', 1_000_000],
-  ['claude-opus-4-6', 1_000_000],
-  ['claude-opus-4-7', 1_000_000],
-  ['claude-opus-4-8', 1_000_000],
-  ['claude-opus-5', 1_000_000],
-  ['claude-fable-5', 1_000_000],
-  ['claude-mythos-5', 1_000_000],
-]
-
-const windowByPrefix = (model: string) => MODEL_CONTEXT_WINDOWS.find(([prefix]) => model.startsWith(prefix))?.[1]
-
-// The raw id first, so every id that already resolved keeps its window; only misses are normalized.
+// Models outside the built-in table fall back to 200K; src/llm/context-window.ts can do better for a CLI run.
 export function modelContextWindow(model: string): number {
-  return windowByPrefix(model) ?? windowByPrefix(baseModelId(model)) ?? 200_000
+  return tableContextWindow(model) ?? 200_000
 }
 
 // Which LLM backend the reviewer/judge use; the seam (src/llm/provider.ts) makes a second provider
@@ -118,7 +100,7 @@ export const config = {
     // Output-token cap for reviewer + judge. The Claude 5 family thinks by default and that
     // counts against this budget, so too low a cap truncates (16k cut off Sonnet 5 mid-review).
     maxTokens: parseInt(optional('MAX_OUTPUT_TOKENS', '32000'), 10),
-    // Override for the model's context window; 0 = derive from the model id (modelContextWindow).
+    // Replaces the reviewer's window and stands in for any other model the window table lacks (contextWindowFor); 0 = off.
     modelContextTokens: parseInt(optional('MODEL_CONTEXT_TOKENS', '0'), 10),
   },
 
