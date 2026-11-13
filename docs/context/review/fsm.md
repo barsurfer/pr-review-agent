@@ -103,7 +103,7 @@ Three guards run before every post (guard 3 only when `--force` is off; all skip
 
 3. **Pre-post dedup** — on non-dry-run runs without `--force`, re-fetches review comments immediately before posting and checks if a concurrent agent run already reviewed the same commit. Prevents race conditions from parallel Jenkins triggers.
 
-**Suggested-fix splice** (`ENABLE_SUGGESTED_FIXES`, off by default) runs after guards 1–2 and the severity order, before the footer: `comment = body + todoSection + footer`, where `body` is the ordered review with blocks when they compose, else the ordered review unchanged. Blocks are keyed by kept index, so each stays under its finding wherever the finding moves, and the `cleanup` / `unbalanced` / `fence` / `size` skips decide exactly as on the unordered text. Guards, metrics and the next run's dedup read the plain text or the footer line, never a block.
+**Suggested-fix splice** (`ENABLE_SUGGESTED_FIXES`, off by default) runs after guards 1–2 and the severity order, before the footer: `comment = body + todoSection + footer`, where `body` is the ordered review with blocks when they compose, else the ordered review unchanged. Blocks are keyed by kept index, so each stays under its finding wherever the finding moves, and the `cleanup` / `unbalanced` / `fence` / `size` skips decide exactly as on the unordered text: findings move only when each keeps its fences to itself, which also lets every block stand alone, and the post-render `unbalanced` check guards the reviews that are not reordered. A pre-post race skip posts nothing and records `suggested_fixes: null`. Guards, metrics and the next run's dedup read the plain text or the footer line, never a block.
 
 ### Posted severity order
 
