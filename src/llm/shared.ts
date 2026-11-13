@@ -12,7 +12,7 @@ export interface LLMOptions {
   model: string
   maxTokens: number
   maxRetries: number
-  effort?: string   // output_config.effort (low|medium|high|xhigh|max); unset = model default
+  effort?: string   // Anthropic output_config.effort / OpenRouter reasoning.effort (low|medium|high|xhigh|max); unset = model default
   tolerateMissing?: string[]
 }
 
