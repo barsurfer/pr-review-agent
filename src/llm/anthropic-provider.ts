@@ -62,11 +62,13 @@ function textOf(response: Anthropic.Message, maxTokens: number): string {
 }
 
 function mapUsage(u: Anthropic.Message['usage']): LLMUsage {
+  const thinking = u.output_tokens_details?.thinking_tokens
   return {
     input_tokens: u.input_tokens,
     output_tokens: u.output_tokens,
     cache_read_input_tokens: u.cache_read_input_tokens ?? 0,
     cache_creation_input_tokens: u.cache_creation_input_tokens ?? 0,
+    ...(typeof thinking === 'number' && thinking > 0 ? { reasoning_tokens: thinking } : {}),
   }
 }
 

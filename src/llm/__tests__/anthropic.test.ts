@@ -15,6 +15,9 @@ vi.mock('@anthropic-ai/sdk', () => {
 import { createProvider } from '../provider.js'
 
 const opts = { model: 'claude-sonnet-5', maxTokens: 1000, maxRetries: 2 }
+const withUsage = (usage: unknown) => stream.mockReturnValue({
+  finalMessage: async () => ({ stop_reason: 'end_turn', content: [{ type: 'text', text: 'hi' }], usage }),
+})
 const answer = (object: unknown) => stream.mockReturnValue({
   finalMessage: async () => ({ stop_reason: 'end_turn', content: [{ type: 'text', text: JSON.stringify(object) }], usage: { input_tokens: 1, output_tokens: 1 } }),
 })
@@ -44,5 +47,16 @@ describe('AnthropicProvider.completeStructured tolerateMissing', () => {
     answer({ lens_recommendations: [] })
     await expect(createProvider('k').completeStructured('s', 'u', schema, tolerant)).rejects.toThrow(/missing required field\(s\): verdict$/)
     expect(JSON.stringify(stream.mock.calls[0])).not.toContain('tolerate')
+  })
+})
+
+describe('AnthropicProvider usage reasoning_tokens', () => {
+  it('maps output_tokens_details.thinking_tokens only when positive', async () => {
+    withUsage({ input_tokens: 1, output_tokens: 9, output_tokens_details: { thinking_tokens: 4 } })
+    expect((await createProvider('k').complete('s', 'u', opts)).usage.reasoning_tokens).toBe(4)
+    for (const details of [null, undefined, { thinking_tokens: 0 }]) {
+      withUsage({ input_tokens: 1, output_tokens: 9, output_tokens_details: details })
+      expect('reasoning_tokens' in (await createProvider('k').complete('s', 'u', opts)).usage).toBe(false)
+    }
   })
 })

@@ -65,7 +65,7 @@ export interface UsageRecord {
   skip_reason: string | null
   model: string
   effort: string | null
-  tokens: { input: number; output: number; cache_read: number; cache_write: number; estimated_input: number }
+  tokens: { input: number; output: number; cache_read: number; cache_write: number; estimated_input: number; reasoning?: number }
   cost_usd: number
   judge_model: string | null
   judge_effort: string | null
@@ -305,6 +305,7 @@ export function buildUsageRecord(
       cache_read: ctx.usage.cache_read,
       cache_write: ctx.usage.cache_write,
       estimated_input: ctx.estimatedInputTokens,
+      ...(ctx.usage.reasoning ? { reasoning: ctx.usage.reasoning } : {}),
     },
     cost_usd: reviewerCost + (judgeCost ?? 0) + (breadthCost ?? 0) + (secondLookCost ?? 0) + lensCost,
     judge_model: judgeModel,

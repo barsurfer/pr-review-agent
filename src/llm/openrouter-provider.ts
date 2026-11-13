@@ -88,7 +88,7 @@ export class OpenRouterProvider implements LLMProvider {
 
 interface OpenRouterResponse {
   choices?: Array<{ message?: { content?: string | null }; finish_reason?: string }>
-  usage?: { prompt_tokens?: number; completion_tokens?: number; cost?: number; cost_details?: { upstream_inference_cost?: number }; prompt_tokens_details?: { cached_tokens?: number } }
+  usage?: { prompt_tokens?: number; completion_tokens?: number; completion_tokens_details?: { reasoning_tokens?: number }; cost?: number; cost_details?: { upstream_inference_cost?: number }; prompt_tokens_details?: { cached_tokens?: number } }
   error?: { message?: string; code?: number | string }
 }
 
@@ -117,6 +117,7 @@ function mapOpenRouterUsage(u: OpenRouterResponse['usage']): LLMUsage {
   // A BYOK key reports cost: 0 (no OpenRouter credits spent); the real upstream spend is in
   // cost_details.upstream_inference_cost. Prefer the gateway's own charge when it's non-zero.
   const cost = typeof u?.cost === 'number' && u.cost > 0 ? u.cost : u?.cost_details?.upstream_inference_cost
+  const reasoning = u?.completion_tokens_details?.reasoning_tokens
   return {
     input_tokens: u?.prompt_tokens ?? 0,
     // Already includes completion_tokens_details.reasoning_tokens (billed as output), as Anthropic's output_tokens includes thinking.
@@ -124,17 +125,20 @@ function mapOpenRouterUsage(u: OpenRouterResponse['usage']): LLMUsage {
     cache_read_input_tokens: u?.prompt_tokens_details?.cached_tokens ?? 0,
     cache_creation_input_tokens: 0,
     ...(typeof cost === 'number' ? { cost_usd: cost } : {}),
+    ...(typeof reasoning === 'number' && reasoning > 0 ? { reasoning_tokens: reasoning } : {}),
   }
 }
 
 function sumUsage(a: LLMUsage, b: LLMUsage): LLMUsage {
   const cost = a.cost_usd === undefined && b.cost_usd === undefined ? undefined : (a.cost_usd ?? 0) + (b.cost_usd ?? 0)
+  const reasoning = (a.reasoning_tokens ?? 0) + (b.reasoning_tokens ?? 0)
   return {
     input_tokens: a.input_tokens + b.input_tokens,
     output_tokens: a.output_tokens + b.output_tokens,
     cache_read_input_tokens: (a.cache_read_input_tokens ?? 0) + (b.cache_read_input_tokens ?? 0),
     cache_creation_input_tokens: (a.cache_creation_input_tokens ?? 0) + (b.cache_creation_input_tokens ?? 0),
     ...(cost === undefined ? {} : { cost_usd: cost }),
+    ...(reasoning > 0 ? { reasoning_tokens: reasoning } : {}),
   }
 }
 

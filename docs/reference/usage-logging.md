@@ -106,6 +106,7 @@ Every finding array (`review_candidates`, `judge_decisions`, `finding_scores`, `
 | `tokens.input` | `number` | Input tokens (from API responses), summed over every model call in the run: reviewer or reply, breadth, second-look, lenses, judge |
 | `tokens.output` | `number` | Output tokens (from API responses), summed the same way |
 | `tokens.estimated_input` | `number` | Pre-call estimate (`chars / 4`) — compare with `tokens.input` for accuracy |
+| `tokens.reasoning` | `number` | absent | Reasoning tokens summed like `tokens.output`, of which they are a subset (output and `cost_usd` are unchanged). Present only when above 0, so records of runs without reasoning keep their shape. OpenRouter reports it today (`usage.completion_tokens_details.reasoning_tokens`); the Anthropic provider maps `usage.output_tokens_details.thinking_tokens` when the API returns it (unverified live). Run total only, no per-stage breakdown |
 | `tokens.cache_read` | `number` | Cache read tokens (reserved for prompt caching) |
 | `tokens.cache_write` | `number` | Cache write tokens (reserved for prompt caching) |
 | `cost_usd` | `number` | Total cost (reviewer + breadth + second-look + lenses + judge): the provider-reported cost where there is one (OpenRouter), else estimated from the per-model pricing table |
@@ -249,6 +250,9 @@ jq -s '[.[] | select(.dedup_source=="checked_commit")] | length' results.jsonl
 
 # Error rate
 jq -s '{total: length, errors: [.[] | select(.action=="ERROR")] | length}' results.jsonl
+
+# Reasoning share of output (runs that report it)
+jq -s '[.[] | select(.tokens.reasoning) | {pr: .pr_id, reasoning: .tokens.reasoning, output: .tokens.output, share: (.tokens.reasoning / .tokens.output * 100 | round)}]' results.jsonl
 
 # Estimate vs actual tokens (accuracy check)
 jq -s '[.[] | select(.action=="REVIEW") | {pr: .pr_id, estimated: .tokens.estimated_input, actual: .tokens.input, ratio: (if .tokens.estimated_input > 0 then (.tokens.input / .tokens.estimated_input * 100 | round | tostring + "%") else "n/a" end)}]' results.jsonl
