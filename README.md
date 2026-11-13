@@ -527,8 +527,8 @@ Key points:
 - **Secrets** — `OPENROUTER_API_KEY` (the workflow sets `LLM_PROVIDER: openrouter`; with the
   default provider it is `ANTHROPIC_API_KEY`) plus the workflow-provided `GITHUB_TOKEN`.
 - **Models** — this repo's own workflow runs reviewer, judge and replies all on
-  `anthropic/claude-haiku-5.5` (`CLAUDE_MODEL`, `JUDGING_MODEL`, `REPLY_MODEL`), with no effort set:
-  the OpenRouter path does not send `REVIEW_EFFORT`/`JUDGE_EFFORT`.
+  `anthropic/claude-haiku-5.5` (`CLAUDE_MODEL`, `JUDGING_MODEL`, `REPLY_MODEL`), at effort `high` for reviewer and judge
+  (`REVIEW_EFFORT`, `JUDGE_EFFORT`); OpenRouter receives it as `reasoning.effort`.
 - **`AGENT_IDENTITY: github-actions[bot]`** — the name shown in review/reply footers.
 - **`SKIP_TARGET_BRANCHES: ""`** — the GitHub flow targets `main` directly, so the `main,master`
   default would skip every PR; it is emptied for this path.

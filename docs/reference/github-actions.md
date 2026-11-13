@@ -266,8 +266,8 @@ exit 1 and writes no record.
   `OPENROUTER_API_KEY`; with the default provider it is `ANTHROPIC_API_KEY`. `GITHUB_TOKEN` is the
   automatic token; `pull-requests: write` is enough to post reviews.
 - **Models.** This repository's own workflow sets `CLAUDE_MODEL`, `JUDGING_MODEL` and `REPLY_MODEL`
-  to `anthropic/claude-haiku-5.5` and leaves effort unset: the OpenRouter provider does not send
-  `REVIEW_EFFORT`/`JUDGE_EFFORT`, so setting them there has no effect.
+  to `anthropic/claude-haiku-5.5` and reviewer and judge effort to `high`. Effort applies under OpenRouter too: it is sent as
+  `reasoning: { effort }`, which OpenRouter maps to Anthropic's native effort on Claude 4.6+ models; up to 0.0.47 it was silently dropped.
 - **Context window.** From 0.0.43 `anthropic/…` slugs resolve to their own window (1M for the 5.x
   family), so `MODEL_CONTEXT_TOKENS` is not needed for them.
 - **Branch policy.** The shipped workflow empties `SKIP_TARGET_BRANCHES` and keeps the default

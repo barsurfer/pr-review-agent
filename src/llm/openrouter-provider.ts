@@ -43,6 +43,18 @@ export class OpenRouterProvider implements LLMProvider {
     // usage.include returns the real USD cost so the record logs it instead of a wrong-model estimate;
     // user tags the request with the reviewed repo for OpenRouter-side segmentation.
     const body = { ...payload, usage: { include: true }, ...(config.repoSlug ? { user: config.repoSlug } : {}) }
+    if (!opts.effort) return this.send(url, headers, body, opts)
+    // OpenRouter maps reasoning.effort to Claude 4.6+ output_config.effort; like the Anthropic provider, a rejected value is retried without it.
+    return this.send(url, headers, { ...body, reasoning: { effort: opts.effort } }, opts).catch((err: unknown) => {
+      if (isReasoningRejection(err)) {
+        console.warn(`  effort "${opts.effort}" not accepted by ${opts.model} — retrying without it`)
+        return this.send(url, headers, body, opts)
+      }
+      throw err
+    })
+  }
+
+  private async send(url: string, headers: Record<string, string>, body: Record<string, unknown>, opts: LLMOptions): Promise<OpenRouterResponse> {
     let lastErr: unknown
     for (let attempt = 0; attempt <= opts.maxRetries; attempt++) {
       try {
@@ -98,6 +110,7 @@ function mapOpenRouterUsage(u: OpenRouterResponse['usage']): LLMUsage {
   const cost = typeof u?.cost === 'number' && u.cost > 0 ? u.cost : u?.cost_details?.upstream_inference_cost
   return {
     input_tokens: u?.prompt_tokens ?? 0,
+    // Already includes completion_tokens_details.reasoning_tokens (billed as output), as Anthropic's output_tokens includes thinking.
     output_tokens: u?.completion_tokens ?? 0,
     cache_read_input_tokens: u?.prompt_tokens_details?.cached_tokens ?? 0,
     cache_creation_input_tokens: 0,
@@ -115,15 +128,23 @@ function openRouterError(status: number | undefined, rawMessage: string, code?: 
   // diff-only degrade backstop fires. Covers OpenAI/Anthropic/Gemini/Cohere phrasings.
   const hay = `${rawMessage} ${typeof code === 'string' ? code : ''}`
   const overflow = /context[ _]length|maximum context|reduce the length|context_length_exceeded|too many tokens|input is too long|input token count/i.test(hay)
-  const e = new Error(overflow ? `prompt is too long: ${rawMessage}` : rawMessage) as StatusError
+  const e = new Error(overflow ? `${OVERFLOW_PREFIX}${rawMessage}` : rawMessage) as StatusError
   const resolved = overflow ? 400 : status
   if (typeof resolved === 'number') e.status = resolved
   e.__openrouter = true
   return e
 }
 
+const OVERFLOW_PREFIX = 'prompt is too long: '
+
 function isOpenRouterError(err: unknown): err is StatusError {
   return !!(err as StatusError)?.__openrouter
+}
+
+// Observed: 400 "reasoning.effort: Invalid option: …"; documented: 400 "Reasoning is mandatory …" (effort none on Opus/Sonnet 5.5). Non-reasoning models ignore the field.
+function isReasoningRejection(err: unknown): boolean {
+  if (!isOpenRouterError(err) || err.status !== 400) return false
+  return /\breasoning\b/i.test(err.message) && !err.message.startsWith(OVERFLOW_PREFIX)
 }
 
 interface AxiosLikeError {
