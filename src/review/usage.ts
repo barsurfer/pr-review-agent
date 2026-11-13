@@ -92,7 +92,7 @@ export interface UsageRecord {
   unjudged_candidates?: NonNullable<UsageRecord['review_candidates']>
   judge_decisions: AppliedDecision[] | null
   judge_anomalies: JudgeAnomalies | null
-  judge_policy: { keep_minor: boolean; keep_unverified: boolean; file_context: boolean } | null
+  judge_policy: { keep_minor: boolean; keep_unverified: boolean; file_context: boolean; keep_test_gaps?: boolean } | null
   breadth_status: BreadthStatus | null
   breadth_model: string | null
   breadth_prompt_hash: string | null
@@ -346,7 +346,7 @@ export function buildUsageRecord(
     judge_decisions: ctx.judgeDecisions ?? null,
     judge_anomalies: ctx.judgeAnomalies ?? null,
     judge_policy: judgeModel && judgeTokens
-      ? { keep_minor: config.judge.policy.keepMinor, keep_unverified: config.judge.policy.keepUnverified, file_context: config.judge.fileContext }
+      ? { keep_minor: config.judge.policy.keepMinor, keep_unverified: config.judge.policy.keepUnverified, file_context: config.judge.fileContext, ...(config.judge.policy.keepTestGaps ? { keep_test_gaps: true } : {}) }
       : null,
     breadth_status: breadthStatus,
     breadth_model: ctx.breadthModel ?? null,

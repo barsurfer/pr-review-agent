@@ -903,6 +903,52 @@ describe('lens recommendation (end-to-end)', () => {
   })
 })
 
+describe('J_TGAP keep low_value test gaps (end-to-end)', () => {
+  const GAP_REVIEW: ReviewObject = { ...REVIEW, findings: [...REVIEW.findings, { severity: 'MEDIUM', title: 'Null conn branch has no test', file: 'src/pool.ts', lines: '4', body: 'Add a test for put(null).' }] }
+  const GAP_JUDGED: JudgeOutput = { ...JUDGED, decisions: [...JUDGED.decisions, { candidate_id: 'c4', reason_category: 'low_value', evidence: '', note: 'Asks for an added test.', score: 4 }] }
+  const usageRecord = () => {
+    const out = logSpy.mock.calls.map(c => c.join(' ')).find(l => l.startsWith('\n=== Usage ==='))!
+    return JSON.parse(out.slice(out.indexOf('{')))
+  }
+  const run = async (labels: Record<string, string>) => {
+    completeStructured.mockReset()
+    mockModel(GAP_REVIEW, GAP_JUDGED)
+    logSpy.mockClear()
+    const env = { ...fixture(), ...labels }
+    await runBenchmark(env)
+    const { timestamp: _t, duration_ms: _d, ...record } = usageRecord()
+    return {
+      on: cfg.judge.policy.keepTestGaps, record, raw: readFileSync(env.RB_OUT, 'utf-8'), calls: JSON.stringify(completeStructured.mock.calls),
+      line: logSpy.mock.calls.map(c => c.join(' ')).find(l => l.startsWith('Benchmark settings:'))!,
+    }
+  }
+
+  it('RB_CONFIG_J_TGAP=1 enables it, echoes j_tgap=1 and writes the gap to findings.json as a kept row; the model calls are unchanged', async () => {
+    const absent = await run({})
+    const one = await run({ RB_CONFIG_J_TGAP: '1' })
+
+    expect(one.on).toBe(true)
+    expect(one.line).toBe(`${absent.line} j_tgap=1`)
+    expect(one.calls).toBe(absent.calls)
+    expectAccepted(JSON.parse(one.raw))
+    expect(JSON.parse(one.raw).findings).toContainEqual({ file: 'src/pool.ts', start_line: 4, end_line: 4, message: 'Null conn branch has no test: Add a test for put(null).', producer: 'my-agent' })
+    expect(absent.raw).not.toContain('Null conn branch')
+    expect(one.record.judge_decisions[4]).toMatchObject({ reason_category: 'low_value', final_severity: 'LOW', policy_override: 'test_gap' })
+    expect(one.record.judge_policy.keep_test_gaps).toBe(true)
+  })
+
+  it('RB_CONFIG_J_TGAP=0 leaves the settings line, provider calls, findings and record unchanged', async () => {
+    const absent = await run({})
+    const zero = await run({ RB_CONFIG_J_TGAP: '0' })
+
+    expect(zero.on).toBe(false)
+    expect(absent.on).toBeFalsy()
+    expect([zero.line, zero.calls, zero.raw, JSON.stringify(zero.record)]).toEqual([absent.line, absent.calls, absent.raw, JSON.stringify(absent.record)])
+    expect(absent.line).not.toContain('j_tgap')
+    expect(JSON.stringify(absent.record)).not.toMatch(/keep_test_gaps|policy_override/)
+  })
+})
+
 // Pins the default path: a snapshot diff here means the breadth feature leaked into flag-off runs.
 describe('flag-off regression pin', () => {
   it('judge system prompt, judge input and findings.json are unchanged', async () => {

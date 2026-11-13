@@ -1202,6 +1202,63 @@ describe('MAX_FINDINGS cap', () => {
   })
 })
 
+describe('ENABLE_JUDGE_KEEP_TEST_GAPS: a test gap the judge drops as low_value', () => {
+  const BUG: ReviewObject['findings'][number] = { severity: 'MEDIUM', title: 'foo() result ignored', file: 'src/app.ts', lines: '11', body: 'The return value is dropped.' }
+  const GAP: ReviewObject['findings'][number] = { severity: 'MEDIUM', title: 'New foo() call path has no test', file: 'src/app.ts', lines: '10', body: 'Add a test for the import path.' }
+  const mockJudgeDropsGap = () => mockRunJudge.mockImplementation(async (_k, _m, _r, _t, _e, diff, judgeInput, _f, policy, _l, breadthFrom) => {
+    const judged = applyJudgeDecisions(judgeInput.findings, {
+      decisions: [
+        { candidate_id: 'c0', reason_category: 'validated', evidence: 'src/app.ts:11', note: 'n', score: 8 },
+        { candidate_id: 'c1', reason_category: 'low_value', evidence: '', note: 'Asks for an added test.', score: 4 },
+      ],
+      summary: 'ok', behavioral_diff: [], production_risk: [], unresolved_questions: [], merge_confidence: 80,
+    }, policy, judgeInput.can_be_split, diff, breadthFrom)
+    return { text: judged.markdown, usage: { input_tokens: 800, output_tokens: 300 }, scores: judged.scores, promptHash: 'judgehash', decisions: judged.decisions, anomalies: judged.anomalies, kept: judged.kept }
+  })
+  const run = async (keepTestGaps?: boolean) => {
+    cfg.judge.model = 'judge-model'
+    cfg.judge.policy = keepTestGaps === undefined ? { keepMinor: false, keepUnverified: false } : { keepMinor: false, keepUnverified: false, keepTestGaps }
+    mockReviewer(reviewWith([BUG, GAP]))
+    mockJudgeDropsGap()
+    const adapter = makeAdapter()
+    const record = (await review(adapter, '100', false))!
+    const { timestamp: _t, duration_ms: _d, ...stable } = record
+    return { record, stable: JSON.stringify(stable), body: vi.mocked(adapter.postComment).mock.calls[0][1] as string, prompt: (mockRunReview.mock.calls.at(-1)![8] as { content: string }).content }
+  }
+  afterEach(() => { cfg.judge.policy = { keepMinor: false, keepUnverified: false } })
+
+  it('posts it as LOW only with the flag on, through the comment, scores, anchored findings, decisions and policy', async () => {
+    const absent = await run()
+    const off = await run(false)
+    const on = await run(true)
+
+    expect(absent.body).not.toContain('New foo() call path has no test')
+    expect(absent.body).toContain('**MEDIUM – foo() result ignored** (`src/app.ts:11`)')
+    expect(on.body).toContain('**MEDIUM – foo() result ignored** (`src/app.ts:11`)')
+    expect(on.body).toContain('**LOW – New foo() call path has no test** (`src/app.ts:10`)\n  Add a test for the import path.')
+    expect(on.record.findings).toEqual({ high: 0, medium: 1, low: 1 })
+    expect(on.record.finding_scores).toContainEqual({ title: 'New foo() call path has no test', severity: 'LOW', score: 4, file: 'src/app.ts', lines: '10' })
+    expect(on.record.anchored_findings).toContainEqual(expect.objectContaining({ anchor: 'src/app.ts:10', severity: 'LOW' }))
+    expect(on.record.judge_decisions![1]).toMatchObject({ reason_category: 'low_value', action: 'downgrade', final_severity: 'LOW', policy_override: 'test_gap' })
+    expect(on.record.judge_policy).toEqual({ keep_minor: false, keep_unverified: false, file_context: false, keep_test_gaps: true })
+
+    expect(off.body).toBe(absent.body)
+    expect(off.stable).toBe(absent.stable)
+    expect(absent.record.judge_policy).toEqual({ keep_minor: false, keep_unverified: false, file_context: false })
+    expect(absent.stable).not.toContain('policy_override')
+  })
+
+  it('leaves MAX_FINDINGS as a reviewer-prompt cap only: the prompt is the same and kept findings are not trimmed', async () => {
+    cfg.review.maxFindings = 1
+    const off = await run(false)
+    const on = await run(true)
+
+    expect(on.prompt).toBe(off.prompt)
+    expect(on.prompt).toContain('at most 1')
+    expect(on.record.findings).toEqual({ high: 0, medium: 1, low: 1 })
+  })
+})
+
 // ===========================================================================
 // Scenario 8f: TODO scan appends a deterministic section
 // ===========================================================================

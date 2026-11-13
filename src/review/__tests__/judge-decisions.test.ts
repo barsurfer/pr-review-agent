@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import {
-  REASON_CATEGORIES, REWRITE_CAP, PROPOSAL_CAP, DEFAULT_JUDGE_POLICY, applyJudgeDecisions, policyAction, renderCandidatesForJudge, renderJudgedReview, locateInDiff,
+  REASON_CATEGORIES, REWRITE_CAP, PROPOSAL_CAP, DEFAULT_JUDGE_POLICY, applyJudgeDecisions, isTestGap, policyAction, renderCandidatesForJudge, renderJudgedReview, locateInDiff,
   type JudgeDecision, type JudgeOutput, type ReasonCategory,
 } from '../judge-decisions.js'
+import { isAnchored, parseLineRange } from '../findings-output.js'
 import type { ReviewFinding } from '../formatter.js'
 import { parseFindings, parseVerdictScore } from '../parsers.js'
 import { parseReviewMarkdown } from '../aggregate.js'
@@ -396,6 +397,250 @@ describe('rendered judged review', () => {
     const md = renderCandidatesForJudge({ summary: 's', findings: [finding(), finding({ title: 'B', file: undefined, lines: undefined })], behavioral_diff: [], production_risk: [], unresolved_questions: [] })
     expect(md).toContain('- [c0] **MEDIUM – Race on conns** (`src/pool.ts:2-3`)')
     expect(md).toContain('- [c1] **MEDIUM – B**\n')
+  })
+})
+
+describe('keepTestGaps: a low_value test gap with a numeric line is kept as LOW', () => {
+  const POOL_DIFF = [
+    'diff --git a/src/pool.ts b/src/pool.ts',
+    '--- a/src/pool.ts',
+    '+++ b/src/pool.ts',
+    '@@ -0,0 +1,40 @@',
+    ...Array.from({ length: 40 }, (_, i) => `+  const line${i + 1} = ${i + 1}`),
+  ].join('\n')
+  const TGAP = { keepMinor: false, keepUnverified: false, keepTestGaps: true }
+  const gap = (over: Partial<ReviewFinding> = {}) =>
+    finding({ severity: 'LOW', title: 'Null getFileStats branch has no test', lines: '12', body: 'Add a test for the null branch.', ...over })
+  const lowValue = (over: Partial<JudgeDecision> = {}) => decision({ reason_category: 'low_value', evidence: '', note: 'Asks for an added test.', score: 4, ...over })
+  const apply = (cands: ReviewFinding[], decisions: JudgeDecision[], policy: typeof DEFAULT_JUDGE_POLICY = TGAP, breadthFrom = Infinity, options?: Parameters<typeof applyJudgeDecisions>[6]) =>
+    applyJudgeDecisions(cands, output(decisions), policy, [], POOL_DIFF, breadthFrom, options)
+  const DROPPED_GAP = {
+    candidate_id: 'c0', reason_category: 'low_value', reclassified_from: null, action: 'drop', original_severity: 'LOW', final_severity: null, score: 4,
+    evidence: '', note: 'Asks for an added test.', rewritten: false, anchor_source: 'reviewer', anchor_file: 'src/pool.ts', anchor_lines: '12',
+  }
+
+  it('off (absent or false): drops the test gap and the decision deep-equals the pre-flag shape', () => {
+    for (const policy of [DEFAULT_JUDGE_POLICY, { ...DEFAULT_JUDGE_POLICY, keepTestGaps: false }]) {
+      const r = apply([gap()], [lowValue()], policy)
+      expect(r.kept).toEqual([])
+      expect(r.decisions[0]).toStrictEqual(DROPPED_GAP)
+    }
+  })
+
+  it('flag-off pin: a serialized mixed decision set matches the pre-flag output byte for byte', () => {
+    const PIN = '[{"candidate_id":"c0","reason_category":"validated","reclassified_from":null,"action":"keep","original_severity":"MEDIUM","final_severity":"MEDIUM","score":8,"evidence":"src/pool.ts:2","note":"n","rewritten":false,"anchor_source":"reviewer","anchor_file":"src/pool.ts","anchor_lines":"2-3"},{"candidate_id":"c1","reason_category":"low_value","reclassified_from":null,"action":"drop","original_severity":"MEDIUM","final_severity":null,"score":4,"evidence":"","note":"Asks for an added test.","rewritten":false,"anchor_source":"reviewer","anchor_file":"src/pool.ts","anchor_lines":"12"},{"candidate_id":"c2","reason_category":"low_value","reclassified_from":null,"action":"drop","original_severity":"LOW","final_severity":null,"score":2,"evidence":"","note":"Preference.","rewritten":false,"anchor_source":"reviewer","anchor_file":"src/pool.ts","anchor_lines":"20"},{"candidate_id":"c3","reason_category":"duplicate","reclassified_from":null,"action":"drop","original_severity":"LOW","final_severity":null,"score":3,"evidence":"src/pool.ts:12","note":"Same as c1.","rewritten":false,"anchor_source":"reviewer","anchor_file":"src/pool.ts","anchor_lines":"30"},{"candidate_id":"c4","reason_category":"low_value","reclassified_from":null,"action":"drop","original_severity":"HIGH","final_severity":null,"score":5,"evidence":"","note":"Asks for tests.","rewritten":false,"anchor_source":"none","anchor_file":null,"anchor_lines":null}]'
+    const cands = [
+      finding(),
+      gap({ severity: 'MEDIUM' }),
+      gap({ title: 'Hardcoded colors bypass the palette tokens', lines: '20', body: 'Use the palette tokens.' }),
+      gap({ title: 'Pagination test never exercises has_more=true', lines: '30', body: 'Same gap as c1.' }),
+      gap({ severity: 'HIGH', title: 'New PlatformNotSupported branch and once-only guard have no tests', file: undefined, lines: undefined, body: 'No test covers the guard.' }),
+    ]
+    const decisions = [
+      decision(),
+      lowValue({ candidate_id: 'c1' }),
+      lowValue({ candidate_id: 'c2', note: 'Preference.', score: 2 }),
+      decision({ candidate_id: 'c3', reason_category: 'duplicate', evidence: 'src/pool.ts:12', note: 'Same as c1.', score: 3 }),
+      lowValue({ candidate_id: 'c4', note: 'Asks for tests.', score: 5 }),
+    ]
+    const absent = apply(cands, decisions, DEFAULT_JUDGE_POLICY)
+    const off = apply(cands, decisions, { ...DEFAULT_JUDGE_POLICY, keepTestGaps: false })
+    expect(JSON.stringify(absent.decisions)).toBe(PIN)
+    expect(JSON.stringify(off.decisions)).toBe(PIN)
+    expect(JSON.stringify([off.kept, off.scores, off.anomalies, off.markdown])).toBe(JSON.stringify([absent.kept, absent.scores, absent.anomalies, absent.markdown]))
+    expect(absent.kept.map(k => k.title)).toEqual(['Race on conns'])
+  })
+
+  it('on: keeps the test gap as LOW with policy_override, in kept, scores and the rendered review', () => {
+    const r = apply([finding(), gap()], [decision(), lowValue({ candidate_id: 'c1' })])
+    expect(r.decisions[1]).toStrictEqual({ ...DROPPED_GAP, candidate_id: 'c1', action: 'keep', final_severity: 'LOW', policy_override: 'test_gap' })
+    expect('policy_override' in r.decisions[0]).toBe(false)
+    expect(r.kept[1]).toEqual({ severity: 'LOW', title: 'Null getFileStats branch has no test', body: 'Add a test for the null branch.', file: 'src/pool.ts', lines: '12', score: 4, anchorSource: 'reviewer' })
+    expect(r.scores[1]).toEqual({ title: 'Null getFileStats branch has no test', severity: 'LOW', score: 4, file: 'src/pool.ts', lines: '12' })
+    expect(parseFindings(r.markdown)).toEqual({ high: 0, medium: 1, low: 1 })
+    expect(parseReviewMarkdown(r.markdown).findings[1]).toEqual({ severity: 'LOW', title: 'Null getFileStats branch has no test', file: 'src/pool.ts', lines: '12', body: 'Add a test for the null branch.' })
+  })
+
+  it.each(['HIGH', 'MEDIUM'] as const)('on: a %s test gap is downgraded to LOW', severity => {
+    const r = apply([gap({ severity })], [lowValue()])
+    expect(r.decisions[0]).toMatchObject({ reason_category: 'low_value', action: 'downgrade', original_severity: severity, final_severity: 'LOW', policy_override: 'test_gap' })
+    expect(r.kept[0].severity).toBe('LOW')
+  })
+
+  it('on: a judge anchor or a verbatim quote on a changed line makes the gap placeable', () => {
+    expect(apply([gap({ lines: 'getFileStats' })], [lowValue({ anchor_file: 'src/pool.ts', anchor_lines: '7' })]).decisions[0])
+      .toMatchObject({ action: 'keep', anchor_source: 'judge', anchor_lines: '7', policy_override: 'test_gap' })
+    expect(apply([gap({ lines: undefined })], [lowValue({ anchor_quote: 'const line9 = 9' })]).decisions[0])
+      .toMatchObject({ action: 'keep', anchor_source: 'diff', anchor_lines: '9', policy_override: 'test_gap' })
+  })
+
+  it.each([
+    ['a symbol-only reviewer location', { lines: 'getFileStats' }, Infinity],
+    ['no file and no line', { file: undefined, lines: undefined }, Infinity],
+    ['a numeric line but no file', { file: undefined, lines: '12' }, Infinity],
+    ['a breadth line off the diff', { lines: '99' }, 0],
+  ] as const)('on: drops a test gap with %s', (_name, over, breadthFrom) => {
+    const r = apply([gap(over)], [lowValue()], TGAP, breadthFrom)
+    expect(r.kept).toEqual([])
+    expect(r.decisions[0]).toMatchObject({ reason_category: 'low_value', action: 'drop', anchor_source: 'none' })
+    expect('policy_override' in r.decisions[0]).toBe(false)
+  })
+
+  it.each(['0', '0-0', 'L0'])('on: drops a test gap whose reviewer line %s has no positive line number', lines => {
+    const r = apply([gap({ lines })], [lowValue()])
+    expect(r.kept).toEqual([])
+    expect(r.decisions[0]).toMatchObject({ reason_category: 'low_value', action: 'drop', anchor_source: 'reviewer', anchor_lines: lines })
+    expect('policy_override' in r.decisions[0]).toBe(false)
+  })
+
+  it.each(['', 'getFileStats'])('on: drops a test gap whose reviewer line "%s" is not a line', lines => {
+    const r = apply([gap({ lines })], [lowValue()])
+    expect(r.kept).toEqual([])
+    expect('policy_override' in r.decisions[0]).toBe(false)
+  })
+
+  it.each(['12', '12-14'])('on: keeps a test gap on line %s', lines => {
+    const r = apply([gap({ lines })], [lowValue()])
+    expect(r.decisions[0]).toMatchObject({ action: 'keep', anchor_lines: lines, policy_override: 'test_gap' })
+    expect(r.kept[0]).toMatchObject({ lines, anchorSource: 'reviewer' })
+  })
+
+  it('on: overrides exactly when the downstream placement check accepts the kept finding, at the range it places', () => {
+    const cases: Array<[string, { start: number; end: number } | null]> = [['0', null], ['0-0', null], ['', null], ['getFileStats', null], ['12', { start: 12, end: 12 }], ['12-14', { start: 12, end: 14 }], ['0-3', { start: 3, end: 3 }], ['5-2', { start: 2, end: 5 }]]
+    for (const [lines, placed] of cases) {
+      const r = apply([gap({ lines })], [lowValue()])
+      const overridden = r.decisions[0].policy_override === 'test_gap'
+      expect(overridden).toBe(placed !== null)
+      if (overridden) {
+        expect(isAnchored(r.kept[0])).toBe(true)
+        expect(parseLineRange(r.kept[0].lines)).toEqual(placed)
+      }
+    }
+  })
+
+  it('on: a low_value finding that names no test gap still drops', () => {
+    const r = apply([gap({ title: 'Hardcoded colors bypass the palette tokens', body: 'Use the palette tokens.' })], [lowValue()])
+    expect(r.kept).toEqual([])
+    expect(r.decisions[0]).toStrictEqual({ ...DROPPED_GAP })
+  })
+
+  it('on: the body counts too', () => {
+    const r = apply([gap({ title: 'Lazy-rotation tests miss the CAS conflict branch and unknown-key path', body: 'The VersionConflict skip branch is never exercised.' })], [lowValue()])
+    expect(r.decisions[0]).toMatchObject({ action: 'keep', policy_override: 'test_gap' })
+  })
+
+  it.each(['incorrect', 'already_handled', 'duplicate', 'style_only', 'out_of_scope', 'unverifiable', 'minor', 'framework_uncertainty'] as ReasonCategory[])(
+    'on: a %s test gap follows the policy table, only low_value is overridden', reason => {
+      const r = apply([gap()], [lowValue({ reason_category: reason, evidence: 'src/pool.ts:12 guard' })])
+      expect(r.kept).toEqual([])
+      expect(r.decisions[0]).toMatchObject({ reason_category: reason, action: policyAction(reason, 'LOW', TGAP).action })
+      expect('policy_override' in r.decisions[0]).toBe(false)
+    })
+
+  it('on: an incorrect drop without evidence is reclassified unverifiable, not overridden', () => {
+    const r = apply([gap()], [lowValue({ reason_category: 'incorrect', evidence: '' })])
+    expect(r.decisions[0]).toMatchObject({ reason_category: 'unverifiable', reclassified_from: 'incorrect', action: 'drop' })
+    expect('policy_override' in r.decisions[0]).toBe(false)
+  })
+
+  it('keepMinor on or off: the test gap is kept either way and minor still follows keepMinor', () => {
+    const cands = [gap(), gap({ title: 'Dead helper left behind', lines: '20', body: 'Unused.' }), gap({ title: 'Prefer a config flag', lines: '21', body: 'Make it configurable.' })]
+    const decisions = [lowValue(), decision({ candidate_id: 'c1', reason_category: 'minor' }), lowValue({ candidate_id: 'c2' })]
+    for (const keepMinor of [false, true]) {
+      const r = apply(cands, decisions, { keepMinor, keepUnverified: false, keepTestGaps: true })
+      expect(r.kept.map(k => k.title)).toEqual(keepMinor ? ['Null getFileStats branch has no test', 'Dead helper left behind'] : ['Null getFileStats branch has no test'])
+      expect(r.decisions.map(d => d.policy_override)).toEqual(['test_gap', undefined, undefined])
+    }
+    expect(apply(cands, decisions, { keepMinor: true, keepUnverified: false }).kept.map(k => k.title)).toEqual(['Dead helper left behind'])
+  })
+
+  it('with J_QUALITY: a gap the evidence check already validated is not overridden, a low_value gap is overridden once, a demoted duplicate is not', () => {
+    const r = apply(
+      [gap({ severity: 'MEDIUM' }), gap({ severity: 'MEDIUM', title: 'Pagination test never exercises has_more=true', lines: '30' }), gap({ title: 'No test covers the centimeters unit path', lines: '35' })],
+      [decision({ evidence: 'src/pool.ts:12' }), lowValue({ candidate_id: 'c1' }), decision({ candidate_id: 'c2', reason_category: 'duplicate', duplicate_of: 'c9' })],
+      TGAP, Infinity, { quality: true },
+    )
+    expect(r.decisions[0]).toMatchObject({ reason_category: 'validated', action: 'keep', final_severity: 'MEDIUM' })
+    expect(r.decisions[1]).toMatchObject({ reason_category: 'low_value', action: 'downgrade', final_severity: 'LOW', policy_override: 'test_gap' })
+    expect(r.decisions[2]).toMatchObject({ reason_category: 'unverifiable', invalid_duplicate: true, action: 'drop' })
+    expect([r.decisions[0], r.decisions[2]].some(d => 'policy_override' in d)).toBe(false)
+    expect(r.kept.map(k => [k.title, k.severity])).toEqual([['Null getFileStats branch has no test', 'MEDIUM'], ['Pagination test never exercises has_more=true', 'LOW']])
+  })
+
+  it('on: the kept gap carries the judge score, a capped rewrite and a proposal like any kept finding', () => {
+    const plain = apply([gap()], [lowValue({ score: 9 })])
+    expect(plain.kept[0]).toMatchObject({ score: 9, body: 'Add a test for the null branch.' })
+    expect(plain.decisions[0].rewritten).toBe(false)
+    const rewritten = apply([gap()], [lowValue({ rewritten_body: 'No test reaches the null branch.' })])
+    expect(rewritten.kept[0].body).toBe('No test reaches the null branch.')
+    expect(rewritten.decisions[0].rewritten).toBe(true)
+    const withFix = apply([gap()], [lowValue({ proposal: 'Add a test that passes null stats.' })], TGAP, Infinity, { proposals: true })
+    expect(withFix.kept[0].proposal).toBe('Add a test that passes null stats.')
+    expect(withFix.decisions[0]).toMatchObject({ policy_override: 'test_gap', proposal: 'Add a test that passes null stats.' })
+  })
+
+  const REPLAY_TEST_GAP_TITLES = [
+    'New exception-handling branches have no test coverage',
+    'New note-parsing branches and JSON round-trip are untested',
+    'Promise connect() traced path has no test',
+    'Null getFileStats branch has no test',
+    'Pagination test never exercises has_more=true',
+    'Test never asserts layer-order re-init',
+    'No regression test for the download language fix',
+    'Integration test does not cover pagination or clamping',
+    'No test covers the centimeters unit path',
+    'Freshness logic added without tests',
+    'Threading and invokeAndWait error paths are untested',
+    'Test coverage does not match the PR description: only one test, no zonos case',
+  ]
+  const REPLAY_OTHER_LOW_VALUE_TITLES = [
+    'Hardcoded colors bypass the palette tokens',
+    'Queries without a callback are silently untraced',
+    'Global state cleared inline, not in a fixture',
+    'Janitor goroutine has no stop path',
+    'Unchecked `as Locale` cast on download language',
+    'CHANGELOG omits the new path file-size cap',
+    'Default OAuth scopes are broader than a review tool needs',
+    'Named palettes have no size cap',
+    'Rotation test covers only the success path',
+    'Tests are absent for new branching logic',
+    'Sweep test never checks that tracked files survive',
+    'Hard-coded variant count lets missing variants pass the test',
+  ]
+
+  const GENERIC_PHRASE_NON_TEST_TITLES = [
+    'Remove the redundant catch: this operation cannot fail',
+    'Add a docstring: the documentation does not cover retries',
+    'Tautological comparison: x === x is always true',
+    'Handler does not assert that the caller owns the resource',
+    "Retry fallback can't fail, so the error branch is dead code",
+    'Empty-list validation trivially passes and skips the size check',
+    'The handler never tests the return value of write()',
+    'Error path is not covered by the circuit breaker',
+    'EU region has no coverage in the pricing table',
+    'The README does not cover the new environment variables',
+  ]
+
+  it.each(REPLAY_TEST_GAP_TITLES)('isTestGap accepts %s', title => {
+    expect(isTestGap(title, '')).toBe(true)
+  })
+
+  it.each([...REPLAY_OTHER_LOW_VALUE_TITLES, ...GENERIC_PHRASE_NON_TEST_TITLES])('isTestGap rejects %s', title => {
+    expect(isTestGap(title, '')).toBe(false)
+  })
+
+  it('isTestGap: a generic phrase counts with a testing word anywhere in the title or body, outside the phrase itself', () => {
+    expect(isTestGap('Pagination branch is never exercised', 'The new test only requests the first page.')).toBe(true)
+    expect(isTestGap('Pagination branch is never exercised', 'Only the first page is ever requested.')).toBe(false)
+    expect(isTestGap('Fallback cannot fail', 'The mock always resolves, so the error branch is dead.')).toBe(true)
+    expect(isTestGap('The parser never tests for an empty buffer', '')).toBe(false)
+    expect(isTestGap('Fallback path is never tested', '')).toBe(true)
+  })
+
+  it('on: end to end, every matching title is kept and every other one dropped', () => {
+    const titles = [...REPLAY_TEST_GAP_TITLES, ...REPLAY_OTHER_LOW_VALUE_TITLES, ...GENERIC_PHRASE_NON_TEST_TITLES]
+    const r = apply(titles.map((title, i) => gap({ title, body: 'See the title.', lines: String(i + 1) })), titles.map((_, i) => lowValue({ candidate_id: `c${i}` })))
+    expect(r.kept.map(k => k.title)).toEqual(REPLAY_TEST_GAP_TITLES)
   })
 })
 

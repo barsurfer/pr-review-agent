@@ -112,6 +112,7 @@ export const config = {
     policy: {
       keepMinor: optional('ENABLE_JUDGE_KEEP_MINOR', 'false') === 'true',
       keepUnverified: optional('ENABLE_JUDGE_KEEP_UNVERIFIED', 'false') === 'true',
+      keepTestGaps: optional('ENABLE_JUDGE_KEEP_TEST_GAPS', 'false') === 'true',
     },
     // Off by default: sending the reviewer's file context roughly doubles judge input tokens.
     fileContext: optional('ENABLE_JUDGE_FILE_CONTEXT', 'false') === 'true',

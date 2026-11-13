@@ -310,6 +310,13 @@ describe('buildUsageRecord judge decision fields', () => {
     }
   })
 
+  it('adds keep_test_gaps: true to the policy only when ENABLE_JUDGE_KEEP_TEST_GAPS is on', () => {
+    Object.assign(cfg.judge.policy, { keepTestGaps: true })
+    expect(buildUsageRecord(judged(), 1, null).judge_policy).toStrictEqual({ keep_minor: false, keep_unverified: false, file_context: false, keep_test_gaps: true })
+    Object.assign(cfg.judge.policy, { keepTestGaps: false })
+    expect(buildUsageRecord(judged(), 1, null).judge_policy).toStrictEqual({ keep_minor: false, keep_unverified: false, file_context: false })
+  })
+
   it('logs no policy when the judge is configured off', () => {
     cfg.judge.model = ''
     expect(buildUsageRecord(judged(), 1, null).judge_policy).toBeNull()
