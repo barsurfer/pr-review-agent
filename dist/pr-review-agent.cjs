@@ -42287,17 +42287,30 @@ function isIdShaped(token) {
 function stripCode(body) {
   return body.replace(/```[\s\S]*?```/g, " ").replace(/`[^`]*`/g, " ");
 }
+function mentionsAgent(body, agentIds, agentNames) {
+  for (const m of body.matchAll(MENTION_TOKEN)) {
+    if (isIdShaped(m[1]) && agentIds.has(m[1])) return true;
+  }
+  const lower = body.toLowerCase();
+  for (const name of agentNames) {
+    if (name && mentionsName(lower, "@" + name)) return true;
+  }
+  return false;
+}
+function mentionsName(lower, needle) {
+  const wordChar = /[\p{L}\p{N}_-]/u;
+  for (let at = lower.indexOf(needle); at !== -1; at = lower.indexOf(needle, at + 1)) {
+    const before = at > 0 ? lower[at - 1] : void 0;
+    const next = lower[at + needle.length];
+    if ((before === void 0 || !wordChar.test(before)) && (next === void 0 || !wordChar.test(next))) return true;
+  }
+  return false;
+}
 function decideDirectedElsewhere(body, agentIds, agentNames) {
   if (agentIds.size === 0) return { drop: false };
   const lead = stripCode(body).trim().match(LEADING_MENTION);
   if (!lead || !isIdShaped(lead[1])) return { drop: false };
-  for (const m of body.matchAll(MENTION_TOKEN)) {
-    if (isIdShaped(m[1]) && agentIds.has(m[1])) return { drop: false };
-  }
-  const lower = body.toLowerCase();
-  for (const name of agentNames) {
-    if (name && lower.includes("@" + name)) return { drop: false };
-  }
+  if (mentionsAgent(body, agentIds, agentNames)) return { drop: false };
   return { drop: true, matchedToken: lead[1] };
 }
 
@@ -42319,6 +42332,35 @@ var PrTooLargeError = class extends Error {
 
 // src/vcs/bitbucket.ts
 var REQUEST_TIMEOUT_MS = 3e4;
+function threadMembers(comments, reviewIds) {
+  const parentOf = /* @__PURE__ */ new Map();
+  for (const c of comments) parentOf.set(String(c.id), c.parent?.id ? String(c.parent.id) : null);
+  const reaches = /* @__PURE__ */ new Map();
+  const reachesReview = (start) => {
+    const path4 = /* @__PURE__ */ new Set();
+    let cur = start;
+    let ok = false;
+    while (cur != null) {
+      if (reviewIds.has(cur)) {
+        ok = true;
+        break;
+      }
+      const known = reaches.get(cur);
+      if (known !== void 0) {
+        ok = known;
+        break;
+      }
+      if (path4.has(cur) || !parentOf.has(cur)) break;
+      path4.add(cur);
+      cur = parentOf.get(cur);
+    }
+    for (const id of path4) reaches.set(id, ok);
+    return ok;
+  };
+  const members = /* @__PURE__ */ new Set();
+  for (const [id, parent] of parentOf) if (parent != null && reachesReview(parent)) members.add(id);
+  return members;
+}
 var BitbucketAdapter = class {
   client;
   workspace;
@@ -42467,26 +42509,32 @@ var BitbucketAdapter = class {
     return comments;
   }
   async getRepliesToReviewComments(prId, reviewCommentIds, includeAnswered = false) {
-    const parentIds = new Set(reviewCommentIds);
     const reviewIdSet = new Set(reviewCommentIds);
     this.agentIds = /* @__PURE__ */ new Set();
     this.agentNames = /* @__PURE__ */ new Set();
     const humanReplies = [];
     let agentReplyCount = 0;
     let latestAgentReply = "";
-    for (const c of await this.fetchComments(prId)) {
-      const body = c.content?.raw ?? "";
-      if (c.user && (reviewIdSet.has(String(c.id)) || hasReplyFooter(body))) {
+    const comments = await this.fetchComments(prId);
+    const inThread = threadMembers(comments, reviewIdSet);
+    const agentCommentIds = /* @__PURE__ */ new Set();
+    for (const c of comments) {
+      if (!reviewIdSet.has(String(c.id)) && !hasReplyFooter(c.content?.raw ?? "")) continue;
+      agentCommentIds.add(String(c.id));
+      if (c.user) {
         if (c.user.account_id) this.agentIds.add(String(c.user.account_id));
         if (c.user.uuid) this.agentIds.add(String(c.user.uuid).replace(/[{}]/g, ""));
         if (c.user.display_name) this.agentNames.add(String(c.user.display_name).toLowerCase());
         if (c.user.nickname) this.agentNames.add(String(c.user.nickname).toLowerCase());
       }
-      const parentId = c.parent?.id ? String(c.parent.id) : null;
-      if (!parentId || !parentIds.has(parentId)) continue;
+    }
+    let identityWarned = false;
+    for (const c of comments) {
+      const body = c.content?.raw ?? "";
+      if (!inThread.has(String(c.id))) continue;
+      const parentId = String(c.parent.id);
       if (hasReplyFooter(body)) {
         agentReplyCount++;
-        parentIds.add(String(c.id));
         if (c.created_on > latestAgentReply) latestAgentReply = c.created_on;
         if (includeAnswered) {
           humanReplies.push({
@@ -42499,15 +42547,26 @@ var BitbucketAdapter = class {
         }
         continue;
       }
+      let contextOnly = false;
+      if (!agentCommentIds.has(parentId)) {
+        if (this.agentIds.size === 0) {
+          if (!identityWarned) console.warn("  Could not derive the agent id-set \u2014 keeping all replies (nested-reply @-mention rule inert this run)");
+          identityWarned = true;
+        } else {
+          contextOnly = !mentionsAgent(body, this.agentIds, this.agentNames);
+        }
+      }
       humanReplies.push({
         id: String(c.id),
         parentId,
         author: c.user?.display_name ?? "Unknown",
         ...authorIdOf(c.user?.uuid ?? c.user?.account_id),
+        ...contextOnly ? { contextOnly: true } : {},
         body,
         createdOn: c.created_on
       });
     }
+    humanReplies.sort((a, b) => a.createdOn < b.createdOn ? -1 : a.createdOn > b.createdOn ? 1 : 0);
     if (includeAnswered) return { replies: humanReplies, agentReplyCount };
     if (!latestAgentReply) return { replies: humanReplies, agentReplyCount };
     return { replies: humanReplies.filter((r) => r.createdOn > latestAgentReply), agentReplyCount };
@@ -46515,7 +46574,7 @@ function getAgentVersion() {
     const pkg = JSON.parse((0, import_fs4.readFileSync)(pkgPath, "utf-8"));
     return pkg.version;
   } catch {
-    if (true) return "0.0.49";
+    if (true) return "0.0.50";
     return "unknown";
   }
 }
@@ -46527,7 +46586,7 @@ function getBuildCommit() {
     const dirty = (0, import_child_process.execSync)("git status --porcelain", opts2).toString().trim() ? "-dirty" : "";
     return hash + dirty;
   } catch {
-    if (true) return "c16a8eb";
+    if (true) return "45555a6";
     return "unknown";
   }
 }
@@ -46761,6 +46820,11 @@ async function dropRepliesDirectedElsewhere(ctx, replies) {
     return replies;
   }
 }
+function questionsForAgent(replies) {
+  const questions = replies.filter((r) => !r.contextOnly);
+  if (questions.length < replies.length) console.log(`  Skipped ${replies.length - questions.length} nested reply(s) to a human that don't @-mention the agent`);
+  return questions;
+}
 var forced = (ctx) => ctx.force === "clean" || ctx.force === "re-review";
 function markHeadChecked(ctx) {
   if (forced(ctx) || ctx.dryRun || ctx.outcomeSink || ctx.bundleUncertain || ctx.deltaFetchFailed) return;
@@ -46955,7 +47019,7 @@ async function transition(state, ctx) {
       if (ctx.replies.length < replies.length) {
         console.log(`  Filtered ${replies.length - ctx.replies.length} reply(s) older than latest review (${latestReviewDate})`);
       }
-      ctx.replies = await dropRepliesDirectedElsewhere(ctx, ctx.replies);
+      ctx.replies = await dropRepliesDirectedElsewhere(ctx, questionsForAgent(ctx.replies));
       if (ctx.replies.length > 0) {
         if (config.reply.maxComments > 0 && agentReplyCount >= config.reply.maxComments) {
           console.log(`  Found ${ctx.replies.length} unanswered reply(s), but agent already posted ${agentReplyCount}/${config.reply.maxComments} replies \u2014 skipping`);
@@ -47397,7 +47461,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
         const lastReview = supersedeBoundary(ctx.previousReviews ?? []);
         const replies = ctx.replies ?? [];
         const lastAgentReplyAt = replies.filter((r) => hasReplyFooter(r.body)).reduce((max, r) => r.createdOn > max ? r.createdOn : max, "");
-        const unanswered = await dropRepliesDirectedElsewhere(ctx, replies.filter((r) => !hasReplyFooter(r.body) && !!lastReview && r.createdOn > lastReview.createdOn && r.createdOn > lastAgentReplyAt));
+        const unanswered = await dropRepliesDirectedElsewhere(ctx, questionsForAgent(replies.filter((r) => !hasReplyFooter(r.body) && !!lastReview && r.createdOn > lastReview.createdOn && r.createdOn > lastAgentReplyAt)));
         const priorHadFindings = !!lastReview && markdownHasFindings(lastReview.body);
         const stillOpen = (ctx.reviewObject?.delta_stats?.still_open ?? 0) > 0;
         if (unanswered.length > 0) {
