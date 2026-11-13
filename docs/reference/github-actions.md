@@ -265,6 +265,9 @@ exit 1 and writes no record.
 - **LLM secret.** The shipped workflow sets `LLM_PROVIDER: openrouter` and reads
   `OPENROUTER_API_KEY`; with the default provider it is `ANTHROPIC_API_KEY`. `GITHUB_TOKEN` is the
   automatic token; `pull-requests: write` is enough to post reviews.
+- **Models.** This repository's own workflow sets `CLAUDE_MODEL`, `JUDGING_MODEL` and `REPLY_MODEL`
+  to `anthropic/claude-haiku-5.5` and leaves effort unset: the OpenRouter provider does not send
+  `REVIEW_EFFORT`/`JUDGE_EFFORT`, so setting them there has no effect.
 - **Context window.** From 0.0.43 `anthropic/…` slugs resolve to their own window (1M for the 5.x
   family), so `MODEL_CONTEXT_TOKENS` is not needed for them.
 - **Branch policy.** The shipped workflow empties `SKIP_TARGET_BRANCHES` and keeps the default
