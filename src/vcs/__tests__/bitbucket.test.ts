@@ -486,3 +486,108 @@ describe('getRepliesToReviewComments — the whole thread under a review', () =>
     })
   })
 })
+
+describe('getRepliesToReviewComments — a reply to a human is for the agent only when it @-mentions the agent', () => {
+  const marks = (replies: { id: string; contextOnly?: true }[]) => replies.map(r => [r.id, r.contextOnly ?? false])
+  const nestedUnderDev = (body: string) => [
+    richComment(1, REVIEW_BODY, '2026-07-01T10:00:00Z', agentUser),
+    richComment(2, 'Why HIGH?', '2026-07-01T11:00:00Z', devUser, 1),
+    richComment(3, body, '2026-07-01T12:00:00Z', devB, 2),
+  ]
+
+  it('reported thread: only the nested reply that does not mention the bot is context, in both variants', async () => {
+    clientMock.get.mockResolvedValue({ data: { values: reportedThread() } })
+
+    const unanswered = await makeAdapter().getRepliesToReviewComments('100', ['901359884'])
+    const discussion = await makeAdapter().getRepliesToReviewComments('100', ['901359884'], true)
+
+    const expected = [['901796414', false], ['901876223', true], ['901878728', false]]
+    expect(marks(unanswered.replies)).toEqual(expected)
+    expect(marks(discussion.replies)).toEqual(expected)
+  })
+
+  it.each([
+    ['mid-sentence by account id', `does our comments thread make sense @{${AGENT_ID}}?`],
+    ['after a mention of a human', `@{${FERNANDO}} agreed, and @{${AGENT_ID}} please confirm`],
+    ['by double-braced uuid', '@{{1886cb80-0000-0000-0000-000000000000}} please confirm'],
+    ['by plain-text name', 'what do you think @HeyTech?'],
+  ])('a nested reply that mentions the bot %s is a question', async (_, body) => {
+    clientMock.get.mockResolvedValue({ data: { values: nestedUnderDev(body) } })
+
+    const { replies } = await makeAdapter().getRepliesToReviewComments('100', ['1'])
+
+    expect(marks(replies)).toEqual([['2', false], ['3', false]])
+  })
+
+  it.each([
+    ['no mention at all', 'I think it is fine'],
+    ['a mention of a human only', `@{${FERNANDO}} yes, the attachment tests cover it`],
+    ['a code-like token that is not an id', 'see `@{vm.name}` in the template'],
+  ])('a nested reply with %s is context', async (_, body) => {
+    clientMock.get.mockResolvedValue({ data: { values: nestedUnderDev(body) } })
+
+    const { replies } = await makeAdapter().getRepliesToReviewComments('100', ['1'])
+
+    expect(marks(replies)).toEqual([['2', false], ['3', true]])
+  })
+
+  it('a reply to an agent reply needs no mention; one more level down under a human does', async () => {
+    clientMock.get.mockResolvedValue({
+      data: { values: [
+        richComment(1, REVIEW_BODY, '2026-07-01T10:00:00Z', agentUser),
+        richComment(2, 'Why HIGH?', '2026-07-01T11:00:00Z', devUser, 1),
+        richComment(3, AGENT_REPLY_BODY, '2026-07-01T12:00:00Z', agentUser, 2),
+        richComment(4, 'Still unclear', '2026-07-01T13:00:00Z', devB, 3),
+        richComment(5, 'Same for me', '2026-07-01T14:00:00Z', devUser, 4),
+      ] },
+    })
+
+    const { replies, agentReplyCount } = await makeAdapter().getRepliesToReviewComments('100', ['1'])
+
+    expect(agentReplyCount).toBe(1)
+    expect(marks(replies)).toEqual([['4', false], ['5', true]])
+  })
+
+  it('the directed-reply filter keeps a nested reply that mentions a human first and the bot later', async () => {
+    clientMock.get.mockResolvedValue({ data: { values: nestedUnderDev(`@{${FERNANDO}} agreed, and @{${AGENT_ID}} please confirm`) } })
+    const adapter = makeAdapter()
+    const { replies } = await adapter.getRepliesToReviewComments('100', ['1'])
+
+    const kept = await adapter.filterAddressedToAgent!(replies, new Set())
+
+    expect(kept.map(r => r.id)).toEqual(['2', '3'])
+  })
+
+  it('marks never change the agent reply count or what counts as answered', async () => {
+    clientMock.get.mockResolvedValue({
+      data: { values: [
+        richComment(1, REVIEW_BODY, '2026-07-01T10:00:00Z', agentUser),
+        richComment(2, 'Why HIGH?', '2026-07-01T11:00:00Z', devUser, 1),
+        richComment(3, 'chatter before the answer', '2026-07-01T11:30:00Z', devB, 2),
+        richComment(4, AGENT_REPLY_BODY, '2026-07-01T12:00:00Z', agentUser, 1),
+        richComment(5, 'chatter after the answer', '2026-07-01T13:00:00Z', devUser, 3),
+        richComment(6, `@{${AGENT_ID}} and this one?`, '2026-07-01T14:00:00Z', devB, 3),
+      ] },
+    })
+
+    const unanswered = await makeAdapter().getRepliesToReviewComments('100', ['1'])
+    const discussion = await makeAdapter().getRepliesToReviewComments('100', ['1'], true)
+
+    expect(unanswered.agentReplyCount).toBe(1)
+    expect(marks(unanswered.replies)).toEqual([['5', true], ['6', false]])
+    expect(discussion.agentReplyCount).toBe(1)
+    expect(marks(discussion.replies)).toEqual([['2', false], ['3', true], ['4', false], ['5', true], ['6', false]])
+  })
+
+  it('without a derivable agent id-set nothing is marked, with one warning', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    clientMock.get.mockResolvedValue({ data: { values: humanChain(3) } })
+
+    const { replies } = await makeAdapter().getRepliesToReviewComments('100', ['1'])
+
+    expect(marks(replies)).toEqual([['2', false], ['3', false], ['4', false]])
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn.mock.calls[0][0]).toContain('Could not derive the agent id-set')
+    warn.mockRestore()
+  })
+})

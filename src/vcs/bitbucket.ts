@@ -1,6 +1,6 @@
 import axios, { AxiosInstance, AxiosRequestConfig } from 'axios'
 import { hasReviewFooter, hasReplyFooter } from '../review/formatter.js'
-import { decideDirectedElsewhere } from './mention-filter.js'
+import { decideDirectedElsewhere, mentionsAgent } from './mention-filter.js'
 import type { VCSAdapter, PRInfo, ChangedFile, ReviewComment, CommentReply, ReplyResult } from './adapter.js'
 import { AGENT_REPLY_AUTHOR, authorIdOf } from './adapter.js'
 
@@ -198,16 +198,22 @@ export class BitbucketAdapter implements VCSAdapter {
 
     const comments = await this.fetchComments(prId)
     const inThread = threadMembers(comments, reviewIdSet)
+    const agentCommentIds = new Set<string>()
     for (const c of comments) {
-      const body: string = c.content?.raw ?? ''
-      // Agent identity for filterAddressedToAgent: the authors of our review comments and our own
-      // replies. Derivation only ever adds ids, so it can't wrongly mark a human reply as the agent.
-      if (c.user && (reviewIdSet.has(String(c.id)) || hasReplyFooter(body))) {
+      if (!reviewIdSet.has(String(c.id)) && !hasReplyFooter(c.content?.raw ?? '')) continue
+      agentCommentIds.add(String(c.id))
+      // Agent identity = authors of our reviews and replies; derivation only adds ids, so a human is never taken for the agent.
+      if (c.user) {
         if (c.user.account_id) this.agentIds.add(String(c.user.account_id))
         if (c.user.uuid) this.agentIds.add(String(c.user.uuid).replace(/[{}]/g, ''))
         if (c.user.display_name) this.agentNames.add(String(c.user.display_name).toLowerCase())
         if (c.user.nickname) this.agentNames.add(String(c.user.nickname).toLowerCase())
       }
+    }
+    let identityWarned = false
+
+    for (const c of comments) {
+      const body: string = c.content?.raw ?? ''
       if (!inThread.has(String(c.id))) continue
       const parentId = String(c.parent.id)
       if (hasReplyFooter(body)) {
@@ -225,11 +231,22 @@ export class BitbucketAdapter implements VCSAdapter {
         }
         continue
       }
+      // A reply to an agent comment is addressed to the agent implicitly; one to a human only when it @-mentions the agent.
+      let contextOnly = false
+      if (!agentCommentIds.has(parentId)) {
+        if (this.agentIds.size === 0) {
+          if (!identityWarned) console.warn('  Could not derive the agent id-set — keeping all replies (nested-reply @-mention rule inert this run)')
+          identityWarned = true
+        } else {
+          contextOnly = !mentionsAgent(body, this.agentIds, this.agentNames)
+        }
+      }
       humanReplies.push({
         id: String(c.id),
         parentId,
         author: c.user?.display_name ?? 'Unknown',
         ...authorIdOf(c.user?.uuid ?? c.user?.account_id),
+        ...(contextOnly ? { contextOnly: true as const } : {}),
         body,
         createdOn: c.created_on,
       })

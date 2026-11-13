@@ -135,8 +135,9 @@ The agent scans all PR comments looking for replies to its review comments:
    previous review cycle from re-triggering a reply loop (a production reply-loop incident).
 
 So the agent finds developer questions at any nesting depth: direct replies to the review,
-follow-ups to its own replies, and questions nested under other developers' replies
-(Bitbucket; details in [review/replies.md](../context/review/replies.md)).
+follow-ups to its own replies, and questions nested under other developers' replies that
+`@`-mention it (Bitbucket; other nested discussion is context only; details in
+[review/replies.md](../context/review/replies.md)).
 
 ### One Reply per Trigger
 

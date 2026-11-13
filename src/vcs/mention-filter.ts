@@ -23,6 +23,19 @@ export interface DropDecision {
   matchedToken?: string   // the leading mention that triggered the drop, for per-drop logging
 }
 
+// The agent is addressed anywhere, by id or name, even mid-sentence or after another mention.
+export function mentionsAgent(body: string, agentIds: ReadonlySet<string>, agentNames: ReadonlySet<string>): boolean {
+  for (const m of body.matchAll(MENTION_TOKEN)) {
+    if (isIdShaped(m[1]) && agentIds.has(m[1])) return true
+  }
+  // A picker-less plain-text @agentname the tokenizer can't see.
+  const lower = body.toLowerCase()
+  for (const name of agentNames) {
+    if (name && lower.includes('@' + name)) return true
+  }
+  return false
+}
+
 export function decideDirectedElsewhere(
   body: string,
   agentIds: ReadonlySet<string>,
@@ -31,15 +44,6 @@ export function decideDirectedElsewhere(
   if (agentIds.size === 0) return { drop: false }
   const lead = stripCode(body).trim().match(LEADING_MENTION)
   if (!lead || !isIdShaped(lead[1])) return { drop: false }
-
-  // Keep if the agent is addressed anywhere by id, even mid-sentence or after another mention.
-  for (const m of body.matchAll(MENTION_TOKEN)) {
-    if (isIdShaped(m[1]) && agentIds.has(m[1])) return { drop: false }
-  }
-  // Keep a picker-less plain-text @agentname the tokenizer can't see.
-  const lower = body.toLowerCase()
-  for (const name of agentNames) {
-    if (name && lower.includes('@' + name)) return { drop: false }
-  }
+  if (mentionsAgent(body, agentIds, agentNames)) return { drop: false }
   return { drop: true, matchedToken: lead[1] }
 }
