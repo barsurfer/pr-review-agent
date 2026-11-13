@@ -18,18 +18,27 @@ export class OpenRouterProvider implements LLMProvider {
     // strict:false — our REVIEW/JUDGE schemas don't meet OpenAI strict's all-keys-required rule;
     // JSON.parse + missingRequired below is the fidelity guard instead. Gate models on supported_parameters.
     const response_format = { type: 'json_schema', json_schema: { name: 'result', schema, strict: false } }
-    const data = await this.request({ model: opts.model, max_tokens: opts.maxTokens, response_format, messages: openRouterMessages(system, user) }, opts)
-    const choice = firstChoice(data, opts.maxTokens)
-    const text = contentOf(choice)
+    const payload = { model: opts.model, max_tokens: opts.maxTokens, response_format, messages: openRouterMessages(system, user) }
+    const first = await this.structuredAttempt<T>(payload, schema, opts)
+    if (!first.missing.length) return { object: first.object, usage: first.usage }
+    // A strict:false model can drop a nested required field on one sample and not the next; one resend costs less than failing the run.
+    console.warn(`  Structured output from ${opts.model} missing ${first.missing.join(', ')} — retrying once`)
+    const second = await this.structuredAttempt<T>(payload, schema, opts).catch((err: unknown) => { throw withPriorUsage(err, first.usage) })
+    const usage = sumUsage(first.usage, second.usage)
+    if (second.missing.length) throw Object.assign(new Error(`Structured output missing required field(s): ${second.missing.join(', ')}`), { usage })
+    return { object: second.object, usage }
+  }
+
+  private async structuredAttempt<T>(payload: Record<string, unknown>, schema: Record<string, unknown>, opts: LLMOptions): Promise<{ object: T; usage: LLMUsage; missing: string[] }> {
+    const data = await this.request(payload, opts)
+    const text = contentOf(firstChoice(data, opts.maxTokens))
     let object: T
     try {
       object = JSON.parse(text) as T
     } catch {
       throw new Error('Model returned invalid JSON despite structured output')
     }
-    const missing = missingRequired(object, schema, true, opts.tolerateMissing)
-    if (missing.length) throw new Error(`Structured output missing required field(s): ${missing.join(', ')}`)
-    return { object, usage: mapOpenRouterUsage(data.usage) }
+    return { object, usage: mapOpenRouterUsage(data.usage), missing: missingRequired(object, schema, true, opts.tolerateMissing) }
   }
 
   private async request(payload: Record<string, unknown>, opts: LLMOptions): Promise<OpenRouterResponse> {
@@ -116,6 +125,24 @@ function mapOpenRouterUsage(u: OpenRouterResponse['usage']): LLMUsage {
     cache_creation_input_tokens: 0,
     ...(typeof cost === 'number' ? { cost_usd: cost } : {}),
   }
+}
+
+function sumUsage(a: LLMUsage, b: LLMUsage): LLMUsage {
+  const cost = a.cost_usd === undefined && b.cost_usd === undefined ? undefined : (a.cost_usd ?? 0) + (b.cost_usd ?? 0)
+  return {
+    input_tokens: a.input_tokens + b.input_tokens,
+    output_tokens: a.output_tokens + b.output_tokens,
+    cache_read_input_tokens: (a.cache_read_input_tokens ?? 0) + (b.cache_read_input_tokens ?? 0),
+    cache_creation_input_tokens: (a.cache_creation_input_tokens ?? 0) + (b.cache_creation_input_tokens ?? 0),
+    ...(cost === undefined ? {} : { cost_usd: cost }),
+  }
+}
+
+// The first attempt was paid for, so a resend that fails another way still reports it.
+function withPriorUsage(err: unknown, prior: LLMUsage): unknown {
+  if (!err || typeof err !== 'object') return err
+  const own = (err as { usage?: LLMUsage }).usage
+  return Object.assign(err, { usage: own ? sumUsage(prior, own) : prior })
 }
 
 type StatusError = Error & { status?: number; __openrouter?: true }

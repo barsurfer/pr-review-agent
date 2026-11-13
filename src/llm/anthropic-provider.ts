@@ -27,7 +27,7 @@ export class AnthropicProvider implements LLMProvider {
     // Structured output should honor the schema, but a degraded response can be valid JSON yet
     // miss required keys — fail loudly here instead of crashing later on `.length` of undefined.
     const missing = missingRequired(object, schema, false, opts.tolerateMissing)
-    if (missing.length) throw new Error(`Structured output missing required field(s): ${missing.join(', ')}`)
+    if (missing.length) throw Object.assign(new Error(`Structured output missing required field(s): ${missing.join(', ')}`), { usage: mapUsage(response.usage) })
     return { object, usage: mapUsage(response.usage) }
   }
 
