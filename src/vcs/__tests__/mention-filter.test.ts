@@ -85,6 +85,9 @@ describe('mentionsAgent — plain-text name needs a word boundary', () => {
     ['@dev-ops owns this', false],
     ['@dev_team owns this', false],
     ['@devon and @dev', true],
+    ['mail alice@dev.co', false],
+    ['mail alice@dev', false],
+    ['mail alice@dev.co then @dev', true],
   ])('%s -> %s', async (body, expected) => {
     const { mentionsAgent } = await import('../mention-filter.js')
     expect(mentionsAgent(body, ids, names)).toBe(expected)
