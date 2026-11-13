@@ -356,6 +356,19 @@ describe('benchmark mode end-to-end (model + judge mocked)', () => {
     expect(cfg.judge.proposals).toBe(true)
   })
 
+  it('ENABLE_SUGGESTED_FIXES has no label but is echoed as sfx=0/1, so a run on the code-proposal contract is visible', async () => {
+    const settings = () => logSpy.mock.calls.map(c => c.join(' ')).filter(l => l.startsWith('Benchmark settings:')).at(-1)!
+    await runBenchmark({ ...fixture() })
+    expect(settings()).toMatch(/ b_priority=[01] sfx=0 j_proposal=[01]/)
+    cfg.judge.suggestedFixes = true
+    try {
+      await runBenchmark({ ...fixture() })
+      expect(settings()).toMatch(/ b_priority=[01] sfx=1 j_proposal=[01]/)
+    } finally {
+      delete cfg.judge.suggestedFixes
+    }
+  })
+
   it('LNUM=1 numbers the diff the reviewer sees and is echoed', async () => {
     await runBenchmark({ ...fixture(), RB_CONFIG_LNUM: '1' })
 

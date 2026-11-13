@@ -91,7 +91,7 @@ export interface JudgeOptions {
   codeProposals?: boolean
 }
 
-export type RenderJudged = (suffixes: ReadonlyMap<number, string>) => string
+export type RenderJudged = (suffixes: ReadonlyMap<number, string>, order?: readonly number[]) => string
 
 export interface JudgedReview {
   kept: KeptFinding[]
@@ -99,7 +99,9 @@ export interface JudgedReview {
   anomalies: JudgeAnomalies
   scores: FindingScore[]
   markdown: string
+  render: RenderJudged
   renderWith?: RenderJudged
+  proposalsDropped?: number
 }
 
 export const candidateId = (index: number): string => `c${index}`
@@ -122,6 +124,8 @@ export function sanitizeProposal(raw: unknown): string | undefined {
 // Code is pasted as-is: dedent, since trim breaks the first line's relative indent, and count blank lines so padding cannot escape the caps.
 export function sanitizeCodeProposal(raw: unknown): string | undefined {
   if (typeof raw !== 'string') return undefined
+  // The fence-unwrap regex below backtracks in O(run × length) on an unclosed backtick run, so bound the input first.
+  if (raw.length > 4 * PROPOSAL_CAP) return undefined
   let s = raw.replace(/\r\n?/g, '\n').trimEnd()
   const fenced = s.match(/^\s*(`{3,}|~{3,})[^\n]*\n([\s\S]*?)\n[ \t]*\1$/)
   if (fenced) s = fenced[2]
@@ -346,6 +350,7 @@ export function applyJudgeDecisions(candidates: readonly ReviewFinding[], output
   const kept: KeptFinding[] = []
   const moved: string[] = []
   const rows: KeptRow[] = []
+  const sanitizerDropped: number[] = []
   candidates.forEach((candidate, i) => {
     const id = candidateId(i)
     const entry = entries[i]
@@ -359,6 +364,7 @@ export function applyJudgeDecisions(candidates: readonly ReviewFinding[], output
     const { question, body, anchor, proposal, ...applied } = entry.r
     const isKept = entry.r.action === 'keep' || entry.r.action === 'downgrade'
     const keptProposal = proposals && isKept && proposal ? { proposal } : {}
+    if (proposals && options?.codeProposals && isKept && !proposal && typeof entry.d.proposal === 'string' && entry.d.proposal.trim()) sanitizerDropped.push(i)
     const expansion = options?.quality && isKept && entry.d.additional_locations?.length
       ? expandLocations(candidate, entry.d.additional_locations, anchor, idx)
       : null
@@ -382,9 +388,11 @@ export function applyJudgeDecisions(candidates: readonly ReviewFinding[], output
   if (options?.quality) dedupKept(kept, rows, decisions, idx)
 
   const scores: FindingScore[] = kept.map(k => ({ title: k.title, severity: k.severity, score: k.score!, file: k.file, lines: k.lines }))
+  const render: RenderJudged = (suffixes, order) => renderJudgedReview(kept, output, moved, canBeSplit, suffixes, order)
   return {
-    kept, decisions, anomalies, scores, markdown: renderJudgedReview(kept, output, moved, canBeSplit),
-    ...(options?.codeProposals ? { renderWith: (suffixes: ReadonlyMap<number, string>) => renderJudgedReview(kept, output, moved, canBeSplit, suffixes) } : {}),
+    kept, decisions, anomalies, scores, markdown: renderJudgedReview(kept, output, moved, canBeSplit), render,
+    // Kept as the code-proposal contract callers check for; POST_REVIEW reads render, which every judged review has.
+    ...(options?.codeProposals ? { renderWith: render, proposalsDropped: sanitizerDropped.filter(i => decisions[i].quality_action !== 'dedup_suppressed').length } : {}),
   }
 }
 
@@ -513,7 +521,7 @@ function expandLocations(candidate: ReviewFinding, locations: readonly Additiona
 }
 
 // Must stay byte-compatible with what the judge used to write: Findings bullets and the Merge Confidence line are re-parsed downstream.
-export function renderJudgedReview(kept: readonly KeptFinding[], output: JudgeOutput, movedQuestions: readonly string[] = [], canBeSplit: readonly string[] = [], suffixes?: ReadonlyMap<number, string>): string {
+export function renderJudgedReview(kept: readonly KeptFinding[], output: JudgeOutput, movedQuestions: readonly string[] = [], canBeSplit: readonly string[] = [], suffixes?: ReadonlyMap<number, string>, order?: readonly number[]): string {
   const questions = [...(output.unresolved_questions ?? [])]
   for (const q of movedQuestions) if (!questions.includes(q)) questions.push(q)
   const review: ReviewObject = {
@@ -525,7 +533,7 @@ export function renderJudgedReview(kept: readonly KeptFinding[], output: JudgeOu
     can_be_split: canBeSplit.length ? [...canBeSplit] : undefined,
   }
   const confidence = Math.max(0, Math.min(100, Math.round(Number(output.merge_confidence) || 0)))
-  return `${renderReview(review, { emptyFindings: 'No actionable findings.', suffix: suffixes && (i => suffixes.get(i) ?? '') })}\n\n### Merge Confidence: ${confidence}%\n\n${DISCLAIMER}`
+  return `${renderReview(review, { emptyFindings: 'No actionable findings.', suffix: suffixes && (i => suffixes.get(i) ?? ''), order })}\n\n### Merge Confidence: ${confidence}%\n\n${DISCLAIMER}`
 }
 
 export function renderCandidatesForJudge(review: ReviewObject): string {

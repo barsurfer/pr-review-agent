@@ -244,3 +244,23 @@ describe('filterAddressedToAgent — directed-elsewhere drop rule', () => {
     warn.mockRestore()
   })
 })
+
+describe('getRepliesToReviewComments — authorId', () => {
+  const withUser = (user: object) =>
+    ({ id: 2, parent: { id: 1 }, content: { raw: 'q' }, user, created_on: '2026-07-01T11:00:00Z' })
+  const fetchReply = async (user: object) => {
+    clientMock.get.mockResolvedValue({ data: { values: [comment(1, REVIEW_BODY, '2026-07-01T10:00:00Z', 'Review Bot'), withUser(user)] } })
+    return (await makeAdapter().getRepliesToReviewComments('100', ['1'])).replies[0]
+  }
+
+  it('uses user.uuid, falling back to user.account_id', async () => {
+    expect((await fetchReply({ display_name: 'Ann', uuid: '{u-1}', account_id: 'acc-1' })).authorId).toBe('{u-1}')
+    expect((await fetchReply({ display_name: 'Ann', account_id: 'acc-1' })).authorId).toBe('acc-1')
+  })
+
+  it('leaves authorId absent when the payload has neither', async () => {
+    const reply = await fetchReply({ display_name: 'Ann' })
+    expect('authorId' in reply).toBe(false)
+    expect(reply.author).toBe('Ann')
+  })
+})

@@ -12,14 +12,18 @@ export const MAX_BLOCK_CHARS = `\n\n${SUGGESTED_FIX_LABEL}\n\n`.length + MAX_FEN
 export interface SuggestedFixStats {
   rendered: number
   rejected: number
+  dropped?: number
   skipped?: 'cleanup' | 'unbalanced' | 'fence' | 'size'
 }
 
 const FENCE_LINE = /^[ \t]*(`{3,}|~{3,})/
 const BLOCK_OPENER = new RegExp(`^(\`{3,})${SUGGESTED_FIX_MARKER}$`)
+// The footer parsers' /m regexes also start a line after CR, U+2028 and U+2029, so a footer-shaped line could hide behind one; no fix needs other controls.
+const UNSAFE_CHARS = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F\u2028\u2029]/
 
 // A fence line would mix prose and snippet, and a footer-shaped line copied into a reply would make it pass as an agent review.
 export function fixCodeContent(proposal: string): string | null {
+  if (UNSAFE_CHARS.test(proposal)) return null
   const review = new RegExp(REVIEW_FOOTER_SOURCE)
   const reply = new RegExp(REPLY_FOOTER_SOURCE)
   for (const line of proposal.split('\n')) {
@@ -69,12 +73,63 @@ export function hasUnclosedFence(text: string): boolean {
   return !!(loose || strict)
 }
 
+// Python-Markdown 3.x fenced_code FENCED_BLOCK_RE split into its opener and closer lines: Bitbucket Cloud documents this renderer, which closes a fence only on the exact opener at column 0.
+const PM_OPENER = /^(~{3,}|`{3,})[ ]*(?:(\{[^\n]*\})|(\.?([\w#.+-]*)[ ]*)?(?:hl_lines=("|')([\s\S]*?)\5[ ]*)?)$/
+const PM_CLOSER = /^(~{3,}|`{3,})[ ]*$/
+
+export interface PmBlock { opener: string; code: string }
+
+// The regex's lazy search pairs an opener with the first exact closer after it and leaves an unpaired opener as text; one pass does the same without its quadratic rescans.
+export function pmBlocks(text: string): { blocks: PmBlock[]; rest: string } {
+  // Python-Markdown normalises CR first, and only \n ends its lines, not U+2028/U+2029 as in a JS /m regex.
+  const lines = text.replace(/\r\n?/g, '\n').split('\n')
+  const closers = new Map<string, number[]>()
+  lines.forEach((line, n) => {
+    const fence = PM_CLOSER.exec(line)?.[1]
+    if (!fence) return
+    const at = closers.get(fence)
+    if (at) at.push(n)
+    else closers.set(fence, [n])
+  })
+  const next = new Map<string, number>()
+  const firstCloserAfter = (fence: string, i: number): number | undefined => {
+    const at = closers.get(fence) ?? []
+    let p = next.get(fence) ?? 0
+    while (p < at.length && at[p] <= i) p++
+    next.set(fence, p)
+    return at[p]
+  }
+  const blocks: PmBlock[] = []
+  const rest: string[] = []
+  for (let i = 0; i < lines.length; i++) {
+    const fence = PM_OPENER.exec(lines[i])?.[1]
+    const close = fence === undefined ? undefined : firstCloserAfter(fence, i)
+    if (close === undefined) {
+      rest.push(lines[i])
+      continue
+    }
+    blocks.push({ opener: lines[i], code: lines.slice(i + 1, close).join('\n') })
+    rest.push(`\u0002PH${blocks.length}\u0003`)
+    i = close
+  }
+  return { blocks, rest: rest.join('\n') }
+}
+
+// A model fence pair around a block turns it into code text that the strip then leaves in, so each block must strip out and render alone; render order may be permuted, hence sorted.
+function blocksStandAlone(text: string, plain: string, codes: readonly string[]): boolean {
+  if (stripSuggestedFixes(text) !== plain.replace(/\r\n?/g, '\n')) return false
+  const own = pmBlocks(text).blocks.filter(b => b.opener.endsWith(SUGGESTED_FIX_MARKER)).map(b => b.code).sort()
+  const want = [...codes].sort()
+  return own.length === want.length && own.every((c, n) => c === want[n])
+}
+
 export function composeSuggestedFixes(kept: readonly KeptFinding[], renderWith: RenderJudged, plain: string, budget: number): { text: string; stats: SuggestedFixStats } {
   const fixes: Array<[number, string]> = []
   let rejected = 0
   kept.forEach((k, i) => {
     if (!k.proposal) return
-    const code = fixCodeContent(k.proposal)
+    // The strip's MAX_BLOCK_CHARS bound holds only for code within the cap, so it is not left to the sanitizer alone.
+    const code = k.proposal.length <= PROPOSAL_CAP ? fixCodeContent(k.proposal) : null
     if (code === null) rejected++
     else fixes.push([i, code])
   })
@@ -91,6 +146,7 @@ export function composeSuggestedFixes(kept: readonly KeptFinding[], renderWith: 
   }
   const text = renderWith(suffixes)
   if (text.length > budget) return skip('size')
+  if (!blocksStandAlone(text, plain, fixes.map(([, code]) => code))) return skip('unbalanced')
   return { text, stats: { rendered: suffixes.size, rejected } }
 }
 

@@ -67,8 +67,11 @@ jobs:
         env:
           LLM_PROVIDER: openrouter
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          CLAUDE_MODEL: anthropic/claude-sonnet-5.5
+          CLAUDE_MODEL: anthropic/claude-haiku-5.5
           JUDGING_MODEL: anthropic/claude-haiku-5.5
+          REPLY_MODEL: anthropic/claude-haiku-5.5
+          REVIEW_EFFORT: high
+          JUDGE_EFFORT: high
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           AGENT_IDENTITY: github-actions[bot]
           # GitHub flow targets main directly; the default main,master would skip every PR

@@ -520,3 +520,37 @@ describe('output schema ↔ type parity (drift canary)', () => {
     expect(md).not.toContain('undefined')
   })
 })
+
+describe('authorId never reaches a model', () => {
+  const object: ReviewObject = { summary: 's', findings: [], behavioral_diff: [], production_risk: [], unresolved_questions: [] }
+  const at = '2026-03-10T10:00:00Z'
+  const plain = [
+    { id: '3', parentId: '2', author: 'Fernando', body: 'Fixed in d4f2b43e.', createdOn: at },
+    { id: '4', parentId: '2', author: 'Vadim', body: 'Why HIGH?', createdOn: at },
+  ]
+  const withIds = plain.map((r, i) => ({ ...r, authorId: `{secret-id-${i}}` }))
+
+  it('reviewer input is byte-identical with and without authorId', async () => {
+    const send = async (replies: CommentReply[]) => {
+      completeStructured.mockReset()
+      completeStructured.mockResolvedValue({ object, usage })
+      await runReview('key', 'model', 3, 16000, '', prInfo, 'FULL DIFF', [], prompt, [{ id: '2', body: 'REVIEW', createdOn: at }], replies)
+      return completeStructured.mock.calls[0][1] as string
+    }
+    const withId = await send(withIds)
+    expect(withId).toBe(await send(plain))
+    expect(withId).not.toContain('secret-id')
+  })
+
+  it('reply model input is byte-identical with and without authorId', async () => {
+    const send = async (replies: CommentReply[]) => {
+      complete.mockReset()
+      complete.mockResolvedValue({ text: 'Answer.', usage })
+      await runCommentResponse('key', 'model', 3, 'DIFF', 'ORIGINAL REVIEW', replies)
+      return JSON.stringify(complete.mock.calls[0])
+    }
+    const withId = await send(withIds)
+    expect(withId).toBe(await send(plain))
+    expect(withId).not.toContain('secret-id')
+  })
+})

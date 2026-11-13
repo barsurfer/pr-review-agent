@@ -8,10 +8,9 @@
 # Details: docs/reference/azure-devops.md ("Agent version", "Branch policy").
 
 variables:
-  # Immutable release tag of the agent bundle; >= v0.0.43 for every setting below. The fixes the doc
-  # lists for v0.0.46 need a bump once that tag exists.
+  # Immutable release tag of the agent bundle; >= v0.0.43 for every setting below.
   - name: AGENT_TAG
-    value: v0.0.45
+    value: v0.0.47
 
   # Branch policy. Azure exports pipeline variables to the agent's env under the same name, and none
   # is defined here, so both pipelines run the agent defaults: skip PRs into main,master and from

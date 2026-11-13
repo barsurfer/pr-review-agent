@@ -409,7 +409,7 @@ All credentials and settings are provided via environment variables.
 | `MAX_CHANGED_LINES` | `3000` | Skip review if PR has more changed lines (0 = disabled) |
 | `MAX_FINDINGS` | `0` (unlimited) | Cap findings the reviewer reports; appends a findings-limit instruction to the prompt |
 | `ENABLE_SPLIT_CHECK` | `true` | Reviewer adds a "Can Be Split" section when the PR spans independent themes (set `false` to disable) |
-| `ENABLE_TODO_SCAN` | `true` | Scan added lines for `TODO`/`FIXME`/`HACK` and append a "TODOs Introduced" section |
+| `ENABLE_TODO_SCAN` | `true` | Scan added lines for `TODO`/`FIXME`/`HACK` and append a "TODOs Introduced" section (skips `.md`/`.mdx`/`.txt`/`.rst` files and lines quoting the section name) |
 | `AGENT_IDENTITY` | `BITBUCKET_USERNAME` | Name shown in review footers. Falls back to `BITBUCKET_USERNAME`, then `'Claude'` |
 | `JUDGING_MODEL` | `claude-sonnet-5` | Judge model for finding validation — on by default; set empty to disable |
 | `REVIEW_EFFORT` / `JUDGE_EFFORT` | (model default) | Thinking effort for reviewer / judge (`low`\|`medium`\|`high`\|`xhigh`\|`max`) |
@@ -526,6 +526,9 @@ Key points:
   without `cancel-in-progress` (one running, one pending; a paid review is never cancelled).
 - **Secrets** — `OPENROUTER_API_KEY` (the workflow sets `LLM_PROVIDER: openrouter`; with the
   default provider it is `ANTHROPIC_API_KEY`) plus the workflow-provided `GITHUB_TOKEN`.
+- **Models** — this repo's own workflow runs reviewer, judge and replies all on
+  `anthropic/claude-haiku-5.5` (`CLAUDE_MODEL`, `JUDGING_MODEL`, `REPLY_MODEL`), at effort `high` for reviewer and judge
+  (`REVIEW_EFFORT`, `JUDGE_EFFORT`); OpenRouter receives it as `reasoning.effort`.
 - **`AGENT_IDENTITY: github-actions[bot]`** — the name shown in review/reply footers.
 - **`SKIP_TARGET_BRANCHES: ""`** — the GitHub flow targets `main` directly, so the `main,master`
   default would skip every PR; it is emptied for this path.

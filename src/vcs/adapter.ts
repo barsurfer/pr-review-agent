@@ -24,9 +24,19 @@ export interface CommentReply {
   id: string
   parentId: string
   author: string
+  // Platform account id for usage records only; never part of any model input.
+  authorId?: string
   body: string
   createdOn: string
 }
+
+// Spread target: the key is omitted, not undefined, when the payload has no id.
+export const authorIdOf = (id: unknown): { authorId?: string } => (typeof id === 'string' && id ? { authorId: id } : {})
+
+export const AGENT_REPLY_AUTHOR = 'Agent (prior reply)'
+
+// Every adapter labels its own earlier replies (reply-footer match) with this author; no human reply carries it.
+export const isAgentReply = (r: CommentReply): boolean => r.author === AGENT_REPLY_AUTHOR
 
 export interface ReplyResult {
   replies: CommentReply[]

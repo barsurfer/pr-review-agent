@@ -50,11 +50,9 @@ What the sample steps do, and why:
 - **Run linkage:** see [Run linkage and this run's record](#run-linkage-and-this-runs-record).
 
 ### First-setup gotchas
-- **`AGENT_TAG`** lives in `pr-review-settings.yml` and is pinned to `v0.0.45`, the latest
-  published tag. The fixes marked v0.0.46 in [Agent version](#agent-version) are not in it: bump
-  the pin once the `v0.0.46` tag exists (the pipeline downloads the bundle from that tag, so a pin
-  to a tag that does not exist yet fails every run). Pin an immutable release tag. Sanity-check a
-  ref with
+- **`AGENT_TAG`** lives in `pr-review-settings.yml` and is pinned to `v0.0.47`, which has every fix
+  in [Agent version](#agent-version). The pipeline downloads the bundle from that tag, so a pin to a
+  tag that does not exist fails every run. Pin an immutable release tag. Sanity-check a ref with
   `curl …/<ref>/dist/pr-review-agent.cjs | grep -c AzureDevOpsAdapter` (must be > 0).
 - **YAML location** — build validation resolves the pipeline YAML **and** the settings template
   from the PR's *source branch*, so that branch must contain both (merge the target in if the
@@ -64,7 +62,8 @@ What the sample steps do, and why:
 
 ### Agent version
 
-The bundle is downloaded at `AGENT_TAG`. Minimum version for what this doc uses:
+The bundle is downloaded at `AGENT_TAG`. Minimum version for what this doc uses (v0.0.46 was never
+published as a tag, so v0.0.47 is the first published version with its changes):
 
 | Feature | Minimum |
 |---|---|
@@ -72,8 +71,8 @@ The bundle is downloaded at `AGENT_TAG`. Minimum version for what this doc uses:
 | Run linkage from `JOB_NAME` / `BUILD_NUMBER` / `BUILD_URL` (record `jenkins`, footer build link) | v0.0.4 |
 | Deleted Azure comments ignored | v0.0.34 |
 | `ONLY_TARGET_BRANCHES`, `TRIGGER_EVENT` / `TRIGGER_COMMENT_AUTHOR` / `IGNORE_COMMENT_AUTHORS`, `LAST_CHECKED_COMMIT` + `checked_commit` | v0.0.43 |
-| Delta after a rebase / force-push (old head found in the PR's iterations); a blob 404 fails the delta instead of dropping the file; a PR without `lastMergeSourceCommit` fails the run instead of posting a footer with an empty commit | v0.0.46 |
-| `TRIGGER_EVENT_KIND`, `USAGE_RECORD_FILE`; `checked_commit` only for a 12–64 hex head | v0.0.46 |
+| Delta after a rebase / force-push (old head found in the PR's iterations); a blob 404 fails the delta instead of dropping the file; a PR without `lastMergeSourceCommit` fails the run instead of posting a footer with an empty commit | v0.0.47 |
+| `TRIGGER_EVENT_KIND`, `USAGE_RECORD_FILE`; `checked_commit` only for a 12–64 hex head | v0.0.47 |
 
 The samples pass every setting as an **env var**, never a flag: an older bundle ignores an
 unknown env var (for example v0.0.42 ignores `ONLY_TARGET_BRANCHES` and reviews every PR), but
@@ -164,10 +163,10 @@ the same script step (the mapped names are step env vars there):
 RECORD=$(jq -c --arg job "$JOB_NAME" --arg build "$BUILD_NUMBER" 'select(.jenkins.job == $job and .jenkins.build == $build)' results.jsonl | tail -n 1)
 ```
 
-From v0.0.46 there is also `USAGE_RECORD_FILE`: set it in the step `env:` to a path, `rm -f` it
+From v0.0.47 there is also `USAGE_RECORD_FILE`: set it in the step `env:` to a path, `rm -f` it
 before the run, and read that file, which holds only this run's record
 ([usage-logging.md](usage-logging.md#finding-this-runs-record)). The samples do not set it,
-because the v0.0.45 pin ignores it.
+because the feature is optional.
 
 The record's head is `source_commit` = the PR's `lastMergeSourceCommit` (the source branch head),
 which matches the pipeline variable `System.PullRequest.SourceCommitId`. Never compare it with
@@ -207,13 +206,13 @@ PR and passes it back as `LAST_CHECKED_COMMIT` (needs `AGENT_TAG` ≥ v0.0.43). 
   exit code.
 - **Lock: not needed for correctness.** An older run finishing last is harmless (contract item 5),
   and a read that misses a concurrent write costs at most one extra review.
-- **Force-push.** Up to v0.0.45 a rebase or force-push made every later Azure delta fail (the
+- **Force-push.** Before v0.0.47 a rebase or force-push made every later Azure delta fail (the
   footer's abbreviated hash could only be expanded from commits still reachable from the head),
   and a run with a failed delta never reports `checked_commit`, so the feature stayed off until a
-  review posted. From v0.0.46 the adapter also looks the hash up in the PR's iterations. If Azure
+  review posted. From v0.0.47 the adapter also looks the hash up in the PR's iterations. If Azure
   still refuses to diff that commit (unverified), the run falls back to the full diff and
   withholds `checked_commit`, as before.
-- **Rebase limit (from v0.0.46).** The delta from an iteration head is two-dot (old head → new
+- **Rebase limit (from v0.0.47).** The delta from an iteration head is two-dot (old head → new
   head), so it shows what the developer changed, not how the PR diff changed. After a rebase onto a
   moved target it can be empty while the PR diff did change: if the target deleted a line and the
   rebase kept it, the new head's tree equals the reviewed one, so the run ends as `DEDUP_SKIP` and
@@ -323,7 +322,7 @@ because only that hook fires it) and `TRIGGER_COMMENT_AUTHOR` (the payload's
 `resource.comment.author.id`, a GUID; never `displayName`, which is mutable and may contain
 commas). A comment whose author is listed in `IGNORE_COMMENT_AUTHORS` then exits before any
 Azure call ([skip-logic §7](../context/review/skip-logic.md)). The event name already counts as a
-comment event by name, so `TRIGGER_EVENT_KIND` (v0.0.46+) is not needed; `comment` would be safe
+comment event by name, so `TRIGGER_EVENT_KIND` (v0.0.47+) is not needed; `comment` would be safe
 here because this pipeline only receives comment events, but never set it in build validation.
 
 1. Find the agent's GUID: leave `prReviewIgnoreCommentAuthors` empty, let a review post, and

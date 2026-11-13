@@ -2,6 +2,7 @@ import axios, { AxiosInstance, AxiosRequestConfig } from 'axios'
 import { hasReviewFooter, hasReplyFooter } from '../review/formatter.js'
 import { decideDirectedElsewhere } from './mention-filter.js'
 import type { VCSAdapter, PRInfo, ChangedFile, ReviewComment, CommentReply, ReplyResult } from './adapter.js'
+import { AGENT_REPLY_AUTHOR, authorIdOf } from './adapter.js'
 
 // Bound every Bitbucket call so a hung request fails fast instead of stalling the whole run
 const REQUEST_TIMEOUT_MS = 30_000
@@ -193,7 +194,7 @@ export class BitbucketAdapter implements VCSAdapter {
           humanReplies.push({
             id: String(c.id),
             parentId,
-            author: 'Agent (prior reply)',
+            author: AGENT_REPLY_AUTHOR,
             body,
             createdOn: c.created_on,
           })
@@ -204,6 +205,7 @@ export class BitbucketAdapter implements VCSAdapter {
         id: String(c.id),
         parentId,
         author: c.user?.display_name ?? 'Unknown',
+        ...authorIdOf(c.user?.uuid ?? c.user?.account_id),
         body,
         createdOn: c.created_on,
       })

@@ -61,7 +61,7 @@ import { LENS_REGISTRY, lensSystemPrompt, lensBriefing } from '../lenses.js'
 import { loadPrompt } from '../../prompt/loader.js'
 import { fetchContext } from '../../context/fetcher.js'
 import { logUsageRecord } from '../usage.js'
-import { applyJudgeDecisions } from '../judge-decisions.js'
+import { applyJudgeDecisions, PROPOSAL_CAP } from '../judge-decisions.js'
 import { renderReview, buildReplyFooter, hasReplyFooter, extractCommitHash, markdownHasFindings, type ReviewObject } from '../formatter.js'
 import { createProvider } from '../../llm/provider.js'
 import { renderFixBlock, stripSuggestedFixes, SUGGESTED_FIX_MARKER } from '../suggested-fix.js'
@@ -1306,6 +1306,29 @@ describe('breadth review and the judge in normal mode', () => {
     expect(body).not.toContain('Merge Confidence')
     expect(warnSpy.mock.calls.map(c => c.join(' ')).join('\n')).toContain('Judge failed (judge boom)')
     warnSpy.mockRestore()
+  })
+
+  it('with ENABLE_SUGGESTED_FIXES on, the breadth-only judge failure posts the same clean review and records no suggested fixes', async () => {
+    const run = async (flag: boolean) => {
+      cfg.judge.suggestedFixes = flag
+      const adapter = bigAdapter()
+      mockReviewer(reviewWith([]))
+      mockBreadth(B_BUG)
+      mockRunJudge.mockRejectedValue(new Error('judge boom'))
+      const record = await review(adapter, '100', false)
+      return { record: record!, body: posted(adapter) }
+    }
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const on = await run(true)
+      const off = await run(false)
+      expect(on.record).toMatchObject({ action: 'REVIEW', judge_status: 'failed', suggested_fixes: null })
+      expect(on.body).toBe(off.body)
+      expect(on.body).not.toContain(SUGGESTED_FIX_MARKER)
+    } finally {
+      cfg.judge.suggestedFixes = false
+      warnSpy.mockRestore()
+    }
   })
 
   it('still throws on a judge failure when the reviewer had findings, so CI retries', async () => {
@@ -3510,10 +3533,6 @@ describe('checked commit from CI', () => {
   })
 })
 
-// ===========================================================================
-// Suggested fixes (ENABLE_SUGGESTED_FIXES): post, reply, re-review through the real clients
-// ===========================================================================
-
 describe('suggested fixes (ENABLE_SUGGESTED_FIXES)', () => {
   const FINDING_A: ReviewObject['findings'][number] = { severity: 'HIGH', title: 'Client leaked', file: 'src/app.ts', lines: '10', body: 'Release in finally.' }
   const FINDING_B: ReviewObject['findings'][number] = { severity: 'MEDIUM', title: 'Missing await', file: 'src/app.ts', lines: '11', body: 'Await foo().' }
@@ -3732,5 +3751,96 @@ describe('suggested fixes (ENABLE_SUGGESTED_FIXES)', () => {
     expect(outcomes[0].judgedFindings![0].proposal).toBe(FIX)
     expect(outcomes[0].reviewText).not.toContain(SUGGESTED_FIX_MARKER)
     expect(record!.suggested_fixes).toBeNull()
+  })
+
+  const withLogs = async <T>(run: () => Promise<T>): Promise<{ result: T; logs: string[] }> => {
+    const logs: string[] = []
+    const spy = vi.spyOn(console, 'log').mockImplementation((...a: unknown[]) => { logs.push(a.map(String).join(' ')) })
+    try {
+      return { result: await run(), logs }
+    } finally {
+      spy.mockRestore()
+    }
+  }
+
+  it('a pre-post race skip after the blocks were composed posts nothing and records no suggested fixes', async () => {
+    await realClients(reviewWith([FINDING_A, FINDING_B]))
+    const postedOn = posted((await firstReview(true)).adapter)
+    let n = 0
+    const racing = makeAdapter({ getPreviousReviewComments: vi.fn().mockImplementation(async () => (n++ === 0 ? [] : [{ id: '200', body: postedOn, createdOn: T1 }])) })
+    const { result: raced, logs } = await withLogs(() => review(racing, '100', false))
+    expect(logs).toContain('  Suggested fixes: 1 rendered, 0 rejected')
+    expect(raced!.action).toBe('DEDUP_SKIP')
+    expect(racing.postComment).not.toHaveBeenCalled()
+    expect(raced!.suggested_fixes).toBeNull()
+  })
+
+  it('a kept proposal the sanitizer omits is counted as dropped; the comment posts without a block', async () => {
+    await realClients(reviewWith([FINDING_A, FINDING_B]), { proposal: 'x'.repeat(PROPOSAL_CAP + 1) })
+    const { result: on, logs } = await withLogs(() => firstReview(true))
+    expect(posted(on.adapter)).not.toContain(SUGGESTED_FIX_MARKER)
+    expect(on.record.suggested_fixes).toEqual({ rendered: 0, rejected: 0, dropped: 1 })
+    expect(logs).toContain('  Suggested fixes: 0 rendered, 0 rejected, 1 dropped by the sanitizer')
+  })
+
+  it('a dropped candidate with a proposal before a kept one that moves up: the block posts under its own finding only', async () => {
+    const reviewObj = reviewWith([{ ...FINDING_B, title: 'Style nit', body: 'Rename it.' }, FINDING_B, FINDING_A])
+    await realClients(reviewObj)
+    const decide = (i: number, reason_category: string, proposal?: string) => ({ candidate_id: `c${i}`, reason_category, evidence: 'src/app.ts:10', note: 'n', score: 8, ...(proposal ? { proposal } : {}) })
+    completeStructured.mockImplementation(async (_system: string, _user: string, schema: unknown) => isJudge(schema)
+      ? {
+          object: { decisions: [decide(0, 'style_only', 'nope()'), decide(1, 'validated'), decide(2, 'validated', RAW_FIX)], summary: 'Judged.', behavioral_diff: [], production_risk: [], unresolved_questions: [], merge_confidence: 70 },
+          usage: { input_tokens: 800, output_tokens: 300 },
+        }
+      : { object: reviewObj, usage: { input_tokens: 1000, output_tokens: 200 } })
+
+    const body = posted((await firstReview(true)).adapter)
+
+    expect(body).toContain(`  Release in finally.${BLOCK}\n\n- **MEDIUM – Missing await** (\`src/app.ts:11\`)`)
+    expect(body.split(SUGGESTED_FIX_MARKER)).toHaveLength(2)
+    expect(body).not.toContain('nope()')
+    expect(body).not.toContain('Style nit')
+  })
+})
+
+describe('reply authors in the usage record', () => {
+  it('REPLY run: reply_authors lists the distinct ids of the people who asked', async () => {
+    const adapter = makeAdapter({
+      getPreviousReviewComments: vi.fn().mockResolvedValue([{ id: '200', body: '### Review' + footer(1, COMMIT_A), createdOn: '2026-03-10T10:00:00Z' }]),
+      getRepliesToReviewComments: vi.fn().mockResolvedValue({
+        replies: [
+          { id: '300', parentId: '200', author: 'Vadim', authorId: '{v-1}', body: 'Why HIGH?', createdOn: '2026-03-10T14:00:00Z' },
+          { id: '301', parentId: '200', author: 'Vadim', authorId: '{v-1}', body: 'And the cache?', createdOn: '2026-03-10T15:00:00Z' },
+          { id: '302', parentId: '200', author: 'Ann', body: 'Same here', createdOn: '2026-03-10T16:00:00Z' },
+        ],
+        agentReplyCount: 0,
+      }),
+    })
+    setupModelMocks()
+
+    const record = await review(adapter, '100', true)
+
+    expect(record!.action).toBe('REPLY')
+    expect(record!.reply_authors).toEqual(['{v-1}', 'Ann'])
+  })
+
+  it('re-review with mixed human and agent replies: counts split, agent excluded from authors', async () => {
+    const adapter = reReviewAdapter(FLAGGED_PRIOR, [
+      { ...devReply('2026-03-09T12:00:00Z'), authorId: 'acc-f' },
+      agentReply('2026-03-09T13:00:00Z'),
+      devReply('2026-03-09T14:00:00Z'),
+    ])
+    mockReviewer(reviewWith([NEW_FINDING], { delta_stats: { resolved: 0, still_open: 1, new_findings: 1 } }))
+
+    const record = await review(adapter, '100', true)
+
+    expect(record!.review_number).toBe(2)
+    expect(record!.delta).toMatchObject({ developer_replies: 3, human_replies: 2, agent_replies: 1 })
+    expect(record!.reply_authors).toEqual(['acc-f', 'Fernando'])
+  })
+
+  it('a run with no replies carries no reply_authors key', async () => {
+    const record = await review(makeAdapter(), '100', true)
+    expect('reply_authors' in record!).toBe(false)
   })
 })

@@ -198,3 +198,157 @@ describe('OpenRouterProvider error normalization', () => {
     vi.useRealTimers()
   })
 })
+
+describe('OpenRouterProvider effort', () => {
+  const schema = { required: ['verdict'] } as Record<string, unknown>
+  const bodyOf = (i = 0) => post.mock.calls[i][1] as Record<string, unknown>
+  const plainBody = '{"model":"openai/gpt-x","max_tokens":1000,"messages":[{"role":"system","content":"s"},{"role":"user","content":"u"}],"usage":{"include":true}}'
+  const structuredBody = '{"model":"openai/gpt-x","max_tokens":1000,"response_format":{"type":"json_schema","json_schema":{"name":"result","schema":{"required":["verdict"]},"strict":false}},"messages":[{"role":"system","content":"s"},{"role":"user","content":"u"}],"usage":{"include":true}}'
+  const invalidEffort = { response: { status: 400, data: { error: { message: 'reasoning.effort: Invalid option: expected one of "max"|"xhigh"|"high"|"medium"|"low"|"minimal"|"none"', code: 400 } } } }
+  let warn: ReturnType<typeof vi.spyOn>
+  beforeEach(() => { warn = vi.spyOn(console, 'warn').mockImplementation(() => {}) })
+  afterEach(() => { warn.mockRestore() })
+
+  it.each(['low', 'medium', 'high', 'xhigh', 'max'])('sends reasoning.effort %s on complete and completeStructured', async effort => {
+    post.mockResolvedValue(okText(JSON.stringify({ verdict: 'ok' }), {}))
+    await createProvider('k').complete('s', 'u', { ...opts, effort })
+    await createProvider('k').completeStructured('s', 'u', schema, { ...opts, effort })
+    expect(bodyOf(0).reasoning).toEqual({ effort })
+    expect(bodyOf(1).reasoning).toEqual({ effort })
+    expect(JSON.stringify(bodyOf(0))).toBe(`${plainBody.slice(0, -1)},"reasoning":{"effort":"${effort}"}}`)
+    expect(JSON.stringify(bodyOf(1))).toBe(`${structuredBody.slice(0, -1)},"reasoning":{"effort":"${effort}"}}`)
+  })
+
+  it.each([['unset', {}], ['undefined', { effort: undefined }], ['empty', { effort: '' }]])('sends the pre-effort body byte for byte when effort is %s', async (_label, extra) => {
+    post.mockResolvedValue(okText(JSON.stringify({ verdict: 'ok' }), {}))
+    await createProvider('k').complete('s', 'u', { ...opts, ...extra })
+    await createProvider('k').completeStructured('s', 'u', schema, { ...opts, ...extra })
+    expect(post).toHaveBeenCalledTimes(2)
+    expect(JSON.stringify(bodyOf(0))).toBe(plainBody)
+    expect(JSON.stringify(bodyOf(1))).toBe(structuredBody)
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('appends reasoning after the user field when a repo slug is set', async () => {
+    const cfg = config as unknown as { repoSlug: string }
+    cfg.repoSlug = 'alice-platform'
+    post.mockResolvedValue(okText('hi', {}))
+    await createProvider('k').complete('s', 'u', opts)
+    await createProvider('k').complete('s', 'u', { ...opts, effort: 'high' })
+    cfg.repoSlug = ''
+    expect(JSON.stringify(bodyOf(0))).toBe(`${plainBody.slice(0, -1)},"user":"alice-platform"}`)
+    expect(JSON.stringify(bodyOf(1))).toBe(`${plainBody.slice(0, -1)},"user":"alice-platform","reasoning":{"effort":"high"}}`)
+  })
+
+  it('retries once without reasoning on the observed 400 invalid-effort rejection, warning once', async () => {
+    post.mockRejectedValueOnce(invalidEffort).mockResolvedValueOnce(okText(JSON.stringify({ verdict: 'ok' }), {}))
+    const r = await createProvider('k').completeStructured('s', 'u', schema, { ...opts, effort: 'bogus' })
+    expect(r.object).toEqual({ verdict: 'ok' })
+    expect(post).toHaveBeenCalledTimes(2)
+    expect(bodyOf(0).reasoning).toEqual({ effort: 'bogus' })
+    expect(JSON.stringify(bodyOf(1))).toBe(structuredBody)
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn).toHaveBeenCalledWith('  effort "bogus" not accepted by openai/gpt-x — retrying without it')
+  })
+
+  it('retries without reasoning on an HTTP-200 body rejection ("Reasoning is mandatory")', async () => {
+    post.mockResolvedValueOnce(resp({ error: { message: 'Reasoning is mandatory for this endpoint and cannot be disabled.', code: 400 } }))
+      .mockResolvedValueOnce(okText('ok', {}))
+    const r = await createProvider('k').complete('s', 'u', { ...opts, effort: 'none' })
+    expect(r.text).toBe('ok')
+    expect(post).toHaveBeenCalledTimes(2)
+    expect(JSON.stringify(bodyOf(1))).toBe(plainBody)
+  })
+
+  it('retries only once: a second rejection is thrown', async () => {
+    post.mockRejectedValue(invalidEffort)
+    const err = await createProvider('k').complete('s', 'u', { ...opts, effort: 'bogus' }).catch(e => e)
+    expect(err.status).toBe(400)
+    expect(err.message).toMatch(/reasoning\.effort/)
+    expect(post).toHaveBeenCalledTimes(2)
+  })
+
+  it.each([
+    ['context overflow 400', { response: { status: 400, data: { error: { message: "This model's maximum context length is 8192 tokens" } } } }],
+    ['overflow 400 that mentions reasoning', { response: { status: 400, data: { error: { message: 'input is too long for requested reasoning' } } } }],
+    ['unrelated 400', { response: { status: 400, data: { error: { message: 'Invalid schema for response_format' } } } }],
+    ['unrelated 400 that mentions reasoning', { response: { status: 400, data: { error: { message: 'This provider does not support reasoning with tools' } } } }],
+    ['401 mentioning reasoning', { response: { status: 401, data: { error: { message: 'reasoning not allowed for this key' } } } }],
+    ['402', { response: { status: 402, data: { error: { message: 'Insufficient credits' } } } }],
+    ['422', { response: { status: 422, data: { error: { message: 'reasoning.effort: unprocessable' } } } }],
+    ['timeout', { code: 'ECONNABORTED', message: 'timeout of 600000ms exceeded' }],
+  ])('does not retry without effort on a %s', async (_label, failure) => {
+    post.mockRejectedValue(failure)
+    await expect(createProvider('k').complete('s', 'u', { ...opts, effort: 'high' })).rejects.toThrow()
+    expect(post).toHaveBeenCalledTimes(1)
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('keeps the context-overflow degrade signal when effort is set', async () => {
+    post.mockRejectedValue({ response: { status: 400, data: { error: { message: "This model's maximum context length is 8192 tokens" } } } })
+    const err = await createProvider('k').complete('s', 'u', { ...opts, effort: 'high' }).catch(e => e)
+    expect(isContextLengthError(err)).toBe(true)
+  })
+
+  it('does not retry a reasoning rejection when no effort was sent', async () => {
+    post.mockRejectedValue(invalidEffort)
+    await expect(createProvider('k').complete('s', 'u', opts)).rejects.toThrow(/reasoning\.effort/)
+    expect(post).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps reasoning on transient 5xx retries', async () => {
+    vi.useFakeTimers()
+    post.mockRejectedValueOnce({ response: { status: 503 } }).mockResolvedValueOnce(okText('ok', {}))
+    const p = createProvider('k').complete('s', 'u', { ...opts, effort: 'high' })
+    await vi.runAllTimersAsync()
+    await p
+    vi.useRealTimers()
+    expect(post).toHaveBeenCalledTimes(2)
+    expect(bodyOf(1).reasoning).toEqual({ effort: 'high' })
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('maps usage with reasoning tokens: output_tokens is completion_tokens, cost_usd the provider total', async () => {
+    const reasoningUsage = { prompt_tokens: 306, completion_tokens: 418, completion_tokens_details: { reasoning_tokens: 312 }, prompt_tokens_details: { cached_tokens: 0 } }
+    post.mockResolvedValueOnce(okText('a', { ...reasoningUsage, cost: 0, is_byok: true, cost_details: { upstream_inference_cost: 0.0002396 } }))
+      .mockResolvedValueOnce(okText('b', { ...reasoningUsage, cost: 0.0002396 }))
+    const byok = await createProvider('k').complete('s', 'u', { ...opts, effort: 'high' })
+    const credits = await createProvider('k').complete('s', 'u', { ...opts, effort: 'high' })
+    const expected = { input_tokens: 306, output_tokens: 418, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, cost_usd: 0.0002396 }
+    expect(byok.usage).toEqual(expected)
+    expect(credits.usage).toEqual(expected)
+  })
+
+  describe('structured output with reasoning content in the message', () => {
+    const withReasoning = (content: unknown, finish = 'stop') => resp({
+      choices: [{
+        message: {
+          role: 'assistant', content, refusal: null,
+          reasoning: '{"verdict":"from-reasoning"} counting the cases first',
+          reasoning_details: [{ type: 'reasoning.text', text: '{"verdict":"from-reasoning"}', format: 'anthropic-claude-v1', index: 0 }],
+        },
+        finish_reason: finish,
+      }],
+      usage: { prompt_tokens: 306, completion_tokens: 400, completion_tokens_details: { reasoning_tokens: 290 } },
+    })
+
+    it('parses message.content only, never the reasoning text', async () => {
+      post.mockResolvedValue(withReasoning(JSON.stringify({ verdict: 'ok' })))
+      const r = await createProvider('k').completeStructured('s', 'u', schema, { ...opts, effort: 'high' })
+      expect(r.object).toEqual({ verdict: 'ok' })
+      expect(r.usage.output_tokens).toBe(400)
+    })
+
+    it('still throws on a missing required key when only the reasoning has it', async () => {
+      post.mockResolvedValue(withReasoning(JSON.stringify({ other: 1 })))
+      await expect(createProvider('k').completeStructured('s', 'u', schema, { ...opts, effort: 'high' })).rejects.toThrow(/missing required field\(s\): verdict$/)
+    })
+
+    it('throws TruncatedResponseError with reasoning-inclusive usage when reasoning eats max_tokens', async () => {
+      post.mockResolvedValue(withReasoning('{"verdict": "o', 'length'))
+      const err = await createProvider('k').completeStructured('s', 'u', schema, { ...opts, effort: 'high' }).catch(e => e)
+      expect(err).toBeInstanceOf(TruncatedResponseError)
+      expect((err as TruncatedResponseError).usage.output_tokens).toBe(400)
+    })
+  })
+})

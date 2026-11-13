@@ -19,6 +19,7 @@ import { activeLenses, type LensRecommendation } from './lenses.js'
 import { isCheckedCommitHash } from './checked-commit.js'
 import type { SuggestedFixStats } from './suggested-fix.js'
 import type { ReviewContext, LensRun, EventKind } from './types.js'
+import { isAgentReply } from '../vcs/adapter.js'
 
 // 12 hex chars of sha256 — enough to tell prompt/code versions apart across runs without bloating the record.
 function hash12(s: string): string {
@@ -102,7 +103,8 @@ export interface UsageRecord {
   untouched_files: { count: number; paths: string[]; cut: number; deprioritized?: number } | null
   recall_levers: { j_quality: boolean; sl_breadth: boolean; j_shown_anchor: boolean; b_priority: boolean }
   touch_rate: number | null
-  delta: { developer_replies: number; resolved: number; still_open: number; new_findings: number } | null
+  delta: { developer_replies: number; human_replies: number; agent_replies: number; resolved: number; still_open: number; new_findings: number } | null
+  reply_authors?: string[]
   checked_commit?: string
   dedup_source?: 'checked_commit'
   jenkins: { job: string; build: string; url: string } | null
@@ -256,6 +258,10 @@ export function buildUsageRecord(
   const breadthStatus = ctx.breadthStatus ?? (ctx.bundleCount ? (config.breadth.enabled ? 'skipped_bundled' : 'disabled') : null)
   const secondLookStatus = ctx.secondLookStatus ?? (ctx.bundleCount ? (config.review.secondLook ? 'skipped_bundled' : 'disabled') : null)
 
+  const humanReplies = (ctx.replies ?? []).filter(r => !isAgentReply(r))
+  // Id when the platform gave one, else the display name; first-seen order, distinct.
+  const replyAuthors = [...new Set(humanReplies.map(r => r.authorId ?? r.author))]
+
   return {
     run_id: `${config.vcsProvider}-${ctx.repoSlug}-${ctx.prId}-${commitShort}`,
     timestamp: new Date().toISOString(),
@@ -360,10 +366,14 @@ export function buildUsageRecord(
     })() : null,
     delta: ctx.reviewNumber > 1 && ctx.reviewObject ? {
       developer_replies: ctx.replies?.length ?? 0,
+      human_replies: humanReplies.length,
+      agent_replies: (ctx.replies?.length ?? 0) - humanReplies.length,
       resolved: deltaStats?.resolved ?? 0,
       still_open: deltaStats?.still_open ?? 0,
       new_findings: deltaStats?.new_findings ?? 0,
     } : null,
+    // Absent when no human replied, so records without discussion keep their current shape.
+    ...(replyAuthors.length ? { reply_authors: replyAuthors } : {}),
     // Present only when the head was really checked and the run did not fail afterwards; CI stores exactly this value, so it must pass the LAST_CHECKED_COMMIT rule too, whatever head the adapter reported.
     ...(ctx.headChecked && !error && isCheckedCommitHash(ctx.prInfo!.sourceCommit) ? { checked_commit: ctx.prInfo!.sourceCommit } : {}),
     ...(ctx.dedupHit === 'checked_commit' ? { dedup_source: 'checked_commit' as const } : {}),
