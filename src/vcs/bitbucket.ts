@@ -1,11 +1,36 @@
 import axios, { AxiosInstance, AxiosRequestConfig } from 'axios'
 import { hasReviewFooter, hasReplyFooter } from '../review/formatter.js'
-import { decideDirectedElsewhere } from './mention-filter.js'
+import { decideDirectedElsewhere, mentionsAgent } from './mention-filter.js'
 import type { VCSAdapter, PRInfo, ChangedFile, ReviewComment, CommentReply, ReplyResult } from './adapter.js'
 import { AGENT_REPLY_AUTHOR, authorIdOf } from './adapter.js'
 
 // Bound every Bitbucket call so a hung request fails fast instead of stalling the whole run
 const REQUEST_TIMEOUT_MS = 30_000
+
+// Built from parent links, not API order; a chain through a deleted (absent) comment or a cycle reaches no review.
+function threadMembers(comments: any[], reviewIds: ReadonlySet<string>): Set<string> {
+  const parentOf = new Map<string, string | null>()
+  for (const c of comments) parentOf.set(String(c.id), c.parent?.id ? String(c.parent.id) : null)
+  const reaches = new Map<string, boolean>()
+  const reachesReview = (start: string): boolean => {
+    const path = new Set<string>()
+    let cur: string | null | undefined = start
+    let ok = false
+    while (cur != null) {
+      if (reviewIds.has(cur)) { ok = true; break }
+      const known = reaches.get(cur)
+      if (known !== undefined) { ok = known; break }
+      if (path.has(cur) || !parentOf.has(cur)) break
+      path.add(cur)
+      cur = parentOf.get(cur)
+    }
+    for (const id of path) reaches.set(id, ok)
+    return ok
+  }
+  const members = new Set<string>()
+  for (const [id, parent] of parentOf) if (parent != null && reachesReview(parent)) members.add(id)
+  return members
+}
 
 export class BitbucketAdapter implements VCSAdapter {
   private readonly client: AxiosInstance
@@ -164,7 +189,6 @@ export class BitbucketAdapter implements VCSAdapter {
   }
 
   async getRepliesToReviewComments(prId: string, reviewCommentIds: string[], includeAnswered = false): Promise<ReplyResult> {
-    const parentIds = new Set(reviewCommentIds)
     const reviewIdSet = new Set(reviewCommentIds)
     this.agentIds = new Set()
     this.agentNames = new Set()
@@ -172,22 +196,28 @@ export class BitbucketAdapter implements VCSAdapter {
     let agentReplyCount = 0
     let latestAgentReply = ''   // ISO timestamp of our most recent reply
 
-    for (const c of await this.fetchComments(prId)) {
-      const body: string = c.content?.raw ?? ''
-      // Agent identity for filterAddressedToAgent: the authors of our review comments and our own
-      // replies. Derivation only ever adds ids, so it can't wrongly mark a human reply as the agent.
-      if (c.user && (reviewIdSet.has(String(c.id)) || hasReplyFooter(body))) {
+    const comments = await this.fetchComments(prId)
+    const inThread = threadMembers(comments, reviewIdSet)
+    const agentCommentIds = new Set<string>()
+    for (const c of comments) {
+      if (!reviewIdSet.has(String(c.id)) && !hasReplyFooter(c.content?.raw ?? '')) continue
+      agentCommentIds.add(String(c.id))
+      // Agent identity = authors of our reviews and replies; derivation only adds ids, so a human is never taken for the agent.
+      if (c.user) {
         if (c.user.account_id) this.agentIds.add(String(c.user.account_id))
         if (c.user.uuid) this.agentIds.add(String(c.user.uuid).replace(/[{}]/g, ''))
         if (c.user.display_name) this.agentNames.add(String(c.user.display_name).toLowerCase())
         if (c.user.nickname) this.agentNames.add(String(c.user.nickname).toLowerCase())
       }
-      const parentId = c.parent?.id ? String(c.parent.id) : null
-      if (!parentId || !parentIds.has(parentId)) continue
+    }
+    let identityWarned = false
+
+    for (const c of comments) {
+      const body: string = c.content?.raw ?? ''
+      if (!inThread.has(String(c.id))) continue
+      const parentId = String(c.parent.id)
       if (hasReplyFooter(body)) {
         agentReplyCount++
-        // Track agent reply IDs so we also find replies nested under them
-        parentIds.add(String(c.id))
         if (c.created_on > latestAgentReply) latestAgentReply = c.created_on
         // For delta reviews, include agent replies so the model sees its own prior conclusions
         if (includeAnswered) {
@@ -201,15 +231,28 @@ export class BitbucketAdapter implements VCSAdapter {
         }
         continue
       }
+      // A reply to an agent comment is addressed to the agent implicitly; one to a human only when it @-mentions the agent.
+      let contextOnly = false
+      if (!agentCommentIds.has(parentId)) {
+        if (this.agentIds.size === 0) {
+          if (!identityWarned) console.warn('  Could not derive the agent id-set — keeping all replies (nested-reply @-mention rule inert this run)')
+          identityWarned = true
+        } else {
+          contextOnly = !mentionsAgent(body, this.agentIds, this.agentNames)
+        }
+      }
       humanReplies.push({
         id: String(c.id),
         parentId,
         author: c.user?.display_name ?? 'Unknown',
         ...authorIdOf(c.user?.uuid ?? c.user?.account_id),
+        ...(contextOnly ? { contextOnly: true as const } : {}),
         body,
         createdOn: c.created_on,
       })
     }
+    // RESPOND_TO_REPLIES answers under the last reply's parent, so the newest must come last whatever the API order.
+    humanReplies.sort((a, b) => (a.createdOn < b.createdOn ? -1 : a.createdOn > b.createdOn ? 1 : 0))
 
     // For delta review context: return all human replies
     if (includeAnswered) return { replies: humanReplies, agentReplyCount }

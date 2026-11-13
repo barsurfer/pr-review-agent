@@ -26,6 +26,8 @@ export interface CommentReply {
   author: string
   // Platform account id for usage records only; never part of any model input.
   authorId?: string
+  // Set when a human answered a human without @-mentioning the agent: discussion context, never a question to answer.
+  contextOnly?: true
   body: string
   createdOn: string
 }

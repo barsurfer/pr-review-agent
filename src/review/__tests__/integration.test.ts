@@ -67,6 +67,7 @@ import { createProvider } from '../../llm/provider.js'
 import { renderFixBlock, stripSuggestedFixes, SUGGESTED_FIX_MARKER } from '../suggested-fix.js'
 import { createHash } from 'crypto'
 import { readFileSync } from 'fs'
+import { BitbucketAdapter } from '../../vcs/bitbucket.js'
 
 const mockRunReview = vi.mocked(runReview)
 const mockRunCommentResponse = vi.mocked(runCommentResponse)
@@ -3842,5 +3843,140 @@ describe('reply authors in the usage record', () => {
   it('a run with no replies carries no reply_authors key', async () => {
     const record = await review(makeAdapter(), '100', true)
     expect('reply_authors' in record!).toBe(false)
+  })
+})
+
+// The real Bitbucket adapter over a canned comment list, so the thread walk itself runs inside review().
+describe('nested Bitbucket reply thread through review() (live PR 9099 shape)', () => {
+  afterEach(() => { cfg.reply.skipDirectedElsewhere = false })
+
+  const BOT = { account_id: '712020:1257b717-eb9e-4c24-905e-59185f811af3', uuid: '{1886cb80-0000-0000-0000-000000000000}', display_name: 'HeyTech', nickname: 'HeyTech' }
+  const DEV_A = { account_id: '5cf55f9a3fa1890e7f16e51f', uuid: '{2222cb80-0000-0000-0000-000000000000}', display_name: 'Fernando' }
+  const DEV_B = { account_id: '557058:00000000-0000-4000-8000-0000000000bb', uuid: '{3333cb80-0000-0000-0000-000000000000}', display_name: 'Dev B' }
+  const PR_AUTHOR_ID = '557058:00000000-0000-4000-8000-0000000000aa'
+  const bbComment = (id: number, body: string, created_on: string, user: object, parent?: number) =>
+    ({ id, ...(parent ? { parent: { id: parent } } : {}), content: { raw: body }, user, created_on })
+  const thread = (reviewBody: string) => [
+    bbComment(901359884, reviewBody, '2026-11-12T20:26:37.646496+00:00', BOT),
+    bbComment(901796414, `@{${PR_AUTHOR_ID}} is this covered by the e2e suite?`, '2026-11-13T12:27:34.015078+00:00', DEV_A, 901359884),
+    bbComment(901876223, `@{${DEV_A.account_id}} yes, the attachment tests cover it`, '2026-11-13T14:10:02.118001+00:00', DEV_B, 901796414),
+    bbComment(901878728, `@{${BOT.account_id}} does our comments thread makes sense? `, '2026-11-13T14:14:33.208848+00:00', DEV_B, 901876223),
+  ]
+
+  function bitbucket(comments: object[]) {
+    const bb = new BitbucketAdapter('https://api.bitbucket.org/2.0', 'test', 'bot', 'x')
+    bb.setRepoSlug('repo')
+    const client = (bb as any).client
+    vi.spyOn(client, 'get').mockResolvedValue({ data: { values: comments } })
+    const post = vi.spyOn(client, 'post').mockResolvedValue({ data: {} })
+    vi.spyOn(bb, 'getPullRequestInfo').mockResolvedValue(makePRInfo())
+    vi.spyOn(bb, 'getDiff').mockResolvedValue(DIFF)
+    vi.spyOn(bb, 'getChangedFiles').mockResolvedValue([{ path: 'src/app.ts', status: 'modified' }])
+    vi.spyOn(bb, 'getFileContent').mockResolvedValue('')
+    vi.spyOn(bb, 'getRepoFileContent').mockResolvedValue(null)
+    vi.spyOn(bb, 'getCommitDiff').mockResolvedValue(DIFF)
+    return { bb, post }
+  }
+  const answeredIds = () => (mockRunCommentResponse.mock.calls[0][5] as CommentReply[]).map(r => r.id)
+  const postedReply = (post: { mock: { calls: any[][] } }) => {
+    expect(post).toHaveBeenCalledTimes(1)
+    const [path, payload] = post.mock.calls[0]
+    expect(path).toBe('/repositories/test/repo/pullrequests/100/comments')
+    expect(hasReplyFooter(payload.content.raw)).toBe(true)
+    return payload.parent
+  }
+
+  it('skip-directed on: answers only the question put to the bot, threaded under its parent', async () => {
+    cfg.reply.skipDirectedElsewhere = true
+    const { bb, post } = bitbucket(thread('### Review' + footer(1, COMMIT_A)))
+
+    const record = await review(bb, '100', false)
+
+    expect(record!.action).toBe('REPLY')
+    expect(answeredIds()).toEqual(['901878728'])
+    expect(postedReply(post)).toEqual({ id: 901876223 })
+    expect(record!.reply_authors).toEqual([DEV_B.uuid])
+  })
+
+  it('skip-directed off: the direct reply and the bot-directed nested reply are answered, the reply between two humans is not', async () => {
+    const { bb, post } = bitbucket(thread('### Review' + footer(1, COMMIT_A)))
+
+    const record = await review(bb, '100', false)
+
+    expect(record!.action).toBe('REPLY')
+    expect(answeredIds()).toEqual(['901796414', '901878728'])
+    expect(postedReply(post)).toEqual({ id: 901876223 })
+    expect(record!.reply_authors).toEqual([DEV_A.uuid, DEV_B.uuid])
+  })
+
+  it.each([false, true])('nested human-to-human chatter alone is no question and spends no reply (skip-directed %s)', async flag => {
+    cfg.reply.skipDirectedElsewhere = flag
+    const answer = bbComment(901800000, 'Covered.' + buildReplyFooter('test-bot', 'claude-haiku-4-5-20251001'), '2026-11-13T12:30:00.000000+00:00', BOT, 901359884)
+    const chatter = bbComment(901876223, 'agreed, thanks', '2026-11-13T14:10:02.118001+00:00', DEV_B, 901796414)
+    const { bb, post } = bitbucket([...thread('### Review' + footer(1, COMMIT_A)).slice(0, 2), answer, chatter])
+
+    const record = await review(bb, '100', false)
+
+    expect(record!.action).toBe('DEDUP_SKIP')
+    expect(record!.skip_reason).toContain('no unanswered questions')
+    expect(mockRunCommentResponse).not.toHaveBeenCalled()
+    expect(post).not.toHaveBeenCalled()
+    expect('reply_authors' in record!).toBe(false)
+  })
+
+  it('0-finding re-review, skip-directed off: the nested reply between two humans is still not answered', async () => {
+    const { bb, post } = bitbucket(thread(CLEAN_PRIOR + footer(1, PRIOR_COMMIT)))
+    mockReviewer(reviewWith([], { delta_stats: { resolved: 0, still_open: 0, new_findings: 0 } }))
+
+    const record = await review(bb, '100', false)
+
+    expect((mockRunReview.mock.calls[0][10] as CommentReply[]).map(r => r.id)).toEqual(['901796414', '901876223', '901878728'])
+    expect(record!.action).toBe('REPLY')
+    expect(answeredIds()).toEqual(['901796414', '901878728'])
+    expect(postedReply(post)).toEqual({ id: 901876223 })
+    expect(record!.delta).toMatchObject({ developer_replies: 2, human_replies: 2, agent_replies: 0 })
+    expect(record!.reply_authors).toEqual([DEV_A.uuid, DEV_B.uuid])
+  })
+
+  it('a posted re-review keeps the whole thread as discussion, chatter included, in the reviewer input and the record', async () => {
+    const { bb, post } = bitbucket(thread(FLAGGED_PRIOR + footer(1, PRIOR_COMMIT)))
+    mockReviewer(reviewWith([NEW_FINDING], { delta_stats: { resolved: 0, still_open: 1, new_findings: 1 } }))
+
+    const record = await review(bb, '100', false)
+
+    expect((mockRunReview.mock.calls[0][10] as CommentReply[]).map(r => r.id)).toEqual(['901796414', '901876223', '901878728'])
+    expect(mockRunCommentResponse).not.toHaveBeenCalled()
+    expect(post).toHaveBeenCalledTimes(1)
+    expect(post.mock.calls[0][1]).not.toHaveProperty('parent')
+    expect(record!.delta).toMatchObject({ developer_replies: 3, human_replies: 3, agent_replies: 0 })
+    expect(record!.reply_authors).toEqual([DEV_A.uuid, DEV_B.uuid])
+  })
+
+  it('0-finding re-review: the reviewer sees the whole thread, the deep question is answered and counted', async () => {
+    cfg.reply.skipDirectedElsewhere = true
+    const { bb, post } = bitbucket(thread(CLEAN_PRIOR + footer(1, PRIOR_COMMIT)))
+    mockReviewer(reviewWith([], { delta_stats: { resolved: 0, still_open: 0, new_findings: 0 } }))
+
+    const record = await review(bb, '100', false)
+
+    expect((mockRunReview.mock.calls[0][10] as CommentReply[]).map(r => r.id)).toEqual(['901796414', '901876223', '901878728'])
+    expect(record!.action).toBe('REPLY')
+    expect(record!.review_number).toBe(2)
+    expect(answeredIds()).toEqual(['901878728'])
+    expect(postedReply(post)).toEqual({ id: 901876223 })
+    expect(record!.delta).toMatchObject({ developer_replies: 1, human_replies: 1, agent_replies: 0 })
+    expect(record!.reply_authors).toEqual([DEV_B.uuid])
+  })
+
+  it('once the answer sits under 901876223, the next run has nothing to answer (no reply loop)', async () => {
+    const answer = bbComment(901880001, 'It does.' + buildReplyFooter('test-bot', 'claude-haiku-4-5-20251001'), '2026-11-13T14:16:00.000000+00:00', BOT, 901876223)
+    const { bb, post } = bitbucket([...thread('### Review' + footer(1, COMMIT_A)), answer])
+
+    const record = await review(bb, '100', false)
+
+    expect(record!.action).toBe('DEDUP_SKIP')
+    expect(record!.skip_reason).toContain('no unanswered questions')
+    expect(mockRunCommentResponse).not.toHaveBeenCalled()
+    expect(post).not.toHaveBeenCalled()
   })
 })
