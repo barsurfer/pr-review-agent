@@ -262,10 +262,10 @@ describe('CLI --force normalisation (src/index.ts)', () => {
 
 const CHILD_TIMEOUT = TIMEOUT - 10_000
 
-// The unroutable-URL harness fails before CHECK_BRANCHES, so these runs get a local server that answers only the PR-info call: a branch skip exits 0, a pass reaches FETCH_DIFF and errors on the 500.
+// The unroutable-URL harness fails before CHECK_BRANCHES, so these runs get a local server that answers only the PR-info call: a branch skip exits 0, a pass reaches FETCH_DIFF and errors on the 404 (not a 5xx, which would be retried).
 async function runAgainstPr(pr: { source: string; target: string }, args: string[], extraEnv: Record<string, string> = {}) {
   const server = createServer((req, res) => {
-    if (req.url !== '/repositories/w/r/pullrequests/1') { res.writeHead(500); res.end(); return }
+    if (req.url !== '/repositories/w/r/pullrequests/1') { res.writeHead(404); res.end(); return }
     res.writeHead(200, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({
       id: 1, title: 'T', description: '', author: { display_name: 'dev' },

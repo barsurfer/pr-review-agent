@@ -57,6 +57,8 @@ Separately, a deterministic `TODO`/`FIXME`/`HACK` scan (`scanTodos`, `ENABLE_TOD
 4. No repo prompt and no `--prompt`: composed **tech-stack fallback** (below), if any base is detected
 5. All five sections default if nothing above applies
 
+**Lookup is best-effort:** the instructions file is optional, so any lookup error other than "not found" (rate limit, outage) logs `Warning: lookup of .agent-review-instructions.md failed (...)`, stops the probing and continues at step 4. The review then runs without the repo's own instructions; the footer's `Prompt:` value (`stack:...` or `default` instead of `repo`) shows it.
+
 **Module fallback:** when every changed file in the PR lives under a single top-level
 directory (monorepo module, e.g. `web-app/`), that directory is treated as an effective
 root and `<dir>/.agent-review-instructions.md` → `<dir>/docs/...` are probed after the

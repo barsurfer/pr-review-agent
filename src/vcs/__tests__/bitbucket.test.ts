@@ -591,3 +591,33 @@ describe('getRepliesToReviewComments — a reply to a human is for the agent onl
     warn.mockRestore()
   })
 })
+
+describe('rate-limit retry wiring', () => {
+  it('resends a file lookup that got 429 instead of failing the run', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const limited = Object.assign(new Error('Request failed with status code 429'), { config: { method: 'get', url: '/src/abc/x.md' }, response: { status: 429, headers: { 'retry-after': '0.01' } } })
+    clientMock.get.mockRejectedValueOnce(limited).mockResolvedValue({ data: 'content' })
+
+    expect(await makeAdapter().getRepoFileContent('x.md', 'abc')).toBe('content')
+    expect(clientMock.get).toHaveBeenCalledTimes(2)
+    expect(warn).toHaveBeenCalledTimes(1)
+    warn.mockRestore()
+  })
+})
+
+describe('redirect follow-up retry', () => {
+  it('resends the diff download after a 503 on the redirect target', async () => {
+    const axios = (await import('axios')).default as unknown as { get: ReturnType<typeof vi.fn> }
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const down = Object.assign(new Error('Request failed with status code 503'), { config: { method: 'get', url: 'https://cdn.example/diff' }, response: { status: 503, headers: { 'retry-after': '0.01' } } })
+    clientMock.get.mockResolvedValue({ status: 302, headers: { location: 'https://cdn.example/diff?sig=secret' } })
+    axios.get.mockRejectedValueOnce(down).mockResolvedValue({ status: 200, data: 'diff --git a/x b/x' })
+
+    expect(await makeAdapter().getDiff('1')).toBe('diff --git a/x b/x')
+    expect(axios.get).toHaveBeenCalledTimes(2)
+    expect(log.mock.calls.flat().join('\n')).not.toContain('secret')
+    log.mockRestore()
+    warn.mockRestore()
+  })
+})
