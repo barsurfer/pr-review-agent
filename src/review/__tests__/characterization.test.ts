@@ -294,7 +294,9 @@ async function runScenario(s: Scenario, checkedCommitArg = false) {
     for (const spy of spies) spy.mockRestore()
   }
 
-  const { timestamp, duration_ms, agent_commit, agent_version, checked_commit, dedup_source, ...stable } = (record ?? {}) as Record<string, unknown>
+  const { timestamp, duration_ms, agent_commit, agent_version, checked_commit, dedup_source, reply_authors, ...stable } = (record ?? {}) as Record<string, unknown>
+  // Reply-author counts are additive record fields pinned in usage.test.ts, not part of this characterization.
+  if (stable.delta) { const { human_replies, agent_replies, ...delta } = stable.delta as Record<string, unknown>; stable.delta = delta }
   return { vcs, model, console: console_, record: record ? stable : null, thrown }
 }
 
