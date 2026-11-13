@@ -35,6 +35,7 @@ function threadMembers(comments: any[], reviewIds: ReadonlySet<string>): Set<str
 
 export class BitbucketAdapter implements VCSAdapter {
   private readonly client: AxiosInstance
+  private readonly redirectClient: Pick<AxiosInstance, 'get'>
   private readonly workspace: string
   private readonly authHeader: string
   private readonly baseHost: string
@@ -51,6 +52,7 @@ export class BitbucketAdapter implements VCSAdapter {
         'Content-Type': 'application/json',
       },
     }), 'bitbucket'), 'bitbucket')
+    this.redirectClient = withRetry(withCallLog(axios, 'bitbucket'), 'bitbucket')
   }
 
   /** Follow 302 redirects while preserving auth (axios strips auth on redirect).
@@ -64,7 +66,7 @@ export class BitbucketAdapter implements VCSAdapter {
       if (!sameHost) {
         console.warn(`  Redirect to a different host — not forwarding auth`)
       }
-      return withCallLog(axios, 'bitbucket').get(location, {
+      return this.redirectClient.get(location, {
         ...config,
         timeout: REQUEST_TIMEOUT_MS,
         headers: sameHost ? { ...config.headers, Authorization: this.authHeader } : { ...config.headers },

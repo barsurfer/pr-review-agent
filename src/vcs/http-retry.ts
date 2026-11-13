@@ -1,8 +1,8 @@
 // Bitbucket limits are rolling windows, so a quick resend hits the same limit; the waits are long on purpose.
-const RETRY_DELAYS_MS = [3_000, 18_000, 36_000]
+const RETRY_DELAYS_MS = [3_000, 24_000, 96_000]
 export const MAX_RETRIES = RETRY_DELAYS_MS.length
-const MAX_DELAY_MS = 60_000
-export const RETRY_BUDGET_MS = 120_000
+const MAX_DELAY_MS = 96_000
+export const RETRY_BUDGET_MS = 180_000
 const METHODS = new Set(['get', 'post', 'put', 'delete'])
 
 interface HttpError {

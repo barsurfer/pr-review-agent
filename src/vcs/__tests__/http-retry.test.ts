@@ -41,7 +41,7 @@ describe('withRetry', () => {
     raw.get.mockRejectedValue(err)
     await expect(client.get('/a')).rejects.toBe(err)
     expect(raw.get).toHaveBeenCalledTimes(MAX_RETRIES + 1)
-    expect(sleep.mock.calls).toEqual([[3000], [18_000], [36_000]])
+    expect(sleep.mock.calls).toEqual([[3000], [24_000], [96_000]])
   })
 
   it('resends a GET after 5xx or a dropped connection, never after 4xx or a timeout', async () => {
@@ -74,10 +74,10 @@ describe('withRetry', () => {
 })
 
 describe('retryDelayMs', () => {
-  it('waits 3 s, 18 s, 36 s and caps a long Retry-After at 60 s', () => {
-    expect([0, 1, 2].map(n => retryDelayMs(n, httpError(429)))).toEqual([3000, 18_000, 36_000])
-    expect(retryDelayMs(0, httpError(429, { 'retry-after': '3600' }))).toBe(60_000)
-    expect(retryDelayMs(1, httpError(429, { 'retry-after': 'soon' }))).toBe(18_000)
+  it('waits 3 s, 24 s, 96 s and caps a long Retry-After at 96 s', () => {
+    expect([0, 1, 2].map(n => retryDelayMs(n, httpError(429)))).toEqual([3000, 24_000, 96_000])
+    expect(retryDelayMs(0, httpError(429, { 'retry-after': '3600' }))).toBe(96_000)
+    expect(retryDelayMs(1, httpError(429, { 'retry-after': 'soon' }))).toBe(24_000)
   })
 })
 
@@ -97,16 +97,16 @@ describe('withRetry budget', () => {
     const { raw, sleep, client } = setup()
     raw.get.mockRejectedValue(httpError(429, { 'retry-after': '60' }))
     await expect(client.get('/a')).rejects.toThrow('429')
-    expect(sleep.mock.calls).toEqual([[60_000], [60_000]])
-    expect(RETRY_BUDGET_MS).toBe(120_000)
+    expect(sleep.mock.calls).toEqual([[60_000], [60_000], [60_000]])
+    expect(RETRY_BUDGET_MS).toBe(180_000)
 
     const before = raw.get.mock.calls.length
     await expect(client.get('/b')).rejects.toThrow('429')
     expect(raw.get.mock.calls.length).toBe(before + 1)
-    expect(sleep).toHaveBeenCalledTimes(2)
+    expect(sleep).toHaveBeenCalledTimes(3)
     await expect(client.get('/c')).rejects.toThrow('429')
     const budgetWarnings = warn.mock.calls.filter((c: unknown[]) => String(c[0]).includes('retry budget'))
-    expect(budgetWarnings).toEqual([['  [bitbucket] retry budget (120s) spent - failing without further retries']])
+    expect(budgetWarnings).toEqual([['  [bitbucket] retry budget (180s) spent - failing without further retries']])
   })
 
   it('gives a fresh client a fresh budget', async () => {
