@@ -36,11 +36,13 @@ export function mentionsAgent(body: string, agentIds: ReadonlySet<string>, agent
   return false
 }
 
-// The name must end at a word boundary, so a short agent name like "dev" is not found inside "@devon".
+// Word boundaries on both sides: a short agent name like "dev" is not found inside "@devon" or the email "alice@dev.co".
 function mentionsName(lower: string, needle: string): boolean {
+  const wordChar = /[\p{L}\p{N}_-]/u
   for (let at = lower.indexOf(needle); at !== -1; at = lower.indexOf(needle, at + 1)) {
+    const before = at > 0 ? lower[at - 1] : undefined
     const next = lower[at + needle.length]
-    if (next === undefined || !/[\p{L}\p{N}_-]/u.test(next)) return true
+    if ((before === undefined || !wordChar.test(before)) && (next === undefined || !wordChar.test(next))) return true
   }
   return false
 }
