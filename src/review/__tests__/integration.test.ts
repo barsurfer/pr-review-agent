@@ -3719,7 +3719,7 @@ describe('suggested fixes (ENABLE_SUGGESTED_FIXES)', () => {
     expect('proposal' in off.record.anchored_findings![0]).toBe(false)
 
     const [promptOn, promptOff] = judgePrompts()
-    expect(promptOn).toContain('only the corrected code for the lines that change')
+    expect(promptOn).toContain('the fix, posted to the developer as a copyable plain-text block')
     const base = readFileSync(new URL('../../prompt/judge-prompt.txt', import.meta.url), 'utf-8')
     expect(promptOff).toBe(base)
     expect(off.record.judge_prompt_hash).toBe(createHash('sha256').update(base).digest('hex').slice(0, 12))

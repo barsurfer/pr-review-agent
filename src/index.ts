@@ -50,7 +50,7 @@ program
   .option('--lenses <list>', 'Concern-specific reviewer passes, e.g. reliability+security (overrides ENABLE_LENSES/LENSES; requires a judge)')
   .option('--lens-recommendation', 'Log which lenses the first-pass reviewer recommends for this PR; never gates a lens (overrides ENABLE_LENS_RECOMMENDATION)')
   .option('--proposals', 'Add a concise fix proposal to each kept finding in results.jsonl anchored_findings (overrides ENABLE_JUDGE_PROPOSALS; requires a judge)')
-  .option('--suggested-fixes', 'Post a code fix block under each kept finding that has one; implies code-only proposals (overrides ENABLE_SUGGESTED_FIXES; requires a judge)')
+  .option('--suggested-fixes', 'Post a fix block (instruction, plus code for local edits) under each kept finding that has one; implies proposals (overrides ENABLE_SUGGESTED_FIXES; requires a judge)')
   .option('--keep-test-gaps', 'Keep a candidate the judge files as low_value when it names a test gap and has a placeable line, as LOW (overrides ENABLE_JUDGE_KEEP_TEST_GAPS; requires a judge)')
   .option('--event <name>', 'What started this run, e.g. pullrequest:comment_created (overrides TRIGGER_EVENT); logged, and enables IGNORE_COMMENT_AUTHORS on comment events')
   .option('--comment-author <id>', 'Account id of the event actor, e.g. the Bitbucket actor uuid (overrides TRIGGER_COMMENT_AUTHOR)')
