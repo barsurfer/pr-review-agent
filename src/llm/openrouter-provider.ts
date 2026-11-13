@@ -141,10 +141,10 @@ function isOpenRouterError(err: unknown): err is StatusError {
   return !!(err as StatusError)?.__openrouter
 }
 
-// Observed: 400 "reasoning.effort: Invalid option: …"; documented: 400 "Reasoning is mandatory …" (effort none on Opus/Sonnet 5.5). Non-reasoning models ignore the field.
+// Observed: 400 "reasoning.effort: Invalid option: …"; documented: 400 "Reasoning is mandatory …" (effort none on Opus/Sonnet 5.5). Only these phrasings count, so an unrelated 400 that mentions reasoning is not retried.
 function isReasoningRejection(err: unknown): boolean {
   if (!isOpenRouterError(err) || err.status !== 400) return false
-  return /\breasoning\b/i.test(err.message) && !err.message.startsWith(OVERFLOW_PREFIX)
+  return /reasoning\.effort|reasoning is mandatory/i.test(err.message) && !err.message.startsWith(OVERFLOW_PREFIX)
 }
 
 interface AxiosLikeError {

@@ -272,6 +272,7 @@ describe('OpenRouterProvider effort', () => {
     ['context overflow 400', { response: { status: 400, data: { error: { message: "This model's maximum context length is 8192 tokens" } } } }],
     ['overflow 400 that mentions reasoning', { response: { status: 400, data: { error: { message: 'input is too long for requested reasoning' } } } }],
     ['unrelated 400', { response: { status: 400, data: { error: { message: 'Invalid schema for response_format' } } } }],
+    ['unrelated 400 that mentions reasoning', { response: { status: 400, data: { error: { message: 'This provider does not support reasoning with tools' } } } }],
     ['401 mentioning reasoning', { response: { status: 401, data: { error: { message: 'reasoning not allowed for this key' } } } }],
     ['402', { response: { status: 402, data: { error: { message: 'Insufficient credits' } } } }],
     ['422', { response: { status: 422, data: { error: { message: 'reasoning.effort: unprocessable' } } } }],
