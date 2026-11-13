@@ -70,3 +70,23 @@ describe('decideDirectedElsewhere — drop rule', () => {
     expect(decide('Fixed in d4f2b43e.').drop).toBe(false)
   })
 })
+
+describe('mentionsAgent — plain-text name needs a word boundary', () => {
+  const ids = new Set(['712020:1257b717-eb9e-4c24-905e-59185f811af3'])
+  const names = new Set(['dev'])
+
+  it.each([
+    ['@dev can you check', true],
+    ['thanks @Dev', true],
+    ['@dev, see above', true],
+    ['(@dev)', true],
+    ['@devon can you check', false],
+    ['ask @dev2 instead', false],
+    ['@dev-ops owns this', false],
+    ['@dev_team owns this', false],
+    ['@devon and @dev', true],
+  ])('%s -> %s', async (body, expected) => {
+    const { mentionsAgent } = await import('../mention-filter.js')
+    expect(mentionsAgent(body, ids, names)).toBe(expected)
+  })
+})

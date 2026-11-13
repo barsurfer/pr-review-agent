@@ -31,7 +31,16 @@ export function mentionsAgent(body: string, agentIds: ReadonlySet<string>, agent
   // A picker-less plain-text @agentname the tokenizer can't see.
   const lower = body.toLowerCase()
   for (const name of agentNames) {
-    if (name && lower.includes('@' + name)) return true
+    if (name && mentionsName(lower, '@' + name)) return true
+  }
+  return false
+}
+
+// The name must end at a word boundary, so a short agent name like "dev" is not found inside "@devon".
+function mentionsName(lower: string, needle: string): boolean {
+  for (let at = lower.indexOf(needle); at !== -1; at = lower.indexOf(needle, at + 1)) {
+    const next = lower[at + needle.length]
+    if (next === undefined || !/[\p{L}\p{N}_-]/u.test(next)) return true
   }
   return false
 }
