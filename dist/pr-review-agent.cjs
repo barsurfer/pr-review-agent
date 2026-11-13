@@ -13509,14 +13509,14 @@ var require_form_data = __commonJS({
         this._error(new Error("Arrays are not supported."));
         return;
       }
-      var header = this._multiPartHeader(field, value, options);
+      var header2 = this._multiPartHeader(field, value, options);
       var footer = this._multiPartFooter();
-      append2(header);
+      append2(header2);
       append2(value);
       append2(footer);
-      this._trackLength(header, value, options);
+      this._trackLength(header2, value, options);
     };
-    FormData3.prototype._trackLength = function(header, value, options) {
+    FormData3.prototype._trackLength = function(header2, value, options) {
       var valueLength = 0;
       if (options.knownLength != null) {
         valueLength += Number(options.knownLength);
@@ -13526,7 +13526,7 @@ var require_form_data = __commonJS({
         valueLength = Buffer.byteLength(value);
       }
       this._valueLength += valueLength;
-      this._overheadLength += Buffer.byteLength(header) + FormData3.LINE_BREAK.length;
+      this._overheadLength += Buffer.byteLength(header2) + FormData3.LINE_BREAK.length;
       if (!value || !value.path && !(value.readable && hasOwn2(value, "httpVersion")) && !(value instanceof Stream2)) {
         return;
       }
@@ -13576,18 +13576,18 @@ var require_form_data = __commonJS({
       if (typeof options.header === "object") {
         populate(headers, options.header);
       }
-      var header;
+      var header2;
       for (var prop in headers) {
         if (hasOwn2(headers, prop)) {
-          header = headers[prop];
-          if (header == null) {
+          header2 = headers[prop];
+          if (header2 == null) {
             continue;
           }
-          if (!Array.isArray(header)) {
-            header = [header];
+          if (!Array.isArray(header2)) {
+            header2 = [header2];
           }
-          if (header.length) {
-            contents += prop + ": " + header.join("; ") + FormData3.LINE_BREAK;
+          if (header2.length) {
+            contents += prop + ": " + header2.join("; ") + FormData3.LINE_BREAK;
           }
         }
       }
@@ -13639,13 +13639,13 @@ var require_form_data = __commonJS({
       return "--" + this.getBoundary() + "--" + FormData3.LINE_BREAK;
     };
     FormData3.prototype.getHeaders = function(userHeaders) {
-      var header;
+      var header2;
       var formHeaders = {
         "content-type": "multipart/form-data; boundary=" + this.getBoundary()
       };
-      for (header in userHeaders) {
-        if (hasOwn2(userHeaders, header)) {
-          formHeaders[header.toLowerCase()] = userHeaders[header];
+      for (header2 in userHeaders) {
+        if (hasOwn2(userHeaders, header2)) {
+          formHeaders[header2.toLowerCase()] = userHeaders[header2];
         }
       }
       return formHeaders;
@@ -15363,10 +15363,10 @@ var require_follow_redirects = __commonJS({
     }
     function removeMatchingHeaders(regex, headers) {
       var lastValue;
-      for (var header in headers) {
-        if (regex.test(header)) {
-          lastValue = headers[header];
-          delete headers[header];
+      for (var header2 in headers) {
+        if (regex.test(header2)) {
+          lastValue = headers[header2];
+          delete headers[header2];
         }
       }
       return lastValue === null || typeof lastValue === "undefined" ? void 0 : String(lastValue).trim();
@@ -37105,16 +37105,16 @@ var sanitizeHeaderValue = (value) => sanitizeValue(value, INVALID_UNICODE_HEADER
 var sanitizeByteStringHeaderValue = (value) => sanitizeValue(value, INVALID_BYTE_STRING_HEADER_VALUE_CHARS);
 function toByteStringHeaderObject(headers) {
   const byteStringHeaders = /* @__PURE__ */ Object.create(null);
-  utils_default.forEach(headers.toJSON(), (value, header) => {
-    byteStringHeaders[header] = sanitizeByteStringHeaderValue(value);
+  utils_default.forEach(headers.toJSON(), (value, header2) => {
+    byteStringHeaders[header2] = sanitizeByteStringHeaderValue(value);
   });
   return byteStringHeaders;
 }
 
 // node_modules/axios/lib/core/AxiosHeaders.js
 var $internals = /* @__PURE__ */ Symbol("internals");
-function normalizeHeader(header) {
-  return header && String(header).trim().toLowerCase();
+function normalizeHeader(header2) {
+  return header2 && String(header2).trim().toLowerCase();
 }
 function normalizeValue(value) {
   if (value === false || value == null) {
@@ -37216,12 +37216,12 @@ function parseParameters(value) {
   return parameters;
 }
 var isValidHeaderName = (str) => /^[-_a-zA-Z0-9^`|~,!#$%&'*+.]+$/.test(str.trim());
-function matchHeaderValue(context, value, header, filter2, isHeaderNameFilter) {
+function matchHeaderValue(context, value, header2, filter2, isHeaderNameFilter) {
   if (utils_default.isFunction(filter2)) {
-    return filter2.call(this, value, header);
+    return filter2.call(this, value, header2);
   }
   if (isHeaderNameFilter) {
-    value = header;
+    value = header2;
   }
   if (!utils_default.isString(value)) return;
   if (utils_default.isString(filter2)) {
@@ -37231,20 +37231,20 @@ function matchHeaderValue(context, value, header, filter2, isHeaderNameFilter) {
     return filter2.test(value);
   }
 }
-function formatHeader(header) {
-  return header.trim().toLowerCase().replace(/([a-z\d])(\w*)/g, (w, char, str) => {
+function formatHeader(header2) {
+  return header2.trim().toLowerCase().replace(/([a-z\d])(\w*)/g, (w, char, str) => {
     return char.toUpperCase() + str;
   });
 }
-function buildAccessors(obj, header) {
-  const accessorName = utils_default.toCamelCase(" " + header);
+function buildAccessors(obj, header2) {
+  const accessorName = utils_default.toCamelCase(" " + header2);
   ["get", "set", "has"].forEach((methodName) => {
     Object.defineProperty(obj, methodName + accessorName, {
       // Null-proto descriptor so a polluted Object.prototype.get cannot turn
       // this data descriptor into an accessor descriptor on the way in.
       __proto__: null,
       value: function(arg1, arg2, arg3) {
-        return this[methodName].call(this, header, arg1, arg2, arg3);
+        return this[methodName].call(this, header2, arg1, arg2, arg3);
       },
       configurable: true
     });
@@ -37254,7 +37254,7 @@ var AxiosHeaders = class {
   constructor(headers) {
     headers && this.set(headers);
   }
-  set(header, valueOrRewrite, rewrite) {
+  set(header2, valueOrRewrite, rewrite) {
     const self2 = this;
     function setHeader(_value, _header, _rewrite) {
       const lHeader = normalizeHeader(_header);
@@ -37267,13 +37267,13 @@ var AxiosHeaders = class {
       }
     }
     const setHeaders = (headers, _rewrite) => utils_default.forEach(headers, (_value, _header) => setHeader(_value, _header, _rewrite));
-    if (utils_default.isPlainObject(header) || header instanceof this.constructor) {
-      setHeaders(header, valueOrRewrite);
-    } else if (utils_default.isString(header) && (header = header.trim()) && !isValidHeaderName(header)) {
-      setHeaders(parseHeaders_default(header), valueOrRewrite);
-    } else if (utils_default.isObject(header) && utils_default.isSafeIterable(header)) {
+    if (utils_default.isPlainObject(header2) || header2 instanceof this.constructor) {
+      setHeaders(header2, valueOrRewrite);
+    } else if (utils_default.isString(header2) && (header2 = header2.trim()) && !isValidHeaderName(header2)) {
+      setHeaders(parseHeaders_default(header2), valueOrRewrite);
+    } else if (utils_default.isObject(header2) && utils_default.isSafeIterable(header2)) {
       let obj = /* @__PURE__ */ Object.create(null), dest, key;
-      for (const entry of header) {
+      for (const entry of header2) {
         if (!utils_default.isArray(entry)) {
           throw new TypeError("Object iterator must return a key-value pair");
         }
@@ -37287,14 +37287,14 @@ var AxiosHeaders = class {
       }
       setHeaders(obj, valueOrRewrite);
     } else {
-      header != null && setHeader(valueOrRewrite, header, rewrite);
+      header2 != null && setHeader(valueOrRewrite, header2, rewrite);
     }
     return this;
   }
-  get(header, parser) {
-    header = normalizeHeader(header);
-    if (header) {
-      const key = utils_default.findKey(this, header);
+  get(header2, parser) {
+    header2 = normalizeHeader(header2);
+    if (header2) {
+      const key = utils_default.findKey(this, header2);
       if (key) {
         const value = this[key];
         if (!parser) {
@@ -37313,15 +37313,15 @@ var AxiosHeaders = class {
       }
     }
   }
-  has(header, matcher) {
-    header = normalizeHeader(header);
-    if (header) {
-      const key = utils_default.findKey(this, header);
+  has(header2, matcher) {
+    header2 = normalizeHeader(header2);
+    if (header2) {
+      const key = utils_default.findKey(this, header2);
       return !!(key && this[key] !== void 0 && (!matcher || matchHeaderValue(this, this[key], key, matcher)));
     }
     return false;
   }
-  delete(header, matcher) {
+  delete(header2, matcher) {
     const self2 = this;
     let deleted = false;
     function deleteHeader(_header) {
@@ -37334,10 +37334,10 @@ var AxiosHeaders = class {
         }
       }
     }
-    if (utils_default.isArray(header)) {
-      header.forEach(deleteHeader);
+    if (utils_default.isArray(header2)) {
+      header2.forEach(deleteHeader);
     } else {
-      deleteHeader(header);
+      deleteHeader(header2);
     }
     return deleted;
   }
@@ -37357,16 +37357,16 @@ var AxiosHeaders = class {
   normalize(format) {
     const self2 = this;
     const headers = {};
-    utils_default.forEach(this, (value, header) => {
-      const key = utils_default.findKey(headers, header);
+    utils_default.forEach(this, (value, header2) => {
+      const key = utils_default.findKey(headers, header2);
       if (key) {
         self2[key] = normalizeValue(value);
-        delete self2[header];
+        delete self2[header2];
         return;
       }
-      const normalized = format ? formatHeader(header) : String(header).trim();
-      if (normalized !== header) {
-        delete self2[header];
+      const normalized = format ? formatHeader(header2) : String(header2).trim();
+      if (normalized !== header2) {
+        delete self2[header2];
       }
       self2[normalized] = normalizeValue(value);
       headers[normalized] = true;
@@ -37378,8 +37378,8 @@ var AxiosHeaders = class {
   }
   toJSON(asStrings) {
     const obj = /* @__PURE__ */ Object.create(null);
-    utils_default.forEach(this, (value, header) => {
-      value != null && value !== false && (obj[header] = asStrings && utils_default.isArray(value) ? value.join(", ") : value);
+    utils_default.forEach(this, (value, header2) => {
+      value != null && value !== false && (obj[header2] = asStrings && utils_default.isArray(value) ? value.join(", ") : value);
     });
     return obj;
   }
@@ -37387,7 +37387,7 @@ var AxiosHeaders = class {
     return Object.entries(this.toJSON())[Symbol.iterator]();
   }
   toString() {
-    return Object.entries(this.toJSON()).map(([header, value]) => header + ": " + value).join("\n");
+    return Object.entries(this.toJSON()).map(([header2, value]) => header2 + ": " + value).join("\n");
   }
   getSetCookie() {
     const value = this.get("set-cookie");
@@ -37407,7 +37407,7 @@ var AxiosHeaders = class {
     targets.forEach((target) => computed.set(target));
     return computed;
   }
-  static accessor(header) {
+  static accessor(header2) {
     const internals = this[$internals] = this[$internals] = {
       accessors: {}
     };
@@ -37420,7 +37420,7 @@ var AxiosHeaders = class {
         accessors[lHeader] = true;
       }
     }
-    utils_default.isArray(header) ? header.forEach(defineAccessor) : defineAccessor(header);
+    utils_default.isArray(header2) ? header2.forEach(defineAccessor) : defineAccessor(header2);
     return this;
   }
 };
@@ -38812,10 +38812,10 @@ var ZlibHeaderTransformStream = class extends import_stream3.default.Transform {
     if (chunk.length !== 0) {
       this._transform = this.__transform;
       if (chunk[0] !== 120) {
-        const header = Buffer.alloc(2);
-        header[0] = 120;
-        header[1] = 156;
-        this.push(header, encoding);
+        const header2 = Buffer.alloc(2);
+        header2[0] = 120;
+        header2[1] = 156;
+        this.push(header2, encoding);
       }
     }
     this.__transform(chunk, encoding, callback);
@@ -39584,9 +39584,9 @@ function stripMatchingHeaders(headers, sensitiveSet) {
   if (!headers) {
     return;
   }
-  Object.keys(headers).forEach((header) => {
-    if (sensitiveSet.has(header.toLowerCase())) {
-      delete headers[header];
+  Object.keys(headers).forEach((header2) => {
+    if (sensitiveSet.has(header2.toLowerCase())) {
+      delete headers[header2];
     }
   });
 }
@@ -39774,8 +39774,8 @@ var http2Transport = {
       [HTTP2_HEADER_METHOD]: options.method,
       [HTTP2_HEADER_PATH]: options.path
     };
-    utils_default.forEach(headers, (header, name) => {
-      name.charAt(0) !== ":" && (http2Headers[name] = header);
+    utils_default.forEach(headers, (header2, name) => {
+      name.charAt(0) !== ":" && (http2Headers[name] = header2);
     });
     const req = session.request(http2Headers);
     req.once("response", (responseHeaders) => {
@@ -40201,8 +40201,8 @@ var http_default = isHttpAdapterSupported && function httpAdapter(config2) {
             );
           }
           const sensitiveSet = /* @__PURE__ */ new Set();
-          for (const header of sensitiveHeaders) {
-            if (!utils_default.isString(header)) {
+          for (const header2 of sensitiveHeaders) {
+            if (!utils_default.isString(header2)) {
               return reject(
                 new AxiosError_default(
                   "sensitiveHeaders must be an array of strings",
@@ -40211,7 +40211,7 @@ var http_default = isHttpAdapterSupported && function httpAdapter(config2) {
                 )
               );
             }
-            sensitiveSet.add(header.toLowerCase());
+            sensitiveSet.add(header2.toLowerCase());
           }
           if (sensitiveSet.size) {
             options.sensitiveHeaders = Array.from(sensitiveSet);
@@ -42332,6 +42332,106 @@ var PrTooLargeError = class extends Error {
   reason;
 };
 
+// src/vcs/http-retry.ts
+init_define_STACK_PROMPTS();
+var RETRY_DELAYS_MS = [3e3, 24e3, 96e3];
+var MAX_RETRIES = RETRY_DELAYS_MS.length;
+var MAX_DELAY_MS = 96e3;
+var RETRY_BUDGET_MS = 18e4;
+var OPTIONAL_RETRY_BUDGET_MS = 3e4;
+var METHODS = /* @__PURE__ */ new Set(["get", "post", "put", "delete"]);
+function header(err, name) {
+  const v = err.response?.headers?.[name];
+  return v == null || v === "" ? void 0 : String(v);
+}
+function describeHttpError(err) {
+  const e = err ?? {};
+  if (!e.config?.url) return null;
+  const parts = [`${(e.config.method ?? "get").toUpperCase()} ${e.config.url.split("?")[0]}`];
+  const resource = header(e, "x-ratelimit-resource");
+  const retryAfter = header(e, "retry-after");
+  if (resource) parts.push(`X-RateLimit-Resource: ${resource}`);
+  if (retryAfter) parts.push(`Retry-After: ${retryAfter}`);
+  return parts.join("; ");
+}
+function isRetryable(err, read) {
+  const e = err ?? {};
+  const status = e.response?.status;
+  if (status === 429) return true;
+  if (!read) return false;
+  if (status !== void 0) return status >= 500;
+  return e.code === "ECONNRESET" || e.code === "EAI_AGAIN";
+}
+function retryDelayMs(attempt, err) {
+  const retryAfter = Number(header(err ?? {}, "retry-after"));
+  const ms = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1e3 : RETRY_DELAYS_MS[Math.min(attempt, MAX_RETRIES - 1)];
+  return Math.min(ms, MAX_DELAY_MS);
+}
+var delay = (ms) => new Promise((resolve4) => setTimeout(resolve4, ms));
+function wrapMethods(client, wrap) {
+  return new Proxy(client, {
+    get(target, prop, receiver) {
+      if (typeof prop !== "string" || !METHODS.has(prop)) return Reflect.get(target, prop, receiver);
+      return wrap(prop, (...args) => Reflect.get(target, prop).apply(target, args));
+    }
+  });
+}
+function callTarget(url2) {
+  const raw = typeof url2 === "string" ? url2 : "";
+  if (/^https?:\/\//i.test(raw)) {
+    try {
+      const u = new URL(raw);
+      return u.host + u.pathname;
+    } catch {
+    }
+  }
+  return raw.split(/[?#]/)[0];
+}
+function limitDetails(err) {
+  const resource = header(err, "x-ratelimit-resource");
+  const retryAfter = header(err, "retry-after");
+  return [...resource ? [`X-RateLimit-Resource: ${resource}`] : [], ...retryAfter ? [`Retry-After: ${retryAfter}`] : []];
+}
+function withCallLog(client, label) {
+  return wrapMethods(client, (method, call) => async (...args) => {
+    const target = `${method.toUpperCase()} ${callTarget(args[0])}`;
+    const started = Date.now();
+    try {
+      const res = await call(...args);
+      console.log(`  [${label}] ${target} \u2192 ${res?.status ?? "ok"} (${Date.now() - started}ms)`);
+      return res;
+    } catch (err) {
+      const e = err ?? {};
+      console.log(`  [${label}] ${target} \u2192 ${e.response?.status ?? e.code ?? "error"} (${[`${Date.now() - started}ms`, ...limitDetails(e)].join("; ")})`);
+      throw err;
+    }
+  });
+}
+function withRetry(client, label, sleep2 = delay, budgetMs = RETRY_BUDGET_MS) {
+  let slept = 0;
+  let budgetLogged = false;
+  return wrapMethods(client, (method, call) => async (...args) => {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await call(...args);
+      } catch (err) {
+        if (attempt >= MAX_RETRIES || !isRetryable(err, method === "get")) throw err;
+        const ms = retryDelayMs(attempt, err);
+        if (slept + ms > budgetMs) {
+          if (!budgetLogged) {
+            budgetLogged = true;
+            console.warn(`  [${label}] retry budget (${budgetMs / 1e3}s) spent - failing without further retries`);
+          }
+          throw err;
+        }
+        slept += ms;
+        console.warn(`  [${label}] retry ${attempt + 1}/${MAX_RETRIES} in ${ms / 1e3}s`);
+        await sleep2(ms);
+      }
+    }
+  });
+}
+
 // src/vcs/bitbucket.ts
 var REQUEST_TIMEOUT_MS = 3e4;
 function threadMembers(comments, reviewIds) {
@@ -42365,6 +42465,9 @@ function threadMembers(comments, reviewIds) {
 }
 var BitbucketAdapter = class {
   client;
+  redirectClient;
+  // Own small budget, so a rate-limited optional lookup cannot spend the waits that required calls need.
+  optionalClient;
   workspace;
   authHeader;
   baseHost;
@@ -42376,14 +42479,17 @@ var BitbucketAdapter = class {
     } catch {
       this.baseHost = "";
     }
-    this.client = axios_default.create({
+    const logged = withCallLog(axios_default.create({
       baseURL: baseUrl,
       timeout: REQUEST_TIMEOUT_MS,
       headers: {
         Authorization: this.authHeader,
         "Content-Type": "application/json"
       }
-    });
+    }), "bitbucket");
+    this.client = withRetry(logged, "bitbucket");
+    this.optionalClient = withRetry(logged, "bitbucket", void 0, OPTIONAL_RETRY_BUDGET_MS);
+    this.redirectClient = withRetry(withCallLog(axios_default, "bitbucket"), "bitbucket");
   }
   /** Follow 302 redirects while preserving auth (axios strips auth on redirect).
    *  Only re-attach auth on same-host redirects — never leak the token to another host. */
@@ -42400,7 +42506,7 @@ var BitbucketAdapter = class {
       if (!sameHost) {
         console.warn(`  Redirect to a different host \u2014 not forwarding auth`);
       }
-      return axios_default.get(location, {
+      return this.redirectClient.get(location, {
         ...config2,
         timeout: REQUEST_TIMEOUT_MS,
         headers: sameHost ? { ...config2.headers, Authorization: this.authHeader } : { ...config2.headers }
@@ -42465,7 +42571,7 @@ var BitbucketAdapter = class {
   async getRepoFileContent(filePath, ref = "HEAD") {
     const repoSlug = this.getRepoSlug();
     try {
-      const { data } = await this.client.get(
+      const { data } = await this.optionalClient.get(
         `/repositories/${this.workspace}/${repoSlug}/src/${ref}/${filePath}`,
         { responseType: "text" }
       );
@@ -43018,7 +43124,7 @@ var AzureDevOpsAdapter = class {
   prId = "";
   constructor(baseUrl, org, project, pat, accessToken = "") {
     this.authHeader = accessToken ? `Bearer ${accessToken}` : "Basic " + Buffer.from(`:${pat}`).toString("base64");
-    this.client = axios_default.create({
+    this.client = withCallLog(axios_default.create({
       baseURL: `${baseUrl}/${encodeURIComponent(org)}/${encodeURIComponent(project)}/_apis/git`,
       headers: {
         Authorization: this.authHeader,
@@ -43026,7 +43132,7 @@ var AzureDevOpsAdapter = class {
       },
       params: { "api-version": "7.1" }
       // required on every Azure DevOps call
-    });
+    }), "azure");
     console.warn("Azure DevOps adapter is experimental (WIP) \u2014 validated live on cloud Services (reviews + reply flow); on-prem Server is unverified.");
   }
   async getPullRequestInfo(prId) {
@@ -43370,7 +43476,7 @@ var GitHubAdapter = class {
   owner;
   constructor(baseUrl, owner, token) {
     this.owner = owner;
-    this.client = axios_default.create({
+    this.client = withCallLog(axios_default.create({
       baseURL: baseUrl,
       timeout: REQUEST_TIMEOUT_MS2,
       headers: {
@@ -43379,7 +43485,7 @@ var GitHubAdapter = class {
         "X-GitHub-Api-Version": "2022-11-28",
         "Content-Type": "application/json"
       }
-    });
+    }), "github");
   }
   async getPullRequestInfo(prId) {
     const { data } = await this.client.get(`${this.repoPath()}/pulls/${prId}`);
@@ -43538,9 +43644,9 @@ var GitHubAdapter = class {
     }
     return items;
   }
-  nextLink(header) {
-    if (typeof header !== "string") return null;
-    for (const part of header.split(",")) {
+  nextLink(header2) {
+    if (typeof header2 !== "string") return null;
+    for (const part of header2.split(",")) {
       const m = part.match(/<([^>]+)>\s*;\s*rel="next"/);
       if (m) return m[1];
     }
@@ -43976,15 +44082,27 @@ async function loadPrompt(adapter2, prInfo, localPromptPath, changedFiles, diff)
     console.log(`  PR changes are confined to "${moduleDir}/" \u2014 will also check it for instructions`);
     paths.push(`${moduleDir}/${REPO_PROMPT_FILE}`, `${moduleDir}/docs/${REPO_PROMPT_FILE}`);
   }
+  let lookupFailed = false;
+  const fetchOptional = async (path4, ref) => {
+    if (lookupFailed) return null;
+    try {
+      return await adapter2.getRepoFileContent(path4, ref);
+    } catch (err) {
+      lookupFailed = true;
+      const where = describeHttpError(err);
+      console.warn(`Warning: lookup of ${REPO_PROMPT_FILE} failed (${err.message}${where ? `; ${where}` : ""}) - continuing without repo instructions`);
+      return null;
+    }
+  };
   for (const ref of [prInfo.sourceCommit, prInfo.targetBranch]) {
     for (const path4 of paths) {
-      let repoPrompt = await adapter2.getRepoFileContent(path4, ref);
+      let repoPrompt = await fetchOptional(path4, ref);
       if (repoPrompt) {
         if (looksLikeSymlink(repoPrompt)) {
           const dir = path4.includes("/") ? path4.slice(0, path4.lastIndexOf("/")) : "";
           const resolved2 = resolveSymlink(dir, repoPrompt.trim());
           console.log(`  ${path4} is a symlink \u2192 ${resolved2}`);
-          repoPrompt = await adapter2.getRepoFileContent(resolved2, ref);
+          repoPrompt = await fetchOptional(resolved2, ref);
           if (!repoPrompt) continue;
         }
         console.log(`Using repo-specific prompt from ${path4} (${ref.slice(0, 12)})`);
@@ -44254,8 +44372,8 @@ var OpenRouterProvider = class {
       } catch (err) {
         if (isOpenRouterError(err)) throw err;
         lastErr = err;
-        if (attempt < opts2.maxRetries && isRetryable(err)) {
-          await delay(retryDelayMs(attempt, err));
+        if (attempt < opts2.maxRetries && isRetryable2(err)) {
+          await delay2(retryDelayMs2(attempt, err));
           continue;
         }
         throw axiosToError(err);
@@ -44335,19 +44453,19 @@ function axiosToError(err) {
   const message = errBody?.message ?? ax.message ?? "OpenRouter request failed";
   return openRouterError(status, message, errBody?.code);
 }
-function isRetryable(err) {
+function isRetryable2(err) {
   const ax = err;
   if (ax.code === "ECONNABORTED" || ax.code === "ETIMEDOUT") return false;
   if (!ax.response) return true;
   const s = ax.response.status ?? 0;
   return s === 429 || s >= 500;
 }
-function retryDelayMs(attempt, err) {
+function retryDelayMs2(attempt, err) {
   const retryAfter = Number(err.response?.headers?.["retry-after"]);
   if (Number.isFinite(retryAfter) && retryAfter > 0) return retryAfter * 1e3;
   return Math.min(500 * 2 ** attempt, 8e3);
 }
-function delay(ms) {
+function delay2(ms) {
   return new Promise((resolve4) => setTimeout(resolve4, ms));
 }
 
@@ -44398,14 +44516,14 @@ function filterDiff(diff, excludePatterns) {
 function parseChangedFiles(diff) {
   const files = [];
   for (const section of diff.split(/(?=^diff --git )/m)) {
-    const header = section.match(/^diff --git a\/(.+?) b\/(.+)$/m);
-    if (!header) continue;
+    const header2 = section.match(/^diff --git a\/(.+?) b\/(.+)$/m);
+    if (!header2) continue;
     const meta = section.split(/^@@/m)[0];
     const renamedTo = meta.match(/^rename to (.+)$/m)?.[1];
     const newPath = meta.match(/^\+\+\+ b\/(.+)$/m)?.[1];
     const oldPath = meta.match(/^--- a\/(.+)$/m)?.[1];
     const status = /^new file mode /m.test(meta) ? "added" : /^deleted file mode /m.test(meta) ? "deleted" : renamedTo ? "renamed" : "modified";
-    const path4 = (renamedTo ?? newPath ?? oldPath ?? header[2]).replace(/\t.*$/, "");
+    const path4 = (renamedTo ?? newPath ?? oldPath ?? header2[2]).replace(/\t.*$/, "");
     files.push({ path: path4, status });
   }
   return files;
@@ -46637,7 +46755,7 @@ function getAgentVersion() {
     const pkg = JSON.parse((0, import_fs4.readFileSync)(pkgPath, "utf-8"));
     return pkg.version;
   } catch {
-    if (true) return "0.0.52";
+    if (true) return "0.0.53";
     return "unknown";
   }
 }
@@ -46649,7 +46767,7 @@ function getBuildCommit() {
     const dirty = (0, import_child_process.execSync)("git status --porcelain", opts2).toString().trim() ? "-dirty" : "";
     return hash + dirty;
   } catch {
-    if (true) return "20c40c1";
+    if (true) return "526a22a";
     return "unknown";
   }
 }
@@ -47792,9 +47910,10 @@ Starting review for PR #${prId}`);
     if (e.usage) {
       addUsage(ctx, e.usage);
     }
+    const where = describeHttpError(err);
     error = {
       type: e.constructor.name,
-      message: e.message,
+      message: where ? `${e.message} [${where}]` : e.message,
       status: e.status ?? null
     };
   }
