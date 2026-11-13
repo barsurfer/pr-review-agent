@@ -6,6 +6,8 @@ export interface LLMUsage {
   // Provider-reported USD for the call (OpenRouter with usage.include); unset for Anthropic, which
   // has no cost field — callers fall back to the static pricing table when this is absent.
   cost_usd?: number
+  // Subset of output_tokens spent on reasoning, set only when the provider reports a positive count.
+  reasoning_tokens?: number
 }
 
 export interface LLMOptions {

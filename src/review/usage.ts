@@ -26,6 +26,10 @@ function hash12(s: string): string {
   return createHash('sha256').update(s).digest('hex').slice(0, 12)
 }
 
+function candidateRows(list: Array<ReviewFinding & { origin: CandidateOrigin }>): NonNullable<UsageRecord['review_candidates']> {
+  return list.map((f, i) => ({ id: candidateId(i), origin: f.origin, severity: f.severity, title: f.title, file: f.file ?? null, lines: f.lines ?? null, body: f.body }))
+}
+
 function firstSentence(body: string): string {
   const s = body.trim()
   return (s.match(/^.*?[.!?](?=\s|$)/)?.[0] ?? s).trim()
@@ -61,7 +65,7 @@ export interface UsageRecord {
   skip_reason: string | null
   model: string
   effort: string | null
-  tokens: { input: number; output: number; cache_read: number; cache_write: number; estimated_input: number }
+  tokens: { input: number; output: number; cache_read: number; cache_write: number; estimated_input: number; reasoning?: number }
   cost_usd: number
   judge_model: string | null
   judge_effort: string | null
@@ -85,6 +89,7 @@ export interface UsageRecord {
   anchored_findings: Array<{ anchor: string; severity: ReviewFinding['severity']; type: IssueType; description: string; proposal?: string; quality_action?: string }> | null
   // Candidates are stored once; judge_decisions join to them by candidate_id.
   review_candidates: Array<{ id: string; origin: CandidateOrigin; severity: ReviewFinding['severity']; title: string; file: string | null; lines: string | null; body: string }> | null
+  unjudged_candidates?: NonNullable<UsageRecord['review_candidates']>
   judge_decisions: AppliedDecision[] | null
   judge_anomalies: JudgeAnomalies | null
   judge_policy: { keep_minor: boolean; keep_unverified: boolean; file_context: boolean } | null
@@ -300,6 +305,7 @@ export function buildUsageRecord(
       cache_read: ctx.usage.cache_read,
       cache_write: ctx.usage.cache_write,
       estimated_input: ctx.estimatedInputTokens,
+      ...(ctx.usage.reasoning ? { reasoning: ctx.usage.reasoning } : {}),
     },
     cost_usd: reviewerCost + (judgeCost ?? 0) + (breadthCost ?? 0) + (secondLookCost ?? 0) + lensCost,
     judge_model: judgeModel,
@@ -333,9 +339,10 @@ export function buildUsageRecord(
         })
       : null,
     review_candidates: ctx.judgeDecisions && ctx.reviewObject
-      ? (ctx.judgeCandidates ?? ctx.reviewObject.findings.map(f => ({ ...f, origin: 'review' as const })))
-          .map((f, i) => ({ id: candidateId(i), origin: f.origin, severity: f.severity, title: f.title, file: f.file ?? null, lines: f.lines ?? null, body: f.body }))
+      ? candidateRows(ctx.judgeCandidates ?? ctx.reviewObject.findings.map(f => ({ ...f, origin: 'review' as const })))
       : null,
+    // Only when the judge threw and the run failed, so findings that were never judged or posted stay diagnosable.
+    ...(error && ctx.judgeStatus === 'failed' && ctx.judgeCandidates ? { unjudged_candidates: candidateRows(ctx.judgeCandidates) } : {}),
     judge_decisions: ctx.judgeDecisions ?? null,
     judge_anomalies: ctx.judgeAnomalies ?? null,
     judge_policy: judgeModel && judgeTokens

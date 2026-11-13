@@ -2,7 +2,8 @@
 // Review orchestration — state machine only
 // ---------------------------------------------------------------------------
 
-import { config, modelContextWindow } from '../config.js'
+import { config } from '../config.js'
+import { contextWindowFor } from '../llm/context-window.js'
 import { loadPrompt } from '../prompt/loader.js'
 import { fetchContext } from '../context/fetcher.js'
 import { runReview, runCommentResponse, runJudge, runBreadth, runLens } from './client.js'
@@ -323,11 +324,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         lastReview.body,
         ctx.replies!
       )
-      ctx.usage.input_tokens += result.usage.input_tokens
-      ctx.usage.output_tokens += result.usage.output_tokens
-      ctx.usage.cache_read += result.usage.cache_read_input_tokens ?? 0
-      ctx.usage.cache_write += result.usage.cache_creation_input_tokens ?? 0
-      if (result.usage.cost_usd !== undefined) ctx.usage.cost_usd = (ctx.usage.cost_usd ?? 0) + result.usage.cost_usd
+      addUsage(ctx, result.usage)
 
       const replyBody = result.text.trimEnd() + buildReplyFooter(config.agentIdentity, replyModel, getJobUrl())
 
@@ -391,9 +388,9 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
 
       let s = sizes()
       // Input budget: MAX_INPUT_TOKENS and the context window (minus output reserve), whichever is smaller, so a big diff degrades/skips instead of hitting a 400.
-      // The diff goes to both reviewer and judge, so cap by the smaller window; MODEL_CONTEXT_TOKENS overrides the reviewer's derived window.
-      const reviewerWindow = config.anthropic.modelContextTokens > 0 ? config.anthropic.modelContextTokens : modelContextWindow(config.anthropic.model)
-      const ctxWindow = config.judge.model ? Math.min(reviewerWindow, modelContextWindow(config.judge.model)) : reviewerWindow
+      // The diff goes to both reviewer and judge, so cap by the smaller window.
+      const reviewerWindow = contextWindowFor(config.anthropic.model, true)
+      const ctxWindow = config.judge.model ? Math.min(reviewerWindow, contextWindowFor(config.judge.model)) : reviewerWindow
       const ctxCap = ctxWindow > 0 ? ctxWindow - config.anthropic.maxTokens : 0
       const limits = [config.anthropic.maxInputTokens, ctxCap].filter(n => n > 0)
       const max = limits.length ? Math.min(...limits) : 0
@@ -488,11 +485,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         ctx.lensRecommendations = recs
         console.log(`  Lens recommendations: ${recs ? recs.map(r => `${r.lens} (${r.reason})`).join(', ') || 'none' : 'unavailable'}`)
       }
-      ctx.usage.input_tokens += result.usage.input_tokens
-      ctx.usage.output_tokens += result.usage.output_tokens
-      ctx.usage.cache_read += result.usage.cache_read_input_tokens ?? 0
-      ctx.usage.cache_write += result.usage.cache_creation_input_tokens ?? 0
-      if (result.usage.cost_usd !== undefined) ctx.usage.cost_usd = (ctx.usage.cost_usd ?? 0) + result.usage.cost_usd
+      addUsage(ctx, result.usage)
       return State.CHECK_NO_CHANGE
     }
 
@@ -537,7 +530,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       const briefing = breadthBriefing(firstPass, coverage.untouched, ctx.breadthPlan)
       const estimate = ctx.estimatedInputTokens + Math.ceil((system.length - ctx.prompt!.content.length + briefing.length) / 4)
       // A 0 limit means "disabled", as in ESTIMATE_TOKENS; without this filter MAX_INPUT_TOKENS=0 would skip every breadth pass.
-      const limits = [config.anthropic.maxInputTokens, modelContextWindow(model) - config.anthropic.maxTokens].filter(n => n > 0)
+      const limits = [config.anthropic.maxInputTokens, contextWindowFor(model) - config.anthropic.maxTokens].filter(n => n > 0)
       const budget = limits.length ? Math.min(...limits) : Infinity
       if (estimate > budget) {
         ctx.breadthStatus = 'skipped_budget'
@@ -568,7 +561,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         console.log(`  Breadth review: ${coverage.untouched.length} untouched file(s) → ${result.findings.length} finding(s)`)
       } catch (err: unknown) {
         // A truncated response carries its usage; count it so the record shows what the failed call cost.
-        const e = err as Error & { usage?: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number; cost_usd?: number } }
+        const e = err as Error & { usage?: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number; cost_usd?: number; reasoning_tokens?: number } }
         if (e.usage) {
           ctx.breadthUsage = { input_tokens: e.usage.input_tokens, output_tokens: e.usage.output_tokens, cost_usd: e.usage.cost_usd }
           addUsage(ctx, e.usage)
@@ -607,7 +600,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       // shownLength on the numbered payloads (diff + file contexts) so the guard counts the line-number gutter, as ESTIMATE_TOKENS does.
       const shownSL = (s: string) => shownLength(s, config.review.lineNumbers)
       const estimate = Math.ceil((system.length + shownSL(restrictedDiff) + briefing.length + contexts.reduce((n, c) => n + shownSL(c.content), 0)) / 4)
-      const limits = [config.anthropic.maxInputTokens, modelContextWindow(model) - config.anthropic.maxTokens].filter(n => n > 0)
+      const limits = [config.anthropic.maxInputTokens, contextWindowFor(model) - config.anthropic.maxTokens].filter(n => n > 0)
       const budget = limits.length ? Math.min(...limits) : Infinity
       if (estimate > budget) {
         ctx.secondLookStatus = 'skipped_budget'
@@ -636,7 +629,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         ctx.secondLookStatus = 'succeeded'
         console.log(`  Second-look: ${flagged.length} flagged file(s) → ${result.findings.length} additional finding(s)`)
       } catch (err: unknown) {
-        const e = err as Error & { usage?: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number; cost_usd?: number } }
+        const e = err as Error & { usage?: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number; cost_usd?: number; reasoning_tokens?: number } }
         if (e.usage) {
           ctx.secondLookUsage = { input_tokens: e.usage.input_tokens, output_tokens: e.usage.output_tokens, cost_usd: e.usage.cost_usd }
           addUsage(ctx, e.usage)
@@ -661,7 +654,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
 
       const effort = config.lenses.model ? '' : config.review.effort
       const earlier = [...(ctx.reviewObject?.findings ?? []), ...(ctx.breadthFindings ?? []), ...(ctx.secondLookFindings ?? [])]
-      const limits = [config.anthropic.maxInputTokens, modelContextWindow(model) - config.anthropic.maxTokens].filter(n => n > 0)
+      const limits = [config.anthropic.maxInputTokens, contextWindowFor(model) - config.anthropic.maxTokens].filter(n => n > 0)
       const budget = limits.length ? Math.min(...limits) : Infinity
       let halt: LensStatus | undefined
       for (const lens of lenses) {
@@ -703,7 +696,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
           run.status = 'succeeded'
           console.log(`  Lens ${lens.name}: ${result.findings.length} finding(s)`)
         } catch (err: unknown) {
-          const e = err as Error & { usage?: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number; cost_usd?: number } }
+          const e = err as Error & { usage?: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number; cost_usd?: number; reasoning_tokens?: number } }
           if (e.usage) {
             run.usage = { input_tokens: e.usage.input_tokens, output_tokens: e.usage.output_tokens, cost_usd: e.usage.cost_usd }
             addUsage(ctx, e.usage)
@@ -833,11 +826,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
           console.log(`  Judge finding scores: ${result.scores.map(s => `${s.severity} ${s.score}/10`).join(', ')}`)
         }
         ctx.judgeUsage = { input_tokens: result.usage.input_tokens, output_tokens: result.usage.output_tokens, cost_usd: result.usage.cost_usd }
-        ctx.usage.input_tokens += result.usage.input_tokens
-        ctx.usage.output_tokens += result.usage.output_tokens
-        ctx.usage.cache_read += result.usage.cache_read_input_tokens ?? 0
-        ctx.usage.cache_write += result.usage.cache_creation_input_tokens ?? 0
-        if (result.usage.cost_usd !== undefined) ctx.usage.cost_usd = (ctx.usage.cost_usd ?? 0) + result.usage.cost_usd
+        addUsage(ctx, result.usage)
         ctx.judgeStatus = 'succeeded'
       } catch (err: unknown) {
         ctx.judgeStatus = 'failed'
@@ -1021,15 +1010,11 @@ export async function review(adapter: VCSAdapter, prId: string, dryRun = false, 
     }
   } catch (err: unknown) {
     ctx.action = 'ERROR'
-    const e = err as Error & { status?: number; usage?: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number; cost_usd?: number } }
+    const e = err as Error & { status?: number; usage?: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number; cost_usd?: number; reasoning_tokens?: number } }
     // A truncated response carries its usage — fold it in so the record shows the real token spend
     // (often large: that is why it truncated) instead of zeros.
     if (e.usage) {
-      ctx.usage.input_tokens += e.usage.input_tokens
-      ctx.usage.output_tokens += e.usage.output_tokens
-      ctx.usage.cache_read += e.usage.cache_read_input_tokens ?? 0
-      ctx.usage.cache_write += e.usage.cache_creation_input_tokens ?? 0
-      if (e.usage.cost_usd !== undefined) ctx.usage.cost_usd = (ctx.usage.cost_usd ?? 0) + e.usage.cost_usd
+      addUsage(ctx, e.usage)
     }
     error = {
       type: e.constructor.name,

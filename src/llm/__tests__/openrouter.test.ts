@@ -314,9 +314,40 @@ describe('OpenRouterProvider effort', () => {
       .mockResolvedValueOnce(okText('b', { ...reasoningUsage, cost: 0.0002396 }))
     const byok = await createProvider('k').complete('s', 'u', { ...opts, effort: 'high' })
     const credits = await createProvider('k').complete('s', 'u', { ...opts, effort: 'high' })
-    const expected = { input_tokens: 306, output_tokens: 418, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, cost_usd: 0.0002396 }
+    const expected = { input_tokens: 306, output_tokens: 418, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, cost_usd: 0.0002396, reasoning_tokens: 312 }
     expect(byok.usage).toEqual(expected)
     expect(credits.usage).toEqual(expected)
+  })
+
+  describe('reasoning_tokens on usage', () => {
+    const withDetails = (d: unknown) => okText('a', { prompt_tokens: 10, completion_tokens: 20, completion_tokens_details: d })
+    const reasoningOf = async (d: unknown) => {
+      post.mockResolvedValueOnce(withDetails(d))
+      return (await createProvider('k').complete('s', 'u', opts)).usage
+    }
+
+    it('is set when reported above zero and leaves output_tokens as completion_tokens', async () => {
+      const usage = await reasoningOf({ reasoning_tokens: 7 })
+      expect(usage.reasoning_tokens).toBe(7)
+      expect(usage.output_tokens).toBe(20)
+    })
+
+    it.each([['missing details', undefined], ['missing field', {}], ['zero', { reasoning_tokens: 0 }], ['non-number', { reasoning_tokens: '9' }]])('is absent for %s', async (_l, d) => {
+      expect('reasoning_tokens' in await reasoningOf(d)).toBe(false)
+    })
+
+    it('sums across the structured resend, including when the resend itself fails', async () => {
+      const schema = { required: ['verdict'] }
+      const partial = (r: number) => okText(JSON.stringify({}), { prompt_tokens: 10, completion_tokens: 20, completion_tokens_details: { reasoning_tokens: r } })
+      post.mockResolvedValueOnce(partial(5)).mockResolvedValueOnce(okText(JSON.stringify({ verdict: 'ok' }), { prompt_tokens: 10, completion_tokens: 20, completion_tokens_details: { reasoning_tokens: 8 } }))
+      const ok = await createProvider('k').completeStructured('s', 'u', schema, opts)
+      expect(ok.usage.reasoning_tokens).toBe(13)
+      expect(ok.usage.output_tokens).toBe(40)
+
+      post.mockResolvedValueOnce(partial(5)).mockResolvedValueOnce(partial(6))
+      const err = await createProvider('k').completeStructured('s', 'u', schema, opts).catch((e: unknown) => e as { usage: { reasoning_tokens?: number } })
+      expect((err as { usage: { reasoning_tokens?: number } }).usage.reasoning_tokens).toBe(11)
+    })
   })
 
   describe('structured output with reasoning content in the message', () => {

@@ -14,6 +14,7 @@ import { resolveTrigger } from './review/trigger.js'
 import { resolveCheckedCommit } from './review/checked-commit.js'
 import { validateLocalPrompt, loadPrompt } from './prompt/loader.js'
 import { runBenchmark } from './benchmark.js'
+import { resolveContextWindows } from './llm/context-window.js'
 import type { VCSAdapter } from './vcs/adapter.js'
 
 const program = new Command()
@@ -233,6 +234,7 @@ async function main(): Promise<void> {
 
   // A bare --force means re-review; an empty value (how CI passes an unset parameter) must run exactly like an absent flag, pre-post race check included.
   const forceMode = opts.force === true ? 're-review' : typeof opts.force === 'string' && opts.force.trim() ? opts.force as 'clean' | 're-review' : 'off'
+  await resolveContextWindows()
   await review(adapter, opts.prId!, opts.dryRun ?? false, opts.prompt, forceMode, opts.logUsage ?? true, opts.repoSlug ?? '', undefined, trigger, checkedCommit)
 }
 

@@ -201,7 +201,7 @@ Off by default. Set `LLM_PROVIDER=openrouter` and `OPENROUTER_API_KEY` (or reuse
 
 - Prompts stay Claude-tuned; structured-output reliability varies per routed model, so pick models that list `response_format`/`structured_outputs` in OpenRouter's `supported_parameters`.
 - Real per-call USD cost is taken from OpenRouter and logged.
-- Set `MODEL_CONTEXT_TOKENS` to the routed model's real window — non-Claude slugs otherwise fall back to a 200K assumption.
+- Non-Claude slugs take their context window from OpenRouter's public model list (one request per run, only for models the agent doesn't map), else a 200K fallback with a startup warning; `MODEL_CONTEXT_TOKENS` overrides it.
 - ReviewBench defaults to Anthropic and is unchanged unless you set these env vars.
 
 Details: [docs/context/llm/structured-output.md](docs/context/llm/structured-output.md), vars in [docs/reference/env-vars.md](docs/reference/env-vars.md).
@@ -414,7 +414,7 @@ All credentials and settings are provided via environment variables.
 | `JUDGING_MODEL` | `claude-sonnet-5` | Judge model for finding validation — on by default; set empty to disable |
 | `REVIEW_EFFORT` / `JUDGE_EFFORT` | (model default) | Thinking effort for reviewer / judge (`low`\|`medium`\|`high`\|`xhigh`\|`max`) |
 | `MAX_OUTPUT_TOKENS` | `32000` | Max output tokens per reviewer/judge call (raise for big PRs at high effort) |
-| `MODEL_CONTEXT_TOKENS` | `0` (derive) | Override the model's context-window size used for budgeting |
+| `MODEL_CONTEXT_TOKENS` | `0` (derive) | Context-window size for budgeting: replaces the reviewer's window and fills in for any other model the agent doesn't map (a mapped judge still caps) |
 | `MAX_REPLY_COMMENTS` | `5` | Max agent replies per PR (0 = unlimited) |
 | `SKIP_SOURCE_BRANCHES` / `SKIP_TARGET_BRANCHES` | `main,master,release/*,hotfix/*` / `main,master` | Branch-exclusion globs; per repo via `--skip-source-branches=` / `--skip-target-branches=` |
 | `ONLY_TARGET_BRANCHES` | — (off) | When set, skip PRs whose target matches none of these globs (e.g. stacked PRs until retargeted); the skip lists win on overlap. Main-only repo: `SKIP_TARGET_BRANCHES=` + `ONLY_TARGET_BRANCHES=main` + `SKIP_SOURCE_BRANCHES=main,master`. See [skip-logic.md](docs/context/review/skip-logic.md) |

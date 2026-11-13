@@ -168,10 +168,11 @@ export async function runBundledReview(ctx: ReviewContext, maxInputTokens: numbe
   return { ok: true }
 }
 
-export function addUsage(ctx: ReviewContext, u: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number; cost_usd?: number }): void {
+export function addUsage(ctx: ReviewContext, u: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number; cost_usd?: number; reasoning_tokens?: number }): void {
   ctx.usage.input_tokens += u.input_tokens
   ctx.usage.output_tokens += u.output_tokens
   ctx.usage.cache_read += u.cache_read_input_tokens ?? 0
   ctx.usage.cache_write += u.cache_creation_input_tokens ?? 0
   if (u.cost_usd !== undefined) ctx.usage.cost_usd = (ctx.usage.cost_usd ?? 0) + u.cost_usd
+  if (u.reasoning_tokens) ctx.usage.reasoning = (ctx.usage.reasoning ?? 0) + u.reasoning_tokens
 }

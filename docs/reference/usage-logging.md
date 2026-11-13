@@ -106,6 +106,7 @@ Every finding array (`review_candidates`, `judge_decisions`, `finding_scores`, `
 | `tokens.input` | `number` | Input tokens (from API responses), summed over every model call in the run: reviewer or reply, breadth, second-look, lenses, judge |
 | `tokens.output` | `number` | Output tokens (from API responses), summed the same way |
 | `tokens.estimated_input` | `number` | Pre-call estimate (`chars / 4`) — compare with `tokens.input` for accuracy |
+| `tokens.reasoning` | `number` | absent | Reasoning tokens summed like `tokens.output`, of which they are a subset (output and `cost_usd` are unchanged). Present only when above 0, so records of runs without reasoning keep their shape. OpenRouter reports it today (`usage.completion_tokens_details.reasoning_tokens`); the Anthropic provider maps `usage.output_tokens_details.thinking_tokens` when the API returns it (unverified live). Run total only, no per-stage breakdown |
 | `tokens.cache_read` | `number` | Cache read tokens (reserved for prompt caching) |
 | `tokens.cache_write` | `number` | Cache write tokens (reserved for prompt caching) |
 | `cost_usd` | `number` | Total cost (reviewer + breadth + second-look + lenses + judge): the provider-reported cost where there is one (OpenRouter), else estimated from the per-model pricing table |
@@ -128,6 +129,7 @@ Every finding array (`review_candidates`, `judge_decisions`, `finding_scores`, `
 | `finding_scores` | `array \| null` | Judge per-finding `{ title, severity, score, file?, lines? }`; null if no judge |
 | `min_finding_score` | `number \| null` | Lowest kept finding score |
 | `review_candidates` | `array \| null` | Judge candidates stored once with ids (`c0…`): `{ id, origin, severity, title, file, lines, body }`, `origin` = `review` \| `breadth` \| `second_look` \| `lens:<name>`; judge-run only |
+| `unjudged_candidates` | `array` \| absent | Same rows as `review_candidates` (`{ id, origin, severity, title, file, lines, body }`), present only on an `ERROR` record whose judge call threw (`judge_status: failed`), so the candidates that were never judged or posted stay readable. Sits right after `review_candidates`, which stays null on that path. Absent on every other record, including a judge failure the run absorbed (`--benchmark`, or a clean reviewer with breadth-only candidates) |
 | `judge_decisions` | `array \| null` | One per candidate: `{ candidate_id, reason_category, reclassified_from, action, original_severity, final_severity, score, evidence, note, rewritten, anchor_source, anchor_file, anchor_lines }`; the resolved anchor is logged for **every decided candidate** (kept or dropped) so an offline re-score can place a finding a different policy would keep. Flag-gated extras, absent otherwise: `anchor_basis` (`ENABLE_JUDGE_SHOWN_CONTEXT_ANCHORS`); `duplicate_of`, `invalid_duplicate`, `expansions`, `quality_action`, `retained_candidate_id` (`ENABLE_JUDGE_QUALITY`); `proposal` on kept candidates (`ENABLE_JUDGE_PROPOSALS` or `ENABLE_SUGGESTED_FIXES`). See [prompt/judge.md](../context/prompt/judge.md). Judge-run only |
 | `judge_anomalies` | `object \| null` | `{ unknown_ids, undecided, duplicate_ids, drop_without_evidence }`, plus `invalid_duplicate` under `ENABLE_JUDGE_QUALITY`; judge-run only |
 | `judge_policy` | `object \| null` | `{ keep_minor, keep_unverified, file_context }` flags in effect; only when the judge ran |
@@ -150,7 +152,7 @@ Every finding array (`review_candidates`, `judge_decisions`, `finding_scores`, `
 | `dedup_source` | `"checked_commit"` \| absent | Present when the run matched the head against the checked commit CI passed (`LAST_CHECKED_COMMIT`), kept even if the run then errored |
 | `jenkins` | `object \| null` | `{ job, build, url }` from the `JOB_NAME`/`BUILD_NUMBER`/`BUILD_URL` env vars, whatever the CI (Jenkins sets them; any other CI can export them from its own run ids), or null when all three are empty — maps a run to its build/artifact. The name predates other CIs |
 | `trigger` | `object` \| absent | `{ event, comment_author }` — raw trimmed values from `--event`/`--comment-author` (or `TRIGGER_EVENT`/`TRIGGER_COMMENT_AUTHOR`), null for the one not given, plus `event_kind` (`comment` \| `other`, from 0.0.46) only when `--event-kind`/`TRIGGER_EVENT_KIND` was given with a valid value. The key is absent when neither event nor author was given, so those records serialize as before. See [review/skip-logic.md §7](../context/review/skip-logic.md) |
-| `error` | `object \| null` | `{ type, message, status }` on failure. On a max-tokens truncation, `type` is `TruncatedResponseError` and `tokens.*` still hold the real spend (not zeros). A reviewer response whose `findings` is null or not a list gives `Structured output missing required field(s): findings` (`type` `Error`, the same as a missing key) and also keeps the spend |
+| `error` | `object \| null` | `{ type, message, status }` on failure. On a max-tokens truncation, `type` is `TruncatedResponseError` and `tokens.*` still hold the real spend (not zeros). A reviewer response whose `findings` is null or not a list gives `Structured output missing required field(s): findings` (`type` `Error`, the same as a missing key) and also keeps the spend. A missing required key (`Structured output missing required field(s): …`) keeps the spend too: both providers attach the call's usage, and on OpenRouter, which resends such a response once, the usage of both attempts |
 
 ### Action Values
 
@@ -248,6 +250,9 @@ jq -s '[.[] | select(.dedup_source=="checked_commit")] | length' results.jsonl
 
 # Error rate
 jq -s '{total: length, errors: [.[] | select(.action=="ERROR")] | length}' results.jsonl
+
+# Reasoning share of output (runs that report it)
+jq -s '[.[] | select(.tokens.reasoning) | {pr: .pr_id, reasoning: .tokens.reasoning, output: .tokens.output, share: (.tokens.reasoning / .tokens.output * 100 | round)}]' results.jsonl
 
 # Estimate vs actual tokens (accuracy check)
 jq -s '[.[] | select(.action=="REVIEW") | {pr: .pr_id, estimated: .tokens.estimated_input, actual: .tokens.input, ratio: (if .tokens.estimated_input > 0 then (.tokens.input / .tokens.estimated_input * 100 | round | tostring + "%") else "n/a" end)}]' results.jsonl

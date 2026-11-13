@@ -27,7 +27,7 @@ export class AnthropicProvider implements LLMProvider {
     // Structured output should honor the schema, but a degraded response can be valid JSON yet
     // miss required keys — fail loudly here instead of crashing later on `.length` of undefined.
     const missing = missingRequired(object, schema, false, opts.tolerateMissing)
-    if (missing.length) throw new Error(`Structured output missing required field(s): ${missing.join(', ')}`)
+    if (missing.length) throw Object.assign(new Error(`Structured output missing required field(s): ${missing.join(', ')}`), { usage: mapUsage(response.usage) })
     return { object, usage: mapUsage(response.usage) }
   }
 
@@ -62,11 +62,13 @@ function textOf(response: Anthropic.Message, maxTokens: number): string {
 }
 
 function mapUsage(u: Anthropic.Message['usage']): LLMUsage {
+  const thinking = u.output_tokens_details?.thinking_tokens
   return {
     input_tokens: u.input_tokens,
     output_tokens: u.output_tokens,
     cache_read_input_tokens: u.cache_read_input_tokens ?? 0,
     cache_creation_input_tokens: u.cache_creation_input_tokens ?? 0,
+    ...(typeof thinking === 'number' && thinking > 0 ? { reasoning_tokens: thinking } : {}),
   }
 }
 
