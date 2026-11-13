@@ -934,7 +934,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       let body = posted.text
       // After every guard and parser has read the plain text, so no reviewText consumer ever sees a block.
       if (config.judge.suggestedFixes && judgedRender) {
-        const composed = composeSuggestedFixes(ctx.judgedFindings ?? [], s => judgedRender(s, posted.order), body, COMMENT_BUDGET - todoSection.length - footer.length)
+        const composed = composeSuggestedFixes(ctx.judgedFindings ?? [], s => judgedRender(s, posted.order), body, COMMENT_BUDGET - todoSection.length - footer.length, (s, fixFree) => judgedRender(s, posted.order, fixFree))
         body = composed.text
         const dropped = ctx.proposalsDropped
         ctx.suggestedFixes = dropped ? { ...composed.stats, dropped } : composed.stats

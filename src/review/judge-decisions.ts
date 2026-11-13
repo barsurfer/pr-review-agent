@@ -29,6 +29,7 @@ export interface JudgeDecision {
   duplicate_of?: string
   additional_locations?: AdditionalLocation[]
   proposal?: unknown
+  body_without_fix?: unknown
 }
 
 export interface JudgeOutput {
@@ -72,6 +73,7 @@ export interface AppliedDecision {
   invalid_duplicate?: boolean
   expansions?: Array<{ file: string; accepted: boolean; suppressed_by?: string }>
   proposal?: string
+  body_without_fix?: string
   quality_action?: string
   retained_candidate_id?: string
 }
@@ -91,7 +93,7 @@ export interface JudgeOptions {
   codeProposals?: boolean
 }
 
-export type RenderJudged = (suffixes: ReadonlyMap<number, string>, order?: readonly number[]) => string
+export type RenderJudged = (suffixes: ReadonlyMap<number, string>, order?: readonly number[], fixFree?: ReadonlySet<number>) => string
 
 export interface JudgedReview {
   kept: KeptFinding[]
@@ -141,6 +143,14 @@ export function sanitizeCodeProposal(raw: unknown): string | undefined {
   const code = lines.map(l => (l.trim() ? l.slice(common.length) : '')).join('\n')
   if (!code || code.length > PROPOSAL_CAP || lines.length > PROPOSAL_MAX_LINES) return undefined
   return code
+}
+
+// A text half again as long as the one it replaces is not that text with the fix taken out.
+export function sanitizeBodyWithoutFix(raw: unknown, body: string): string | undefined {
+  if (typeof raw !== 'string') return undefined
+  const s = raw.trim()
+  if (!s || s.length > REWRITE_CAP || s.length > body.length * 1.5) return undefined
+  return s
 }
 const UNVERIFIED_SCORE_CAP = 5
 const NEEDS_EVIDENCE: ReadonlySet<ReasonCategory> = new Set(['incorrect', 'already_handled'])
@@ -337,7 +347,8 @@ export function applyJudgeDecisions(candidates: readonly ReviewFinding[], output
     const resolved = given.map(d => {
       const r = resolve(d, candidate, policy, idx, i >= breadthFrom, shownFor(i))
       const proposal = proposals ? (options?.codeProposals ? sanitizeCodeProposal(d.proposal) : sanitizeProposal(d.proposal)) : undefined
-      return { r: proposal ? { ...r, proposal } : r, d }
+      const withoutFix = proposal && options?.codeProposals ? sanitizeBodyWithoutFix(d.body_without_fix, r.body) : undefined
+      return { r: proposal ? { ...r, proposal, ...(withoutFix ? { body_without_fix: withoutFix } : {}) } : r, d }
     })
     const chosen = resolved.find(x => x.r.action === 'drop') ?? resolved[0]
     if (chosen.r.reclassified_from) anomalies.drop_without_evidence++
@@ -361,20 +372,21 @@ export function applyJudgeDecisions(candidates: readonly ReviewFinding[], output
       })
       return
     }
-    const { question, body, anchor, proposal, ...applied } = entry.r
+    const { question, body, anchor, proposal, body_without_fix, ...applied } = entry.r
     const isKept = entry.r.action === 'keep' || entry.r.action === 'downgrade'
     const keptProposal = proposals && isKept && proposal ? { proposal } : {}
+    const withoutFix = isKept ? body_without_fix : undefined
     if (proposals && options?.codeProposals && isKept && !proposal && typeof entry.d.proposal === 'string' && entry.d.proposal.trim()) sanitizerDropped.push(i)
     const expansion = options?.quality && isKept && entry.d.additional_locations?.length
       ? expandLocations(candidate, entry.d.additional_locations, anchor, idx)
       : null
-    decisions.push({ ...applied, candidate_id: id, ...(expansion ? { expansions: expansion.log } : {}), ...keptProposal })
+    decisions.push({ ...applied, candidate_id: id, ...(expansion ? { expansions: expansion.log } : {}), ...keptProposal, ...(withoutFix ? { body_without_fix: withoutFix } : {}) })
 
     if (entry.r.action === 'move_to_unresolved') moved.push(question ?? candidate.title)
     if (isKept) {
       kept.push({
         severity: entry.r.final_severity!, title: candidate.title, body, file: anchor.file, lines: anchor.lines,
-        score: entry.r.score!, type: candidate.type, anchorSource: anchor.source, ...keptProposal,
+        score: entry.r.score!, type: candidate.type, anchorSource: anchor.source, ...keptProposal, ...(withoutFix ? { bodyWithoutFix: withoutFix } : {}),
         ...(entry.r.quality_action ? { quality_action: entry.r.quality_action } : {}),
       })
       rows.push({ candidate: i, expansion: false, validated: entry.r.reason_category === 'validated', evidenced: !!entry.r.evidence, rescueOf: entry.r.invalid_duplicate ? index.get(normalizeId(String(entry.r.duplicate_of ?? ''))) : undefined })
@@ -388,7 +400,7 @@ export function applyJudgeDecisions(candidates: readonly ReviewFinding[], output
   if (options?.quality) dedupKept(kept, rows, decisions, idx)
 
   const scores: FindingScore[] = kept.map(k => ({ title: k.title, severity: k.severity, score: k.score!, file: k.file, lines: k.lines }))
-  const render: RenderJudged = (suffixes, order) => renderJudgedReview(kept, output, moved, canBeSplit, suffixes, order)
+  const render: RenderJudged = (suffixes, order, fixFree) => renderJudgedReview(kept, output, moved, canBeSplit, suffixes, order, fixFree)
   return {
     kept, decisions, anomalies, scores, markdown: renderJudgedReview(kept, output, moved, canBeSplit), render,
     // Kept as the code-proposal contract callers check for; POST_REVIEW reads render, which every judged review has.
@@ -521,12 +533,12 @@ function expandLocations(candidate: ReviewFinding, locations: readonly Additiona
 }
 
 // Must stay byte-compatible with what the judge used to write: Findings bullets and the Merge Confidence line are re-parsed downstream.
-export function renderJudgedReview(kept: readonly KeptFinding[], output: JudgeOutput, movedQuestions: readonly string[] = [], canBeSplit: readonly string[] = [], suffixes?: ReadonlyMap<number, string>, order?: readonly number[]): string {
+export function renderJudgedReview(kept: readonly KeptFinding[], output: JudgeOutput, movedQuestions: readonly string[] = [], canBeSplit: readonly string[] = [], suffixes?: ReadonlyMap<number, string>, order?: readonly number[], fixFree?: ReadonlySet<number>): string {
   const questions = [...(output.unresolved_questions ?? [])]
   for (const q of movedQuestions) if (!questions.includes(q)) questions.push(q)
   const review: ReviewObject = {
     summary: output.summary,
-    findings: kept.map(k => ({ severity: k.severity, title: k.title, file: k.file, lines: k.lines, body: k.body })),
+    findings: kept.map((k, i) => ({ severity: k.severity, title: k.title, file: k.file, lines: k.lines, body: fixFree?.has(i) && k.bodyWithoutFix ? k.bodyWithoutFix : k.body })),
     behavioral_diff: output.behavioral_diff ?? [],
     production_risk: output.production_risk ?? [],
     unresolved_questions: questions,
