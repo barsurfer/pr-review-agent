@@ -170,11 +170,16 @@ export interface TodoItem {
   text: string
 }
 
+const DOC_FILE = /[.](md|mdx|txt|rst)$/i
+// The agent's own heading: a line quoting it is the review format (docs, test fixtures), not a breadcrumb.
+const OWN_SECTION = /TODOs Introduced/i
+
 // Deterministic TODO/FIXME/HACK scan of added lines — catches breadcrumbs a model might miss.
 export function scanTodos(diff: string): TodoItem[] {
   const marker = /\b(TODO|FIXME|HACK)\b:?\s*(.*)/i
   const todos: TodoItem[] = []
   for (const { file, line, text } of addedLines(diff)) {
+    if (DOC_FILE.test(file) || OWN_SECTION.test(text)) continue
     const m = text.match(marker)
     if (!m) continue
     const body = m[2].trim()
