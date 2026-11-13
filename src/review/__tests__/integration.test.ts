@@ -1259,6 +1259,63 @@ describe('ENABLE_JUDGE_KEEP_TEST_GAPS: a test gap the judge drops as low_value',
   })
 })
 
+describe('ENABLE_BENCHMARK_COUNTERPART_ROWS outside a benchmark run', () => {
+  const TWO_FILES = DIFF + 'diff --git a/src/foo.ts b/src/foo.ts\n--- a/src/foo.ts\n+++ b/src/foo.ts\n@@ -1,1 +1,2 @@\n+export const foo = () => 1\n'
+  const BUG: ReviewObject['findings'][number] = { severity: 'MEDIUM', title: 'foo() result ignored', file: 'src/app.ts', lines: '11', body: 'The value foo() returns (foo.ts line 1) is dropped.', type: 'correctness' }
+  let kept: unknown[] = []
+  const run = async (on: boolean, proposals = false) => {
+    cfg.judge.model = 'judge-model'
+    cfg.judge.proposals = proposals
+    cfg.benchmarkCounterpartRows = on
+    mockReviewer(reviewWith([BUG]))
+    mockRunJudge.mockImplementation(async (_k, _m, _r, _t, _e, diff, judgeInput, _f, policy, _l, breadthFrom, options) => {
+      const judged = applyJudgeDecisions(judgeInput.findings, {
+        decisions: [{ candidate_id: 'c0', reason_category: 'validated', evidence: 'src/app.ts:11', note: 'n', score: 8, rewritten_body: 'foo() is called for nothing.' }],
+        summary: 'ok', behavioral_diff: [], production_risk: [], unresolved_questions: [], merge_confidence: 80,
+      }, policy, judgeInput.can_be_split, diff, breadthFrom, options)
+      kept = judged.kept
+      return { text: judged.markdown, usage: { input_tokens: 800, output_tokens: 300 }, scores: judged.scores, promptHash: 'judgehash', decisions: judged.decisions, anomalies: judged.anomalies, kept: judged.kept, render: judged.render }
+    })
+    const adapter = makeAdapter({
+      getDiff: vi.fn().mockResolvedValue(TWO_FILES),
+      getChangedFiles: vi.fn().mockResolvedValue([{ path: 'src/app.ts', status: 'modified' }, { path: 'src/foo.ts', status: 'modified' }]),
+    })
+    const record = (await review(adapter, '100', false))!
+    const { timestamp: _t, duration_ms: _d, ...stable } = record
+    return { record, stable, kept, body: vi.mocked(adapter.postComment).mock.calls[0][1] as string, judgeArgs: mockRunJudge.mock.calls.at(-1)! }
+  }
+  afterEach(() => { cfg.benchmarkCounterpartRows = undefined; cfg.judge.proposals = undefined })
+
+  it('flag on and off: the same posted comment, usage record and runJudge arguments, and no reviewer body on kept findings', async () => {
+    const off = await run(false)
+    const on = await run(true)
+
+    expect(on.body).toBe(off.body)
+    expect(on.stable).toStrictEqual(off.stable)
+    expect(on.judgeArgs).toStrictEqual(off.judgeArgs)
+    expect(on.judgeArgs).toHaveLength(11)
+    expect(on.kept).toStrictEqual(off.kept)
+    expect(JSON.stringify(on.kept)).not.toContain('reviewerBody')
+  })
+
+  it('with another flag that sends judge options, the options carry no counterparts', async () => {
+    const off = await run(false, true)
+    const on = await run(true, true)
+
+    expect(on.judgeArgs).toStrictEqual(off.judgeArgs)
+    expect(on.judgeArgs[11]).not.toHaveProperty('counterparts')
+    expect(on.stable).toStrictEqual(off.stable)
+    expect(on.body).toBe(off.body)
+  })
+
+  it('serializes the production record in the pre-feature shape: no candidate type, no counterpart_rows', async () => {
+    const { record } = await run(true)
+    expect(JSON.stringify({ ...record, timestamp: 'T', agent_version: 'V', duration_ms: 0, agent_commit: 'C', jenkins: null })).toBe(HEAD_SHAPE_RECORD)
+  })
+})
+
+const HEAD_SHAPE_RECORD = '{"run_id":"bitbucket--100-aaa111222333","timestamp":"T","agent_version":"V","vcs":"bitbucket","workspace":"test","repo_slug":"","pr_id":"100","pr_author":"dev","source_commit":"aaa111222333","source_branch":"feature/test","target_branch":"develop","changed_files":2,"changed_lines":3,"diff_size":{"files":{"added":0,"modified":2,"deleted":0,"renamed":0},"lines_added":3,"lines_removed":0,"reviewable_files":2,"reviewable_lines_added":3,"reviewable_lines_removed":0},"context_files_fetched":0,"degraded":false,"review_number":1,"action":"REVIEW","skip_reason":null,"model":"claude-haiku-4-5-20251001","effort":null,"tokens":{"input":1800,"output":500,"cache_read":0,"cache_write":0,"estimated_input":65},"cost_usd":0.0089,"judge_model":"judge-model","judge_effort":null,"judge_tokens":{"input":800,"output":300},"judge_cost_usd":0.0069,"duration_ms":0,"dry_run":false,"force":"off","prompt_source":"repo","agent_commit":"C","prompt_hash":"10052f24e175","judge_prompt_hash":"judgehash","judge_status":"succeeded","verdict_score":80,"computed_score":96,"review_findings":{"high":0,"medium":1,"low":0},"findings":{"high":0,"medium":1,"low":0},"finding_scores":[{"title":"foo() result ignored","severity":"MEDIUM","score":8,"file":"src/app.ts","lines":"11"}],"min_finding_score":8,"anchored_findings":[{"anchor":"src/app.ts:11","severity":"MEDIUM","type":"correctness","description":"foo() is called for nothing."}],"review_candidates":[{"id":"c0","origin":"review","severity":"MEDIUM","title":"foo() result ignored","file":"src/app.ts","lines":"11","body":"The value foo() returns (foo.ts line 1) is dropped."}],"judge_decisions":[{"candidate_id":"c0","reason_category":"validated","reclassified_from":null,"action":"keep","original_severity":"MEDIUM","final_severity":"MEDIUM","score":8,"evidence":"src/app.ts:11","note":"n","rewritten":true,"anchor_source":"reviewer","anchor_file":"src/app.ts","anchor_lines":"11"}],"judge_anomalies":{"unknown_ids":0,"undecided":0,"duplicate_ids":0,"drop_without_evidence":0},"judge_policy":{"keep_minor":false,"keep_unverified":false,"file_context":false},"breadth_status":"disabled","breadth_model":null,"breadth_prompt_hash":null,"breadth_tokens":null,"breadth_cost_usd":null,"second_look_status":"disabled","second_look_prompt_hash":null,"second_look_tokens":null,"second_look_cost_usd":null,"untouched_files":null,"recall_levers":{"j_quality":false,"sl_breadth":false,"j_shown_anchor":false,"b_priority":false},"touch_rate":null,"delta":null,"checked_commit":"aaa111222333","jenkins":null,"error":null}'
+
 // ===========================================================================
 // Scenario 8f: TODO scan appends a deterministic section
 // ===========================================================================

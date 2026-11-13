@@ -28,9 +28,10 @@ export interface KeptFinding {
   lines?: string
   score?: number
   type?: IssueType   // carried from the reviewer finding; analytics only
-  anchorSource?: 'reviewer' | 'judge' | 'diff' | 'file' | 'none'   // where file/lines came from, so a consumer can trust only what it wants
+  anchorSource?: 'reviewer' | 'judge' | 'diff' | 'file' | 'mention' | 'none'   // where file/lines came from, so a consumer can trust only what it wants
   proposal?: string
   quality_action?: string
+  reviewerBody?: string
 }
 
 export interface FindingsReport {
@@ -260,6 +261,65 @@ export function anchorToFile(kept: readonly KeptFinding[], firstAdded: ReadonlyM
     const line = firstAdded.get(file) ?? (live.has(file) ? 1 : undefined)
     return line ? { ...k, file, lines: String(line), anchorSource: 'file' } : k
   })
+}
+
+// Reject rather than truncate: "cache.ts:123456" or "@scope/cache.ts:3.0.0" would otherwise become a line the text never cited.
+const FILE_LINE = /(?<![\w./:-])([\w./-]*[\w-]\.[A-Za-z][A-Za-z0-9]{0,5})[`'"]?(?::L?|#L|,?\s+lines?\s+|\s+\(lines?\s+|\s+L(?=\d))(\d{1,5})(?:\s*(?:-|–|to)\s*L?(\d{1,5}))?/g
+const CUT_SHORT = /\d|\.\d|\s*(?:-|–|to)\s*L?\d/y
+const MAX_COUNTERPARTS = 3
+
+// An exact path wins; otherwise the name must fit exactly one changed file, deleted ones included, so a root file never beats a nested twin.
+function resolveMention(token: string, changedFiles: readonly ChangedFile[]): ChangedFile | undefined {
+  const name = normalizeFindingPath(token)
+  const exact = name.includes('/')
+    ? changedFiles.find(f => f.path === name) ?? (/^[ab]\//.test(name) ? changedFiles.find(f => f.path === name.slice(2)) : undefined)
+    : undefined
+  if (exact) return exact
+  const hits = changedFiles.filter(f => f.path === name || f.path.endsWith('/' + name))
+  return hits.length === 1 ? hits[0] : undefined
+}
+
+export function counterpartMentions(texts: readonly string[], ownFile: string, changedFiles: readonly ChangedFile[], addedFileLength: ReadonlyMap<string, number> = new Map()): Array<{ file: string; lines: string }> {
+  const out: Array<{ file: string; lines: string }> = []
+  for (const raw of texts) {
+    const text = String(raw ?? '')
+    let scanned = 0, inAddress = false
+    for (const m of text.matchAll(FILE_LINE)) {
+      const start = Number(m[2]), end = m[3] === undefined ? start : Number(m[3])
+      const lines = start === end ? String(start) : `${start}-${end}`
+      const hit = resolveMention(m[1], changedFiles)
+      if (!hit || hit.status === 'deleted' || hit.path === ownFile || !start || end < start || !parseLineRange(lines)) continue
+      if (out.some(c => c.file === hit.path && c.lines === lines)) continue
+      for (; scanned < m.index!; scanned++) {
+        if (/\s/.test(text[scanned])) inAddress = false
+        else if (text[scanned] === '@' || text.startsWith('://', scanned)) inAddress = true
+      }
+      CUT_SHORT.lastIndex = m.index! + m[0].length
+      if (inAddress || CUT_SHORT.test(text)) continue
+      if (hit.status === 'added' && end > (addedFileLength.get(hit.path) ?? 0)) continue
+      out.push({ file: hit.path, lines })
+      if (out.length === MAX_COUNTERPARTS) return out
+    }
+  }
+  return out
+}
+
+export function counterpartFindings(placed: readonly KeptFinding[], changedFiles: readonly ChangedFile[], diff: string): KeptFinding[] {
+  const paths = changedFiles.map(f => f.path)
+  const addedFileLength = new Map<string, number>()
+  for (const { file, line } of addedLines(diff)) addedFileLength.set(normalizeFindingPath(file), line)
+  return placed.flatMap(k => {
+    if (!isAnchored(k) || k.reviewerBody === undefined) return []
+    const { proposal: _ownFix, ...copy } = k
+    return counterpartMentions([k.title, k.reviewerBody], normalizeFindingPath(k.file, paths), changedFiles, addedFileLength)
+      .map(c => ({ ...copy, ...c, anchorSource: 'mention' as const }))
+  })
+}
+
+// Originals go first so a counterpart never displaces one: keptToReportFindings keeps the first row per file, range and title.
+export function withCounterparts(placed: readonly KeptFinding[], changedFiles: readonly ChangedFile[], diff: string, producer: string, changedPaths: readonly string[] = []): { findings: ReportFinding[]; added: number } {
+  const findings = keptToReportFindings([...placed, ...counterpartFindings(placed, changedFiles, diff)], producer, changedPaths)
+  return { findings, added: findings.length - keptToReportFindings(placed, producer, changedPaths).length }
 }
 
 // Kept findings → the line-anchored report shape. Findings with no usable file/line are dropped

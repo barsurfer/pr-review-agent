@@ -200,6 +200,8 @@ export const config = {
 
   usageRecordFile: optional('USAGE_RECORD_FILE', '').trim(),
 
+  benchmarkCounterpartRows: optional('ENABLE_BENCHMARK_COUNTERPART_ROWS', 'false') === 'true',
+
   diffExcludePatterns: optional('DIFF_EXCLUDE_PATTERNS', '*.lock,package-lock.json,yarn.lock,pnpm-lock.yaml,*.json,*.spec.ts')
     .split(',')
     .map(p => p.trim())

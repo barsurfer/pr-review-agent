@@ -91,6 +91,7 @@ export interface JudgeOptions {
   shownAnchors?: ShownAnchors
   proposals?: boolean
   codeProposals?: boolean
+  counterparts?: boolean
 }
 
 export type RenderJudged = (suffixes: ReadonlyMap<number, string>, order?: readonly number[]) => string
@@ -393,6 +394,7 @@ export function applyJudgeDecisions(candidates: readonly ReviewFinding[], output
         severity: entry.r.final_severity!, title: candidate.title, body, file: anchor.file, lines: anchor.lines,
         score: entry.r.score!, type: candidate.type, anchorSource: anchor.source, ...keptProposal,
         ...(entry.r.quality_action ? { quality_action: entry.r.quality_action } : {}),
+        ...(options?.counterparts ? { reviewerBody: candidate.body } : {}),
       })
       rows.push({ candidate: i, expansion: false, validated: entry.r.reason_category === 'validated', evidenced: !!entry.r.evidence, rescueOf: entry.r.invalid_duplicate ? index.get(normalizeId(String(entry.r.duplicate_of ?? ''))) : undefined })
       for (const x of expansion?.accepted ?? []) {

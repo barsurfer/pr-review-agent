@@ -31,8 +31,13 @@ const completeStructured = vi.fn()
 vi.mock('../llm/provider.js', () => ({
   createProvider: vi.fn(() => ({ complete: vi.fn(), completeStructured })),
 }))
+vi.mock('../review/findings-output.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../review/findings-output.js')>()
+  return { ...actual, withCounterparts: vi.fn(actual.withCounterparts) }
+})
 
 import { runBenchmark } from '../benchmark.js'
+import { withCounterparts } from '../review/findings-output.js'
 import { config } from '../config.js'
 import { REVIEW_OUTPUT_SCHEMA, BREADTH_OUTPUT_SCHEMA } from '../review/client.js'
 import { estimateCost } from '../review/usage.js'
@@ -946,6 +951,169 @@ describe('J_TGAP keep low_value test gaps (end-to-end)', () => {
     expect([zero.line, zero.calls, zero.raw, JSON.stringify(zero.record)]).toEqual([absent.line, absent.calls, absent.raw, JSON.stringify(absent.record)])
     expect(absent.line).not.toContain('j_tgap')
     expect(JSON.stringify(absent.record)).not.toMatch(/keep_test_gaps|policy_override/)
+  })
+})
+
+describe('XROWS counterpart rows (end-to-end)', () => {
+  const XDIFF = DIFF + [
+    'diff --git a/src/cache.ts b/src/cache.ts',
+    'new file mode 100644',
+    'index 0000000..3333333',
+    '--- /dev/null',
+    '+++ b/src/cache.ts',
+    '@@ -0,0 +1,4 @@',
+    '+export const cache = new Map<string, Conn>()',
+    '+export function take(k: string) {',
+    '+  return cache.get(k)',
+    '+}',
+    'diff --git a/src/old.ts b/src/old.ts',
+    'deleted file mode 100644',
+    'index 4444444..0000000',
+    '--- a/src/old.ts',
+    '+++ /dev/null',
+    '@@ -1,2 +0,0 @@',
+    '-export const old = 1',
+    '-export const older = 2',
+    '',
+  ].join('\n')
+  const XREVIEW: ReviewObject = {
+    ...REVIEW,
+    findings: [
+      { severity: 'MEDIUM', title: 'Race on conns', file: 'src/pool.ts', lines: '2-3', type: 'reliability', body: 'get/put mutate conns without a lock; take() in src/cache.ts:3 hands out the same conn (cache.ts lines 2-3), unlike src/old.ts:1, see pool.ts:4 and src/cache.ts:9.' },
+      ...REVIEW.findings.slice(1),
+    ],
+  }
+  const XJUDGED: JudgeOutput = {
+    ...JUDGED,
+    decisions: [
+      { ...JUDGED.decisions[0], rewritten_body: 'conns races between get and put (cache.ts:1 too).' },
+      JUDGED.decisions[1],
+      { ...JUDGED.decisions[2], evidence: 'src/cache.ts:4 stores null as well' },
+      JUDGED.decisions[3],
+    ],
+  }
+  const usageRecord = () => {
+    const out = logSpy.mock.calls.map(c => c.join(' ')).find(l => l.startsWith('\n=== Usage ==='))!
+    return JSON.parse(out.slice(out.indexOf('{')))
+  }
+  const run = async (labels: Record<string, string>, setup = () => mockModel(XREVIEW, XJUDGED), diff = XDIFF) => {
+    completeStructured.mockReset()
+    setup()
+    logSpy.mockClear()
+    const env = { ...fixture({ diff }), ...labels }
+    writeFileSync(join(env.RB_REPO, 'src', 'cache.ts'), 'export const cache = new Map<string, Conn>()\nexport function take(k: string) {\n  return cache.get(k)\n}\n')
+    await runBenchmark(env)
+    const { timestamp: _t, duration_ms: _d, ...record } = usageRecord()
+    const stdout = logSpy.mock.calls.map(c => c.join(' ')).join('\n')
+    return {
+      record, raw: readFileSync(env.RB_OUT, 'utf-8'), calls: JSON.stringify(completeStructured.mock.calls), stdout,
+      line: stdout.split('\n').find(l => l.startsWith('Benchmark settings:'))!,
+    }
+  }
+  const expectOnlyEchoDiffers = (one: Awaited<ReturnType<typeof run>>, absent: Awaited<ReturnType<typeof run>>) => {
+    expect(one.line).toBe(`${absent.line} xrows=1`)
+    expect([one.raw, one.calls, JSON.stringify(one.record)]).toEqual([absent.raw, absent.calls, JSON.stringify(absent.record)])
+    expect('counterpart_rows' in one.record).toBe(false)
+  }
+  const row = (file: string, start: number, end: number, message: string) => ({ file, start_line: start, end_line: end, message, producer: 'my-agent' })
+  const RACE = 'Race on conns: conns races between get and put (cache.ts:1 too).'
+  const BASENAME = 'Cited by basename: put accepts null.'
+  afterEach(() => { cfg.benchmarkCounterpartRows = undefined })
+
+  it('flag off: findings.json is byte-identical to the pre-feature output', async () => {
+    const absent = await run({})
+    expect(absent.raw).toBe(JSON.stringify({
+      pr: { repo: 'https://github.com/owner/repo', pr_number: 1938, base: BASE, head: HEAD },
+      agent: 'my-agent',
+      findings: [row('src/pool.ts', 2, 3, RACE), row('src/pool.ts', 4, 4, BASENAME)],
+    }, null, 2) + '\n')
+    expect(absent.line).not.toContain('xrows')
+    expect('counterpart_rows' in absent.record).toBe(false)
+  })
+
+  it('RB_CONFIG_XROWS=1 adds rows only at other-file locations the reviewer text cites; model calls and every other record field are unchanged', async () => {
+    const absent = await run({})
+    const one = await run({ RB_CONFIG_XROWS: '1' })
+
+    expect(cfg.benchmarkCounterpartRows).toBe(true)
+    expect(one.line).toBe(`${absent.line} xrows=1`)
+    expect(one.calls).toBe(absent.calls)
+    expectAccepted(JSON.parse(one.raw))
+    expect(JSON.parse(one.raw).findings).toEqual([
+      row('src/pool.ts', 2, 3, RACE), row('src/pool.ts', 4, 4, BASENAME), row('src/cache.ts', 3, 3, RACE), row('src/cache.ts', 2, 3, RACE),
+    ])
+    expect(JSON.parse(one.raw).findings.slice(0, 2)).toEqual(JSON.parse(absent.raw).findings)
+    const { counterpart_rows: added, ...rest } = one.record
+    expect(added).toBe(2)
+    expect(JSON.stringify(rest)).toBe(JSON.stringify(absent.record))
+  })
+
+  it('a benchmark record logs each candidate’s reviewer type, with or without the flag', async () => {
+    const absent = await run({})
+    const one = await run({ RB_CONFIG_XROWS: '1' })
+    expect(absent.record.review_candidates.map((c: any) => c.type)).toEqual(['reliability', null, null, null])
+    expect(one.record.review_candidates).toEqual(absent.record.review_candidates)
+  })
+
+  it('with J_PROPOSAL=1 the original keeps its proposal and a counterpart row carries none', async () => {
+    const withFix = () => mockModel(XREVIEW, { ...XJUDGED, decisions: [{ ...XJUDGED.decisions[0], proposal: 'Guard conns with a mutex.' }, ...XJUDGED.decisions.slice(1)] })
+    const one = await run({ RB_CONFIG_J_PROPOSAL: '1', RB_CONFIG_XROWS: '1' }, withFix)
+    const rows = JSON.parse(one.raw).findings
+    expect(rows.map((r: any) => [r.file, r.start_line, r.proposal])).toEqual([
+      ['src/pool.ts', 2, 'Guard conns with a mutex.'], ['src/pool.ts', 4, undefined], ['src/cache.ts', 3, undefined], ['src/cache.ts', 2, undefined],
+    ])
+    expect(rows.slice(1).every((r: any) => !('proposal' in r))).toBe(true)
+  })
+
+  it('a throw while building counterpart rows keeps findings.json identical to the flag-off output, with one warning', async () => {
+    const absent = await run({})
+    vi.mocked(withCounterparts).mockImplementationOnce(() => { throw new Error('boom') })
+    const warnSpy = vi.spyOn(console, 'warn')
+    const one = await run({ RB_CONFIG_XROWS: '1' })
+
+    expect(one.raw).toBe(absent.raw)
+    expect(one.record.counterpart_rows).toBe(0)
+    expect(warnSpy.mock.calls.filter(c => String(c[0]).includes('Counterpart rows skipped'))).toHaveLength(1)
+    warnSpy.mockRestore()
+  })
+
+  it('RB_CONFIG_XROWS=0 leaves the settings line, provider calls, findings and record unchanged', async () => {
+    const absent = await run({})
+    const zero = await run({ RB_CONFIG_XROWS: '0' })
+
+    expect([zero.line, zero.calls, zero.raw, JSON.stringify(zero.record)]).toEqual([absent.line, absent.calls, absent.raw, JSON.stringify(absent.record)])
+  })
+
+  it('judge-failure fallback: XROWS=1 adds no rows and no record key; everything but the echo is identical', async () => {
+    const judgeFails = () => completeStructured.mockImplementation(async (_s: string, _u: string, schema: unknown) => {
+      if (schema === REVIEW_OUTPUT_SCHEMA) return { object: XREVIEW, usage }
+      throw new Error('Structured output missing required field(s): decisions')
+    })
+    const absent = await run({}, judgeFails)
+    const one = await run({ RB_CONFIG_XROWS: '1' }, judgeFails)
+
+    expect(absent.record.judge_status).toBe('failed')
+    expect(JSON.parse(absent.raw).findings.map((f: any) => f.file)).toEqual(['src/pool.ts', 'src/pool.ts', 'src/pool.ts'])
+    expectOnlyEchoDiffers(one, absent)
+  })
+
+  it('bundled review: XROWS=1 adds no rows and no record key; everything but the echo is identical', async () => {
+    const section = (path: string, lines: number) =>
+      `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -1,1 +1,${lines} @@\n${Array.from({ length: lines }, (_, i) => `+const line${i} = ${i};`).join('\n')}\n`
+    const bundled = () => {
+      cfg.review.bundledReview = true
+      cfg.review.maxBundles = 8
+      cfg.anthropic.maxInputTokens = 8000
+      completeStructured.mockImplementation(async (_system: string, user: string, schema: unknown) =>
+        ({ object: schema !== REVIEW_OUTPUT_SCHEMA ? XJUDGED : user.includes('src/pool.ts') ? XREVIEW : { ...XREVIEW, findings: [] }, usage }))
+    }
+    const diff = XDIFF + section('src/big-one.ts', 380) + section('src/big-two.ts', 380)
+    const absent = await run({}, bundled, diff)
+    const one = await run({ RB_CONFIG_XROWS: '1' }, bundled, diff)
+
+    expect(absent.stdout).toContain('switching to bundled review')
+    expect(JSON.parse(absent.raw).findings.length).toBeGreaterThan(0)
+    expectOnlyEchoDiffers(one, absent)
   })
 })
 

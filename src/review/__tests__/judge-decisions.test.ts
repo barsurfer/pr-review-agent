@@ -341,6 +341,22 @@ describe('reviewer issue-type carry-through', () => {
   })
 })
 
+describe('counterparts option: the reviewer body rides on the kept finding', () => {
+  const out = output([decision({ rewritten_body: 'Rewritten without the cache.ts mention.' })])
+  const review = [finding({ body: 'Same race in cache.ts line 3.' })]
+
+  it('carries the reviewer body even when the judge rewrote it, and nothing else changes', () => {
+    const off = applyJudgeDecisions(review, out, DEFAULT_JUDGE_POLICY, [], '', Infinity)
+    const on = applyJudgeDecisions(review, out, DEFAULT_JUDGE_POLICY, [], '', Infinity, { counterparts: true })
+    expect(on.kept[0].reviewerBody).toBe('Same race in cache.ts line 3.')
+    expect(on.kept[0].body).toBe('Rewritten without the cache.ts mention.')
+    const { reviewerBody: _r, ...rest } = on.kept[0]
+    expect(rest).toEqual(off.kept[0])
+    expect('reviewerBody' in off.kept[0]).toBe(false)
+    expect([on.markdown, on.decisions, on.scores]).toEqual([off.markdown, off.decisions, off.scores])
+  })
+})
+
 describe('applyJudgeDecisions edge rules', () => {
   it('drops on a duplicate decision regardless of order, and keeps first-wins among non-drops', () => {
     const dropFirst = applyJudgeDecisions([finding()], output([decision({ reason_category: 'style_only' }), decision()]))
