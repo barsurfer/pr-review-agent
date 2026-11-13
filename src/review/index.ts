@@ -5,6 +5,7 @@
 import { config } from '../config.js'
 import { contextWindowFor } from '../llm/context-window.js'
 import { loadPrompt } from '../prompt/loader.js'
+import { describeHttpError } from '../vcs/http-retry.js'
 import { fetchContext } from '../context/fetcher.js'
 import { runReview, runCommentResponse, runJudge, runBreadth, runLens } from './client.js'
 import { buildShownSource } from './shown-anchors.js'
@@ -1026,9 +1027,10 @@ export async function review(adapter: VCSAdapter, prId: string, dryRun = false, 
     if (e.usage) {
       addUsage(ctx, e.usage)
     }
+    const where = describeHttpError(err)
     error = {
       type: e.constructor.name,
-      message: e.message,
+      message: where ? `${e.message} [${where}]` : e.message,
       status: e.status ?? null,
     }
   }

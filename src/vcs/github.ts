@@ -3,6 +3,7 @@ import { hasReviewFooter, hasReplyFooter } from '../review/formatter.js'
 import { PrTooLargeError } from './adapter.js'
 import type { VCSAdapter, PRInfo, ChangedFile, ReviewComment, CommentReply, ReplyResult } from './adapter.js'
 import { AGENT_REPLY_AUTHOR } from './adapter.js'
+import { withCallLog } from './http-retry.js'
 
 // Fail a hung request fast instead of stalling the whole run.
 const REQUEST_TIMEOUT_MS = 30_000
@@ -24,7 +25,7 @@ export class GitHubAdapter implements VCSAdapter {
 
   constructor(baseUrl: string, owner: string, token: string) {
     this.owner = owner
-    this.client = axios.create({
+    this.client = withCallLog(axios.create({
       baseURL: baseUrl,
       timeout: REQUEST_TIMEOUT_MS,
       headers: {
@@ -33,7 +34,7 @@ export class GitHubAdapter implements VCSAdapter {
         'X-GitHub-Api-Version': '2022-11-28',
         'Content-Type': 'application/json',
       },
-    })
+    }), 'github')
   }
 
   async getPullRequestInfo(prId: string): Promise<PRInfo> {

@@ -79,6 +79,34 @@ describe('loadPrompt module-dir fallback', () => {
   })
 })
 
+describe('loadPrompt when the instructions lookup fails', () => {
+  const failing = (failOn: string, files: Record<string, string> = {}) => ({
+    getRepoFileContent: vi.fn(async (path: string) => {
+      if (path === failOn) throw Object.assign(new Error('Request failed with status code 429'), { config: { method: 'get', url: `/src/abc/${path}` }, response: { status: 429, headers: { 'x-ratelimit-resource': 'api' } } })
+      return files[path] ?? null
+    }),
+  })
+
+  it('warns once, stops probing and falls through to the bundled rules instead of failing the run', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const adapter = failing('.agent-review-instructions.md')
+    const result = await loadPrompt(adapter as unknown as VCSAdapter, PR, undefined, changed('src/a.ts'))
+
+    expect(result.source).toBe('stack:typescript-node')
+    expect(adapter.getRepoFileContent).toHaveBeenCalledTimes(1)
+    expect(warn.mock.calls).toEqual([['Warning: lookup of .agent-review-instructions.md failed (Request failed with status code 429; GET /src/abc/.agent-review-instructions.md; X-RateLimit-Resource: api) - continuing without repo instructions']])
+    warn.mockRestore()
+  })
+
+  it('uses defaults when no stack is detected, and still uses a file found before the failure', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect((await loadPrompt(failing('docs/.agent-review-instructions.md') as unknown as VCSAdapter, PR, undefined, changed('notes.txt'))).source).toBe('default')
+    const found = failing('docs/.agent-review-instructions.md', { '.agent-review-instructions.md': MODULE_PROMPT })
+    expect((await loadPrompt(found as unknown as VCSAdapter, PR, undefined, changed('src/a.ts'))).source).toBe('repo')
+    warn.mockRestore()
+  })
+})
+
 describe('security baseline', () => {
   it('injects the generic OWASP baseline when no SECURITY section is provided', async () => {
     const result = await loadPrompt(adapterWith({}), PR)

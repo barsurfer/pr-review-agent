@@ -24,7 +24,7 @@ async function runCli(models: { reviewer: string; judge: string }) {
       res.end(JSON.stringify(MODEL_LIST))
       return
     }
-    res.writeHead(500); res.end()
+    res.writeHead(404); res.end()
   })
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`

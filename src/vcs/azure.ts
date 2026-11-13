@@ -18,6 +18,7 @@ import { structuredPatch } from 'diff'
 import { hasReviewFooter, hasReplyFooter } from '../review/formatter.js'
 import type { VCSAdapter, PRInfo, ChangedFile, ReviewComment, CommentReply, ReplyResult } from './adapter.js'
 import { AGENT_REPLY_AUTHOR, authorIdOf } from './adapter.js'
+import { withCallLog } from './http-retry.js'
 
 // Skip content-diffing files past this size — huge blobs blow up the diff and the
 // size thresholds without adding review value (mirrors the context-fetch caps).
@@ -50,14 +51,14 @@ export class AzureDevOpsAdapter implements VCSAdapter {
     this.authHeader = accessToken
       ? `Bearer ${accessToken}`
       : 'Basic ' + Buffer.from(`:${pat}`).toString('base64')
-    this.client = axios.create({
+    this.client = withCallLog(axios.create({
       baseURL: `${baseUrl}/${encodeURIComponent(org)}/${encodeURIComponent(project)}/_apis/git`,
       headers: {
         Authorization: this.authHeader,
         'Content-Type': 'application/json',
       },
       params: { 'api-version': '7.1' },   // required on every Azure DevOps call
-    })
+    }), 'azure')
     console.warn('Azure DevOps adapter is experimental (WIP) — validated live on cloud Services (reviews + reply flow); on-prem Server is unverified.')
   }
 

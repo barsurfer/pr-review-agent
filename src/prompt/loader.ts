@@ -5,6 +5,7 @@ import type { VCSAdapter, PRInfo, ChangedFile } from '../vcs/adapter.js'
 import { detectStacks } from './stack.js'
 import { DEFAULT_ROLE, DEFAULT_REVIEW_PRIORITIES, DEFAULT_SECURITY, DEFAULT_MENTAL_MODEL, DEFAULT_EXCEPTIONS } from './defaults.js'
 import { config } from '../config.js'
+import { describeHttpError } from '../vcs/http-retry.js'
 
 const REPO_PROMPT_FILE = '.agent-review-instructions.md'
 
@@ -228,16 +229,29 @@ export async function loadPrompt(adapter: VCSAdapter, prInfo: PRInfo, localPromp
     console.log(`  PR changes are confined to "${moduleDir}/" — will also check it for instructions`)
     paths.push(`${moduleDir}/${REPO_PROMPT_FILE}`, `${moduleDir}/docs/${REPO_PROMPT_FILE}`)
   }
+  // The instructions file is optional, so a failed lookup (rate limit, outage) must not cost the whole review; one failure ends the probing.
+  let lookupFailed = false
+  const fetchOptional = async (path: string, ref: string): Promise<string | null> => {
+    if (lookupFailed) return null
+    try {
+      return await adapter.getRepoFileContent(path, ref)
+    } catch (err: unknown) {
+      lookupFailed = true
+      const where = describeHttpError(err)
+      console.warn(`Warning: lookup of ${REPO_PROMPT_FILE} failed (${(err as Error).message}${where ? `; ${where}` : ''}) - continuing without repo instructions`)
+      return null
+    }
+  }
   for (const ref of [prInfo.sourceCommit, prInfo.targetBranch]) {
     for (const path of paths) {
-      let repoPrompt = await adapter.getRepoFileContent(path, ref)
+      let repoPrompt = await fetchOptional(path, ref)
       if (repoPrompt) {
         // Git symlinks are stored as a single line with the target path
         if (looksLikeSymlink(repoPrompt)) {
           const dir = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : ''
           const resolved = resolveSymlink(dir, repoPrompt.trim())
           console.log(`  ${path} is a symlink → ${resolved}`)
-          repoPrompt = await adapter.getRepoFileContent(resolved, ref)
+          repoPrompt = await fetchOptional(resolved, ref)
           if (!repoPrompt) continue
         }
         console.log(`Using repo-specific prompt from ${path} (${ref.slice(0, 12)})`)

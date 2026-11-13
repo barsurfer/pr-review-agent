@@ -591,3 +591,16 @@ describe('getRepliesToReviewComments — a reply to a human is for the agent onl
     warn.mockRestore()
   })
 })
+
+describe('rate-limit retry wiring', () => {
+  it('resends a file lookup that got 429 instead of failing the run', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const limited = Object.assign(new Error('Request failed with status code 429'), { config: { method: 'get', url: '/src/abc/x.md' }, response: { status: 429, headers: { 'retry-after': '0.01' } } })
+    clientMock.get.mockRejectedValueOnce(limited).mockResolvedValue({ data: 'content' })
+
+    expect(await makeAdapter().getRepoFileContent('x.md', 'abc')).toBe('content')
+    expect(clientMock.get).toHaveBeenCalledTimes(2)
+    expect(warn).toHaveBeenCalledTimes(1)
+    warn.mockRestore()
+  })
+})

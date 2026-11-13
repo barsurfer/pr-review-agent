@@ -3,6 +3,7 @@ import { hasReviewFooter, hasReplyFooter } from '../review/formatter.js'
 import { decideDirectedElsewhere, mentionsAgent } from './mention-filter.js'
 import type { VCSAdapter, PRInfo, ChangedFile, ReviewComment, CommentReply, ReplyResult } from './adapter.js'
 import { AGENT_REPLY_AUTHOR, authorIdOf } from './adapter.js'
+import { withCallLog, withRetry } from './http-retry.js'
 
 // Bound every Bitbucket call so a hung request fails fast instead of stalling the whole run
 const REQUEST_TIMEOUT_MS = 30_000
@@ -42,14 +43,14 @@ export class BitbucketAdapter implements VCSAdapter {
     this.workspace = workspace
     this.authHeader = 'Basic ' + Buffer.from(`${username}:${token}`).toString('base64')
     try { this.baseHost = new URL(baseUrl).host } catch { this.baseHost = '' }
-    this.client = axios.create({
+    this.client = withRetry(withCallLog(axios.create({
       baseURL: baseUrl,
       timeout: REQUEST_TIMEOUT_MS,
       headers: {
         Authorization: this.authHeader,
         'Content-Type': 'application/json',
       },
-    })
+    }), 'bitbucket'), 'bitbucket')
   }
 
   /** Follow 302 redirects while preserving auth (axios strips auth on redirect).
@@ -63,7 +64,7 @@ export class BitbucketAdapter implements VCSAdapter {
       if (!sameHost) {
         console.warn(`  Redirect to a different host — not forwarding auth`)
       }
-      return axios.get(location, {
+      return withCallLog(axios, 'bitbucket').get(location, {
         ...config,
         timeout: REQUEST_TIMEOUT_MS,
         headers: sameHost ? { ...config.headers, Authorization: this.authHeader } : { ...config.headers },
