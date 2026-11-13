@@ -33,7 +33,7 @@ For each candidate you keep, give \`proposal\`: the specific code change that re
 
 const PROPOSAL_CODE = `## PROPOSAL
 
-For each candidate you keep, give \`proposal\`: the fix, posted to the developer as a copyable plain-text block. Start with one or two short lines that say what to change and where (file, function or line). When the fix is a local edit you can write from the code you were shown, follow with the corrected code as it should read after the fix, with its original indentation, at most 5 lines. When it is not (a choice between options, a config or design change, a change across files), give only the instruction lines. Plain text only: no markdown, no fences, no diff markers, no line-number gutter. Keep each line under ~100 characters, and the whole under 7 lines and ~450 characters. Do not restate the problem or why it matters. Omit \`proposal\` only when you cannot name a concrete change; never write "consider", "verify" or "ensure".
+For each candidate you keep, give \`proposal\`: the fix, posted to the developer as a copyable plain-text block. Start with one or two short lines that say what to change and where (file, function or line). When the fix is a local edit you can write from the code you were shown, follow with the corrected code as it should read after the fix, with its original indentation, at most 5 lines. When it is not (a choice between options, a config or design change, a change across files), give only the instruction lines. Plain text only: no markdown, no fences, no diff markers, no line-number gutter. Keep each line under ~100 characters, and the whole to at most 7 lines with no blank lines, under ~450 characters. Do not restate the problem or why it matters. Omit \`proposal\` only when you cannot name a concrete change; never write "consider", "verify" or "ensure".
 
 When you give \`proposal\`, also give \`body_without_fix\`: the finding text as posted (your \`rewritten_body\`, else the candidate's body) with the fix left out - only the problem and why it matters, in at most 1–3 sentences. Keep every fact needed to understand the problem. No fix, no "should", no code snippet.
 
@@ -83,7 +83,7 @@ export const PROPOSAL_DECISION_PROPERTIES = {
 } as const
 
 export const PROPOSAL_CODE_DECISION_PROPERTIES = {
-  proposal: { type: 'string', description: 'Only for a candidate you keep: the fix as a copyable plain-text block: one or two short lines saying what to change and where, then, for a local edit, the corrected code as it reads after the fix (at most 5 lines). Instruction lines only when the fix is not a local edit. No markdown, fences, diff markers or line numbers. Lines under ~100 characters; under 7 lines and ~450 characters in total. Omit only when no concrete change can be named.' },
+  proposal: { type: 'string', description: 'Only for a candidate you keep: the fix as a copyable plain-text block: one or two short lines saying what to change and where, then, for a local edit, the corrected code as it reads after the fix (at most 5 lines). Instruction lines only when the fix is not a local edit. No markdown, fences, diff markers or line numbers. Lines under ~100 characters; at most 7 lines with no blank lines, under ~450 characters in total. Omit only when no concrete change can be named.' },
   body_without_fix: { type: 'string', description: 'Only with proposal: the finding text as posted (rewritten_body, else the candidate body) with the fix left out - the problem and why it matters, 1–3 sentences. No fix, no "should", no code snippet.' },
 } as const
 
