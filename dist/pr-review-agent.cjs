@@ -44821,6 +44821,12 @@ function sanitizeCodeProposal(raw) {
   if (!code || code.length > PROPOSAL_CAP || lines.length > PROPOSAL_MAX_LINES) return void 0;
   return code;
 }
+function sanitizeBodyWithoutFix(raw, body) {
+  if (typeof raw !== "string") return void 0;
+  const s = raw.trim();
+  if (!s || s.length > REWRITE_CAP || s.length > body.length * 1.5) return void 0;
+  return s;
+}
 var UNVERIFIED_SCORE_CAP = 5;
 var NEEDS_EVIDENCE = /* @__PURE__ */ new Set(["incorrect", "already_handled"]);
 var SEVERITY_RANK = { LOW: 0, MEDIUM: 1, HIGH: 2 };
@@ -44983,7 +44989,8 @@ function applyJudgeDecisions(candidates, output, policy = DEFAULT_JUDGE_POLICY, 
     const resolved2 = given.map((d) => {
       const r = resolve2(d, candidate, policy, idx, i >= breadthFrom, shownFor(i));
       const proposal = proposals ? options?.codeProposals ? sanitizeCodeProposal(d.proposal) : sanitizeProposal(d.proposal) : void 0;
-      return { r: proposal ? { ...r, proposal } : r, d };
+      const withoutFix = proposal && options?.codeProposals ? sanitizeBodyWithoutFix(d.body_without_fix, r.body) : void 0;
+      return { r: proposal ? { ...r, proposal, ...withoutFix ? { body_without_fix: withoutFix } : {} } : r, d };
     });
     const chosen = resolved2.find((x) => x.r.action === "drop") ?? resolved2[0];
     if (chosen.r.reclassified_from) anomalies.drop_without_evidence++;
@@ -45016,12 +45023,13 @@ function applyJudgeDecisions(candidates, output, policy = DEFAULT_JUDGE_POLICY, 
       });
       return;
     }
-    const { question, body, anchor, proposal, ...applied } = entry.r;
+    const { question, body, anchor, proposal, body_without_fix, ...applied } = entry.r;
     const isKept = entry.r.action === "keep" || entry.r.action === "downgrade";
     const keptProposal = proposals && isKept && proposal ? { proposal } : {};
+    const withoutFix = isKept ? body_without_fix : void 0;
     if (proposals && options?.codeProposals && isKept && !proposal && typeof entry.d.proposal === "string" && entry.d.proposal.trim()) sanitizerDropped.push(i);
     const expansion = options?.quality && isKept && entry.d.additional_locations?.length ? expandLocations(candidate, entry.d.additional_locations, anchor, idx) : null;
-    decisions.push({ ...applied, candidate_id: id, ...expansion ? { expansions: expansion.log } : {}, ...keptProposal });
+    decisions.push({ ...applied, candidate_id: id, ...expansion ? { expansions: expansion.log } : {}, ...keptProposal, ...withoutFix ? { body_without_fix: withoutFix } : {} });
     if (entry.r.action === "move_to_unresolved") moved.push(question ?? candidate.title);
     if (isKept) {
       kept.push({
@@ -45034,6 +45042,7 @@ function applyJudgeDecisions(candidates, output, policy = DEFAULT_JUDGE_POLICY, 
         type: candidate.type,
         anchorSource: anchor.source,
         ...keptProposal,
+        ...withoutFix ? { bodyWithoutFix: withoutFix } : {},
         ...entry.r.quality_action ? { quality_action: entry.r.quality_action } : {}
       });
       rows.push({ candidate: i, expansion: false, validated: entry.r.reason_category === "validated", evidenced: !!entry.r.evidence, rescueOf: entry.r.invalid_duplicate ? index.get(normalizeId(String(entry.r.duplicate_of ?? ""))) : void 0 });
@@ -45045,7 +45054,7 @@ function applyJudgeDecisions(candidates, output, policy = DEFAULT_JUDGE_POLICY, 
   });
   if (options?.quality) dedupKept(kept, rows, decisions, idx);
   const scores = kept.map((k) => ({ title: k.title, severity: k.severity, score: k.score, file: k.file, lines: k.lines }));
-  const render = (suffixes, order) => renderJudgedReview(kept, output, moved, canBeSplit, suffixes, order);
+  const render = (suffixes, order, fixFree) => renderJudgedReview(kept, output, moved, canBeSplit, suffixes, order, fixFree);
   return {
     kept,
     decisions,
@@ -45163,12 +45172,12 @@ ${candidate.body}`;
   }
   return { accepted, log };
 }
-function renderJudgedReview(kept, output, movedQuestions = [], canBeSplit = [], suffixes, order) {
+function renderJudgedReview(kept, output, movedQuestions = [], canBeSplit = [], suffixes, order, fixFree) {
   const questions = [...output.unresolved_questions ?? []];
   for (const q of movedQuestions) if (!questions.includes(q)) questions.push(q);
   const review2 = {
     summary: output.summary,
-    findings: kept.map((k) => ({ severity: k.severity, title: k.title, file: k.file, lines: k.lines, body: k.body })),
+    findings: kept.map((k, i) => ({ severity: k.severity, title: k.title, file: k.file, lines: k.lines, body: fixFree?.has(i) && k.bodyWithoutFix ? k.bodyWithoutFix : k.body })),
     behavioral_diff: output.behavioral_diff ?? [],
     production_risk: output.production_risk ?? [],
     unresolved_questions: questions,
@@ -45225,7 +45234,11 @@ var PROPOSAL = `## PROPOSAL
 For each candidate you keep, give \`proposal\`: the specific code change that resolves it, written as an instruction to the person or agent who will make the edit ("Wrap X in try/finally and release the client in finally."). It must be standalone - understandable without the finding text - and must not repeat the problem or why it matters (that is \`body\`/\`rewritten_body\`). At most 2 sentences plus one optional fenced snippet of up to 4 lines, under ~500 characters total. If you cannot name a concrete change from the code you were shown, omit \`proposal\`; never write "consider", "verify" or "ensure". Dropped candidates get no proposal.`;
 var PROPOSAL_CODE = `## PROPOSAL
 
-For each candidate you keep, give \`proposal\`: only the corrected code for the lines that change, as they should read after the fix. No prose, no markdown fences, no diff markers, no line-number gutter. Copy the original indentation. At most 5 lines and under ~400 characters. If the fix is not a local edit of at most 5 lines that you can write from the code you were shown, omit \`proposal\`. Dropped candidates get no proposal.`;
+For each candidate you keep, give \`proposal\`: only the corrected code for the lines that change, as they should read after the fix. No prose, no markdown fences, no diff markers, no line-number gutter. Copy the original indentation. At most 5 lines and under ~400 characters. If the fix is not a local edit of at most 5 lines that you can write from the code you were shown, omit \`proposal\`.
+
+When you give \`proposal\`, also give \`body_without_fix\`: the finding text as posted (your \`rewritten_body\`, else the candidate's body) with the fix left out - only the problem and why it matters, in at most 1\u20133 sentences. Keep every fact needed to understand the problem. No fix, no "should", no code snippet.
+
+Dropped candidates get no proposal.`;
 function composeJudgePrompt(base, opts2) {
   let out = base;
   if (opts2.shownAnchors) {
@@ -45274,7 +45287,8 @@ var PROPOSAL_DECISION_PROPERTIES = {
   proposal: { type: "string", description: "Only for a candidate you keep: the concrete change that fixes it, as an imperative instruction a developer or coding agent can apply without re-reading the finding. 1-2 sentences, optionally one minimal fenced snippet of at most 4 lines. Name the exact function/symbol to change. Do not restate the problem or its impact. Keep it under ~500 characters; omit when no concrete fix can be determined from the code you were shown." }
 };
 var PROPOSAL_CODE_DECISION_PROPERTIES = {
-  proposal: { type: "string", description: "Only for a candidate you keep: the corrected code for the lines that change, as they read after the fix. No prose, fences, diff markers or line numbers. At most 5 lines, under ~400 characters. Omit when the fix is not a small local edit you can write from the code you were shown." }
+  proposal: { type: "string", description: "Only for a candidate you keep: the corrected code for the lines that change, as they read after the fix. No prose, fences, diff markers or line numbers. At most 5 lines, under ~400 characters. Omit when the fix is not a small local edit you can write from the code you were shown." },
+  body_without_fix: { type: "string", description: 'Only with proposal: the finding text as posted (rewritten_body, else the candidate body) with the fix left out - the problem and why it matters, 1\u20133 sentences. No fix, no "should", no code snippet.' }
 };
 
 // src/review/suggested-fix.ts
@@ -45301,6 +45315,10 @@ function fixCodeContent(proposal) {
     if (review2.test(t) || reply.test(t)) return null;
   }
   return proposal;
+}
+function fixFreeContent(text) {
+  if (fixCodeContent(text) === null || isNoChange(text)) return null;
+  return stripJenkinsMeta(stripJudgeNotes(stripDeltaStats(stripPreviousFooter(text)))) === text ? text : null;
 }
 var longestRun = (s) => (s.match(/`+/g) ?? []).reduce((n, r) => Math.max(n, r.length), 0);
 var longestLeadingRun = (s) => [...s.matchAll(/^[ \t]*(`+)/gm)].reduce((n, m) => Math.max(n, m[1].length), 0);
@@ -45378,7 +45396,19 @@ function blocksStandAlone(text, plain, codes) {
   const want = [...codes].sort();
   return own2.length === want.length && own2.every((c, n) => c === want[n]);
 }
-function composeSuggestedFixes(kept, renderWith, plain, budget) {
+function placeBlocks(fixes, base, render, budget) {
+  const suffixes = /* @__PURE__ */ new Map();
+  for (const [i, code] of fixes) {
+    const fence = fenceFor(code, base);
+    if (fence.length > MAX_FENCE) return { skipped: "fence" };
+    suffixes.set(i, renderFixBlock(code, fence));
+  }
+  const text = render(suffixes);
+  if (text.length > budget) return { skipped: "size" };
+  if (!blocksStandAlone(text, base, fixes.map(([, code]) => code))) return { skipped: "unbalanced" };
+  return { text };
+}
+function composeSuggestedFixes(kept, renderWith, plain, budget, renderFixFree) {
   const fixes = [];
   let rejected = 0;
   kept.forEach((k, i) => {
@@ -45391,16 +45421,14 @@ function composeSuggestedFixes(kept, renderWith, plain, budget) {
   if (!fixes.length) return { text: plain, stats: { rendered: 0, rejected } };
   if (renderWith(/* @__PURE__ */ new Map()) !== plain) return skip("cleanup");
   if (hasUnclosedFence(plain)) return skip("unbalanced");
-  const suffixes = /* @__PURE__ */ new Map();
-  for (const [i, code] of fixes) {
-    const fence = fenceFor(code, plain);
-    if (fence.length > MAX_FENCE) return skip("fence");
-    suffixes.set(i, renderFixBlock(code, fence));
+  const fixFree = new Set(fixes.filter(([i]) => kept[i].bodyWithoutFix && fixFreeContent(kept[i].bodyWithoutFix) !== null).map(([i]) => i));
+  if (renderFixFree && fixFree.size && renderFixFree(/* @__PURE__ */ new Map(), /* @__PURE__ */ new Set()) === plain) {
+    const base = renderFixFree(/* @__PURE__ */ new Map(), fixFree);
+    const placed2 = hasUnclosedFence(base) ? null : placeBlocks(fixes, base, (s) => renderFixFree(s, fixFree), budget);
+    if (placed2 && "text" in placed2) return { text: placed2.text, stats: { rendered: fixes.length, rejected, fix_free: fixFree.size } };
   }
-  const text = renderWith(suffixes);
-  if (text.length > budget) return skip("size");
-  if (!blocksStandAlone(text, plain, fixes.map(([, code]) => code))) return skip("unbalanced");
-  return { text, stats: { rendered: suffixes.size, rejected } };
+  const placed = placeBlocks(fixes, plain, renderWith, budget);
+  return "text" in placed ? { text: placed.text, stats: { rendered: fixes.length, rejected } } : skip(placed.skipped);
 }
 function blockClose(lines, starts, i, limit2) {
   if (lines[i + 1] !== "") return -1;
@@ -46487,7 +46515,7 @@ function getAgentVersion() {
     const pkg = JSON.parse((0, import_fs4.readFileSync)(pkgPath, "utf-8"));
     return pkg.version;
   } catch {
-    if (true) return "0.0.48";
+    if (true) return "0.0.49";
     return "unknown";
   }
 }
@@ -46499,7 +46527,7 @@ function getBuildCommit() {
     const dirty = (0, import_child_process.execSync)("git status --porcelain", opts2).toString().trim() ? "-dirty" : "";
     return hash + dirty;
   } catch {
-    if (true) return "498578f";
+    if (true) return "c16a8eb";
     return "unknown";
   }
 }
@@ -47554,7 +47582,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
       const posted = judgedRender ? orderPosted(cleaned, ctx.judgedFindings ?? [], (order) => judgedRender(/* @__PURE__ */ new Map(), order)) : !judged && reviewObject ? orderPosted(cleaned, reviewObject.findings, (order) => renderReview(reviewObject, { order })) : { text: cleaned };
       let body = posted.text;
       if (config.judge.suggestedFixes && judgedRender) {
-        const composed = composeSuggestedFixes(ctx.judgedFindings ?? [], (s) => judgedRender(s, posted.order), body, COMMENT_BUDGET - todoSection.length - footer.length);
+        const composed = composeSuggestedFixes(ctx.judgedFindings ?? [], (s) => judgedRender(s, posted.order), body, COMMENT_BUDGET - todoSection.length - footer.length, (s, fixFree) => judgedRender(s, posted.order, fixFree));
         body = composed.text;
         const dropped = ctx.proposalsDropped;
         ctx.suggestedFixes = dropped ? { ...composed.stats, dropped } : composed.stats;
