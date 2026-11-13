@@ -16428,23 +16428,23 @@ async function checkCredentialsFileSafety(path4, onWarn = (m) => console.warn(`a
   if (typeof process === "undefined" || process.platform === "win32")
     return;
   const { fs: fs5 } = await Promise.resolve().then(() => (init_node(), node_exports));
-  let resolved = path4;
+  let resolved2 = path4;
   let st;
   try {
-    resolved = await fs5.promises.realpath(path4);
-    st = await fs5.promises.stat(resolved);
+    resolved2 = await fs5.promises.realpath(path4);
+    st = await fs5.promises.stat(resolved2);
   } catch {
     return;
   }
   const mode = st.mode & 511;
   if (mode & 18) {
-    throw new WorkloadIdentityError(`Credentials file at ${resolved} is group/world-writable (mode 0o${mode.toString(8)}); this allows other local users to plant tokens. Run \`chmod 600 ${resolved}\`.`);
+    throw new WorkloadIdentityError(`Credentials file at ${resolved2} is group/world-writable (mode 0o${mode.toString(8)}); this allows other local users to plant tokens. Run \`chmod 600 ${resolved2}\`.`);
   }
   if (mode & 36) {
-    throw new WorkloadIdentityError(`Credentials file at ${resolved} is group/world-readable (mode 0o${mode.toString(8)}); run \`chmod 600 ${resolved}\` before retrying.`);
+    throw new WorkloadIdentityError(`Credentials file at ${resolved2} is group/world-readable (mode 0o${mode.toString(8)}); run \`chmod 600 ${resolved2}\` before retrying.`);
   }
   if (typeof process.getuid === "function" && st.uid !== process.getuid()) {
-    onWarn(`credentials file at ${resolved} is owned by uid ${st.uid} (current process uid ${process.getuid()}); verify this is intentional.`);
+    onWarn(`credentials file at ${resolved2} is owned by uid ${st.uid} (current process uid ${process.getuid()}); verify this is intentional.`);
   }
 }
 async function writeCredentialsFileAtomic(targetPath, data) {
@@ -36226,6 +36226,24 @@ init_define_STACK_PROMPTS();
 function baseModelId(model) {
   return model.replace(/^anthropic\//, "").replace(/:[\w-]+$/, "").replace(/\./g, "-").replace(/-\d{8}$/, "");
 }
+var MODEL_CONTEXT_WINDOWS = [
+  ["claude-haiku-4-5", 2e5],
+  ["claude-sonnet-4-5", 2e5],
+  ["claude-opus-4-5", 2e5],
+  ["claude-haiku-5", 1e6],
+  ["claude-sonnet-4-6", 1e6],
+  ["claude-sonnet-5", 1e6],
+  ["claude-opus-4-6", 1e6],
+  ["claude-opus-4-7", 1e6],
+  ["claude-opus-4-8", 1e6],
+  ["claude-opus-5", 1e6],
+  ["claude-fable-5", 1e6],
+  ["claude-mythos-5", 1e6]
+];
+var windowByPrefix = (model) => MODEL_CONTEXT_WINDOWS.find(([prefix]) => model.startsWith(prefix))?.[1];
+function tableContextWindow(model) {
+  return windowByPrefix(model) ?? windowByPrefix(baseModelId(model));
+}
 
 // src/config.ts
 function required(name) {
@@ -36245,23 +36263,8 @@ function positiveOr(value, fallback) {
 function parseBranchList(value) {
   return value.split(",").map((p) => p.trim()).filter(Boolean);
 }
-var MODEL_CONTEXT_WINDOWS = [
-  ["claude-haiku-4-5", 2e5],
-  ["claude-sonnet-4-5", 2e5],
-  ["claude-opus-4-5", 2e5],
-  ["claude-haiku-5", 1e6],
-  ["claude-sonnet-4-6", 1e6],
-  ["claude-sonnet-5", 1e6],
-  ["claude-opus-4-6", 1e6],
-  ["claude-opus-4-7", 1e6],
-  ["claude-opus-4-8", 1e6],
-  ["claude-opus-5", 1e6],
-  ["claude-fable-5", 1e6],
-  ["claude-mythos-5", 1e6]
-];
-var windowByPrefix = (model) => MODEL_CONTEXT_WINDOWS.find(([prefix]) => model.startsWith(prefix))?.[1];
 function modelContextWindow(model) {
-  return windowByPrefix(model) ?? windowByPrefix(baseModelId(model)) ?? 2e5;
+  return tableContextWindow(model) ?? 2e5;
 }
 var llmProvider = optional("LLM_PROVIDER", "anthropic");
 function resolveLlmApiKey(provider) {
@@ -36320,7 +36323,7 @@ var config = {
     // Output-token cap for reviewer + judge. The Claude 5 family thinks by default and that
     // counts against this budget, so too low a cap truncates (16k cut off Sonnet 5 mid-review).
     maxTokens: parseInt(optional("MAX_OUTPUT_TOKENS", "32000"), 10),
-    // Override for the model's context window; 0 = derive from the model id (modelContextWindow).
+    // Replaces the reviewer's window and stands in for any other model the window table lacks (contextWindowFor); 0 = off.
     modelContextTokens: parseInt(optional("MODEL_CONTEXT_TOKENS", "0"), 10)
   },
   judge: {
@@ -42236,13 +42239,14 @@ var ISSUE_TYPES = [
 var normalizeIssueType = (t) => ISSUE_TYPES.includes(String(t)) ? t : "other";
 var bullets = (items) => items.map((i) => `- ${i}`).join("\n");
 var listOrNone = (items) => items.length ? bullets(items) : "None.";
+function renderFinding(f, tag = "", suffix = "") {
+  const loc = f.file ? ` (\`${f.file}${f.lines ? `:${f.lines}` : ""}\`)` : "";
+  return `- ${tag}**${f.severity} \u2013 ${f.title}**${loc}
+  ${f.body}${suffix}`;
+}
 function renderReview(r, opts2 = {}) {
   if (r.no_change) return "NO_CHANGE";
-  const findings = r.findings.length ? r.findings.map((f, i) => {
-    const loc = f.file ? ` (\`${f.file}${f.lines ? `:${f.lines}` : ""}\`)` : "";
-    return `- ${opts2.tag?.(i) ?? ""}**${f.severity} \u2013 ${f.title}**${loc}
-  ${f.body}${opts2.suffix?.(i) ?? ""}`;
-  }).join("\n\n") : opts2.emptyFindings ?? "No findings.";
+  const findings = r.findings.length ? (opts2.order ?? r.findings.map((_, i) => i)).map((i) => renderFinding(r.findings[i], opts2.tag?.(i) ?? "", opts2.suffix?.(i) ?? "")).join("\n\n") : opts2.emptyFindings ?? "No findings.";
   const parts = [
     `### Summary
 ${r.summary}`,
@@ -42296,6 +42300,22 @@ function decideDirectedElsewhere(body, agentIds, agentNames) {
   }
   return { drop: true, matchedToken: lead[1] };
 }
+
+// src/vcs/adapter.ts
+init_define_STACK_PROMPTS();
+var authorIdOf = (id) => typeof id === "string" && id ? { authorId: id } : {};
+var AGENT_REPLY_AUTHOR = "Agent (prior reply)";
+var isAgentReply = (r) => r.author === AGENT_REPLY_AUTHOR;
+var PrTooLargeError = class extends Error {
+  constructor(prId, reason) {
+    super(`PR too large to review (${reason})`);
+    this.prId = prId;
+    this.reason = reason;
+    this.name = "PrTooLargeError";
+  }
+  prId;
+  reason;
+};
 
 // src/vcs/bitbucket.ts
 var REQUEST_TIMEOUT_MS = 3e4;
@@ -42472,7 +42492,7 @@ var BitbucketAdapter = class {
           humanReplies.push({
             id: String(c.id),
             parentId,
-            author: "Agent (prior reply)",
+            author: AGENT_REPLY_AUTHOR,
             body,
             createdOn: c.created_on
           });
@@ -42483,6 +42503,7 @@ var BitbucketAdapter = class {
         id: String(c.id),
         parentId,
         author: c.user?.display_name ?? "Unknown",
+        ...authorIdOf(c.user?.uuid ?? c.user?.account_id),
         body,
         createdOn: c.created_on
       });
@@ -43047,11 +43068,11 @@ var AzureDevOpsAdapter = class {
           agentReplyCount++;
           if (createdOn > latestAgentReply) latestAgentReply = createdOn;
           if (includeAnswered) {
-            humanReplies.push({ id: compositeId, parentId: parentReviewId, author: "Agent (prior reply)", body, createdOn });
+            humanReplies.push({ id: compositeId, parentId: parentReviewId, author: AGENT_REPLY_AUTHOR, body, createdOn });
           }
           continue;
         }
-        humanReplies.push({ id: compositeId, parentId: parentReviewId, author: c.author?.displayName ?? "Unknown", body, createdOn });
+        humanReplies.push({ id: compositeId, parentId: parentReviewId, author: c.author?.displayName ?? "Unknown", ...authorIdOf(c.author?.id), body, createdOn });
       }
     }
     if (includeAnswered) return { replies: humanReplies, agentReplyCount };
@@ -43277,21 +43298,6 @@ function buildUnifiedFilePatch(oldPath, newPath, oldContent, newContent) {
 
 // src/vcs/github.ts
 init_define_STACK_PROMPTS();
-
-// src/vcs/adapter.ts
-init_define_STACK_PROMPTS();
-var PrTooLargeError = class extends Error {
-  constructor(prId, reason) {
-    super(`PR too large to review (${reason})`);
-    this.prId = prId;
-    this.reason = reason;
-    this.name = "PrTooLargeError";
-  }
-  prId;
-  reason;
-};
-
-// src/vcs/github.ts
 var REQUEST_TIMEOUT_MS2 = 3e4;
 var DIFF_ACCEPT = "application/vnd.github.diff";
 var RAW_ACCEPT = "application/vnd.github.raw";
@@ -43421,7 +43427,7 @@ var GitHubAdapter = class {
       if (hasReviewFooter(body)) continue;
       if (hasReplyFooter(body)) {
         if (includeAnswered) {
-          humanReplies.push({ id: String(c.id), parentId, author: "Agent (prior reply)", body, createdOn: c.created_at });
+          humanReplies.push({ id: String(c.id), parentId, author: AGENT_REPLY_AUTHOR, body, createdOn: c.created_at });
         }
         continue;
       }
@@ -43495,6 +43501,52 @@ var GitHubAdapter = class {
 
 // src/review/index.ts
 init_define_STACK_PROMPTS();
+
+// src/llm/context-window.ts
+init_define_STACK_PROMPTS();
+var LOOKUP_TIMEOUT_MS = 5e3;
+var listedWindows = /* @__PURE__ */ new Map();
+var resolved = false;
+function contextWindowFor(model, reviewer = false) {
+  const override = config.anthropic.modelContextTokens > 0 ? config.anthropic.modelContextTokens : 0;
+  const known = tableContextWindow(model) !== void 0;
+  if (override && (reviewer || !known)) return override;
+  return !known && listedWindows.get(model) || modelContextWindow(model);
+}
+async function resolveContextWindows() {
+  if (resolved) return;
+  resolved = true;
+  if (config.vcsProvider === "reviewbench" || config.anthropic.modelContextTokens > 0) return;
+  const models = [config.anthropic.model, config.judge.model, config.breadth.enabled ? config.breadth.model : "", config.lenses.enabled ? config.lenses.model : ""];
+  const unknown = [...new Set(models.filter((m) => m && tableContextWindow(m) === void 0))];
+  if (!unknown.length) return;
+  if (config.llmProvider === "openrouter") {
+    try {
+      const list = await fetchModelList();
+      for (const m of unknown) {
+        const window2 = listedWindow(list, m);
+        if (window2) listedWindows.set(m, window2);
+      }
+    } catch (err) {
+      console.warn(`Warning: could not read the OpenRouter model list (${err.message}) - using the 200K fallback context window for ${unknown.join(", ")}; set MODEL_CONTEXT_TOKENS to the real window`);
+      return;
+    }
+    if (listedWindows.size) console.log(`Context window from the OpenRouter model list: ${[...listedWindows].map(([m, w]) => `${m} ${w.toLocaleString()}`).join(", ")}`);
+  }
+  const fallback = unknown.filter((m) => !listedWindows.has(m));
+  if (fallback.length) console.warn(`Warning: no known context window for ${fallback.join(", ")} - using the 200K fallback; set MODEL_CONTEXT_TOKENS to the real window`);
+}
+async function fetchModelList() {
+  const resp = await axios_default.get(`${config.openrouter.baseUrl.replace(/\/+$/, "")}/models`, { timeout: LOOKUP_TIMEOUT_MS });
+  if (!Array.isArray(resp.data?.data)) throw new Error("unexpected response shape");
+  return resp.data.data;
+}
+function listedWindow(list, model) {
+  const bare = model.replace(/:[\w-]+$/, "");
+  const entry = list.find((e) => e.id === model || e.canonical_slug === model) ?? list.find((e) => e.id === bare || e.canonical_slug === bare);
+  const limits = [entry?.context_length, entry?.top_provider?.context_length].filter((n) => typeof n === "number" && Number.isFinite(n) && n > 0);
+  return limits.length ? Math.min(...limits) : void 0;
+}
 
 // src/prompt/loader.ts
 init_define_STACK_PROMPTS();
@@ -43832,12 +43884,12 @@ function looksLikeSymlink(content) {
 }
 function resolveSymlink(symlinkDir, target) {
   const parts = (symlinkDir ? symlinkDir + "/" + target : target).split("/");
-  const resolved = [];
+  const resolved2 = [];
   for (const p of parts) {
-    if (p === "..") resolved.pop();
-    else if (p !== ".") resolved.push(p);
+    if (p === "..") resolved2.pop();
+    else if (p !== ".") resolved2.push(p);
   }
-  return resolved.join("/");
+  return resolved2.join("/");
 }
 function detectModuleDir(changedFiles) {
   const dirs = /* @__PURE__ */ new Set();
@@ -43869,9 +43921,9 @@ async function loadPrompt(adapter2, prInfo, localPromptPath, changedFiles, diff)
       if (repoPrompt) {
         if (looksLikeSymlink(repoPrompt)) {
           const dir = path4.includes("/") ? path4.slice(0, path4.lastIndexOf("/")) : "";
-          const resolved = resolveSymlink(dir, repoPrompt.trim());
-          console.log(`  ${path4} is a symlink \u2192 ${resolved}`);
-          repoPrompt = await adapter2.getRepoFileContent(resolved, ref);
+          const resolved2 = resolveSymlink(dir, repoPrompt.trim());
+          console.log(`  ${path4} is a symlink \u2192 ${resolved2}`);
+          repoPrompt = await adapter2.getRepoFileContent(resolved2, ref);
           if (!repoPrompt) continue;
         }
         console.log(`Using repo-specific prompt from ${path4} (${ref.slice(0, 12)})`);
@@ -44025,7 +44077,7 @@ var AnthropicProvider = class {
       throw new Error("Model returned invalid JSON despite structured output");
     }
     const missing = missingRequired(object, schema, false, opts2.tolerateMissing);
-    if (missing.length) throw new Error(`Structured output missing required field(s): ${missing.join(", ")}`);
+    if (missing.length) throw Object.assign(new Error(`Structured output missing required field(s): ${missing.join(", ")}`), { usage: mapUsage(response.usage) });
     return { object, usage: mapUsage(response.usage) };
   }
   // Stream + finalMessage (not create): the SDK rejects a non-streaming request whose max_tokens
@@ -44054,11 +44106,13 @@ function textOf(response, maxTokens) {
   return block.text;
 }
 function mapUsage(u) {
+  const thinking = u.output_tokens_details?.thinking_tokens;
   return {
     input_tokens: u.input_tokens,
     output_tokens: u.output_tokens,
     cache_read_input_tokens: u.cache_read_input_tokens ?? 0,
-    cache_creation_input_tokens: u.cache_creation_input_tokens ?? 0
+    cache_creation_input_tokens: u.cache_creation_input_tokens ?? 0,
+    ...typeof thinking === "number" && thinking > 0 ? { reasoning_tokens: thinking } : {}
   };
 }
 function anthropicBaseUrl(url2) {
@@ -44088,18 +44142,27 @@ var OpenRouterProvider = class {
   }
   async completeStructured(system, user, schema, opts2) {
     const response_format = { type: "json_schema", json_schema: { name: "result", schema, strict: false } };
-    const data = await this.request({ model: opts2.model, max_tokens: opts2.maxTokens, response_format, messages: openRouterMessages(system, user) }, opts2);
-    const choice = firstChoice(data, opts2.maxTokens);
-    const text = contentOf(choice);
+    const payload = { model: opts2.model, max_tokens: opts2.maxTokens, response_format, messages: openRouterMessages(system, user) };
+    const first = await this.structuredAttempt(payload, schema, opts2);
+    if (!first.missing.length) return { object: first.object, usage: first.usage };
+    console.warn(`  Structured output from ${opts2.model} missing ${first.missing.join(", ")} \u2014 retrying once`);
+    const second = await this.structuredAttempt(payload, schema, opts2).catch((err) => {
+      throw withPriorUsage(err, first.usage);
+    });
+    const usage = sumUsage(first.usage, second.usage);
+    if (second.missing.length) throw Object.assign(new Error(`Structured output missing required field(s): ${second.missing.join(", ")}`), { usage });
+    return { object: second.object, usage };
+  }
+  async structuredAttempt(payload, schema, opts2) {
+    const data = await this.request(payload, opts2);
+    const text = contentOf(firstChoice(data, opts2.maxTokens));
     let object;
     try {
       object = JSON.parse(text);
     } catch {
       throw new Error("Model returned invalid JSON despite structured output");
     }
-    const missing = missingRequired(object, schema, true, opts2.tolerateMissing);
-    if (missing.length) throw new Error(`Structured output missing required field(s): ${missing.join(", ")}`);
-    return { object, usage: mapOpenRouterUsage(data.usage) };
+    return { object, usage: mapOpenRouterUsage(data.usage), missing: missingRequired(object, schema, true, opts2.tolerateMissing) };
   }
   async request(payload, opts2) {
     const url2 = `${config.openrouter.baseUrl.replace(/\/+$/, "")}/chat/completions`;
@@ -44110,6 +44173,16 @@ var OpenRouterProvider = class {
       ...config.openrouter.title ? { "X-OpenRouter-Title": config.openrouter.title } : {}
     };
     const body = { ...payload, usage: { include: true }, ...config.repoSlug ? { user: config.repoSlug } : {} };
+    if (!opts2.effort) return this.send(url2, headers, body, opts2);
+    return this.send(url2, headers, { ...body, reasoning: { effort: opts2.effort } }, opts2).catch((err) => {
+      if (isReasoningRejection(err)) {
+        console.warn(`  effort "${opts2.effort}" not accepted by ${opts2.model} \u2014 retrying without it`);
+        return this.send(url2, headers, body, opts2);
+      }
+      throw err;
+    });
+  }
+  async send(url2, headers, body, opts2) {
     let lastErr;
     for (let attempt = 0; attempt <= opts2.maxRetries; attempt++) {
       try {
@@ -44149,25 +44222,50 @@ function contentOf(choice) {
 }
 function mapOpenRouterUsage(u) {
   const cost = typeof u?.cost === "number" && u.cost > 0 ? u.cost : u?.cost_details?.upstream_inference_cost;
+  const reasoning = u?.completion_tokens_details?.reasoning_tokens;
   return {
     input_tokens: u?.prompt_tokens ?? 0,
+    // Already includes completion_tokens_details.reasoning_tokens (billed as output), as Anthropic's output_tokens includes thinking.
     output_tokens: u?.completion_tokens ?? 0,
     cache_read_input_tokens: u?.prompt_tokens_details?.cached_tokens ?? 0,
     cache_creation_input_tokens: 0,
-    ...typeof cost === "number" ? { cost_usd: cost } : {}
+    ...typeof cost === "number" ? { cost_usd: cost } : {},
+    ...typeof reasoning === "number" && reasoning > 0 ? { reasoning_tokens: reasoning } : {}
   };
+}
+function sumUsage(a, b) {
+  const cost = a.cost_usd === void 0 && b.cost_usd === void 0 ? void 0 : (a.cost_usd ?? 0) + (b.cost_usd ?? 0);
+  const reasoning = (a.reasoning_tokens ?? 0) + (b.reasoning_tokens ?? 0);
+  return {
+    input_tokens: a.input_tokens + b.input_tokens,
+    output_tokens: a.output_tokens + b.output_tokens,
+    cache_read_input_tokens: (a.cache_read_input_tokens ?? 0) + (b.cache_read_input_tokens ?? 0),
+    cache_creation_input_tokens: (a.cache_creation_input_tokens ?? 0) + (b.cache_creation_input_tokens ?? 0),
+    ...cost === void 0 ? {} : { cost_usd: cost },
+    ...reasoning > 0 ? { reasoning_tokens: reasoning } : {}
+  };
+}
+function withPriorUsage(err, prior) {
+  if (!err || typeof err !== "object") return err;
+  const own2 = err.usage;
+  return Object.assign(err, { usage: own2 ? sumUsage(prior, own2) : prior });
 }
 function openRouterError(status, rawMessage, code) {
   const hay = `${rawMessage} ${typeof code === "string" ? code : ""}`;
   const overflow = /context[ _]length|maximum context|reduce the length|context_length_exceeded|too many tokens|input is too long|input token count/i.test(hay);
-  const e = new Error(overflow ? `prompt is too long: ${rawMessage}` : rawMessage);
-  const resolved = overflow ? 400 : status;
-  if (typeof resolved === "number") e.status = resolved;
+  const e = new Error(overflow ? `${OVERFLOW_PREFIX}${rawMessage}` : rawMessage);
+  const resolved2 = overflow ? 400 : status;
+  if (typeof resolved2 === "number") e.status = resolved2;
   e.__openrouter = true;
   return e;
 }
+var OVERFLOW_PREFIX = "prompt is too long: ";
 function isOpenRouterError(err) {
   return !!err?.__openrouter;
+}
+function isReasoningRejection(err) {
+  if (!isOpenRouterError(err) || err.status !== 400) return false;
+  return /reasoning\.effort|reasoning is mandatory/i.test(err.message) && !err.message.startsWith(OVERFLOW_PREFIX);
 }
 function axiosToError(err) {
   const ax = err;
@@ -44337,10 +44435,13 @@ function addedLines(diff) {
   }
   return out;
 }
+var DOC_FILE = /[.](md|mdx|txt|rst)$/i;
+var OWN_SECTION = /TODOs Introduced/i;
 function scanTodos(diff) {
   const marker = /\b(TODO|FIXME|HACK)\b:?\s*(.*)/i;
   const todos = [];
   for (const { file, line, text } of addedLines(diff)) {
+    if (DOC_FILE.test(file) || OWN_SECTION.test(text)) continue;
     const m = text.match(marker);
     if (!m) continue;
     const body = m[2].trim();
@@ -44703,6 +44804,7 @@ function sanitizeProposal(raw) {
 }
 function sanitizeCodeProposal(raw) {
   if (typeof raw !== "string") return void 0;
+  if (raw.length > 4 * PROPOSAL_CAP) return void 0;
   let s = raw.replace(/\r\n?/g, "\n").trimEnd();
   const fenced = s.match(/^\s*(`{3,}|~{3,})[^\n]*\n([\s\S]*?)\n[ \t]*\1$/);
   if (fenced) s = fenced[2];
@@ -44878,12 +44980,12 @@ function applyJudgeDecisions(candidates, output, policy = DEFAULT_JUDGE_POLICY, 
       return null;
     }
     if (given.length > 1) anomalies.duplicate_ids++;
-    const resolved = given.map((d) => {
+    const resolved2 = given.map((d) => {
       const r = resolve2(d, candidate, policy, idx, i >= breadthFrom, shownFor(i));
       const proposal = proposals ? options?.codeProposals ? sanitizeCodeProposal(d.proposal) : sanitizeProposal(d.proposal) : void 0;
       return { r: proposal ? { ...r, proposal } : r, d };
     });
-    const chosen = resolved.find((x) => x.r.action === "drop") ?? resolved[0];
+    const chosen = resolved2.find((x) => x.r.action === "drop") ?? resolved2[0];
     if (chosen.r.reclassified_from) anomalies.drop_without_evidence++;
     return { i, candidate, r: chosen.r, d: chosen.d };
   });
@@ -44892,6 +44994,7 @@ function applyJudgeDecisions(candidates, output, policy = DEFAULT_JUDGE_POLICY, 
   const kept = [];
   const moved = [];
   const rows = [];
+  const sanitizerDropped = [];
   candidates.forEach((candidate, i) => {
     const id = candidateId(i);
     const entry = entries[i];
@@ -44916,6 +45019,7 @@ function applyJudgeDecisions(candidates, output, policy = DEFAULT_JUDGE_POLICY, 
     const { question, body, anchor, proposal, ...applied } = entry.r;
     const isKept = entry.r.action === "keep" || entry.r.action === "downgrade";
     const keptProposal = proposals && isKept && proposal ? { proposal } : {};
+    if (proposals && options?.codeProposals && isKept && !proposal && typeof entry.d.proposal === "string" && entry.d.proposal.trim()) sanitizerDropped.push(i);
     const expansion = options?.quality && isKept && entry.d.additional_locations?.length ? expandLocations(candidate, entry.d.additional_locations, anchor, idx) : null;
     decisions.push({ ...applied, candidate_id: id, ...expansion ? { expansions: expansion.log } : {}, ...keptProposal });
     if (entry.r.action === "move_to_unresolved") moved.push(question ?? candidate.title);
@@ -44941,13 +45045,16 @@ function applyJudgeDecisions(candidates, output, policy = DEFAULT_JUDGE_POLICY, 
   });
   if (options?.quality) dedupKept(kept, rows, decisions, idx);
   const scores = kept.map((k) => ({ title: k.title, severity: k.severity, score: k.score, file: k.file, lines: k.lines }));
+  const render = (suffixes, order) => renderJudgedReview(kept, output, moved, canBeSplit, suffixes, order);
   return {
     kept,
     decisions,
     anomalies,
     scores,
     markdown: renderJudgedReview(kept, output, moved, canBeSplit),
-    ...options?.codeProposals ? { renderWith: (suffixes) => renderJudgedReview(kept, output, moved, canBeSplit, suffixes) } : {}
+    render,
+    // Kept as the code-proposal contract callers check for; POST_REVIEW reads render, which every judged review has.
+    ...options?.codeProposals ? { renderWith: render, proposalsDropped: sanitizerDropped.filter((i) => decisions[i].quality_action !== "dedup_suppressed").length } : {}
   };
 }
 var locationOf = (a, idx) => {
@@ -45056,7 +45163,7 @@ ${candidate.body}`;
   }
   return { accepted, log };
 }
-function renderJudgedReview(kept, output, movedQuestions = [], canBeSplit = [], suffixes) {
+function renderJudgedReview(kept, output, movedQuestions = [], canBeSplit = [], suffixes, order) {
   const questions = [...output.unresolved_questions ?? []];
   for (const q of movedQuestions) if (!questions.includes(q)) questions.push(q);
   const review2 = {
@@ -45068,7 +45175,7 @@ function renderJudgedReview(kept, output, movedQuestions = [], canBeSplit = [], 
     can_be_split: canBeSplit.length ? [...canBeSplit] : void 0
   };
   const confidence = Math.max(0, Math.min(100, Math.round(Number(output.merge_confidence) || 0)));
-  return `${renderReview(review2, { emptyFindings: "No actionable findings.", suffix: suffixes && ((i) => suffixes.get(i) ?? "") })}
+  return `${renderReview(review2, { emptyFindings: "No actionable findings.", suffix: suffixes && ((i) => suffixes.get(i) ?? ""), order })}
 
 ### Merge Confidence: ${confidence}%
 
@@ -45183,7 +45290,9 @@ ${SUGGESTED_FIX_LABEL}
 `.length + MAX_FENCE + SUGGESTED_FIX_MARKER.length + 1 + PROPOSAL_CAP + 1 + MAX_FENCE;
 var FENCE_LINE = /^[ \t]*(`{3,}|~{3,})/;
 var BLOCK_OPENER = new RegExp(`^(\`{3,})${SUGGESTED_FIX_MARKER}$`);
+var UNSAFE_CHARS = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F\u2028\u2029]/;
 function fixCodeContent(proposal) {
+  if (UNSAFE_CHARS.test(proposal)) return null;
   const review2 = new RegExp(REVIEW_FOOTER_SOURCE);
   const reply = new RegExp(REPLY_FOOTER_SOURCE);
   for (const line of proposal.split("\n")) {
@@ -45228,12 +45337,53 @@ function hasUnclosedFence(text) {
   }
   return !!(loose || strict);
 }
+var PM_OPENER = /^(~{3,}|`{3,})[ ]*(?:(\{[^\n]*\})|(\.?([\w#.+-]*)[ ]*)?(?:hl_lines=("|')([\s\S]*?)\5[ ]*)?)$/;
+var PM_CLOSER = /^(~{3,}|`{3,})[ ]*$/;
+function pmBlocks(text) {
+  const lines = text.replace(/\r\n?/g, "\n").split("\n");
+  const closers = /* @__PURE__ */ new Map();
+  lines.forEach((line, n) => {
+    const fence = PM_CLOSER.exec(line)?.[1];
+    if (!fence) return;
+    const at = closers.get(fence);
+    if (at) at.push(n);
+    else closers.set(fence, [n]);
+  });
+  const next = /* @__PURE__ */ new Map();
+  const firstCloserAfter = (fence, i) => {
+    const at = closers.get(fence) ?? [];
+    let p = next.get(fence) ?? 0;
+    while (p < at.length && at[p] <= i) p++;
+    next.set(fence, p);
+    return at[p];
+  };
+  const blocks = [];
+  const rest = [];
+  for (let i = 0; i < lines.length; i++) {
+    const fence = PM_OPENER.exec(lines[i])?.[1];
+    const close = fence === void 0 ? void 0 : firstCloserAfter(fence, i);
+    if (close === void 0) {
+      rest.push(lines[i]);
+      continue;
+    }
+    blocks.push({ opener: lines[i], code: lines.slice(i + 1, close).join("\n") });
+    rest.push(`PH${blocks.length}`);
+    i = close;
+  }
+  return { blocks, rest: rest.join("\n") };
+}
+function blocksStandAlone(text, plain, codes) {
+  if (stripSuggestedFixes(text) !== plain.replace(/\r\n?/g, "\n")) return false;
+  const own2 = pmBlocks(text).blocks.filter((b) => b.opener.endsWith(SUGGESTED_FIX_MARKER)).map((b) => b.code).sort();
+  const want = [...codes].sort();
+  return own2.length === want.length && own2.every((c, n) => c === want[n]);
+}
 function composeSuggestedFixes(kept, renderWith, plain, budget) {
   const fixes = [];
   let rejected = 0;
   kept.forEach((k, i) => {
     if (!k.proposal) return;
-    const code = fixCodeContent(k.proposal);
+    const code = k.proposal.length <= PROPOSAL_CAP ? fixCodeContent(k.proposal) : null;
     if (code === null) rejected++;
     else fixes.push([i, code]);
   });
@@ -45249,6 +45399,7 @@ function composeSuggestedFixes(kept, renderWith, plain, budget) {
   }
   const text = renderWith(suffixes);
   if (text.length > budget) return skip("size");
+  if (!blocksStandAlone(text, plain, fixes.map(([, code]) => code))) return skip("unbalanced");
   return { text, stats: { rendered: suffixes.size, rejected } };
 }
 function blockClose(lines, starts, i, limit2) {
@@ -45879,7 +46030,8 @@ ${renderCandidatesForJudge(review2)}`);
     decisions: judged.decisions,
     anomalies: judged.anomalies,
     kept: judged.kept,
-    ...judged.renderWith ? { renderWith: judged.renderWith } : {}
+    render: judged.render,
+    ...judged.renderWith ? { renderWith: judged.renderWith, proposalsDropped: judged.proposalsDropped } : {}
   };
 }
 function getReplyPrompt() {
@@ -46210,6 +46362,46 @@ function addUsage(ctx, u) {
   ctx.usage.cache_read += u.cache_read_input_tokens ?? 0;
   ctx.usage.cache_write += u.cache_creation_input_tokens ?? 0;
   if (u.cost_usd !== void 0) ctx.usage.cost_usd = (ctx.usage.cost_usd ?? 0) + u.cost_usd;
+  if (u.reasoning_tokens) ctx.usage.reasoning = (ctx.usage.reasoning ?? 0) + u.reasoning_tokens;
+}
+
+// src/review/posted-order.ts
+init_define_STACK_PROMPTS();
+var RANK = /* @__PURE__ */ new Map([["HIGH", 0], ["MEDIUM", 1], ["LOW", 2]]);
+function severityPermutation(findings) {
+  const known = findings.flatMap((f, i) => RANK.has(f.severity) ? [i] : []);
+  const sorted = [...known].sort((a, b) => RANK.get(findings[a].severity) - RANK.get(findings[b].severity) || a - b);
+  let next = 0;
+  return findings.map((f, i) => RANK.has(f.severity) ? sorted[next++] : i);
+}
+var FENCE = /^([ \t]*)(`{3,}|~{3,})(.*)$/;
+function fencesSelfContained(text) {
+  let open;
+  for (const line of text.split(/\r\n|\r|\n/)) {
+    const m = FENCE.exec(line);
+    if (!m) continue;
+    if (open === void 0) {
+      if (!/^ *[\w#.+-]* *$/.test(m[3])) return false;
+      open = m[1] + m[2];
+    } else if (line.startsWith(open) && /^ *$/.test(line.slice(open.length))) {
+      open = void 0;
+    } else {
+      return false;
+    }
+  }
+  return open === void 0;
+}
+function orderPosted(plain, findings, render) {
+  const order = severityPermutation(findings);
+  if (order.every((from, to) => from === to)) return { text: plain };
+  const chunks = findings.map((f) => renderFinding(f));
+  const block = chunks.join("\n\n");
+  const at = plain.indexOf(block);
+  const head = plain.slice(0, at);
+  if (at < 0 || !fencesSelfContained(head) || !chunks.every(fencesSelfContained)) return { text: plain };
+  const text = render(order);
+  if (text !== head + order.map((i) => chunks[i]).join("\n\n") + plain.slice(at + block.length)) return { text: plain };
+  return { text, order };
 }
 
 // src/review/usage.ts
@@ -46252,6 +46444,9 @@ var import_meta3 = {};
 function hash12(s) {
   return (0, import_crypto3.createHash)("sha256").update(s).digest("hex").slice(0, 12);
 }
+function candidateRows(list) {
+  return list.map((f, i) => ({ id: candidateId(i), origin: f.origin, severity: f.severity, title: f.title, file: f.file ?? null, lines: f.lines ?? null, body: f.body }));
+}
 function firstSentence(body) {
   const s = body.trim();
   return (s.match(/^.*?[.!?](?=\s|$)/)?.[0] ?? s).trim();
@@ -46292,7 +46487,7 @@ function getAgentVersion() {
     const pkg = JSON.parse((0, import_fs4.readFileSync)(pkgPath, "utf-8"));
     return pkg.version;
   } catch {
-    if (true) return "0.0.47";
+    if (true) return "0.0.48";
     return "unknown";
   }
 }
@@ -46304,7 +46499,7 @@ function getBuildCommit() {
     const dirty = (0, import_child_process.execSync)("git status --porcelain", opts2).toString().trim() ? "-dirty" : "";
     return hash + dirty;
   } catch {
-    if (true) return "c490e7f";
+    if (true) return "498578f";
     return "unknown";
   }
 }
@@ -46353,6 +46548,8 @@ function buildUsageRecord(ctx, durationMs, error) {
   }, recordModel);
   const breadthStatus = ctx.breadthStatus ?? (ctx.bundleCount ? config.breadth.enabled ? "skipped_bundled" : "disabled" : null);
   const secondLookStatus = ctx.secondLookStatus ?? (ctx.bundleCount ? config.review.secondLook ? "skipped_bundled" : "disabled" : null);
+  const humanReplies = (ctx.replies ?? []).filter((r) => !isAgentReply(r));
+  const replyAuthors = [...new Set(humanReplies.map((r) => r.authorId ?? r.author))];
   return {
     run_id: `${config.vcsProvider}-${ctx.repoSlug}-${ctx.prId}-${commitShort}`,
     timestamp: (/* @__PURE__ */ new Date()).toISOString(),
@@ -46393,7 +46590,8 @@ function buildUsageRecord(ctx, durationMs, error) {
       output: ctx.usage.output_tokens,
       cache_read: ctx.usage.cache_read,
       cache_write: ctx.usage.cache_write,
-      estimated_input: ctx.estimatedInputTokens
+      estimated_input: ctx.estimatedInputTokens,
+      ...ctx.usage.reasoning ? { reasoning: ctx.usage.reasoning } : {}
     },
     cost_usd: reviewerCost + (judgeCost ?? 0) + (breadthCost ?? 0) + (secondLookCost ?? 0) + lensCost,
     judge_model: judgeModel,
@@ -46426,7 +46624,9 @@ function buildUsageRecord(ctx, durationMs, error) {
         ...k.quality_action ? { quality_action: k.quality_action } : {}
       };
     }) : null,
-    review_candidates: ctx.judgeDecisions && ctx.reviewObject ? (ctx.judgeCandidates ?? ctx.reviewObject.findings.map((f) => ({ ...f, origin: "review" }))).map((f, i) => ({ id: candidateId(i), origin: f.origin, severity: f.severity, title: f.title, file: f.file ?? null, lines: f.lines ?? null, body: f.body })) : null,
+    review_candidates: ctx.judgeDecisions && ctx.reviewObject ? candidateRows(ctx.judgeCandidates ?? ctx.reviewObject.findings.map((f) => ({ ...f, origin: "review" }))) : null,
+    // Only when the judge threw and the run failed, so findings that were never judged or posted stay diagnosable.
+    ...error && ctx.judgeStatus === "failed" && ctx.judgeCandidates ? { unjudged_candidates: candidateRows(ctx.judgeCandidates) } : {},
     judge_decisions: ctx.judgeDecisions ?? null,
     judge_anomalies: ctx.judgeAnomalies ?? null,
     judge_policy: judgeModel && judgeTokens ? { keep_minor: config.judge.policy.keepMinor, keep_unverified: config.judge.policy.keepUnverified, file_context: config.judge.fileContext } : null,
@@ -46451,10 +46651,14 @@ function buildUsageRecord(ctx, durationMs, error) {
     })() : null,
     delta: ctx.reviewNumber > 1 && ctx.reviewObject ? {
       developer_replies: ctx.replies?.length ?? 0,
+      human_replies: humanReplies.length,
+      agent_replies: (ctx.replies?.length ?? 0) - humanReplies.length,
       resolved: deltaStats?.resolved ?? 0,
       still_open: deltaStats?.still_open ?? 0,
       new_findings: deltaStats?.new_findings ?? 0
     } : null,
+    // Absent when no human replied, so records without discussion keep their current shape.
+    ...replyAuthors.length ? { reply_authors: replyAuthors } : {},
     // Present only when the head was really checked and the run did not fail afterwards; CI stores exactly this value, so it must pass the LAST_CHECKED_COMMIT rule too, whatever head the adapter reported.
     ...ctx.headChecked && !error && isCheckedCommitHash(ctx.prInfo.sourceCommit) ? { checked_commit: ctx.prInfo.sourceCommit } : {},
     ...ctx.dedupHit === "checked_commit" ? { dedup_source: "checked_commit" } : {},
@@ -46751,11 +46955,7 @@ async function transition(state, ctx) {
         lastReview.body,
         ctx.replies
       );
-      ctx.usage.input_tokens += result.usage.input_tokens;
-      ctx.usage.output_tokens += result.usage.output_tokens;
-      ctx.usage.cache_read += result.usage.cache_read_input_tokens ?? 0;
-      ctx.usage.cache_write += result.usage.cache_creation_input_tokens ?? 0;
-      if (result.usage.cost_usd !== void 0) ctx.usage.cost_usd = (ctx.usage.cost_usd ?? 0) + result.usage.cost_usd;
+      addUsage(ctx, result.usage);
       const replyBody = result.text.trimEnd() + buildReplyFooter(config.agentIdentity, replyModel, getJobUrl());
       if (ctx.dryRun) {
         console.log("\n=== DRY RUN \u2014 Reply output (not posted) ===\n");
@@ -46814,8 +47014,8 @@ async function transition(state, ctx) {
       };
       const fmt = (s2) => `prompt ${s2.prompt.toLocaleString()} | diff ${s2.diff.toLocaleString()} | delta ${s2.delta.toLocaleString()} | files ${s2.files.toLocaleString()} (${s2.filesN}) | prev_reviews ${s2.reviews.toLocaleString()} (${s2.reviewsN}) | replies ${s2.replies.toLocaleString()} (${s2.repliesN})`;
       let s = sizes();
-      const reviewerWindow = config.anthropic.modelContextTokens > 0 ? config.anthropic.modelContextTokens : modelContextWindow(config.anthropic.model);
-      const ctxWindow = config.judge.model ? Math.min(reviewerWindow, modelContextWindow(config.judge.model)) : reviewerWindow;
+      const reviewerWindow = contextWindowFor(config.anthropic.model, true);
+      const ctxWindow = config.judge.model ? Math.min(reviewerWindow, contextWindowFor(config.judge.model)) : reviewerWindow;
       const ctxCap = ctxWindow > 0 ? ctxWindow - config.anthropic.maxTokens : 0;
       const limits = [config.anthropic.maxInputTokens, ctxCap].filter((n) => n > 0);
       const max = limits.length ? Math.min(...limits) : 0;
@@ -46904,11 +47104,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
         ctx.lensRecommendations = recs;
         console.log(`  Lens recommendations: ${recs ? recs.map((r) => `${r.lens} (${r.reason})`).join(", ") || "none" : "unavailable"}`);
       }
-      ctx.usage.input_tokens += result.usage.input_tokens;
-      ctx.usage.output_tokens += result.usage.output_tokens;
-      ctx.usage.cache_read += result.usage.cache_read_input_tokens ?? 0;
-      ctx.usage.cache_write += result.usage.cache_creation_input_tokens ?? 0;
-      if (result.usage.cost_usd !== void 0) ctx.usage.cost_usd = (ctx.usage.cost_usd ?? 0) + result.usage.cost_usd;
+      addUsage(ctx, result.usage);
       return 12 /* CHECK_NO_CHANGE */;
     }
     case 12 /* CHECK_NO_CHANGE */: {
@@ -46959,7 +47155,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
       ctx.breadthPlan = config.breadth.priorityTargets ? prioritizeUntouched(coverage.untouched, ctx.filteredDiff, firstPass) : void 0;
       const briefing = breadthBriefing(firstPass, coverage.untouched, ctx.breadthPlan);
       const estimate = ctx.estimatedInputTokens + Math.ceil((system.length - ctx.prompt.content.length + briefing.length) / 4);
-      const limits = [config.anthropic.maxInputTokens, modelContextWindow(model) - config.anthropic.maxTokens].filter((n) => n > 0);
+      const limits = [config.anthropic.maxInputTokens, contextWindowFor(model) - config.anthropic.maxTokens].filter((n) => n > 0);
       const budget = limits.length ? Math.min(...limits) : Infinity;
       if (estimate > budget) {
         ctx.breadthStatus = "skipped_budget";
@@ -47042,7 +47238,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
       const briefing = secondLookBriefing(known);
       const shownSL = (s) => shownLength(s, config.review.lineNumbers);
       const estimate = Math.ceil((system.length + shownSL(restrictedDiff) + briefing.length + contexts.reduce((n, c) => n + shownSL(c.content), 0)) / 4);
-      const limits = [config.anthropic.maxInputTokens, modelContextWindow(model) - config.anthropic.maxTokens].filter((n) => n > 0);
+      const limits = [config.anthropic.maxInputTokens, contextWindowFor(model) - config.anthropic.maxTokens].filter((n) => n > 0);
       const budget = limits.length ? Math.min(...limits) : Infinity;
       if (estimate > budget) {
         ctx.secondLookStatus = "skipped_budget";
@@ -47101,7 +47297,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
       }
       const effort = config.lenses.model ? "" : config.review.effort;
       const earlier = [...ctx.reviewObject?.findings ?? [], ...ctx.breadthFindings ?? [], ...ctx.secondLookFindings ?? []];
-      const limits = [config.anthropic.maxInputTokens, modelContextWindow(model) - config.anthropic.maxTokens].filter((n) => n > 0);
+      const limits = [config.anthropic.maxInputTokens, contextWindowFor(model) - config.anthropic.maxTokens].filter((n) => n > 0);
       const budget = limits.length ? Math.min(...limits) : Infinity;
       let halt;
       for (const lens of lenses) {
@@ -47256,7 +47452,8 @@ If this PR spans multiple independent themes that could each be a separate, inde
         ctx.judgeDecisions = result.decisions;
         ctx.judgeAnomalies = result.anomalies;
         ctx.judgedFindings = result.kept;
-        if (suggestedFixes && result.renderWith) ctx.renderJudged = result.renderWith;
+        if (result.render) ctx.renderJudged = result.render;
+        if (result.proposalsDropped) ctx.proposalsDropped = result.proposalsDropped;
         if (result.notes) {
           console.log(`  Judge notes (not posted): ${result.notes}`);
         }
@@ -47268,11 +47465,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
           console.log(`  Judge finding scores: ${result.scores.map((s) => `${s.severity} ${s.score}/10`).join(", ")}`);
         }
         ctx.judgeUsage = { input_tokens: result.usage.input_tokens, output_tokens: result.usage.output_tokens, cost_usd: result.usage.cost_usd };
-        ctx.usage.input_tokens += result.usage.input_tokens;
-        ctx.usage.output_tokens += result.usage.output_tokens;
-        ctx.usage.cache_read += result.usage.cache_read_input_tokens ?? 0;
-        ctx.usage.cache_write += result.usage.cache_creation_input_tokens ?? 0;
-        if (result.usage.cost_usd !== void 0) ctx.usage.cost_usd = (ctx.usage.cost_usd ?? 0) + result.usage.cost_usd;
+        addUsage(ctx, result.usage);
         ctx.judgeStatus = "succeeded";
       } catch (err) {
         ctx.judgeStatus = "failed";
@@ -47356,13 +47549,17 @@ If this PR spans multiple independent themes that could each be a separate, inde
       }
       const commitShort = ctx.prInfo.sourceCommit.slice(0, 12);
       const footer = buildReviewFooter(config.agentIdentity, config.anthropic.model, ctx.prompt.source, ctx.reviewNumber, commitShort, getBuildCommit(), getJobUrl());
-      let body = cleaned;
-      if (config.judge.suggestedFixes && ctx.renderJudged) {
-        const composed = composeSuggestedFixes(ctx.judgedFindings ?? [], ctx.renderJudged, cleaned, COMMENT_BUDGET - todoSection.length - footer.length);
+      const judgedRender = ctx.renderJudged;
+      const reviewObject = ctx.reviewObject;
+      const posted = judgedRender ? orderPosted(cleaned, ctx.judgedFindings ?? [], (order) => judgedRender(/* @__PURE__ */ new Map(), order)) : !judged && reviewObject ? orderPosted(cleaned, reviewObject.findings, (order) => renderReview(reviewObject, { order })) : { text: cleaned };
+      let body = posted.text;
+      if (config.judge.suggestedFixes && judgedRender) {
+        const composed = composeSuggestedFixes(ctx.judgedFindings ?? [], (s) => judgedRender(s, posted.order), body, COMMENT_BUDGET - todoSection.length - footer.length);
         body = composed.text;
-        ctx.suggestedFixes = composed.stats;
+        const dropped = ctx.proposalsDropped;
+        ctx.suggestedFixes = dropped ? { ...composed.stats, dropped } : composed.stats;
         const { rendered, rejected, skipped } = composed.stats;
-        console.log(`  Suggested fixes: ${rendered} rendered, ${rejected} rejected${skipped ? `, all skipped (${skipped})` : ""}`);
+        console.log(`  Suggested fixes: ${rendered} rendered, ${rejected} rejected${dropped ? `, ${dropped} dropped by the sanitizer` : ""}${skipped ? `, all skipped (${skipped})` : ""}`);
       }
       const comment = body + todoSection + footer;
       if (ctx.dryRun) {
@@ -47381,6 +47578,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
             console.log(`  Commit ${commitShort} already reviewed by another run \u2014 skipping post`);
             ctx.action = "DEDUP_SKIP";
             ctx.skipReason = "Another agent run already reviewed this commit (race condition avoided)";
+            ctx.suggestedFixes = void 0;
             markHeadChecked(ctx);
             return 19 /* SKIP */;
           }
@@ -47433,11 +47631,7 @@ Starting review for PR #${prId}`);
     ctx.action = "ERROR";
     const e = err;
     if (e.usage) {
-      ctx.usage.input_tokens += e.usage.input_tokens;
-      ctx.usage.output_tokens += e.usage.output_tokens;
-      ctx.usage.cache_read += e.usage.cache_read_input_tokens ?? 0;
-      ctx.usage.cache_write += e.usage.cache_creation_input_tokens ?? 0;
-      if (e.usage.cost_usd !== void 0) ctx.usage.cost_usd = (ctx.usage.cost_usd ?? 0) + e.usage.cost_usd;
+      addUsage(ctx, e.usage);
     }
     error = {
       type: e.constructor.name,
@@ -47642,7 +47836,7 @@ function applyBenchmarkConfig(env) {
   if (!env.MAX_CHANGED_LINES) config.thresholds.maxChangedLines = 0;
   config.review.splitCheck = false;
   applyConfigLabels(env);
-  console.log(`Benchmark settings: model=${config.anthropic.model} effort=${config.review.effort || "default"} judge_model=${config.judge.model || "off"} judge_effort=${config.judge.effort || "default"} nits=${bit(config.review.enableNitpicks)} j_minor=${bit(config.judge.policy.keepMinor)} j_unver=${bit(config.judge.policy.keepUnverified)} j_ctx=${bit(config.judge.fileContext)} lnum=${bit(config.review.lineNumbers)} breadth=${bit(config.breadth.enabled)} b_files=${config.breadth.minFiles} b_untch=${config.breadth.minUntouched} second_look=${bit(config.review.secondLook)} j_quality=${bit(config.judge.quality)} sl_breadth=${bit(config.review.secondLookBreadthTargets)} j_shown_anchor=${bit(config.judge.shownAnchors)} b_priority=${bit(config.breadth.priorityTargets)} j_proposal=${bit(config.judge.proposals)}${activeLenses(config.lenses).length ? ` lenses=${config.lenses.list}` : ""}${config.lenses.recommend ? " lens_rec=1" : ""}`);
+  console.log(`Benchmark settings: model=${config.anthropic.model} effort=${config.review.effort || "default"} judge_model=${config.judge.model || "off"} judge_effort=${config.judge.effort || "default"} nits=${bit(config.review.enableNitpicks)} j_minor=${bit(config.judge.policy.keepMinor)} j_unver=${bit(config.judge.policy.keepUnverified)} j_ctx=${bit(config.judge.fileContext)} lnum=${bit(config.review.lineNumbers)} breadth=${bit(config.breadth.enabled)} b_files=${config.breadth.minFiles} b_untch=${config.breadth.minUntouched} second_look=${bit(config.review.secondLook)} j_quality=${bit(config.judge.quality)} sl_breadth=${bit(config.review.secondLookBreadthTargets)} j_shown_anchor=${bit(config.judge.shownAnchors)} b_priority=${bit(config.breadth.priorityTargets)} sfx=${bit(config.judge.suggestedFixes)} j_proposal=${bit(config.judge.proposals)}${activeLenses(config.lenses).length ? ` lenses=${config.lenses.list}` : ""}${config.lenses.recommend ? " lens_rec=1" : ""}`);
   if (config.judge.proposals && !config.judge.model) console.warn("  J_PROPOSAL=1 but the judge is off - no proposals will be produced.");
   if (config.review.enableNitpicks && !config.judge.policy.keepMinor) {
     console.warn("  NITS=1 but J_MINOR=0 \u2014 nitpicks are logged for offline scoring only; set J_MINOR=1 to post them.");
@@ -47825,6 +48019,7 @@ Filled prompt length: ${result.content.length} chars (~${Math.ceil(result.conten
   if (!trigger && config.trigger.ignoreCommentAuthors.length) console.warn("Warning: IGNORE_COMMENT_AUTHORS is set but no --event/--comment-author (TRIGGER_EVENT/TRIGGER_COMMENT_AUTHOR) was given - the ignore list is inactive.");
   const checkedCommit = resolveCheckedCommit(opts.checkedCommit, config.lastCheckedCommit);
   const forceMode = opts.force === true ? "re-review" : typeof opts.force === "string" && opts.force.trim() ? opts.force : "off";
+  await resolveContextWindows();
   await review(adapter2, opts.prId, opts.dryRun ?? false, opts.prompt, forceMode, opts.logUsage ?? true, opts.repoSlug ?? "", void 0, trigger, checkedCommit);
 }
 main().catch((err) => {
