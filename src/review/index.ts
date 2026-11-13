@@ -13,9 +13,10 @@ import { activeLenses, parseLensList, lensSystemPrompt, lensBriefing } from './l
 import { splitDiffByFile } from './bundler.js'
 import { normalizeFindingPath } from './findings-output.js'
 import { filterDiff, countChangedLines, parseVerdictScore, isPathExcluded, scanTodos, isContextLengthError, shownLength } from './parsers.js'
-import { buildReviewFooter, buildReplyFooter, stripPreviousFooter, stripDeltaStats, stripJudgeNotes, stripJenkinsMeta, stripPreamble, isNoChange, extractCommitHash, legacyCommitHash, countFindings, markdownHasFindings, hasReplyFooter } from './formatter.js'
+import { buildReviewFooter, buildReplyFooter, stripPreviousFooter, stripDeltaStats, stripJudgeNotes, stripJenkinsMeta, stripPreamble, isNoChange, extractCommitHash, legacyCommitHash, countFindings, markdownHasFindings, hasReplyFooter, renderReview } from './formatter.js'
 import { runBundledReview, addUsage } from './bundled.js'
 import { composeSuggestedFixes, COMMENT_BUDGET } from './suggested-fix.js'
+import { orderPosted } from './posted-order.js'
 import { buildUsageRecord, logUsageRecord, getBuildCommit, getJobUrl } from './usage.js'
 import { ignoredCommentAuthor } from './trigger.js'
 import { headMatches } from './checked-commit.js'
@@ -819,7 +820,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         ctx.judgeDecisions = result.decisions
         ctx.judgeAnomalies = result.anomalies
         ctx.judgedFindings = result.kept
-        if (suggestedFixes && result.renderWith) ctx.renderJudged = result.renderWith
+        if (result.render) ctx.renderJudged = result.render
         if (result.notes) {
           console.log(`  Judge notes (not posted): ${result.notes}`)
         }
@@ -934,10 +935,16 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
 
       const commitShort = ctx.prInfo!.sourceCommit.slice(0, 12)
       const footer = buildReviewFooter(config.agentIdentity, config.anthropic.model, ctx.prompt!.source, ctx.reviewNumber, commitShort, getBuildCommit(), getJobUrl())
-      let body = cleaned
+      // Only the posted comment is severity-ordered; a judged bundle has no render closure and its merge already sorts by severity.
+      const judgedRender = ctx.renderJudged
+      const reviewObject = ctx.reviewObject
+      const posted = judgedRender
+        ? orderPosted(cleaned, ctx.judgedFindings ?? [], order => judgedRender(new Map(), order))
+        : !judged && reviewObject ? orderPosted(cleaned, reviewObject.findings, order => renderReview(reviewObject, { order })) : { text: cleaned }
+      let body = posted.text
       // After every guard and parser has read the plain text, so no reviewText consumer ever sees a block.
-      if (config.judge.suggestedFixes && ctx.renderJudged) {
-        const composed = composeSuggestedFixes(ctx.judgedFindings ?? [], ctx.renderJudged, cleaned, COMMENT_BUDGET - todoSection.length - footer.length)
+      if (config.judge.suggestedFixes && judgedRender) {
+        const composed = composeSuggestedFixes(ctx.judgedFindings ?? [], s => judgedRender(s, posted.order), body, COMMENT_BUDGET - todoSection.length - footer.length)
         body = composed.text
         ctx.suggestedFixes = composed.stats
         const { rendered, rejected, skipped } = composed.stats
