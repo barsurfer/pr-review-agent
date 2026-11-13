@@ -33,7 +33,11 @@ For each candidate you keep, give \`proposal\`: the specific code change that re
 
 const PROPOSAL_CODE = `## PROPOSAL
 
-For each candidate you keep, give \`proposal\`: only the corrected code for the lines that change, as they should read after the fix. No prose, no markdown fences, no diff markers, no line-number gutter. Copy the original indentation. At most 5 lines and under ~400 characters. If the fix is not a local edit of at most 5 lines that you can write from the code you were shown, omit \`proposal\`. Dropped candidates get no proposal.`
+For each candidate you keep, give \`proposal\`: only the corrected code for the lines that change, as they should read after the fix. No prose, no markdown fences, no diff markers, no line-number gutter. Copy the original indentation. At most 5 lines and under ~400 characters. If the fix is not a local edit of at most 5 lines that you can write from the code you were shown, omit \`proposal\`.
+
+When you give \`proposal\`, also give \`body_without_fix\`: the finding text as posted (your \`rewritten_body\`, else the candidate's body) with the fix left out - only the problem and why it matters, in at most 1–3 sentences. Keep every fact needed to understand the problem. No fix, no "should", no code snippet.
+
+Dropped candidates get no proposal.`
 
 export function composeJudgePrompt(base: string, opts: { quality: boolean; shownAnchors: boolean; proposals?: boolean; codeProposals?: boolean }): string {
   let out = base
@@ -80,6 +84,7 @@ export const PROPOSAL_DECISION_PROPERTIES = {
 
 export const PROPOSAL_CODE_DECISION_PROPERTIES = {
   proposal: { type: 'string', description: 'Only for a candidate you keep: the corrected code for the lines that change, as they read after the fix. No prose, fences, diff markers or line numbers. At most 5 lines, under ~400 characters. Omit when the fix is not a small local edit you can write from the code you were shown.' },
+  body_without_fix: { type: 'string', description: 'Only with proposal: the finding text as posted (rewritten_body, else the candidate body) with the fix left out - the problem and why it matters, 1–3 sentences. No fix, no "should", no code snippet.' },
 } as const
 
 export interface AdditionalLocation {

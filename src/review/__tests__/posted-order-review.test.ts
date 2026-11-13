@@ -291,3 +291,102 @@ describe('posted severity order through review()', () => {
     expect(judged.posted).toBe((await run({ adapter: bigAdapter, unordered: true })).posted)
   })
 })
+
+describe('fix-free finding text through review() (ENABLE_SUGGESTED_FIXES)', () => {
+  const FIX_FREE = 'The import is never read.'
+  const decide = (withoutFix: boolean): Decide => i => (i === 0 ? { proposal: 'void 0', ...(withoutFix ? { body_without_fix: FIX_FREE } : {}) } : i === 2 ? { proposal: 'if (!x) return' } : {})
+  const flagOn = async (withoutFix: boolean, opts: Parameters<typeof run>[0] = {}) => {
+    await clients(reviewWith([LOW, MED, HIGH]), decide(withoutFix))
+    cfg.judge.model = 'judge-model'
+    cfg.judge.suggestedFixes = true
+    try {
+      return await run(opts)
+    } finally {
+      cfg.judge.suggestedFixes = false
+    }
+  }
+
+  it('one review: the fix-free text sits above its block, the other block keeps its normal text; record, metrics and console lines equal the run without the field except two additive keys', async () => {
+    const withText = await flagOn(true)
+    const without = await flagOn(false)
+    await clients(reviewWith([LOW, MED, HIGH]), decide(true))
+    cfg.judge.model = 'judge-model'
+    const off = await run()
+
+    const posted = withText.posted!
+    expect(headers(posted)).toEqual(['HIGH Crash on null', 'MEDIUM Missing await', 'LOW Unused import'])
+    expect(posted).toContain(`  ${FIX_FREE}${renderFixBlock('void 0', '````')}\n\n### Behavioral Diff`)
+    expect(posted).toContain(`  Crash on null body.${renderFixBlock('if (!x) return', '````')}\n\n- **MEDIUM – Missing await**`)
+    expect(posted).not.toContain('Remove it.')
+    expect(without.posted).toContain(`Remove it.\nIt is never read.${renderFixBlock('void 0', '````')}`)
+    expect(stripSuggestedFixes(posted)).toBe(off.posted!.replace('Remove it.\nIt is never read.', FIX_FREE))
+    expect(extractCommitHash(posted)).toBe(COMMIT)
+
+    const { judge_decisions: dw, suggested_fixes: sw, ...restWith } = withText.record
+    const { judge_decisions: dwo, suggested_fixes: swo, ...restWithout } = without.record
+    expect(restWith).toEqual(restWithout)
+    expect(dw!.map(({ body_without_fix, ...d }) => d)).toEqual(dwo)
+    expect(dw!.map(d => d.body_without_fix)).toEqual([FIX_FREE, undefined, undefined])
+    expect(sw).toEqual({ rendered: 2, rejected: 0, fix_free: 1 })
+    expect(swo).toEqual({ rendered: 2, rejected: 0 })
+    for (const key of ['findings', 'verdict_score', 'computed_score', 'review_findings', 'finding_scores'] as const) expect(withText.record[key], key).toEqual(off.record[key])
+    expect(withText.record.anchored_findings!.map(a => a.description)).toEqual(off.record.anchored_findings!.map(a => a.description))
+    expect(withText.record.anchored_findings![0].description).toBe('Remove it.')
+    expect(withText.lines).toEqual(without.lines)
+  })
+
+  it('dry-run prints exactly the comment the same run would post', async () => {
+    const posted = (await flagOn(true)).posted!
+    const dry = await flagOn(true, { dryRun: true })
+    expect(dry.posted).toBeUndefined()
+    expect(dry.lines).toContain(`log: ${posted}`)
+    expect(dry.record.suggested_fixes).toEqual({ rendered: 2, rejected: 0, fix_free: 1 })
+  })
+
+  it('re-review: the reviewer reads the previous comment stripped, so it sees the fix-free text and neither the fix sentence nor the block', async () => {
+    const prior = (await flagOn(true)).posted!
+    await clients(reviewWith([]))
+    cfg.judge.model = 'judge-model'
+    const adapter = () => ({
+      ...makeAdapter(),
+      getPullRequestInfo: vi.fn().mockResolvedValue({ ...pr, sourceCommit: 'bbb111222333'.padEnd(40, 'f') }),
+      getPreviousReviewComments: vi.fn().mockResolvedValue([{ id: '200', body: prior, createdOn: '2026-03-10T10:00:00Z' }]),
+      getCommitDiff: vi.fn().mockResolvedValue(DIFF),
+    }) as unknown as VCSAdapter
+    await run({ adapter })
+    const input = completeStructured.mock.calls.find(c => !isJudge(c[2]))![1] as string
+    expect(input).toContain(`### Review from 2026-03-10T10:00:00Z:\n${stripOwnSuggestedFixes(prior, 'review')}`)
+    expect(input).toContain(`  ${FIX_FREE}\n\n### Behavioral Diff`)
+    expect(input).not.toContain('Remove it.')
+    expect(input).not.toContain(SUGGESTED_FIX_MARKER)
+  })
+
+  it('bundled path: no proposal is requested, so a returned fix-free text never reaches the post', async () => {
+    const section = (path: string) => `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -1,1 +1,120 @@\n${Array.from({ length: 120 }, (_, i) => `+const line${i} = ${i}`).join('\n')}\n`
+    const files = ['a/one.ts', 'a/two.ts', 'b/one.ts', 'b/two.ts']
+    const bigAdapter = () => makeAdapter(files.map(section).join(''), files)
+    cfg.review.bundledReview = true
+    cfg.anthropic.maxInputTokens = 2000
+    vi.mocked(runReview).mockImplementation(async (...args: unknown[]) => {
+      const o = reviewWith([(args[6] as string).includes('a/one.ts') ? at('LOW', 'Alpha nit', '5', 'Alpha is unused. Remove it.', 'a/one.ts') : at('HIGH', 'Beta crash', '5', 'Beta crashes. Guard it.', 'b/one.ts')])
+      return { text: renderReview(o), usage: { input_tokens: 100, output_tokens: 10 }, review: o }
+    })
+    const actual = await vi.importActual<typeof import('../client.js')>('../client.js')
+    vi.mocked(createProvider).mockReturnValue({ complete: vi.fn(), completeStructured } as never)
+    vi.mocked(runJudge).mockImplementation(actual.runJudge)
+    completeStructured.mockReset()
+    completeStructured.mockImplementation(async () => ({
+      object: { decisions: [{ candidate_id: 'c0', reason_category: 'validated', evidence: 'e', note: 'n', score: 8, proposal: 'guard()', body_without_fix: 'FIX-FREE TEXT' }], summary: 'J.', behavioral_diff: [], production_risk: [], unresolved_questions: [], merge_confidence: 70 },
+      usage: { input_tokens: 100, output_tokens: 10 },
+    }))
+    cfg.judge.model = 'judge-model'
+    cfg.judge.suggestedFixes = true
+    const on = await run({ adapter: bigAdapter })
+    cfg.judge.suggestedFixes = false
+    const off = await run({ adapter: bigAdapter })
+    expect(on.posted).toBe(off.posted)
+    expect(on.posted).toContain('Beta crashes. Guard it.')
+    expect(on.posted).not.toContain('FIX-FREE TEXT')
+    expect(on.posted).not.toContain(SUGGESTED_FIX_MARKER)
+  })
+})
