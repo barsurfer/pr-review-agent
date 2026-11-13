@@ -35,6 +35,7 @@ pr-review-agent/
 │   │   ├── judge-decisions.ts    # Judge decision contract: policy table, anchors, kept findings
 │   │   ├── judge-quality.ts      # ENABLE_JUDGE_QUALITY / proposals prompt and schema additions
 │   │   ├── suggested-fix.ts      # ENABLE_SUGGESTED_FIXES: block render, fence rule, compose, reviewer-input strip
+│   │   ├── posted-order.ts       # HIGH → MEDIUM → LOW order of the posted comment's findings, with its fallbacks
 │   │   ├── shown-anchors.ts      # What each pass was shown, for ENABLE_JUDGE_SHOWN_CONTEXT_ANCHORS
 │   │   ├── trigger.ts            # Trigger context (--event/--comment-author) and IGNORE_COMMENT_AUTHORS matching
 │   │   ├── checked-commit.ts     # Checked commit from CI (--checked-commit/LAST_CHECKED_COMMIT): validation, head match

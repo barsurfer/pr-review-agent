@@ -78,6 +78,8 @@ From 0.0.46, with `USAGE_RECORD_FILE` set (and `--log-usage` on), the same recor
 
 ### Record Schema
 
+Every finding array (`review_candidates`, `judge_decisions`, `finding_scores`, `anchored_findings`) is in production order (reviewer, then breadth, second-look and lens candidates, as judged), not the severity order of the posted comment (see [review/fsm.md](../context/review/fsm.md#posted-severity-order)).
+
 | Field | Type | Description |
 |-------|------|-------------|
 | `run_id` | `string` | Deterministic key: `{vcs}-{repo_slug}-{pr_id}-{commit_short}` |

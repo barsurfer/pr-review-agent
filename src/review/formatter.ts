@@ -137,17 +137,22 @@ const bullets = (items: string[]): string => items.map(i => `- ${i}`).join('\n')
 // Empty list section → "None." rather than a bare heading (the model may return an empty array).
 const listOrNone = (items: string[]): string => (items.length ? bullets(items) : 'None.')
 
+export type RenderedFinding = Pick<ReviewFinding, 'severity' | 'title' | 'file' | 'lines' | 'body'>
+
+export function renderFinding(f: RenderedFinding, tag = '', suffix = ''): string {
+  const loc = f.file ? ` (\`${f.file}${f.lines ? `:${f.lines}` : ''}\`)` : ''
+  return `- ${tag}**${f.severity} – ${f.title}**${loc}\n  ${f.body}${suffix}`
+}
+
 /** Render the reviewer's structured output into the posted markdown. The reviewer emits typed
  *  fields, not prose, so preamble/tone/footer can't leak in — this owns the shape the judge,
  *  dedup, and metrics parse. Merge Confidence is added downstream by the judge, not here. */
-export function renderReview(r: ReviewObject, opts: { emptyFindings?: string; tag?: (index: number) => string; suffix?: (index: number) => string } = {}): string {
+export function renderReview(r: ReviewObject, opts: { emptyFindings?: string; tag?: (index: number) => string; suffix?: (index: number) => string; order?: readonly number[] } = {}): string {
   if (r.no_change) return 'NO_CHANGE'
 
+  // tag and suffix stay keyed by the original index, so a reordered finding keeps its own block.
   const findings = r.findings.length
-    ? r.findings.map((f, i) => {
-        const loc = f.file ? ` (\`${f.file}${f.lines ? `:${f.lines}` : ''}\`)` : ''
-        return `- ${opts.tag?.(i) ?? ''}**${f.severity} – ${f.title}**${loc}\n  ${f.body}${opts.suffix?.(i) ?? ''}`
-      }).join('\n\n')
+    ? (opts.order ?? r.findings.map((_, i) => i)).map(i => renderFinding(r.findings[i], opts.tag?.(i) ?? '', opts.suffix?.(i) ?? '')).join('\n\n')
     : opts.emptyFindings ?? 'No findings.'
 
   const parts = [

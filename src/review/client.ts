@@ -37,6 +37,7 @@ export interface JudgeResult extends ModelResult {
   decisions?: AppliedDecision[]
   anomalies?: JudgeAnomalies
   kept?: KeptFinding[]
+  render?: RenderJudged
   renderWith?: RenderJudged
 }
 
@@ -374,7 +375,7 @@ export async function runJudge(
   const promptHash = createHash('sha256').update(judgePrompt).digest('hex').slice(0, 12)
   return {
     text: judged.markdown, usage, notes: summarizeDecisions(judged.decisions), scores: judged.scores, promptHash,
-    decisions: judged.decisions, anomalies: judged.anomalies, kept: judged.kept,
+    decisions: judged.decisions, anomalies: judged.anomalies, kept: judged.kept, render: judged.render,
     ...(judged.renderWith ? { renderWith: judged.renderWith } : {}),
   }
 }
