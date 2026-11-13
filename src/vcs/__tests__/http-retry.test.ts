@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { AxiosInstance } from 'axios'
-import { withRetry, withCallLog, retryDelayMs, describeHttpError, MAX_RETRIES, RETRY_BUDGET_MS } from '../http-retry.js'
+import { withRetry, withCallLog, retryDelayMs, describeHttpError, MAX_RETRIES, RETRY_BUDGET_MS, OPTIONAL_RETRY_BUDGET_MS } from '../http-retry.js'
 
 const httpError = (status: number, headers: Record<string, string> = {}, method = 'get', url = '/repositories/ws/repo/src/abc/file.md?x=1') =>
   Object.assign(new Error(`Request failed with status code ${status}`), { config: { method, url }, response: { status, headers } })
@@ -107,6 +107,18 @@ describe('withRetry budget', () => {
     await expect(client.get('/c')).rejects.toThrow('429')
     const budgetWarnings = warn.mock.calls.filter((c: unknown[]) => String(c[0]).includes('retry budget'))
     expect(budgetWarnings).toEqual([['  [bitbucket] retry budget (180s) spent - failing without further retries']])
+  })
+
+  it('a smaller budget on a second wrapper leaves the first wrapper its full budget', async () => {
+    const raw = { get: vi.fn() }
+    const sleep = vi.fn(async (_ms: number) => {})
+    const optional = withRetry(raw as unknown as AxiosInstance, 'bitbucket', sleep, OPTIONAL_RETRY_BUDGET_MS)
+    const required = withRetry(raw as unknown as AxiosInstance, 'bitbucket', sleep)
+    raw.get.mockRejectedValue(httpError(429))
+    await expect(optional.get('/optional')).rejects.toThrow('429')
+    expect(sleep.mock.calls).toEqual([[3000], [24_000]])
+    await expect(required.get('/required')).rejects.toThrow('429')
+    expect(sleep.mock.calls).toEqual([[3000], [24_000], [3000], [24_000], [96_000]])
   })
 
   it('gives a fresh client a fresh budget', async () => {

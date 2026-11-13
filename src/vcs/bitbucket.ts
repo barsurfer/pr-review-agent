@@ -3,7 +3,7 @@ import { hasReviewFooter, hasReplyFooter } from '../review/formatter.js'
 import { decideDirectedElsewhere, mentionsAgent } from './mention-filter.js'
 import type { VCSAdapter, PRInfo, ChangedFile, ReviewComment, CommentReply, ReplyResult } from './adapter.js'
 import { AGENT_REPLY_AUTHOR, authorIdOf } from './adapter.js'
-import { withCallLog, withRetry } from './http-retry.js'
+import { withCallLog, withRetry, OPTIONAL_RETRY_BUDGET_MS } from './http-retry.js'
 
 // Bound every Bitbucket call so a hung request fails fast instead of stalling the whole run
 const REQUEST_TIMEOUT_MS = 30_000
@@ -36,6 +36,8 @@ function threadMembers(comments: any[], reviewIds: ReadonlySet<string>): Set<str
 export class BitbucketAdapter implements VCSAdapter {
   private readonly client: AxiosInstance
   private readonly redirectClient: Pick<AxiosInstance, 'get'>
+  // Own small budget, so a rate-limited optional lookup cannot spend the waits that required calls need.
+  private readonly optionalClient: AxiosInstance
   private readonly workspace: string
   private readonly authHeader: string
   private readonly baseHost: string
@@ -44,14 +46,16 @@ export class BitbucketAdapter implements VCSAdapter {
     this.workspace = workspace
     this.authHeader = 'Basic ' + Buffer.from(`${username}:${token}`).toString('base64')
     try { this.baseHost = new URL(baseUrl).host } catch { this.baseHost = '' }
-    this.client = withRetry(withCallLog(axios.create({
+    const logged = withCallLog(axios.create({
       baseURL: baseUrl,
       timeout: REQUEST_TIMEOUT_MS,
       headers: {
         Authorization: this.authHeader,
         'Content-Type': 'application/json',
       },
-    }), 'bitbucket'), 'bitbucket')
+    }), 'bitbucket')
+    this.client = withRetry(logged, 'bitbucket')
+    this.optionalClient = withRetry(logged, 'bitbucket', undefined, OPTIONAL_RETRY_BUDGET_MS)
     this.redirectClient = withRetry(withCallLog(axios, 'bitbucket'), 'bitbucket')
   }
 
@@ -141,7 +145,7 @@ export class BitbucketAdapter implements VCSAdapter {
   async getRepoFileContent(filePath: string, ref = 'HEAD'): Promise<string | null> {
     const repoSlug = this.getRepoSlug()
     try {
-      const { data } = await this.client.get(
+      const { data } = await this.optionalClient.get(
         `/repositories/${this.workspace}/${repoSlug}/src/${ref}/${filePath}`,
         { responseType: 'text' }
       )
