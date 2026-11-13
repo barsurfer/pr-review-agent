@@ -58,6 +58,29 @@ describe('scanTodos', () => {
     const diff = 'diff --git a/a.ts b/a.ts\n+++ b/a.ts\n@@ -1 +1,2 @@\n+const x = 1'
     expect(scanTodos(diff)).toEqual([])
   })
+
+  const added = (file: string, ...lines: string[]) =>
+    [`diff --git a/${file} b/${file}`, `+++ b/${file}`, `@@ -0,0 +1,${lines.length} @@`, ...lines.map(l => '+' + l)].join('\n')
+
+  it('skips documentation files', () => {
+    for (const f of ['README.md', 'docs/a.mdx', 'notes.txt', 'docs/b.RST']) {
+      expect(scanTodos(added(f, 'The TODO: marker is scanned', 'See the TODOs Introduced section'))).toEqual([])
+    }
+  })
+
+  it('ignores a line quoting the agent section name, as in a test fixture', () => {
+    const diff = added('src/x.test.ts', "const body = '### TODOs Introduced\\n- `a.ts:1` — TODO x'")
+    expect(scanTodos(diff)).toEqual([])
+  })
+
+  it('still finds real markers across comment styles', () => {
+    const diff = added('src/a.ts', '// TODO: x', '# FIXME', '/* HACK */', 'const v = compute(a, b) // TODO tighten this later')
+    expect(scanTodos(diff).map(t => t.text)).toEqual(['TODO: x', 'FIXME', 'HACK: */', 'TODO: tighten this later'])
+  })
+
+  it('does not treat a code file named like a doc as one', () => {
+    expect(scanTodos(added('src/notes.todo.ts', '// TODO: real'))).toEqual([{ file: 'src/notes.todo.ts', line: 1, text: 'TODO: real' }])
+  })
 })
 
 // ---------------------------------------------------------------------------

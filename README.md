@@ -409,7 +409,7 @@ All credentials and settings are provided via environment variables.
 | `MAX_CHANGED_LINES` | `3000` | Skip review if PR has more changed lines (0 = disabled) |
 | `MAX_FINDINGS` | `0` (unlimited) | Cap findings the reviewer reports; appends a findings-limit instruction to the prompt |
 | `ENABLE_SPLIT_CHECK` | `true` | Reviewer adds a "Can Be Split" section when the PR spans independent themes (set `false` to disable) |
-| `ENABLE_TODO_SCAN` | `true` | Scan added lines for `TODO`/`FIXME`/`HACK` and append a "TODOs Introduced" section |
+| `ENABLE_TODO_SCAN` | `true` | Scan added lines for `TODO`/`FIXME`/`HACK` and append a "TODOs Introduced" section (skips `.md`/`.mdx`/`.txt`/`.rst` files and lines quoting the section name) |
 | `AGENT_IDENTITY` | `BITBUCKET_USERNAME` | Name shown in review footers. Falls back to `BITBUCKET_USERNAME`, then `'Claude'` |
 | `JUDGING_MODEL` | `claude-sonnet-5` | Judge model for finding validation — on by default; set empty to disable |
 | `REVIEW_EFFORT` / `JUDGE_EFFORT` | (model default) | Thinking effort for reviewer / judge (`low`\|`medium`\|`high`\|`xhigh`\|`max`) |
