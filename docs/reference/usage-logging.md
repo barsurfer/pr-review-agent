@@ -74,7 +74,7 @@ Size thresholds are checked against the filtered diff (excluded files don't coun
 
 Every run appends a JSON record to `results.jsonl` (controlled by `--log-usage`, default: `true`).
 The record is also printed to stdout at the end of every run regardless of the flag.
-From 0.0.46, with `USAGE_RECORD_FILE` set (and `--log-usage` on), the same record is also written to that path, overwriting it, so the file holds only this run's record (see [Finding this run's record](#finding-this-runs-record)). A failed write logs one warning and changes nothing else.
+From 0.0.46, with `USAGE_RECORD_FILE` set (and `--log-usage` on), the same record is also written to that path, overwriting it, so the file holds only this run's record (see [Finding this run's record](#finding-this-runs-record)). From 0.0.54 `--usage-record-file <path>` sets the same path (a non-empty flag wins over the env var). A failed write logs one warning and changes nothing else.
 
 ### Record Schema
 
@@ -195,7 +195,7 @@ With `dry_run: true` nothing is posted, whatever the `action`. Tell the allow-li
 |---|---|---|
 | Match the run ids | The line whose `jenkins.job` / `jenkins.build` equal `$JOB_NAME` / `$BUILD_NUMBER`, last match | Jenkins sets both. Another CI exports `JOB_NAME` / `BUILD_NUMBER` / `BUILD_URL` from its own run ids (per provider in [skip-logic.md §9](../context/review/skip-logic.md)); the `jenkins` field is built from exactly these, and the footer's `Review #N` then links to the run |
 | Fresh file | Run in a fresh working directory, or `rm -f results.jsonl` before the run; read the single line and check its key (`vcs`, `workspace`, `repo_slug`, `pr_id`) | Empty file = the run wrote no record |
-| Own file (from 0.0.46) | `USAGE_RECORD_FILE=<path>`; `rm -f <path>` before the run; read that file | Holds only this run's record (overwritten). Needs `--log-usage` on. A bundle older than the variable writes no file, so CI reads nothing (fail open) |
+| Own file (from 0.0.46) | `USAGE_RECORD_FILE=<path>` (or, from 0.0.54, `--usage-record-file <path>`); `rm -f <path>` before the run; read that file | Holds only this run's record (overwritten). Needs `--log-usage` on. A bundle older than the variable writes no file, so CI reads nothing (fail open) |
 
 ```sh
 # This run's record by run ids (empty when the run wrote none); REVIEW|RE_REVIEW|REPLY = posted; SKIP|DEDUP_SKIP|NO_CHANGE|NO_NEW_FINDINGS = nothing posted

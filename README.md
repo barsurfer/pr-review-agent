@@ -336,11 +336,14 @@ bundle build on every push to `main` and every PR — the gate that keeps `main`
 |------|----------|-------------|
 | `--pr-id <id>` | **Yes**\* | Pull request ID to review |
 | `--repo-slug <slug>` | **Yes** (Bitbucket, Azure, GitHub) | Repository slug (Azure: repo name or GUID; GitHub: repo name) |
-| `--workspace <workspace>` | No | Overrides `BITBUCKET_WORKSPACE` (or `AZURE_ORG` when `--vcs azure`, `GITHUB_OWNER` when `--vcs github`) |
+| `--workspace <workspace>` | No | Workspace / org / owner of the selected provider: overrides `BITBUCKET_WORKSPACE`, `AZURE_ORG` or `GITHUB_OWNER` |
+| `--project <name>` | No | From 0.0.54. Azure DevOps project (overrides `AZURE_PROJECT`); ignored by other providers. An empty value falls back to the env; write it as `--project=`, because an unquoted empty value swallows the next argument. A bundle without this flag exits 1 on it |
 | `--vcs <provider>` | No | `bitbucket` \| `azure` (WIP) \| `github` (experimental) — overrides `VCS_PROVIDER` env var (default: `bitbucket`). `gitlab` is not implemented: from 0.0.46 it exits 1 at startup with one error line |
+| `--vcs-base-url <url>` | No | From 0.0.54. API base URL of the selected provider: overrides `BITBUCKET_BASE_URL`, `AZURE_BASE_URL` or `GITHUB_BASE_URL`. An empty value falls back to the env, then the default; write it as `--vcs-base-url=`, because an unquoted empty value swallows the next argument. A bundle without this flag exits 1 on it |
 | `--dry-run` | No | Print the review to stdout instead of posting to the PR |
 | `--force [mode]` | No | Bypass dedup. Bare or `re-review`: keep prior context; `clean`: drop prior context; an empty value (`--force=`) means not forced |
 | `--log-usage [bool]` | No | Log usage record to `results.jsonl` (default: `true`, use `--log-usage false` to disable). See [docs/reference/usage-logging.md](docs/reference/usage-logging.md) for schema. |
+| `--usage-record-file <path>` | No | From 0.0.54. Also writes this run's usage record alone to `<path>`, overwritten each run; `results.jsonl` is still appended, and `--log-usage false` writes neither (overrides `USAGE_RECORD_FILE`). An empty value falls back to the env; write it as `--usage-record-file=`, because an unquoted empty value swallows the next argument (`--usage-record-file --dry-run` names the file `--dry-run` and the run posts). A bundle without this flag exits 1 on it |
 | `--prompt <path>` | No | Path to a local prompt file (overrides repo `.agent-review-instructions.md`) |
 | `--validate-prompt` | No | Validate prompt and exit — local via `--prompt`, or repo via `--pr-id` |
 | `--model <id>` | No | Claude model ID (overrides `CLAUDE_MODEL` env var) |
@@ -393,7 +396,7 @@ All credentials and settings are provided via environment variables.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `VCS_PROVIDER` | `bitbucket` | Which VCS adapter to use — `bitbucket` (production), `azure`/`github` (experimental); `gitlab` is not implemented (from 0.0.46 it exits 1 at startup) |
-| `BITBUCKET_BASE_URL` | `https://api.bitbucket.org/2.0` | Bitbucket Cloud API base URL (Server/DC is not supported — different v1 API) |
+| `BITBUCKET_BASE_URL` | `https://api.bitbucket.org/2.0` | Bitbucket Cloud API base URL (Server/DC is not supported — different v1 API; can also use `--vcs-base-url`) |
 | `LLM_PROVIDER` | `anthropic` | Model backend: `anthropic` or `openrouter` (see [OpenRouter](#openrouter-optional-model-backend)) |
 | `OPENROUTER_API_KEY` | — | Used when `LLM_PROVIDER=openrouter`; falls back to the `ANTHROPIC_API_KEY` slot if unset |
 | `OPENROUTER_BASE_URL` / `OPENROUTER_REFERER` / `OPENROUTER_TITLE` | `https://openrouter.ai/api/v1` / repo URL / `pr-review-agent` | OpenRouter endpoint and attribution headers (`HTTP-Referer` / `X-OpenRouter-Title`); referer must be non-empty to appear in the dashboard |
@@ -422,7 +425,7 @@ All credentials and settings are provided via environment variables.
 | `IGNORE_COMMENT_AUTHORS` | — (off) | Actor ids whose **comment** events skip the run before any VCS call (needs `--event`/`--comment-author`); pushes are never skipped. An ignored event never catches up a push a skip-if-locked CI lock dropped, so list an actor only when CI queues push events (Bitbucket `pullrequest:updated`). See [skip-logic.md](docs/context/review/skip-logic.md) |
 | `TRIGGER_EVENT_KIND` | — (name rule) | From 0.0.46. `comment` \| `other`: overrides whether the event counts as a comment event. Set it per event, not job-wide, unless the job receives only comment events. See [skip-logic.md §7](docs/context/review/skip-logic.md) |
 | `LAST_CHECKED_COMMIT` | — (off) | The `checked_commit` an earlier run reported for this PR; CI stores it per PR and passes it back, and a run on that same head goes to the reply check like a footer match. Prefer it over `--checked-commit` in CI. See [skip-logic.md §8](docs/context/review/skip-logic.md) |
-| `USAGE_RECORD_FILE` | — (off) | From 0.0.46. A path that receives only this run's usage record (overwritten each run), so any CI can find it without Jenkins env vars; delete it before the run. See [usage-logging.md](docs/reference/usage-logging.md#finding-this-runs-record) |
+| `USAGE_RECORD_FILE` | — (off) | From 0.0.46. A path that receives only this run's usage record (overwritten each run), so any CI can find it without Jenkins env vars; delete it before the run (can also use `--usage-record-file`). See [usage-logging.md](docs/reference/usage-logging.md#finding-this-runs-record) |
 | `DIFF_EXCLUDE_PATTERNS` | `*.lock,package-lock.json,yarn.lock,pnpm-lock.yaml,*.json,*.spec.ts` | Globs excluded from the reviewable diff |
 | `ANTHROPIC_WORKSPACE_ID` | — | Sets the `anthropic-workspace-id` header; required for a user-scoped key (`sk-ant-usr-…`) that isn't bound to a workspace, unneeded for a workspace-scoped key |
 
@@ -449,9 +452,9 @@ Basic. Provide one of `AZURE_ACCESS_TOKEN` or `AZURE_PAT`; the access token wins
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `AZURE_BASE_URL` | `https://dev.azure.com` | API base URL. Point at an on-prem **Server** collection URL for self-hosted instances |
+| `AZURE_BASE_URL` | `https://dev.azure.com` | API base URL. Point at an on-prem **Server** collection URL for self-hosted instances (can also use `--vcs-base-url`) |
 | `AZURE_ORG` | *(required)* | Organization / collection name (can also use `--workspace`) |
-| `AZURE_PROJECT` | *(required)* | Project name |
+| `AZURE_PROJECT` | *(required)* | Project name (can also use `--project`) |
 | `AZURE_ACCESS_TOKEN` | *(one required)* | OAuth Bearer token — e.g. the Azure Pipelines built-in `System.AccessToken`. Zero-PAT. |
 | `AZURE_PAT` | *(one required)* | Personal Access Token — scopes: Code (read) + Threads (read & write). Sent as HTTP Basic `base64(":{PAT}")` |
 
@@ -498,7 +501,7 @@ flat **issue comments** — there is no comment threading and no inline comments
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `GITHUB_BASE_URL` | `https://api.github.com` | API base URL. Point at `https://<host>/api/v3` for GitHub Enterprise Server |
+| `GITHUB_BASE_URL` | `https://api.github.com` | API base URL. Point at `https://<host>/api/v3` for GitHub Enterprise Server (can also use `--vcs-base-url`) |
 | `GITHUB_OWNER` | *(required)* | Repository owner — org or user (can also use `--workspace`) |
 | `GITHUB_TOKEN` | *(required)* | Token with PR read/write. In Actions, the workflow-provided `GITHUB_TOKEN` secret |
 

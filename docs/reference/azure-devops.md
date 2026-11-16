@@ -22,6 +22,21 @@ The adapter is **runner-agnostic** — it does all Azure REST work (fetch diff, 
 - **Native Azure Pipelines (default):** what this doc wires — zero-PAT (`System.AccessToken`), fewest hops, validated on cloud.
 - **Azure → Jenkins job:** only when CI is standardized on Jenkins. Azure Service Hooks (PR create/update for reviews, commented for replies) trigger a Jenkins job running the same `--vcs azure --repo-slug … --pr-id …`, with `AZURE_ACCESS_TOKEN`/`AZURE_PAT` in Jenkins credentials (you lose the zero-PAT OAuth). No agent change — migrating later is just re-pointing the trigger.
 
+## Command line
+
+From v0.0.54 the org and project can be passed as flags instead of `AZURE_ORG` / `AZURE_PROJECT`,
+e.g. when another tool drives the CLI. The token still comes from the environment:
+
+```sh
+export AZURE_PAT=…   # or AZURE_ACCESS_TOKEN
+node dist/pr-review-agent.cjs --vcs azure --workspace my-org --project my-project --repo-slug my-repo --pr-id 42
+```
+
+`--vcs-base-url` sets `AZURE_BASE_URL` (e.g. an on-prem Server collection URL). A non-empty flag
+wins over its env var; an empty one falls back to it. Tokens are deliberately env-only, because
+command-line arguments are visible in process listings. A bundle without `--project` /
+`--vcs-base-url` exits 1 on them, so the CI samples keep passing env vars.
+
 ## CI integration (Azure Pipelines)
 
 Three files, kept in **one folder** of the reviewed repo:
@@ -73,6 +88,7 @@ published as a tag, so v0.0.47 is the first published version with its changes):
 | `ONLY_TARGET_BRANCHES`, `TRIGGER_EVENT` / `TRIGGER_COMMENT_AUTHOR` / `IGNORE_COMMENT_AUTHORS`, `LAST_CHECKED_COMMIT` + `checked_commit` | v0.0.43 |
 | Delta after a rebase / force-push (old head found in the PR's iterations); a blob 404 fails the delta instead of dropping the file; a PR without `lastMergeSourceCommit` fails the run instead of posting a footer with an empty commit | v0.0.47 |
 | `TRIGGER_EVENT_KIND`, `USAGE_RECORD_FILE`; `checked_commit` only for a 12–64 hex head | v0.0.47 |
+| `--project`, `--vcs-base-url`, `--usage-record-file` flags ([Command line](#command-line)) | v0.0.54 |
 
 The samples pass every setting as an **env var**, never a flag: an older bundle ignores an
 unknown env var (for example v0.0.42 ignores `ONLY_TARGET_BRANCHES` and reviews every PR), but

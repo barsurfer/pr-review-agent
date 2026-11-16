@@ -859,6 +859,40 @@ describe('lenses (end-to-end)', () => {
   })
 })
 
+describe('image-baked judge, efforts and lens (reviewbench/Dockerfile)', () => {
+  const settingsLine = () => logSpy.mock.calls.map(c => c.join(' ')).find(l => l.startsWith('Benchmark settings:'))!
+  const lensCalls = () => completeStructured.mock.calls.filter(c => c[2] === BREADTH_OUTPUT_SCHEMA)
+  const judgeOpts = () => completeStructured.mock.calls.filter(c => c[2] !== REVIEW_OUTPUT_SCHEMA && c[2] !== BREADTH_OUTPUT_SCHEMA).at(-1)![3]
+
+  beforeEach(() => {
+    completeStructured.mockImplementation(async (_s: string, _u: string, schema: unknown) =>
+      ({ object: schema === REVIEW_OUTPUT_SCHEMA ? REVIEW : schema === BREADTH_OUTPUT_SCHEMA ? { findings: [] } : JUDGED, usage }))
+    cfg.anthropic.model = 'claude-haiku-5-5'
+    Object.assign(cfg.judge, { model: 'claude-haiku-5-5', effort: 'high' })
+    cfg.review.effort = 'high'
+    cfg.lenses = { enabled: true, list: 'rel', model: '', recommend: false }
+  })
+
+  it('a no-label run echoes the baked values and calls the reviewer, reliability lens and judge with them', async () => {
+    await runBenchmark(fixture())
+
+    expect(settingsLine()).toMatch(/^Benchmark settings: model=claude-haiku-5-5 effort=high judge_model=claude-haiku-5-5 judge_effort=high .* j_proposal=0 lenses=rel$/)
+    expect(completeStructured.mock.calls[0][3]).toMatchObject({ model: 'claude-haiku-5-5', effort: 'high' })
+    expect(lensCalls().map(c => (c[0] as string).match(/## (\w+) LENS/)![1])).toEqual(['RELIABILITY'])
+    expect(judgeOpts()).toMatchObject({ model: 'claude-haiku-5-5', effort: 'high' })
+  })
+
+  it('labels override the baked values: JUDGE_MODEL=claude-sonnet-5, LENSES=0, EFFORT and JUDGE_EFFORT', async () => {
+    await runBenchmark({ ...fixture(), RB_CONFIG_JUDGE_MODEL: 'claude-sonnet-5', RB_CONFIG_LENSES: '0', RB_CONFIG_EFFORT: 'medium', RB_CONFIG_JUDGE_EFFORT: 'low' })
+
+    expect(settingsLine()).toMatch(/^Benchmark settings: model=claude-haiku-5-5 effort=medium judge_model=claude-sonnet-5 judge_effort=low .* j_proposal=0$/)
+    expect(cfg.lenses).toMatchObject({ enabled: false, list: '0' })
+    expect(lensCalls()).toHaveLength(0)
+    expect(completeStructured.mock.calls[0][3]).toMatchObject({ model: 'claude-haiku-5-5', effort: 'medium' })
+    expect(judgeOpts()).toMatchObject({ model: 'claude-sonnet-5', effort: 'low' })
+  })
+})
+
 describe('lens recommendation (end-to-end)', () => {
   const usageRecord = () => {
     const out = logSpy.mock.calls.map(c => c.join(' ')).find(l => l.startsWith('\n=== Usage ==='))!

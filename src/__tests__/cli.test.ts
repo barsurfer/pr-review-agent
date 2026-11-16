@@ -388,3 +388,156 @@ describe('CLI branch-list overrides (src/index.ts)', () => {
     expect(swallowed.passed).toBe(true)
   }, TIMEOUT)
 })
+
+// A request gets 404 and a proxy CONNECT (an https default) gets 403, neither retried, so `seen` shows where the first VCS call went without reaching a real host.
+async function runRecorded(build: (base: string) => { args: string[]; env?: Record<string, string> }, viaProxy = false) {
+  const seen: string[] = []
+  const server = createServer((req, res) => { seen.push(req.url ?? ''); res.writeHead(404); res.end() })
+  server.on('connect', (req, socket) => { seen.push(`CONNECT ${req.url}`); socket.end('HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n') })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+  const { args, env: extraEnv = {} } = build(base)
+  const cwd = mkdtempSync(join(tmpdir(), 'pr-agent-cli-'))
+  let child: ChildProcess | undefined
+  try {
+    const env: Record<string, string | undefined> = {
+      ...process.env,
+      LLM_PROVIDER: 'anthropic', ANTHROPIC_API_KEY: 'test-key',
+      TRIGGER_EVENT: '', TRIGGER_COMMENT_AUTHOR: '', IGNORE_COMMENT_AUTHORS: '', LAST_CHECKED_COMMIT: '',
+      TRIGGER_EVENT_KIND: '', USAGE_RECORD_FILE: '',
+      NO_PROXY: '127.0.0.1,localhost', no_proxy: '127.0.0.1,localhost',
+    }
+    for (const name of Object.keys(env)) if (/^(VCS_PROVIDER$|BITBUCKET_|AZURE_|GITHUB_)/i.test(name)) delete env[name]
+    for (const name of ['http_proxy', 'HTTP_PROXY', 'https_proxy', 'HTTPS_PROXY', 'all_proxy', 'ALL_PROXY']) delete env[name]
+    if (viaProxy) Object.assign(env, { https_proxy: base, HTTPS_PROXY: base, NO_PROXY: '', no_proxy: '' })
+    Object.assign(env, extraEnv)
+    const proc = spawn(process.execPath, [TSX_CLI, INDEX, '--repo-slug', 'r', '--pr-id', '1', '--dry-run', '--log-usage', 'false', ...args], { cwd, env })
+    child = proc
+    let stdout = '', stderr = ''
+    proc.stdout.on('data', d => { stdout += d })
+    proc.stderr.on('data', d => { stderr += d })
+    const status = await new Promise<number | null>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`CLI run exceeded ${CHILD_TIMEOUT} ms`)), CHILD_TIMEOUT)
+      proc.on('close', code => { clearTimeout(timer); resolve(code) })
+    })
+    return { status, stdout, stderr, seen }
+  } finally {
+    if (child && child.exitCode === null && child.signalCode === null) child.kill()
+    server.close()
+    rmSync(cwd, { recursive: true, force: true, maxRetries: 5 })
+  }
+}
+
+const AZURE_ENV = { AZURE_ORG: 'o', AZURE_PAT: 'x' }
+
+describe('CLI --project (src/index.ts)', () => {
+  it('sets the Azure project: no AZURE_PROJECT env passes validation, the flag wins over the env, an empty flag falls back to it', async () => {
+    const [flagOnly, flagWins, emptyFlag] = await Promise.all([
+      runRecorded(base => ({ args: ['--vcs', 'azure', '--project', 'flagp'], env: { ...AZURE_ENV, AZURE_BASE_URL: base } })),
+      runRecorded(base => ({ args: ['--vcs', 'azure', '--project', 'flagp'], env: { ...AZURE_ENV, AZURE_BASE_URL: base, AZURE_PROJECT: 'envp' } })),
+      runRecorded(base => ({ args: ['--vcs', 'azure', '--project', ' '], env: { ...AZURE_ENV, AZURE_BASE_URL: base, AZURE_PROJECT: 'envp' } })),
+    ])
+
+    expect(flagOnly.stderr).not.toContain('Missing required environment variable')
+    expect(flagOnly.seen[0]).toBe('/o/flagp/_apis/git/repositories/r/pullRequests/1?api-version=7.1')
+    expect(flagOnly.status).toBe(1)
+    expect(flagWins.seen[0]).toBe('/o/flagp/_apis/git/repositories/r/pullRequests/1?api-version=7.1')
+    expect(emptyFlag.seen[0]).toBe('/o/envp/_apis/git/repositories/r/pullRequests/1?api-version=7.1')
+  }, TIMEOUT)
+
+  it('missing from both flag and env: the same validation error as before, no VCS call', async () => {
+    const [absent, empty] = await Promise.all([
+      runRecorded(base => ({ args: ['--vcs', 'azure'], env: { ...AZURE_ENV, AZURE_BASE_URL: base } })),
+      runRecorded(base => ({ args: ['--vcs', 'azure', '--project', ''], env: { ...AZURE_ENV, AZURE_BASE_URL: base } })),
+    ])
+
+    for (const run of [absent, empty]) {
+      expect(run.status).toBe(1)
+      expect(run.stderr).toContain('Fatal error: Missing required environment variable: AZURE_PROJECT')
+      expect(run.seen).toEqual([])
+    }
+  }, TIMEOUT)
+
+  it('is accepted and ignored by another provider', async () => {
+    const { stderr, seen } = await runRecorded(base => ({
+      args: ['--vcs', 'bitbucket', '--project', 'p'],
+      env: { BITBUCKET_WORKSPACE: 'w', BITBUCKET_USERNAME: 'u', BITBUCKET_TOKEN: 'invalid', BITBUCKET_BASE_URL: base },
+    }))
+
+    expect(stderr).not.toContain('unknown option')
+    expect(seen[0]).toBe('/repositories/w/r/pullrequests/1')
+  }, TIMEOUT)
+})
+
+describe('CLI --vcs-base-url (src/index.ts)', () => {
+  it.each([
+    ['bitbucket', 'BITBUCKET_BASE_URL', { BITBUCKET_WORKSPACE: 'w', BITBUCKET_USERNAME: 'u', BITBUCKET_TOKEN: 'invalid' }, '/repositories/w/r/pullrequests/1', 'CONNECT api.bitbucket.org:443'],
+    ['azure', 'AZURE_BASE_URL', { ...AZURE_ENV, AZURE_PROJECT: 'p' }, '/o/p/_apis/git/repositories/r/pullRequests/1?api-version=7.1', 'CONNECT dev.azure.com:443'],
+    ['github', 'GITHUB_BASE_URL', { GITHUB_OWNER: 'o', GITHUB_TOKEN: 'invalid' }, '/repos/o/r/pulls/1', 'CONNECT api.github.com:443'],
+  ] as Array<[string, string, Record<string, string>, string, string]>)('%s: the flag wins over %s, an empty flag falls back to the env, then to the default', async (vcs, envName, env, path, defaultConnect) => {
+    const [flagWins, emptyToEnv, emptyToDefault] = await Promise.all([
+      runRecorded(base => ({ args: ['--vcs', vcs, '--vcs-base-url', base], env: { ...env, [envName]: 'http://127.0.0.1:9' } })),
+      runRecorded(base => ({ args: ['--vcs', vcs, '--vcs-base-url', ''], env: { ...env, [envName]: base } })),
+      runRecorded(() => ({ args: ['--vcs', vcs, '--vcs-base-url', '  '], env }), true),
+    ])
+
+    expect(flagWins.seen[0]).toBe(path)
+    expect(flagWins.status).toBe(1)
+    expect(emptyToEnv.seen[0]).toBe(path)
+    expect(emptyToDefault.seen[0]).toBe(defaultConnect)
+    expect(emptyToDefault.status).toBe(1)
+  }, TIMEOUT)
+})
+
+describe('CLI --usage-record-file (src/index.ts)', () => {
+  const runLogged = (cwd: string, args: string[], extraEnv: Record<string, string>) => spawnSync(process.execPath, [TSX_CLI, INDEX, '--repo-slug', 'r', '--pr-id', '1', '--dry-run', '--event', 'pullrequest:comment_created', '--comment-author', 'bot', ...args], {
+    cwd, encoding: 'utf-8',
+    env: {
+      ...process.env,
+      VCS_PROVIDER: 'bitbucket', LLM_PROVIDER: 'anthropic', ANTHROPIC_API_KEY: 'test-key',
+      BITBUCKET_WORKSPACE: 'w', BITBUCKET_USERNAME: 'u', BITBUCKET_TOKEN: 'invalid', BITBUCKET_BASE_URL: 'http://127.0.0.1:9',
+      TRIGGER_EVENT: '', TRIGGER_COMMENT_AUTHOR: '', TRIGGER_EVENT_KIND: '', IGNORE_COMMENT_AUTHORS: 'bot', USAGE_RECORD_FILE: '',
+      ...extraEnv,
+    },
+  })
+  const lines = (path: string) => readFileSync(path, 'utf-8').split('\n').filter(Boolean).map(l => JSON.parse(l))
+
+  it('writes the record to the given path next to the results.jsonl append; the flag wins over USAGE_RECORD_FILE, an empty flag falls back to it', () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'pr-agent-cli-'))
+    try {
+      const flagFile = join(cwd, 'flag.json')
+      const envFile = join(cwd, 'env.json')
+      expect(runLogged(cwd, ['--usage-record-file', flagFile], {}).status).toBe(0)
+      expect(lines(flagFile)).toEqual(lines(join(cwd, 'results.jsonl')))
+
+      rmSync(flagFile)
+      expect(runLogged(cwd, ['--usage-record-file', flagFile], { USAGE_RECORD_FILE: envFile }).status).toBe(0)
+      expect(lines(flagFile)).toEqual([lines(join(cwd, 'results.jsonl'))[1]])
+      expect(readdirSync(cwd)).not.toContain('env.json')
+
+      expect(runLogged(cwd, ['--usage-record-file', ' '], { USAGE_RECORD_FILE: envFile }).status).toBe(0)
+      expect(lines(envFile)).toEqual([lines(join(cwd, 'results.jsonl'))[2]])
+    } finally {
+      rmSync(cwd, { recursive: true, force: true, maxRetries: 5 })
+    }
+  }, TIMEOUT * 2)
+})
+
+describe('CLI --help (src/index.ts)', () => {
+  it('lists the connection flags and the per-provider --workspace text', () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'pr-agent-cli-'))
+    // config loads before commander parses, so --help still needs an LLM key.
+    const { status, stdout } = spawnSync(process.execPath, [TSX_CLI, INDEX, '--help'], {
+      cwd, encoding: 'utf-8',
+      env: { ...process.env, LLM_PROVIDER: 'anthropic', ANTHROPIC_API_KEY: 'test-key' },
+    })
+    rmSync(cwd, { recursive: true, force: true, maxRetries: 5 })
+    const help = stdout.replace(/\s+/g, ' ')
+
+    expect(status).toBe(0)
+    expect(help).toContain('--workspace <workspace> Workspace / org / owner of the selected VCS provider (overrides BITBUCKET_WORKSPACE, AZURE_ORG or GITHUB_OWNER)')
+    expect(help).toContain('--project <name> Azure DevOps project (overrides AZURE_PROJECT; ignored by other providers)')
+    expect(help).toContain('--vcs-base-url <url> API base URL of the selected VCS provider (overrides BITBUCKET_BASE_URL, AZURE_BASE_URL or GITHUB_BASE_URL)')
+    expect(help).toContain('--usage-record-file <path> Also write the usage record of this run alone to this file, overwritten each run; results.jsonl is still appended, and --log-usage false writes neither (overrides USAGE_RECORD_FILE)')
+  }, TIMEOUT)
+})

@@ -15,11 +15,16 @@ WORKDIR /app
 COPY --from=build /src/dist/pr-review-agent.cjs ./pr-review-agent.cjs
 COPY reviewbench/entrypoint.mjs ./entrypoint.mjs
 
-# Defaults only: the RB_CONFIG_MODEL / RB_CONFIG_EFFORT labels override per run. 64k output covers xhigh/max effort thinking.
-# haiku-5-5 reviewer (1M context → big PRs review in one pass) with a sonnet-5 judge.
+# Defaults only: the RB_CONFIG_MODEL / EFFORT / JUDGE_MODEL / JUDGE_EFFORT labels override per run. 64k output covers xhigh/max effort thinking.
+# haiku-5-5 reviewer (1M context → big PRs review in one pass) and haiku-5-5 judge, both at high effort, so a run spends no label slot on them.
 # Bundling salvages PRs still over budget, capped at 3 bundles so one giant PR can't run away on cost.
+# Effort is a build arg because no label can unset it (empty labels are ignored); an empty value builds a model-default image.
+ARG REVIEW_EFFORT=high
+ARG JUDGE_EFFORT=high
 ENV CLAUDE_MODEL=claude-haiku-5-5 \
-    JUDGING_MODEL=claude-sonnet-5 \
+    JUDGING_MODEL=claude-haiku-5-5 \
+    REVIEW_EFFORT=$REVIEW_EFFORT \
+    JUDGE_EFFORT=$JUDGE_EFFORT \
     MAX_OUTPUT_TOKENS=64000 \
     ENABLE_BUNDLED_REVIEW=true \
     MAX_BUNDLES=3
@@ -30,12 +35,14 @@ ARG JUDGE_KEEP_UNVERIFIED=true
 ARG JUDGE_FILE_CONTEXT=false
 ARG NITPICKS=true
 ARG LINE_NUMBERS=true
-# Breadth baked on (best showcase config) so its three RB_CONFIG label slots are free for models + effort.
+# Breadth baked on (best showcase config) so its three RB_CONFIG label slots stay free.
 ARG BREADTH=true
 ARG BREADTH_FILES=1
 ARG BREADTH_UNTOUCHED=0
 # Baked on for the bench image (recall lever under test); prod is unaffected (Jenkins sets its own env).
 ARG SECOND_LOOK=true
+# Reliability lens baked on to free its label slot; as with the LENSES label the list is the switch, so an empty value runs no lens.
+ARG LENSES=rel
 ENV ENABLE_JUDGE_KEEP_MINOR=$JUDGE_KEEP_MINOR \
     ENABLE_JUDGE_KEEP_UNVERIFIED=$JUDGE_KEEP_UNVERIFIED \
     ENABLE_JUDGE_FILE_CONTEXT=$JUDGE_FILE_CONTEXT \
@@ -44,7 +51,9 @@ ENV ENABLE_JUDGE_KEEP_MINOR=$JUDGE_KEEP_MINOR \
     ENABLE_BREADTH_REVIEW=$BREADTH \
     BREADTH_MIN_FILES=$BREADTH_FILES \
     BREADTH_MIN_UNTOUCHED=$BREADTH_UNTOUCHED \
-    ENABLE_SECOND_LOOK=$SECOND_LOOK
+    ENABLE_SECOND_LOOK=$SECOND_LOOK \
+    ENABLE_LENSES=true \
+    LENSES=$LENSES
 
 # Runs as root like the reference agents: /work/out is a host mount whose owner we don't control.
 ENTRYPOINT ["node", "/app/entrypoint.mjs"]

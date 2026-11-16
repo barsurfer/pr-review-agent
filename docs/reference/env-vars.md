@@ -18,7 +18,7 @@ credentials in source code or commit them to version control.**
 | Variable | Example | Description |
 |----------|---------|-------------|
 | `VCS_PROVIDER` | `bitbucket` | Which VCS adapter to use. `bitbucket` is production; `azure` and `github` are experimental (see below); `gitlab` is not implemented: from 0.0.46 selecting it (or `--vcs gitlab`) exits 1 at startup with one error line. |
-| `BITBUCKET_BASE_URL` | `https://api.bitbucket.org/2.0` | Bitbucket Cloud API base URL (Server/DC is not supported — different v1 API) |
+| `BITBUCKET_BASE_URL` | `https://api.bitbucket.org/2.0` | Bitbucket Cloud API base URL (Server/DC is not supported — different v1 API). CLI: `--vcs-base-url` |
 | `BITBUCKET_WORKSPACE` | `my-workspace` | Bitbucket workspace slug |
 | `BITBUCKET_USERNAME` | `you@company.com` | Your Atlassian account email (used for HTTP Basic Auth) |
 | `BITBUCKET_TOKEN` | `ATATT3x...` | Atlassian API token with Bitbucket scopes (replaces deprecated app passwords) |
@@ -52,7 +52,7 @@ credentials in source code or commit them to version control.**
 | `TRIGGER_EVENT_KIND` | `comment` | From 0.0.46. `comment` or `other`: whether this event is a comment event, overriding the name rule (a name containing `comment`, or exactly `note`, `Note Hook` or `pull_request_review`). Case-insensitive; any other value logs one warning and is ignored. Recorded as `trigger.event_kind` only when given. Set it per event, not job-wide, unless the job receives only comment events: `comment` on a job that also runs on pushes makes a listed author's push skippable. Default: empty (name rule). CLI: `--event-kind` |
 | `IGNORE_COMMENT_AUTHORS` | `{bot-uuid}` | Comma-separated actor ids. A comment event by a listed actor skips before any VCS or model call (exit 0, `action: SKIP`); push/created/updated events are never comment events by name, so they are never skipped, whatever the actor. Matching is exact after trim, `{}` strip and lowercase. `--force` overrides it. Default: empty (off). **Caveat:** an ignored event never catches up a push that a skip-if-locked CI lock dropped, so that head stays unreviewed until the next non-ignored event — list an actor only when CI queues push events (Bitbucket `pullrequest:updated`), prefer bots that never comment in response to a push, and don't list the agent's own id under a dropping lock. On GitHub Actions filter commenters in the job `if:` instead. See [review/skip-logic.md §7](../context/review/skip-logic.md) |
 | `LAST_CHECKED_COMMIT` | `0123456789ab…` | The `checked_commit` an earlier run reported for this PR (from that run's `results.jsonl` record). When the head equals it (12–64 hex, so SHA-256 heads work too; prefix match, case-insensitive), a re-review on that head goes to `CHECK_REPLIES` like a footer match instead of re-paying the review. Malformed → one warning, treated as unset. Default: empty (off). CLI: `--checked-commit`. **Rollout:** an older bundle exits 1 on the unknown `--checked-commit` flag, so CI should pass this env var instead. See [review/skip-logic.md §8](../context/review/skip-logic.md) |
-| `USAGE_RECORD_FILE` | `/tmp/pr-review-record.json` | From 0.0.46. A path that receives only this run's usage record, overwritten on every run, so any CI can read "this run's record" without matching on `JOB_NAME` / `BUILD_NUMBER`. Written next to the `results.jsonl` append, so not with `--log-usage false`; a failed write logs one warning and changes nothing else. Delete the file before the run: a run that fails before writing leaves the previous one. Default: empty (off). No CLI flag. See [usage-logging.md](usage-logging.md#finding-this-runs-record) |
+| `USAGE_RECORD_FILE` | `/tmp/pr-review-record.json` | From 0.0.46. A path that receives only this run's usage record, overwritten on every run, so any CI can read "this run's record" without matching on `JOB_NAME` / `BUILD_NUMBER`. Written next to the `results.jsonl` append, so not with `--log-usage false`; a failed write logs one warning and changes nothing else. Delete the file before the run: a run that fails before writing leaves the previous one. Default: empty (off). CLI: `--usage-record-file` (from 0.0.54). See [usage-logging.md](usage-logging.md#finding-this-runs-record) |
 | `DIFF_EXCLUDE_PATTERNS` | `*.lock,*.json,*.spec.ts` | Comma-separated file patterns to strip from diff before sending to Claude. Default: `*.lock,package-lock.json,yarn.lock,pnpm-lock.yaml,*.json,*.spec.ts` |
 | `JUDGING_MODEL` | `claude-sonnet-5` | Judge model for finding validation — **on by default**. Set empty to disable the judge pass. With `LLM_PROVIDER=openrouter` this takes an OpenRouter slug and may be a different vendor than the reviewer. |
 | `REVIEW_EFFORT` | *(unset)* | Reviewer thinking effort: `low`\|`medium`\|`high`\|`xhigh`\|`max`. Unset = model default (a strong model like Opus 4.8 at its adaptive default needs no effort flag). Only the 5-family / Opus-4.6+ / Sonnet-5 support it; models that don't (e.g. Haiku 4.5) are retried without it. `xhigh`/`max` need a larger `MAX_OUTPUT_TOKENS` (~64k) — thinking counts against the output cap and otherwise truncates the review. Applies under both providers: Anthropic sends `output_config.effort`; OpenRouter sends `reasoning: { effort }`, which it maps to the same `output_config.effort` on Claude 4.6+, and a value it rejects with a 400 naming `reasoning` is retried without it. Up to 0.0.47 OpenRouter runs dropped the effort silently, so from the next release an OpenRouter run that sets it reasons more: more output tokens, higher cost, slower. On OpenRouter a budget-based model (Claude ≤4.5) gets a thinking budget of `MAX_OUTPUT_TOKENS` × 0.2/0.5/0.8/0.95 for `low`/`medium`/`high`/`xhigh`·`max` instead of the Anthropic path's retry without effort. See [structured-output.md](../context/llm/structured-output.md#openrouter-specifics). |
@@ -94,8 +94,13 @@ credentials in source code or commit them to version control.**
 > → `--model`/`--judge-model`; `REPLY_MODEL` → `--reply-model`; `MAX_INPUT_TOKENS`/`MAX_OUTPUT_TOKENS` →
 > `--max-input-tokens`/`--max-output-tokens`; `REVIEW_EFFORT`/`JUDGE_EFFORT` →
 > `--effort`/`--judge-effort`; `TRIGGER_EVENT`/`TRIGGER_COMMENT_AUTHOR`/`TRIGGER_EVENT_KIND` → `--event`/`--comment-author`/`--event-kind`;
-> `LAST_CHECKED_COMMIT` → `--checked-commit`
+> `LAST_CHECKED_COMMIT` → `--checked-commit`; from 0.0.54 `AZURE_PROJECT` → `--project`, the selected provider's
+> `BITBUCKET_BASE_URL`/`AZURE_BASE_URL`/`GITHUB_BASE_URL` → `--vcs-base-url` and `USAGE_RECORD_FILE` → `--usage-record-file`
 > (an empty CLI value, as CI systems pass an unset parameter, falls back to the env value). CLI always wins over env.
+> Write an empty value for these three in the `=` form (`--project=`), as for the branch lists below: an unquoted empty value
+> makes the flag swallow the next argument (`--usage-record-file --dry-run` writes the record to a file named `--dry-run` and the run posts).
+> Like `--vcs`/`--workspace`, the connection flags and `--usage-record-file` do nothing under `--benchmark`.
+> Tokens, PATs and API keys have no flag.
 > `SKIP_SOURCE_BRANCHES`/`SKIP_TARGET_BRANCHES`/`ONLY_TARGET_BRANCHES` → `--skip-source-branches`/`--skip-target-branches`/`--only-target-branches`,
 > for per-repo values when the CI env is shared. Here an empty value does **not** fall back: `--skip-target-branches=` is an empty
 > list, i.e. that check is off. Write empty values in the `=` form; an unquoted empty value makes the flag swallow the next argument.
@@ -136,9 +141,9 @@ and is **validated live end-to-end against Azure DevOps Services (cloud)** — o
 
 | Variable | Example | Description |
 |----------|---------|-------------|
-| `AZURE_BASE_URL` | `https://dev.azure.com` | API base URL. Default is cloud Services; set to an on-prem **Server** collection URL for self-hosted. |
+| `AZURE_BASE_URL` | `https://dev.azure.com` | API base URL. Default is cloud Services; set to an on-prem **Server** collection URL for self-hosted. Can also be set via `--vcs-base-url`. |
 | `AZURE_ORG` | `my-org` | Organization / collection name (required). Can also be set via `--workspace`. |
-| `AZURE_PROJECT` | `my-project` | Project name (required). |
+| `AZURE_PROJECT` | `my-project` | Project name (required). Can also be set via `--project`. |
 | `AZURE_ACCESS_TOKEN` | `$(System.AccessToken)` | OAuth Bearer token — e.g. the Azure Pipelines built-in `System.AccessToken`. Zero-PAT auth. **One of this or `AZURE_PAT` is required.** |
 | `AZURE_PAT` | `xxxxxxxx...` | Personal Access Token. Scopes: Code (read) + Threads (read & write). Sent as HTTP Basic `base64(":{PAT}")` (empty username). **One of this or `AZURE_ACCESS_TOKEN` is required.** |
 
@@ -162,7 +167,7 @@ Reviews and replies are flat issue comments (no threading); no inline comments y
 
 | Variable | Example | Description |
 |----------|---------|-------------|
-| `GITHUB_BASE_URL` | `https://api.github.com` | API base URL. Point at `https://<host>/api/v3` for GitHub Enterprise Server. |
+| `GITHUB_BASE_URL` | `https://api.github.com` | API base URL. Point at `https://<host>/api/v3` for GitHub Enterprise Server. Can also be set via `--vcs-base-url`. |
 | `GITHUB_OWNER` | `my-org` | Repository owner (org or user). Required. Can also be set via `--workspace`. Logged as the usage record's `workspace` from 0.0.46. |
 | `GITHUB_TOKEN` | `ghp_…` / `github_pat_…` | Token with PR read/write on the repo. Required. In Actions, the workflow-provided `GITHUB_TOKEN` secret is used. |
 
