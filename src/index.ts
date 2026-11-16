@@ -12,6 +12,7 @@ import { GitHubAdapter } from './vcs/github.js'
 import { review } from './review/index.js'
 import { resolveTrigger } from './review/trigger.js'
 import { resolveCheckedCommit } from './review/checked-commit.js'
+import { cliOrEnv } from './review/cli-value.js'
 import { validateLocalPrompt, loadPrompt } from './prompt/loader.js'
 import { runBenchmark } from './benchmark.js'
 import { resolveContextWindows } from './llm/context-window.js'
@@ -23,12 +24,15 @@ program
   .name('pr-review-agent')
   .description('Automated PR code review powered by Claude')
   .option('--pr-id <id>', 'Pull request ID')
-  .option('--workspace <workspace>', 'VCS workspace / org (overrides BITBUCKET_WORKSPACE)')
+  .option('--workspace <workspace>', 'Workspace / org / owner of the selected VCS provider (overrides BITBUCKET_WORKSPACE, AZURE_ORG or GITHUB_OWNER)')
+  .option('--project <name>', 'Azure DevOps project (overrides AZURE_PROJECT; ignored by other providers)')
   .option('--repo-slug <slug>', 'Repository slug')
   .option('--vcs <provider>', 'VCS provider: bitbucket | azure (WIP) | github (overrides VCS_PROVIDER); gitlab is not implemented and exits 1')
+  .option('--vcs-base-url <url>', 'API base URL of the selected VCS provider (overrides BITBUCKET_BASE_URL, AZURE_BASE_URL or GITHUB_BASE_URL)')
   .option('--dry-run', 'Print the review to stdout without posting to the PR')
   .option('--force [mode]', 'Force review: "clean" (no prior context) or "re-review" (keep context, bypass dedup)')
   .option('--log-usage [bool]', 'Log usage data to results.jsonl (default: true)', (v: string) => v !== 'false', true)
+  .option('--usage-record-file <path>', 'Also write the usage record of this run alone to this file, overwritten each run; results.jsonl is still appended, and --log-usage false writes neither (overrides USAGE_RECORD_FILE)')
   .option('--prompt <path>', 'Path to a local prompt file (overrides repo .agent-review-instructions.md)')
   .option('--validate-prompt', 'Validate prompt and exit (local via --prompt, or repo via --pr-id)')
   .option('--model <id>', 'Claude model ID (overrides CLAUDE_MODEL)')
@@ -62,8 +66,11 @@ program
 const opts = program.opts<{
   prId?: string
   workspace?: string
+  project?: string
   repoSlug?: string
   vcs?: string
+  vcsBaseUrl?: string
+  usageRecordFile?: string
   model?: string
   judgeModel?: string
   replyModel?: string
@@ -136,6 +143,7 @@ async function main(): Promise<void> {
   if (provider === 'bitbucket') {
     // Allow CLI flags to override env vars for one-off runs
     if (opts.workspace) config.bitbucket.workspace = opts.workspace
+    config.bitbucket.baseUrl = cliOrEnv(opts.vcsBaseUrl, config.bitbucket.baseUrl)
     validateBitbucketConfig()
 
     const bb = new BitbucketAdapter(
@@ -154,6 +162,8 @@ async function main(): Promise<void> {
   } else if (provider === 'azure') {
     // Azure DevOps — experimental / WIP. --workspace aliases AZURE_ORG for one-off runs.
     if (opts.workspace) config.azure.org = opts.workspace
+    config.azure.project = cliOrEnv(opts.project, config.azure.project)
+    config.azure.baseUrl = cliOrEnv(opts.vcsBaseUrl, config.azure.baseUrl)
     validateAzureConfig()
 
     const az = new AzureDevOpsAdapter(
@@ -172,6 +182,7 @@ async function main(): Promise<void> {
     adapter = az
   } else if (provider === 'github') {
     if (opts.workspace) config.github.owner = opts.workspace
+    config.github.baseUrl = cliOrEnv(opts.vcsBaseUrl, config.github.baseUrl)
     validateGitHubConfig()
 
     const gh = new GitHubAdapter(config.github.baseUrl, config.github.owner, config.github.token)
@@ -234,6 +245,7 @@ async function main(): Promise<void> {
   const trigger = resolveTrigger(opts, { ...config.trigger, eventKind: config.triggerEventKind })
   if (!trigger && config.trigger.ignoreCommentAuthors.length) console.warn('Warning: IGNORE_COMMENT_AUTHORS is set but no --event/--comment-author (TRIGGER_EVENT/TRIGGER_COMMENT_AUTHOR) was given - the ignore list is inactive.')
   const checkedCommit = resolveCheckedCommit(opts.checkedCommit, config.lastCheckedCommit)
+  config.usageRecordFile = cliOrEnv(opts.usageRecordFile, config.usageRecordFile)
 
   // A bare --force means re-review; an empty value (how CI passes an unset parameter) must run exactly like an absent flag, pre-post race check included.
   const forceMode = opts.force === true ? 're-review' : typeof opts.force === 'string' && opts.force.trim() ? opts.force as 'clean' | 're-review' : 'off'
