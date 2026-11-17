@@ -1,14 +1,15 @@
 import { SHOWN_LINE_CLAUSE, allowShownContext } from './breadth.js'
 import type { ReviewFinding } from './formatter.js'
 
-export interface Lens { name: string; when: string; overlay: string }
+export interface Lens { name: string; when: string; overlay: string; scenarioTag?: boolean }
 
 export interface LensRecommendation { lens: string; reason: string }
 
 // One shared frame keeps the scope lock and the closing contract identical across lenses; allowShownContext needs the clause verbatim.
-const defineLens = (name: string, concern: string, when: string, items: string[], note = ''): Lens => ({
+const defineLens = (name: string, concern: string, when: string, items: string[], note = '', scenarioTag = false): Lens => ({
   name,
   when,
+  ...(scenarioTag ? { scenarioTag } : {}),
   overlay: `## ${name.toUpperCase()} LENS
 Earlier review passes already ran; their findings are listed in the message. This pass re-reads the whole diff for one concern — ${concern} — to find real problems they missed, not to re-report what they found. Report only defects this change introduces, anchored on added or modified lines — no refactoring advice, no audit of unchanged code. Look for:
 ${items.map(i => `- ${i}`).join('\n')}
@@ -51,12 +52,20 @@ const LENSES: Lens[] = [
     'interface/implementation drift: an implementation that no longer matches its declared interface, type, schema or documented contract;',
     'a layering or boundary violation the change introduces: a lower layer importing a higher one, transport or UI code reaching into persistence, or a new module cycle.',
   ], 'Report a mismatch with callers, consumers or implementations only when both sides are visible in what you were shown. Design preferences and refactoring suggestions are not findings.'),
+  defineLens('impact', 'what breaks when the change meets a real scenario', 'changes crossing files, feature gates, persisted data, deferred or repeated work, or side-effect order', [
+    'clean install or build: a module, file, plugin or dependency the new code needs that a manifest, published-files list or setup file omits, only when that whole file is shown in the file context;',
+    'a feature, flag or optional dependency switched off: a new code path that depends on something the shown code enables only conditionally (a nil or disabled guard, a config check), so the path fails or errors on every call while it is off;',
+    'repeated or overlapping use the platform allows (a second click or key press, a retry, a concurrent request): the next run starting before the previous one\'s deferred work (callback, invokeLater, debounce, queued write) has landed;',
+    'existing data and upgrades: records, files or settings written before this change (old ids, missing fields, renamed keys or formats) that the new code, or one of its constructors or modes, cannot read;',
+    'order of side effects: a destructive or visible action (delete, hide, overwrite, send) taken before the check that decides whether it should happen;',
+    'contracts across files: a field, key, method or parameter one changed file writes or calls that the file reading or implementing it names differently, does not expose, or types differently (a nullable value passed where a non-null one is required).',
+  ], 'Trace each scenario from caller to callee through the code you were shown and report a failure only when you can follow it end to end, naming the scenario in the body; report a cross-file mismatch only when both sides are visible. When the same defect occurs in several changed files, report it in each.', true),
 ]
 
 export const LENS_REGISTRY: Readonly<Record<string, Lens>> = Object.freeze(Object.fromEntries(LENSES.map(l => [l.name, l])))
 
 // ReviewBench builds a run's row id from label values and rejects ids over 64 chars, so the LENSES value needs short forms.
-const LENS_ALIASES: Readonly<Record<string, string>> = Object.freeze({ rel: 'reliability', sec: 'security', test: 'testing', perf: 'performance', arch: 'architecture' })
+const LENS_ALIASES: Readonly<Record<string, string>> = Object.freeze({ rel: 'reliability', sec: 'security', test: 'testing', perf: 'performance', arch: 'architecture', imp: 'impact' })
 
 export function activeLenses(settings: { enabled: boolean; list: string }): Lens[] {
   return settings.enabled ? parseLensList(settings.list).lenses : []

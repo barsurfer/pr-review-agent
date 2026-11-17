@@ -6,7 +6,7 @@ import type { VCSAdapter, PRInfo, ChangedFile, ReviewComment, CommentReply } fro
 import type { LoadedPrompt } from '../prompt/loader.js'
 import type { FileContext } from '../context/fetcher.js'
 import type { ReviewObject, ReviewFinding, FindingScore } from './formatter.js'
-import type { KeptFinding } from './findings-output.js'
+import type { KeptFinding, AlsoAffectsLog } from './findings-output.js'
 import type { AppliedDecision, JudgeAnomalies, RenderJudged } from './judge-decisions.js'
 import type { SuggestedFixStats } from './suggested-fix.js'
 import type { BreadthStatus, SecondLookStatus, LensStatus, CandidateOrigin, BreadthPlan } from './breadth.js'
@@ -61,6 +61,8 @@ export interface LensRun {
 
 export interface SinkResult {
   counterpartRows?: number
+  alsoAffectsRows?: number
+  alsoAffects?: AlsoAffectsLog[]
 }
 
 export type OutcomeSink = (outcome: ReviewOutcome) => void | SinkResult | Promise<void | SinkResult>
@@ -118,6 +120,8 @@ export interface ReviewContext {
   suggestedFixes?: SuggestedFixStats
   proposalsDropped?: number
   counterpartRows?: number
+  alsoAffectsRows?: number
+  alsoAffectsLog?: AlsoAffectsLog[]
   // Kept apart from reviewObject so reviewer metrics and the judge-failure fallback stay reviewer-only.
   breadthFindings?: ReviewFinding[]
   breadthStatus?: BreadthStatus

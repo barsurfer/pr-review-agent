@@ -3,7 +3,7 @@
 import { config } from './config.js'
 import { review } from './review/index.js'
 import { ReviewBenchAdapter, readReviewBenchEnv, readPrJson } from './vcs/reviewbench.js'
-import { mergeJudgedFindingsWithStats, mapFindings, keptToReportFindings, isAnchored, anchorToFile, firstAddedLines, withCounterparts, buildFindingsReport, writeFindingsReport, countFindingBullets, type ReportFinding } from './review/findings-output.js'
+import { mergeJudgedFindingsWithStats, mapFindings, keptToReportFindings, isAnchored, anchorToFile, firstAddedLines, withCounterparts, counterpartFindings, alsoAffectsRows, buildFindingsReport, writeFindingsReport, countFindingBullets, type ReportFinding, type AlsoAffectsLog } from './review/findings-output.js'
 import { activeLenses, parseLensList } from './review/lenses.js'
 import type { ReviewOutcome, SinkResult } from './review/types.js'
 
@@ -17,6 +17,9 @@ const count = (set: (n: number) => void) => (v: string, name: string) => {
   if (/^\d+$/.test(v)) set(Number(v))
   else console.warn(`  Ignoring config label ${name}=${v}: expected a non-negative integer`)
 }
+
+// Generated files only, so test files and manifests stay reviewable.
+const DX_PATTERNS = ['*.lock', 'package-lock.json', 'npm-shrinkwrap.json', 'yarn.lock', 'pnpm-lock.yaml', 'go.sum', '*.min.js', '*.min.css', '*.map', '*.snap']
 
 // Short keys because the manifest allows only 6 configuration entries; set only labels that change the image's baked defaults (reviewbench/Dockerfile).
 const CONFIG_LABELS: Record<string, (value: string, name: string) => void> = {
@@ -41,6 +44,8 @@ const CONFIG_LABELS: Record<string, (value: string, name: string) => void> = {
   J_PROPOSAL: flag(on => { config.judge.proposals = on }),
   LENS_REC: flag(on => { config.lenses.recommend = on }),
   XROWS: flag(on => { config.benchmarkCounterpartRows = on }),
+  HI: flag(on => { config.review.highImpact = on }),
+  DX: flag(on => { if (on) config.diffExcludePatterns = [...DX_PATTERNS] }),
   // One value label doubles as the on/off switch because the manifest caps labels at 6.
   LENSES: (v, name) => {
     const on = parseLensList(v).lenses.length > 0
@@ -74,7 +79,7 @@ function applyBenchmarkConfig(env: NodeJS.ProcessEnv): void {
   applyConfigLabels(env)
   // The harness flags any config label whose value never appears in the agent's output.
   // Flags print under their label keys and 0/1 values, so a label set in the UI and a baked ENABLE_* value both show up here.
-  console.log(`Benchmark settings: model=${config.anthropic.model} effort=${config.review.effort || 'default'} judge_model=${config.judge.model || 'off'} judge_effort=${config.judge.effort || 'default'} nits=${bit(config.review.enableNitpicks)} j_minor=${bit(config.judge.policy.keepMinor)} j_unver=${bit(config.judge.policy.keepUnverified)} j_ctx=${bit(config.judge.fileContext)} lnum=${bit(config.review.lineNumbers)} breadth=${bit(config.breadth.enabled)} b_files=${config.breadth.minFiles} b_untch=${config.breadth.minUntouched} second_look=${bit(config.review.secondLook)} j_quality=${bit(config.judge.quality)} sl_breadth=${bit(config.review.secondLookBreadthTargets)} j_shown_anchor=${bit(config.judge.shownAnchors)} b_priority=${bit(config.breadth.priorityTargets)} sfx=${bit(config.judge.suggestedFixes)} j_proposal=${bit(config.judge.proposals)}${activeLenses(config.lenses).length ? ` lenses=${config.lenses.list}` : ''}${config.lenses.recommend ? ' lens_rec=1' : ''}${config.judge.policy.keepTestGaps ? ' j_tgap=1' : ''}${config.benchmarkCounterpartRows ? ' xrows=1' : ''}`)
+  console.log(`Benchmark settings: model=${config.anthropic.model} effort=${config.review.effort || 'default'} judge_model=${config.judge.model || 'off'} judge_effort=${config.judge.effort || 'default'} nits=${bit(config.review.enableNitpicks)} j_minor=${bit(config.judge.policy.keepMinor)} j_unver=${bit(config.judge.policy.keepUnverified)} j_ctx=${bit(config.judge.fileContext)} lnum=${bit(config.review.lineNumbers)} breadth=${bit(config.breadth.enabled)} b_files=${config.breadth.minFiles} b_untch=${config.breadth.minUntouched} second_look=${bit(config.review.secondLook)} j_quality=${bit(config.judge.quality)} sl_breadth=${bit(config.review.secondLookBreadthTargets)} j_shown_anchor=${bit(config.judge.shownAnchors)} b_priority=${bit(config.breadth.priorityTargets)} sfx=${bit(config.judge.suggestedFixes)} j_proposal=${bit(config.judge.proposals)}${activeLenses(config.lenses).length ? ` lenses=${config.lenses.list}` : ''}${config.lenses.recommend ? ' lens_rec=1' : ''}${config.judge.policy.keepTestGaps ? ' j_tgap=1' : ''}${config.benchmarkCounterpartRows ? ' xrows=1' : ''}${config.review.highImpact ? ' hi=1' : ''}${config.diffExcludePatterns.join(',') === DX_PATTERNS.join(',') ? ' dx=1' : ''}`)
   if (config.judge.proposals && !config.judge.model) console.warn('  J_PROPOSAL=1 but the judge is off - no proposals will be produced.')
   // Nitpicks emit but the default policy drops minor, so without keepMinor nothing new posts.
   if (config.review.enableNitpicks && !config.judge.policy.keepMinor) {
@@ -100,21 +105,36 @@ export async function runBenchmark(env: NodeJS.ProcessEnv = process.env): Promis
         const diff = await adapter.getDiff(prNumber)
         const placed = anchorToFile(outcome.judgedFindings, firstAddedLines(diff), changedFiles)
         let extra: { findings: ReportFinding[]; added: number } | undefined
+        let copiesWritten = !!config.benchmarkCounterpartRows
         if (config.benchmarkCounterpartRows) {
           try {
             extra = withCounterparts(placed, changedFiles, diff, rb.agent, changedPaths)
           } catch (err: unknown) {
+            copiesWritten = false
             console.warn(`  Counterpart rows skipped, original rows kept: ${(err as Error).message}`)
             extra = { findings: keptToReportFindings(placed, rb.agent, changedPaths), added: 0 }
           }
         }
         findings = extra ? extra.findings : keptToReportFindings(placed, rb.agent, changedPaths)
+        let also: { rows: ReportFinding[]; log: AlsoAffectsLog[] } | undefined
+        if (config.review.highImpact) {
+          try {
+            also = alsoAffectsRows(placed, copiesWritten ? counterpartFindings(placed, changedFiles, diff) : [], changedFiles, diff, rb.agent)
+            findings = [...findings, ...also.rows]
+            const tally = new Map<string, number>()
+            for (const e of also.log) tally.set(e.status, (tally.get(e.status) ?? 0) + 1)
+            console.log(`Also-affects rows: ${also.rows.length} of ${also.log.length} entries (${[...tally].map(([s, n]) => `${s} ${n}`).join(', ') || 'none'})`)
+          } catch (err: unknown) {
+            console.warn(`  Also-affects rows skipped, other rows kept: ${(err as Error).message}`)
+          }
+        }
         const fileLevel = placed.filter(k => k.anchorSource === 'file')
         console.log(`Benchmark findings: reviewer ${outcome.review.findings.length}, breadth ${outcome.breadthFindings?.length ?? 0}, second-look ${outcome.secondLookFindings?.length ?? 0}${outcome.lensFindings ? `, lens ${outcome.lensFindings.length}` : ''}, judge kept ${outcome.judgedFindings.length}, line-anchored ${findings.length} (${fileLevel.length} placed on the file's first changed line)`)
         if (fileLevel.length > 0) console.log(`  File-level findings: ${fileLevel.map(k => `${k.file}:${k.lines} ${k.title}`).join(' | ')}`)
         // A kept finding without a usable file:line scores zero, so surface it instead of losing it silently.
         const unanchored = placed.filter(k => !isAnchored(k))
         if (unanchored.length > 0) console.warn(`  Parse check: ${unanchored.length} kept finding(s) with no usable file:line, dropped from findings.json: ${unanchored.map(k => k.title).join(' | ')}`)
+        if (config.review.highImpact) return { ...(extra ? { counterpartRows: extra.added } : {}), alsoAffectsRows: also?.rows.length ?? 0, ...(also ? { alsoAffects: also.log } : {}) }
         if (extra) return { counterpartRows: extra.added }
       } else if (outcome.judged) {
         // Bundled review re-parses each bundle's judged markdown, so it alone still needs the prose merge.

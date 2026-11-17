@@ -103,6 +103,11 @@ export type IssueType = typeof ISSUE_TYPES[number]
 export const normalizeIssueType = (t: string | undefined): IssueType =>
   (ISSUE_TYPES as readonly string[]).includes(String(t)) ? (t as IssueType) : 'other'
 
+export const SCENARIOS = ['install', 'feature_off', 'repeat', 'old_data', 'order', 'contract'] as const
+export type Scenario = typeof SCENARIOS[number]
+
+export interface AlsoAffected { file: string; lines: string; where: string }
+
 export interface ReviewFinding {
   severity: 'LOW' | 'MEDIUM' | 'HIGH'
   title: string
@@ -110,6 +115,8 @@ export interface ReviewFinding {
   lines?: string
   body: string
   type?: IssueType
+  also_affects?: AlsoAffected[]
+  scenario?: Scenario
 }
 
 export interface ReviewObject {

@@ -11,8 +11,8 @@ import { config } from '../config.js'
 import { baseModelId } from '../llm/model-id.js'
 import { parseVerdictScore, parseFindings, countDiffLines } from './parsers.js'
 import { countFindings, normalizeIssueType } from './formatter.js'
-import type { FindingScore, ReviewFinding, IssueType } from './formatter.js'
-import { isAnchored, parseLineRange, normalizeFindingPath } from './findings-output.js'
+import type { FindingScore, ReviewFinding, IssueType, Scenario, AlsoAffected } from './formatter.js'
+import { isAnchored, parseLineRange, normalizeFindingPath, type AlsoAffectsLog } from './findings-output.js'
 import { candidateId, type AppliedDecision, type JudgeAnomalies } from './judge-decisions.js'
 import { MAX_UNTOUCHED_LISTED, type BreadthStatus, type SecondLookStatus, type LensStatus, type CandidateOrigin } from './breadth.js'
 import { activeLenses, type LensRecommendation } from './lenses.js'
@@ -26,8 +26,13 @@ function hash12(s: string): string {
   return createHash('sha256').update(s).digest('hex').slice(0, 12)
 }
 
-function candidateRows(list: Array<ReviewFinding & { origin: CandidateOrigin }>, withType: boolean): NonNullable<UsageRecord['review_candidates']> {
-  return list.map((f, i) => ({ id: candidateId(i), origin: f.origin, severity: f.severity, ...(withType ? { type: f.type ? normalizeIssueType(f.type) : null } : {}), title: f.title, file: f.file ?? null, lines: f.lines ?? null, body: f.body }))
+function candidateRows(list: Array<ReviewFinding & { origin: CandidateOrigin }>, withType: boolean, withHi: { scenario: boolean; alsoAffects: boolean } = { scenario: false, alsoAffects: false }): NonNullable<UsageRecord['review_candidates']> {
+  return list.map((f, i) => ({
+    id: candidateId(i), origin: f.origin, severity: f.severity, ...(withType ? { type: f.type ? normalizeIssueType(f.type) : null } : {}), title: f.title, file: f.file ?? null, lines: f.lines ?? null, body: f.body,
+    // The first-pass reviewer is never asked for these, so a value on its candidate is unsanitized model output.
+    ...(withHi.scenario ? { scenario: f.origin !== 'review' ? f.scenario ?? null : null } : {}),
+    ...(withHi.alsoAffects ? { also_affects: f.origin !== 'review' && Array.isArray(f.also_affects) ? f.also_affects : [] } : {}),
+  }))
 }
 
 function firstSentence(body: string): string {
@@ -89,7 +94,7 @@ export interface UsageRecord {
   // One compact read-only row per anchored kept finding; null when the structured judge didn't run.
   anchored_findings: Array<{ anchor: string; severity: ReviewFinding['severity']; type: IssueType; description: string; proposal?: string; quality_action?: string }> | null
   // Candidates are stored once; judge_decisions join to them by candidate_id.
-  review_candidates: Array<{ id: string; origin: CandidateOrigin; severity: ReviewFinding['severity']; type?: IssueType | null; title: string; file: string | null; lines: string | null; body: string }> | null
+  review_candidates: Array<{ id: string; origin: CandidateOrigin; severity: ReviewFinding['severity']; type?: IssueType | null; title: string; file: string | null; lines: string | null; body: string; scenario?: Scenario | null; also_affects?: AlsoAffected[] }> | null
   unjudged_candidates?: NonNullable<UsageRecord['review_candidates']>
   judge_decisions: AppliedDecision[] | null
   judge_anomalies: JudgeAnomalies | null
@@ -107,8 +112,10 @@ export interface UsageRecord {
   lens_recommendations?: LensRecommendation[] | null
   suggested_fixes?: SuggestedFixStats | null
   counterpart_rows?: number
+  also_affects_rows?: number
+  also_affects?: AlsoAffectsLog[]
   untouched_files: { count: number; paths: string[]; cut: number; deprioritized?: number } | null
-  recall_levers: { j_quality: boolean; sl_breadth: boolean; j_shown_anchor: boolean; b_priority: boolean }
+  recall_levers: { j_quality: boolean; sl_breadth: boolean; j_shown_anchor: boolean; b_priority: boolean; high_impact?: true }
   touch_rate: number | null
   delta: { developer_replies: number; human_replies: number; agent_replies: number; resolved: number; still_open: number; new_findings: number } | null
   reply_authors?: string[]
@@ -265,6 +272,9 @@ export function buildUsageRecord(
   const breadthStatus = ctx.breadthStatus ?? (ctx.bundleCount ? (config.breadth.enabled ? 'skipped_bundled' : 'disabled') : null)
   const secondLookStatus = ctx.secondLookStatus ?? (ctx.bundleCount ? (config.review.secondLook ? 'skipped_bundled' : 'disabled') : null)
 
+  const hi = !!config.review.highImpact
+  const withHi = { scenario: hi, alsoAffects: hi && !!ctx.outcomeSink }
+
   const humanReplies = (ctx.replies ?? []).filter(r => !isAgentReply(r))
   // Id when the platform gave one, else the display name; first-seen order, distinct.
   const replyAuthors = [...new Set(humanReplies.map(r => r.authorId ?? r.author))]
@@ -342,10 +352,10 @@ export function buildUsageRecord(
         })
       : null,
     review_candidates: ctx.judgeDecisions && ctx.reviewObject
-      ? candidateRows(ctx.judgeCandidates ?? ctx.reviewObject.findings.map(f => ({ ...f, origin: 'review' as const })), !!ctx.outcomeSink)
+      ? candidateRows(ctx.judgeCandidates ?? ctx.reviewObject.findings.map(f => ({ ...f, origin: 'review' as const })), !!ctx.outcomeSink, withHi)
       : null,
     // Only when the judge threw and the run failed, so findings that were never judged or posted stay diagnosable.
-    ...(error && ctx.judgeStatus === 'failed' && ctx.judgeCandidates ? { unjudged_candidates: candidateRows(ctx.judgeCandidates, !!ctx.outcomeSink) } : {}),
+    ...(error && ctx.judgeStatus === 'failed' && ctx.judgeCandidates ? { unjudged_candidates: candidateRows(ctx.judgeCandidates, !!ctx.outcomeSink, withHi) } : {}),
     judge_decisions: ctx.judgeDecisions ?? null,
     judge_anomalies: ctx.judgeAnomalies ?? null,
     judge_policy: judgeModel && judgeTokens
@@ -365,12 +375,14 @@ export function buildUsageRecord(
     ...(config.lenses.recommend ? { lens_recommendations: ctx.lensRecommendations ?? null } : {}),
     ...(config.judge.suggestedFixes ? { suggested_fixes: ctx.suggestedFixes ?? null } : {}),
     ...(ctx.counterpartRows !== undefined ? { counterpart_rows: ctx.counterpartRows } : {}),
+    ...(ctx.alsoAffectsRows !== undefined ? { also_affects_rows: ctx.alsoAffectsRows } : {}),
+    ...(ctx.alsoAffectsLog ? { also_affects: ctx.alsoAffectsLog } : {}),
     untouched_files: ctx.untouchedFiles
       ? ctx.breadthPlan
         ? { count: ctx.untouchedFiles.length, paths: ctx.breadthPlan.selected, cut: ctx.breadthPlan.omitted, deprioritized: ctx.breadthPlan.deprioritizedReleaseEntries }
         : { count: ctx.untouchedFiles.length, paths: ctx.untouchedFiles.slice(0, MAX_UNTOUCHED_LISTED), cut: Math.max(0, ctx.untouchedFiles.length - MAX_UNTOUCHED_LISTED) }
       : null,
-    recall_levers: { j_quality: !!config.judge.quality, sl_breadth: !!config.review.secondLookBreadthTargets, j_shown_anchor: !!config.judge.shownAnchors, b_priority: !!config.breadth.priorityTargets },
+    recall_levers: { j_quality: !!config.judge.quality, sl_breadth: !!config.review.secondLookBreadthTargets, j_shown_anchor: !!config.judge.shownAnchors, b_priority: !!config.breadth.priorityTargets, ...(hi ? { high_impact: true as const } : {}) },
     touch_rate: ctx.reviewNumber > 1 && deltaStats ? (() => {
       const total = deltaStats.resolved + deltaStats.still_open
       return total > 0 ? Math.round((deltaStats.resolved / total) * 100) : null

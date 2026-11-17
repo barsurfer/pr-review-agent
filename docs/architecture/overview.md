@@ -151,7 +151,7 @@ the first pass left without findings and appends its findings to the judge's can
 The optional `SECOND_LOOK` state (`ENABLE_SECOND_LOOK`) re-reads only the files that already
 have a finding, looking for what the first pass missed there, and appends to the same candidates.
 The optional `LENS_REVIEW` state (`ENABLE_LENSES` + `LENSES`) runs one concern-specific
-reviewer pass per listed lens (reliability, security, testing, performance, architecture)
+reviewer pass per listed lens (reliability, security, testing, performance, architecture, impact)
 over the full diff and appends their findings to the same judge call.
 
 ### POST_REVIEW Safety Guards

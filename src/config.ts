@@ -180,6 +180,8 @@ export const config = {
     secondLook: optional('ENABLE_SECOND_LOOK', 'false') === 'true',
     // Off by default: second-look also re-reads files that only the breadth pass flagged.
     secondLookBreadthTargets: optional('ENABLE_SECOND_LOOK_BREADTH_TARGETS', 'false') === 'true',
+    // Off by default: it lengthens the second-look prompt, and in benchmark mode asks the extra passes for other places with the same defect.
+    highImpact: optional('ENABLE_HIGH_IMPACT', 'false') === 'true',
     // On by default: without numbered lines ~40% of findings carried no line; set false to send the raw diff/context (saves the per-line gutter tokens).
     lineNumbers: optional('ENABLE_LINE_NUMBERS', 'true') !== 'false',
     // On by default with a kill switch: false always reviews the full delta after a target merge.

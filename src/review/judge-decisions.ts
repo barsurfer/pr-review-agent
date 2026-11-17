@@ -94,6 +94,7 @@ export interface JudgeOptions {
   proposals?: boolean
   codeProposals?: boolean
   counterparts?: boolean
+  alsoAffects?: boolean
 }
 
 export type RenderJudged = (suffixes: ReadonlyMap<number, string>, order?: readonly number[], fixFree?: ReadonlySet<number>) => string
@@ -407,6 +408,8 @@ export function applyJudgeDecisions(candidates: readonly ReviewFinding[], output
         score: entry.r.score!, type: candidate.type, anchorSource: anchor.source, ...keptProposal, ...(withoutFix ? { bodyWithoutFix: withoutFix } : {}),
         ...(entry.r.quality_action ? { quality_action: entry.r.quality_action } : {}),
         ...(options?.counterparts ? { reviewerBody: candidate.body } : {}),
+        // Only extra passes are asked for it and sanitized; a first-pass value is invented by the model.
+        ...(options?.alsoAffects && i >= breadthFrom && Array.isArray(candidate.also_affects) && candidate.also_affects.length ? { alsoAffects: candidate.also_affects } : {}),
       })
       rows.push({ candidate: i, expansion: false, validated: entry.r.reason_category === 'validated', evidenced: !!entry.r.evidence, rescueOf: entry.r.invalid_duplicate ? index.get(normalizeId(String(entry.r.duplicate_of ?? ''))) : undefined })
       for (const x of expansion?.accepted ?? []) {

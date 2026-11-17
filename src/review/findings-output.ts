@@ -4,7 +4,7 @@
 
 import { mkdirSync, renameSync, writeFileSync } from 'fs'
 import { dirname } from 'path'
-import type { ReviewFinding, FindingScore, IssueType } from './formatter.js'
+import type { ReviewFinding, FindingScore, IssueType, AlsoAffected } from './formatter.js'
 import { addedLines } from './parsers.js'
 import type { ChangedFile } from '../vcs/adapter.js'
 
@@ -33,6 +33,7 @@ export interface KeptFinding {
   bodyWithoutFix?: string
   quality_action?: string
   reviewerBody?: string
+  alsoAffects?: AlsoAffected[]
 }
 
 export interface FindingsReport {
@@ -311,7 +312,7 @@ export function counterpartFindings(placed: readonly KeptFinding[], changedFiles
   for (const { file, line } of addedLines(diff)) addedFileLength.set(normalizeFindingPath(file), line)
   return placed.flatMap(k => {
     if (!isAnchored(k) || k.reviewerBody === undefined) return []
-    const { proposal: _ownFix, ...copy } = k
+    const { proposal: _ownFix, alsoAffects: _own, ...copy } = k
     return counterpartMentions([k.title, k.reviewerBody], normalizeFindingPath(k.file, paths), changedFiles, addedFileLength)
       .map(c => ({ ...copy, ...c, anchorSource: 'mention' as const }))
   })
@@ -321,6 +322,69 @@ export function counterpartFindings(placed: readonly KeptFinding[], changedFiles
 export function withCounterparts(placed: readonly KeptFinding[], changedFiles: readonly ChangedFile[], diff: string, producer: string, changedPaths: readonly string[] = []): { findings: ReportFinding[]; added: number } {
   const findings = keptToReportFindings([...placed, ...counterpartFindings(placed, changedFiles, diff)], producer, changedPaths)
   return { findings, added: findings.length - keptToReportFindings(placed, producer, changedPaths).length }
+}
+
+export type AlsoAffectsStatus = 'row' | 'parent_unanchored' | 'unresolved_path' | 'deleted_file' | 'own_file' | 'bad_lines' | 'not_changed_line' | 'bad_where' | 'duplicate' | 'over_cap'
+
+export interface AlsoAffectsLog { parent: string; file: string; lines: string; where: string; status: AlsoAffectsStatus }
+
+// Set false to score also-affects rows without the "Same defect here" note.
+export const ALSO_AFFECTS_WHERE_NOTE = true
+const ALSO_AFFECTS_CAP = 3
+const ALSO_AFFECTS_MAX_SPAN = 50
+const ALSO_AFFECTS_LINES = /^\s*(\d+)(?:\s*-\s*(\d+))?\s*$/
+
+// These rows bypass the judge, so each entry must land on a changed line of another live file and must not restate a location already reported.
+export function alsoAffectsRows(placed: readonly KeptFinding[], copies: readonly KeptFinding[], changedFiles: readonly ChangedFile[], diff: string, producer: string, whereNote = ALSO_AFFECTS_WHERE_NOTE): { rows: ReportFinding[]; log: AlsoAffectsLog[] } {
+  // Entries resolve against changedFiles, so the parent's own file must be snapped to the same list or own_file can miss.
+  const changedPaths = changedFiles.map(f => f.path)
+  const added = new Map<string, number[]>()
+  for (const { file, line } of addedLines(diff)) {
+    const key = normalizeFindingPath(file)
+    if (!added.has(key)) added.set(key, [])
+    added.get(key)!.push(line)
+  }
+  const taken: Array<{ file: string; start: number; end: number; title: string }> = []
+  for (const k of [...placed, ...copies]) {
+    if (!isAnchored(k)) continue
+    const r = parseLineRange(k.lines)!
+    taken.push({ file: normalizeFindingPath(k.file, changedPaths), start: r.start, end: r.end, title: k.title })
+  }
+  const rows: ReportFinding[] = []
+  const log: AlsoAffectsLog[] = []
+  for (const parent of placed) {
+    let accepted = 0
+    for (const entry of parent.alsoAffects ?? []) {
+      const where = String(entry.where ?? '').replace(/\s+/g, ' ').trim()
+      const place = ((): AlsoAffectsStatus | { file: string; start: number; end: number } => {
+        if (!isAnchored(parent)) return 'parent_unanchored'
+        const hit = resolveMention(String(entry.file ?? ''), changedFiles)
+        if (!hit) return 'unresolved_path'
+        if (hit.status === 'deleted') return 'deleted_file'
+        if (hit.path === normalizeFindingPath(parent.file, changedPaths)) return 'own_file'
+        const m = ALSO_AFFECTS_LINES.exec(String(entry.lines ?? ''))
+        const start = Number(m?.[1] ?? 0), end = m?.[2] === undefined ? start : Number(m[2])
+        if (!m || start < 1 || end < start || end - start + 1 > ALSO_AFFECTS_MAX_SPAN) return 'bad_lines'
+        const fileAdded = added.get(hit.path) ?? []
+        // An added file is in the diff in full, so a range past its last line is invented, as counterpartMentions also rules.
+        if (hit.status === 'added' && end > (fileAdded.at(-1) ?? 0)) return 'bad_lines'
+        if (!fileAdded.some(l => l >= start && l <= end)) return 'not_changed_line'
+        if (!where) return 'bad_where'
+        const sameIssue = (title: string) => normTitle(title) === normTitle(parent.title) || titlesOverlap(title, parent.title)
+        if (taken.some(t => t.file === hit.path && t.start <= end && start <= t.end && sameIssue(t.title))) return 'duplicate'
+        if (accepted >= ALSO_AFFECTS_CAP) return 'over_cap'
+        return { file: hit.path, start, end }
+      })()
+      log.push({ parent: parent.title, file: String(entry.file ?? ''), lines: String(entry.lines ?? ''), where, status: typeof place === 'string' ? place : 'row' })
+      if (typeof place === 'string') continue
+      accepted++
+      taken.push({ ...place, title: parent.title })
+      const note = whereNote ? ` Same defect here: ${where.replace(/[.;:,]+$/, '').slice(0, 120)}.` : ''
+      const message = parent.body ? `${parent.title}: ${parent.body}${note}` : note ? `${parent.title}:${note}` : parent.title
+      rows.push({ file: place.file, start_line: place.start, end_line: place.end, message, producer })
+    }
+  }
+  return { rows, log }
 }
 
 // Kept findings → the line-anchored report shape. Findings with no usable file/line are dropped

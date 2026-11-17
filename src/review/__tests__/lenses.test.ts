@@ -10,7 +10,7 @@ import type { ReviewFinding } from '../formatter.js'
 const finding = (over: Partial<ReviewFinding> = {}): ReviewFinding =>
   ({ severity: 'MEDIUM', title: 'Bug', file: 'src/a.ts', lines: '1', body: 'b', ...over })
 
-const NAMES = ['reliability', 'security', 'testing', 'performance', 'architecture']
+const NAMES = ['reliability', 'security', 'testing', 'performance', 'architecture', 'impact']
 
 describe('LENS_REGISTRY', () => {
   it('holds exactly the starter lenses, keyed by name', () => {
@@ -89,7 +89,7 @@ describe('parseLensList', () => {
 })
 
 describe('lens aliases stay input-only', () => {
-  it('registry keys and the recommendation schema enum are exactly the five canonical names', () => {
+  it('registry keys and the recommendation schema enum are exactly the six canonical names', () => {
     expect(Object.keys(LENS_REGISTRY)).toEqual(NAMES)
     const schema = reviewOutputSchema(true) as unknown as { properties: { lens_recommendations: { items: { properties: { lens: { enum: string[] } } } } } }
     expect(schema.properties.lens_recommendations.items.properties.lens.enum).toEqual(NAMES)

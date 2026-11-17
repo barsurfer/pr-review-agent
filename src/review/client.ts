@@ -3,7 +3,7 @@ import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { createHash } from 'crypto'
 import { createProvider, type LLMUsage } from '../llm/provider.js'
-import { renderReview, ISSUE_TYPES, type ReviewObject, type ReviewFinding, type FindingScore } from './formatter.js'
+import { renderReview, ISSUE_TYPES, SCENARIOS, type ReviewObject, type ReviewFinding, type FindingScore } from './formatter.js'
 import type { KeptFinding } from './findings-output.js'
 import {
   REASON_CATEGORIES, DEFAULT_JUDGE_POLICY, applyJudgeDecisions, renderCandidatesForJudge, summarizeDecisions,
@@ -228,6 +228,44 @@ export const BREADTH_OUTPUT_SCHEMA = {
   additionalProperties: false,
 } as const
 
+const ALSO_AFFECTS_PROPERTY = { type: 'array', description: 'Other changed files in this diff where this same defect also occurs and that you are not reporting as a finding of their own: the same root cause causing the same failure at a sibling call site, a parallel handler or route, or the other side of a mismatched contract. One entry per place, at most 3. Omit it when the defect is in one file. Never list this finding\'s own file, a place mentioned only as evidence, cause, contrast, documentation or where the fix goes, or a different problem.', items: { type: 'object', properties: { file: { type: 'string', description: 'Path of the other changed file, exactly as it appears in the diff.' }, lines: { type: 'string', description: 'Digits only: the added or changed line or range in that file where the same defect occurs, e.g. "46" or "60-62".' }, where: { type: 'string', description: 'A few words naming the code at that line, e.g. "handleCreate dispatches CREATE_WORKSPACE without a flush".' } }, required: ['file', 'lines', 'where'], additionalProperties: false } }
+
+const SCENARIO_PROPERTY = { type: 'string', enum: [...SCENARIOS], description: 'Only for a finding found by tracing a scenario or contract named in SECOND LOOK item 4 or the IMPACT LENS: which one. Omit otherwise.' }
+
+const findingsVariants = new Map<string, Record<string, unknown>>()
+
+// No option returns BREADTH_OUTPUT_SCHEMA itself (tests dispatch on its identity); a variant is a clone because REVIEW_OUTPUT_SCHEMA shares the findings subtree.
+export function findingsOutputSchema(opts: { alsoAffects?: boolean; scenario?: boolean } = {}): Record<string, unknown> {
+  const alsoAffects = !!opts.alsoAffects, scenario = !!opts.scenario
+  if (!alsoAffects && !scenario) return BREADTH_OUTPUT_SCHEMA
+  const key = `${alsoAffects}:${scenario}`
+  const cached = findingsVariants.get(key)
+  if (cached) return cached
+  const schema = structuredClone(BREADTH_OUTPUT_SCHEMA) as unknown as { properties: { findings: { items: { properties: Record<string, unknown> } } } }
+  const props = schema.properties.findings.items.properties
+  if (alsoAffects) props.also_affects = structuredClone(ALSO_AFFECTS_PROPERTY)
+  if (scenario) props.scenario = structuredClone(SCENARIO_PROPERTY)
+  findingsVariants.set(key, schema)
+  return schema
+}
+
+const ALSO_AFFECTS_KEEP = 10
+
+// A strict:false provider (OpenRouter) can return any shape for these optional fields.
+export function sanitizeFindingExtras(finding: ReviewFinding): ReviewFinding {
+  if (!finding || typeof finding !== 'object') return finding
+  const { also_affects: rawAlso, scenario: rawScenario, ...rest } = finding as Omit<ReviewFinding, 'also_affects' | 'scenario'> & { also_affects?: unknown; scenario?: unknown }
+  const text = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
+  const also = (Array.isArray(rawAlso) ? rawAlso : []).flatMap(e => {
+    if (!e || typeof e !== 'object') return []
+    const { file, lines, where } = e as Record<string, unknown>
+    const entry = { file: text(file), lines: text(lines), where: text(where).replace(/\s+/g, ' ') }
+    return entry.file && entry.lines && entry.where ? [entry] : []
+  }).slice(0, ALSO_AFFECTS_KEEP)
+  const scenario = SCENARIOS.find(s => s === rawScenario)
+  return { ...rest, ...(also.length ? { also_affects: also } : {}), ...(scenario ? { scenario } : {}) }
+}
+
 export async function runLens(
   apiKey: string,
   model: string,
@@ -241,16 +279,17 @@ export async function runLens(
   briefing: string,
   lineNumbers = false,
   label = 'lens',
+  schema: Record<string, unknown> = BREADTH_OUTPUT_SCHEMA,
 ): Promise<{ findings: ReviewFinding[]; usage: LLMUsage; promptHash: string }> {
   const userMessage = `${buildUserMessage(prInfo, diff, fileContexts, [], [], '', lineNumbers)}\n\n${briefing}`
   console.log(`Sending to ${label} reviewer (${model}, maxRetries: ${maxRetries})...`)
   const { object, usage } = await createProvider(apiKey).completeStructured<{ findings: ReviewFinding[] }>(
-    systemPrompt, userMessage, BREADTH_OUTPUT_SCHEMA, { model, maxTokens, maxRetries, effort: effort || undefined },
+    systemPrompt, userMessage, schema, { model, maxTokens, maxRetries, effort: effort || undefined },
   )
   console.log(`${label[0].toUpperCase()}${label.slice(1)} received (${usage.input_tokens} in / ${usage.output_tokens} out tokens, ${object.findings?.length ?? 0} findings)`)
   // A strict:false provider can return a non-array findings; coerce so candidate assembly's .map never throws.
   const findings = Array.isArray(object.findings) ? object.findings : []
-  return { findings, usage, promptHash: createHash('sha256').update(systemPrompt).digest('hex').slice(0, 12) }
+  return { findings: schema === BREADTH_OUTPUT_SCHEMA ? findings : findings.map(sanitizeFindingExtras), usage, promptHash: createHash('sha256').update(systemPrompt).digest('hex').slice(0, 12) }
 }
 
 export async function runBreadth(
@@ -266,8 +305,10 @@ export async function runBreadth(
   briefing: string,
   lineNumbers = false,
   label = 'breadth',
+  schema?: Record<string, unknown>,
 ): Promise<{ findings: ReviewFinding[]; usage: LLMUsage; promptHash: string }> {
-  return runLens(apiKey, model, maxRetries, maxTokens, effort, prInfo, diff, fileContexts, systemPrompt, briefing, lineNumbers, label)
+  const schemaTail: [Record<string, unknown>?] = schema ? [schema] : []
+  return runLens(apiKey, model, maxRetries, maxTokens, effort, prInfo, diff, fileContexts, systemPrompt, briefing, lineNumbers, label, ...schemaTail)
 }
 
 function buildUserMessage(
