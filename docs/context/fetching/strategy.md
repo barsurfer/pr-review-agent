@@ -28,6 +28,8 @@ The agent keeps the diff in two forms simultaneously:
 
 **Note:** JSON files (e.g. i18n translations) are excluded by default because they're typically large, generated, or auto-merged. If a project needs JSON diffs reviewed, remove `*.json` from `DIFF_EXCLUDE_PATTERNS`.
 
+Diff exclusion does not reach file context: `FETCH_CONTEXT` applies only its own rules below, so a changed `package.json` or `*.spec.ts` dropped from the diff can still arrive as a full file. `filterDiff` keys a section on its old `a/` path, so a rename is excluded by its old name. The benchmark-only `DX` label swaps in a generated-files-only list that keeps manifests, configs and tests in the diff (see [vcs/adapter.md](../vcs/adapter.md)).
+
 ---
 
 ## Full File Context (`src/context/fetcher.ts`)

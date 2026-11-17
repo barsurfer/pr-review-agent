@@ -178,11 +178,22 @@ A first review pass already ran; its findings are listed in the message. You are
 3. Incomplete changes on added or modified lines: stubs, placeholder returns, options parsed but ignored, a capability added at one layer but never wired up. A diff segment that ends at an opening brace or \`if\` is a hunk boundary, not an incomplete change.
 Do not repeat a first-pass finding (same root cause at the same place). Every finding needs a concrete failing scenario, a file, and a numeric line on an added or modified line. Return an empty list if you find nothing.`
 
-export function secondLookSystemPrompt(reviewerPrompt: string, limit: number, shownAnchors = false): string {
+// No install scenario here: second-look sees only the flagged files, never a manifest.
+export const IMPACT_ITEM = `4. What breaks in a real scenario: follow the changed code in these files with a feature, flag or optional dependency it relies on switched off; with the same operation repeated before the previous one's deferred work has landed; on data or settings written before this change; and with a destructive or visible step taken before the check meant to gate it. Check each contract the change crosses: a field, key, method or parameter one side writes or calls that the other side names differently, does not expose, or types differently. Report it only when you can follow the failure end to end in what you were shown, and name the scenario in the body.`
+
+const SECOND_LOOK_ANCHOR = '\nDo not repeat a first-pass finding'
+
+export function withImpactItem(lens: string): string {
+  if (lens.split(SECOND_LOOK_ANCHOR).length !== 2) throw new Error('Second-look anchor not found')
+  return lens.replace(SECOND_LOOK_ANCHOR, () => `\n${IMPACT_ITEM}${SECOND_LOOK_ANCHOR}`)
+}
+
+export function secondLookSystemPrompt(reviewerPrompt: string, limit: number, shownAnchors = false, highImpact = false): string {
   const limitSection = limit > 0
     ? `\n\n## FINDINGS LIMIT\nReport at most ${limit} findings, prioritized by severity and impact. If more exist, include only the most important and omit the rest.`
     : ''
-  return `${reviewerPrompt}${limitSection}\n\n${shownAnchors ? allowShownContext(SECOND_LOOK_LENS) : SECOND_LOOK_LENS}`
+  const overlay = highImpact ? withImpactItem(SECOND_LOOK_LENS) : SECOND_LOOK_LENS
+  return `${reviewerPrompt}${limitSection}\n\n${shownAnchors ? allowShownContext(overlay) : overlay}`
 }
 
 // Known findings (review + breadth) in the target files — titles + anchors only, so the pass avoids repeats.

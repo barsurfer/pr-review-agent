@@ -7,7 +7,7 @@ import { contextWindowFor } from '../llm/context-window.js'
 import { loadPrompt, type LoadedPrompt } from '../prompt/loader.js'
 import { describeHttpError } from '../vcs/http-retry.js'
 import { fetchContext } from '../context/fetcher.js'
-import { runReview, runCommentResponse, runJudge, runBreadth, runLens } from './client.js'
+import { runReview, runCommentResponse, runJudge, runBreadth, runLens, findingsOutputSchema } from './client.js'
 import { buildShownSource } from './shown-anchors.js'
 import type { JudgeOptions } from './judge-decisions.js'
 import { fileCoverage, prioritizeUntouched, breadthSystemPrompt, breadthBriefing, flaggedFiles, findingsInFiles, secondLookSystemPrompt, secondLookBriefing, type LensStatus } from './breadth.js'
@@ -141,6 +141,9 @@ function warnOnHashDisagreement(prId: string, body: string, footerHash: string |
   const legacy = legacyCommitHash(body)
   if (legacy !== footerHash) console.warn(`  Footer commit ${footerHash} differs from legacy first match ${legacy} (PR ${prId})`)
 }
+
+// Also-affects rows exist only in findings.json, so production never asks for the field.
+const hiBench = (ctx: ReviewContext): boolean => !!config.review.highImpact && !!ctx.outcomeSink
 
 // The stage is entered only with at least one known lens, so a lens-off run never reaches it.
 function stageAfterSecondLook(): State {
@@ -638,10 +641,11 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       ctx.breadthModel = model
       if (config.judge.shownAnchors) ctx.shownBreadth = buildShownSource(ctx.filteredDiff!, ctx.fileContexts ?? [])
       console.log(`  Breadth review: ${coverage.untouched.length} untouched of ${coverage.reviewable.length} reviewable file(s)`)
+      const breadthSchema: [string?, Record<string, unknown>?] = hiBench(ctx) ? ['breadth', findingsOutputSchema({ alsoAffects: true })] : []
       try {
         const result = await runBreadth(
           config.llmApiKey, model, config.judge.maxRetries, config.anthropic.maxTokens, effort,
-          ctx.prInfo!, ctx.filteredDiff!, ctx.fileContexts ?? [], system, briefing, config.review.lineNumbers,
+          ctx.prInfo!, ctx.filteredDiff!, ctx.fileContexts ?? [], system, briefing, config.review.lineNumbers, ...breadthSchema,
         )
         ctx.breadthFindings = result.findings
         ctx.breadthPromptHash = result.promptHash
@@ -684,7 +688,8 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       const known = findingsInFiles([...firstPass, ...breadth], flagged)
 
       const model = config.anthropic.model
-      const system = secondLookSystemPrompt(ctx.prompt!.content, remaining, config.judge.shownAnchors)
+      const hi = !!config.review.highImpact
+      const system = secondLookSystemPrompt(ctx.prompt!.content, remaining, config.judge.shownAnchors, hi)
       const briefing = secondLookBriefing(known)
       // Estimate on the restricted inputs, not the full diff, so a large PR with few flagged files isn't needlessly skipped.
       // shownLength on the numbered payloads (diff + file contexts) so the guard counts the line-number gutter, as ESTIMATE_TOKENS does.
@@ -707,10 +712,11 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
 
       if (config.judge.shownAnchors) ctx.shownSecondLook = buildShownSource(restrictedDiff, contexts)
       console.log(`  Second-look: re-reading ${flagged.length} flagged file(s), excluding ${known.length} known finding(s)`)
+      const secondLookSchema: [Record<string, unknown>?] = hi ? [findingsOutputSchema({ alsoAffects: hiBench(ctx), scenario: true })] : []
       try {
         const result = await runBreadth(
           config.llmApiKey, model, config.anthropic.maxRetries, config.anthropic.maxTokens, config.review.effort,
-          ctx.prInfo!, restrictedDiff, contexts, system, briefing, config.review.lineNumbers, 'second-look',
+          ctx.prInfo!, restrictedDiff, contexts, system, briefing, config.review.lineNumbers, 'second-look', ...secondLookSchema,
         )
         ctx.secondLookFindings = result.findings
         ctx.secondLookPromptHash = result.promptHash
@@ -774,10 +780,12 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
 
         if (config.judge.shownAnchors && !ctx.shownLens) ctx.shownLens = buildShownSource(ctx.filteredDiff!, ctx.fileContexts ?? [])
         console.log(`  Lens ${lens.name}: full-PR pass, excluding ${known.length} known finding(s)`)
+        const extras = { alsoAffects: hiBench(ctx), scenario: !!config.review.highImpact && !!lens.scenarioTag }
+        const lensSchema: [Record<string, unknown>?] = extras.alsoAffects || extras.scenario ? [findingsOutputSchema(extras)] : []
         try {
           const result = await runLens(
             config.llmApiKey, model, config.anthropic.maxRetries, config.anthropic.maxTokens, effort,
-            ctx.prInfo!, ctx.filteredDiff!, ctx.fileContexts ?? [], system, briefing, config.review.lineNumbers, `lens:${lens.name}`,
+            ctx.prInfo!, ctx.filteredDiff!, ctx.fileContexts ?? [], system, briefing, config.review.lineNumbers, `lens:${lens.name}`, ...lensSchema,
           )
           run.findings = result.findings
           run.promptHash = result.promptHash
@@ -879,7 +887,8 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       ctx.reviewTextBeforeJudge = ctx.reviewText
       const suggestedFixes = !!config.judge.suggestedFixes
       const counterparts = !!ctx.outcomeSink && config.benchmarkCounterpartRows
-      const judgeOptions: JudgeOptions | undefined = config.judge.quality || config.judge.shownAnchors || config.judge.proposals || suggestedFixes || counterparts
+      const alsoAffects = hiBench(ctx)
+      const judgeOptions: JudgeOptions | undefined = config.judge.quality || config.judge.shownAnchors || config.judge.proposals || suggestedFixes || counterparts || alsoAffects
         ? {
             quality: config.judge.quality,
             proposals: config.judge.proposals,
@@ -891,6 +900,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
               : undefined,
             ...(suggestedFixes ? { proposals: true, codeProposals: true } : {}),
             ...(counterparts ? { counterparts: true } : {}),
+            ...(alsoAffects ? { alsoAffects: true } : {}),
           }
         : undefined
       const judgeTail: [JudgeOptions?] = judgeOptions ? [judgeOptions] : []
@@ -972,6 +982,8 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
           ...(ctx.lensRuns ? { lensFindings: ctx.lensRuns.flatMap(r => r.findings) } : {}),
         })
         if (sunk && sunk.counterpartRows !== undefined) ctx.counterpartRows = sunk.counterpartRows
+        if (sunk && sunk.alsoAffectsRows !== undefined) ctx.alsoAffectsRows = sunk.alsoAffectsRows
+        if (sunk && sunk.alsoAffects) ctx.alsoAffectsLog = sunk.alsoAffects
         ctx.action = 'REVIEW'
         return State.DONE
       }
