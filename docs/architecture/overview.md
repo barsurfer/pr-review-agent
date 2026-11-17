@@ -65,7 +65,7 @@ pr-review-agent/
 │   │   ├── judge-prompt.txt      # System prompt for the judge model
 │   │   ├── reply-prompt.txt      # System prompt for developer-reply responses
 │   │   ├── defaults.ts           # Default ROLE, REVIEW PRIORITIES, SECURITY, MENTAL MODEL, EXCEPTIONS
-│   │   └── stacks/               # ~26 composable stack rule sets (language bases + framework overlays)
+│   │   └── stacks/               # ~29 composable stack rule sets (language bases + framework overlays)
 │   └── context/
 │       └── fetcher.ts            # Fetches full-file context beyond the diff
 ├── prompts/                      # Example repo-specific prompts

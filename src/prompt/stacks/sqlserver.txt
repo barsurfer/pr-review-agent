@@ -1,0 +1,21 @@
+## REVIEW PRIORITIES
+
+### SQL Server / T-SQL Specifics
+
+- Dynamic SQL — input concatenated into `EXEC(@sql)` or into the statement text passed to `sp_executesql` instead of bound as its parameters; dynamic identifiers not wrapped in `QUOTENAME`; interpolated or concatenated strings passed to `FromSqlRaw`/`ExecuteSqlRaw`, Dapper, or `CommandText` (`FromSql`/`FromSqlInterpolated` and Dapper parameter objects bind safely)
+- Destructive statements — `UPDATE`/`DELETE` with a missing or always-true `WHERE`, or a join that widens the affected rows; `TRUNCATE`/`DROP` without an existence or environment guard
+- Transactions and errors — multi-statement writes outside a transaction; `BEGIN TRAN` without `SET XACT_ABORT ON` or a `TRY…CATCH` that rolls back (`IF @@TRANCOUNT > 0 ROLLBACK`) and re-raises with `THROW`, leaving an open transaction holding locks; a `SqlTransaction` not assigned to every command meant to run in it
+- Isolation and races — `NOLOCK`/`READ UNCOMMITTED` on reads that feed writes, balances, or user-visible totals (dirty, duplicated, or skipped rows); check-then-insert and upserts (including `MERGE`) without `UPDLOCK, HOLDLOCK` or a unique constraint; `MERGE … WHEN NOT MATCHED BY SOURCE THEN DELETE` against an unfiltered target
+- Index use — non-SARGable predicates (a function or arithmetic on the column, except `CAST(col AS date)`, which still seeks; leading-wildcard `LIKE`; `ISNULL(col, x) = y`); a parameter typed differently from a column the diff or context shows as `VARCHAR`/`CHAR` (an `NVARCHAR` or `AddWithValue` string parameter) forcing an implicit conversion and a scan — set `SqlDbType` and `Size`
+- Schema coupling — `SELECT *` in views, procedures, or `INSERT … SELECT`, and `INSERT` without a column list, which break or shift columns when the table changes
+- Migrations and deployment scripts — adding a `NOT NULL` column without a default (fails on any non-empty table); on a large table, adding a `NOT NULL` column with a default outside Enterprise edition (a size-of-data update), altering a column type, or creating an index without `ONLINE = ON` where the edition supports it; dropping or renaming a column the running version still reads; scripts meant to be re-run, or not tracked by a migration runner, that fail on re-run (no `IF NOT EXISTS`/`COL_LENGTH` guard, no `CREATE OR ALTER`)
+- Identity — `@@IDENTITY` (returns ids inserted by triggers) instead of `SCOPE_IDENTITY()` or `OUTPUT INSERTED.… INTO @t`; a plain `OUTPUT INSERTED.…` without `INTO` fails (Msg 334) on a table with enabled triggers
+- Dates and text — `GETDATE()`/`DATETIME` where UTC or `DATETIME2`/`DATETIMEOFFSET` is required; `BETWEEN` with a date-only upper bound on a datetime column (drops the last day after midnight); user text in `VARCHAR` without a `_UTF8` collation (SQL Server 2019+) or in literals without `N'…'` (Unicode lost); comparisons that assume a case or accent sensitivity the column collation lacks; collation conflicts with `#temp` tables
+- ADO.NET — `SqlConnection`/`SqlDataReader` not disposed (`using`/`Using`), exhausting the pool; one connection shared across threads; `CommandTimeout = 0` (no limit) or the 30 s default on known long operations; row-by-row round trips in a loop where a set-based statement, table-valued parameter, or `SqlBulkCopy` fits
+
+## EXCEPTIONS
+- Do not flag dynamic SQL built only from literals, `QUOTENAME`d identifiers, and `sp_executesql` parameters
+- Do not flag `NOLOCK` on monitoring, dashboard, or estimate queries whose readers accept approximate results
+- Do not claim a migration or query locks or scans a large table unless the diff or context shows the table is large or hot — raise it as an Unresolved Question
+- Do not flag `SELECT *` inside `EXISTS (…)`
+- Do not flag `AddWithValue` by itself: a conversion scan needs a column shown as `VARCHAR`/`CHAR`; otherwise its only cost is plan-cache bloat from the inferred parameter length
