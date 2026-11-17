@@ -236,6 +236,23 @@ function sqlText(lines: string[]): string {
   }).join('\n')
 }
 
+// On a line with <% or %>, only the script parts are VBScript: an apostrophe in HTML (class='x', Don't) would otherwise comment out the script after it
+function aspScript(line: string): string[] {
+  const open = line.indexOf('<%')
+  const close = line.indexOf('%>')
+  if (open < 0 && close < 0) return [line]
+  const parts: string[] = []
+  let inScript = close >= 0 && (open < 0 || close < open)
+  let i = 0
+  for (;;) {
+    const next = line.indexOf(inScript ? '%>' : '<%', i)
+    if (inScript) parts.push(line.slice(i, next < 0 ? line.length : next))
+    if (next < 0) return parts
+    i = next + 2
+    inScript = !inScript
+  }
+}
+
 function looksLikeSql(text: string, anyCase: boolean): boolean {
   // All-caps text needs SQL-shaped punctuation, so labels like "DELETE FROM CART..." or "SELECT ITEMS FROM LIST (OPTIONAL)" stay UI copy
   if (!anyCase && !/[a-z]/.test(text) && !/[=@*\[]|\w\.\w|\w\(|\w[ \t]*,[ \t]*\w/.test(text)) return false
@@ -258,7 +275,7 @@ function hasSqlServerSignal(diff: string, paths: string[]): boolean {
         else if (TSQL_SCRIPT.test(text)) return true
         continue
       }
-      const { kept, strings } = lang ? lex(hunk, lang) : { kept: hunk.filter(l => !COMMENT_LINE.test(l)), strings: [] }
+      const { kept, strings } = lang ? lex(ext === 'asp' ? hunk.flatMap(aspScript) : hunk, lang) : { kept: hunk.filter(l => !COMMENT_LINE.test(l)), strings: [] }
       for (const line of kept) {
         if (SQLSERVER_CLIENT.test(line) || SQLSERVER_CONNSTR.test(line) || (!lang && TSQL.test(line))) return true
         if (RAW_SQL_API.test(line)) neutral = true

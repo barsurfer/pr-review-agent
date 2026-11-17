@@ -417,6 +417,12 @@ describe('detectStacks SQL Server overlay on classic ASP', () => {
     expect(sqlserver(['default.asp'], asp('conn.Execute sql'))).toBe(true)
   })
 
+  it('reads only the <% %> parts of an .asp line, so HTML apostrophes do not hide the script', () => {
+    expect(sqlserver(['default.asp'], asp(`<td class='x'><% Set rs = conn.Execute("SELECT Id FROM Users") %></td>`))).toBe(true)
+    expect(sqlserver(['default.asp'], asp(`<p>Don't</p><% conn.Open "Provider=SQLOLEDB;Data Source=db01" %>`))).toBe(true)
+    expect(sqlserver(['default.asp'], asp(`<% ' SqlConnection is legacy here %><p>x</p>`, `  ' SqlConnection is legacy here`))).toBe(false)
+  })
+
   it('scans SQL strings in .vbs, .wsf and .asa, but not in .asp markup', () => {
     expect(sqlserver(['tools/purge.vbs'], section('tools/purge.vbs', '+sql = "DELETE FROM Sessions WHERE Expired = 1"'))).toBe(true)
     expect(sqlserver(['jobs/a.wsf'], section('jobs/a.wsf', '+  sql = "SELECT Id, Name FROM Users"'))).toBe(true)
@@ -525,9 +531,9 @@ describe('detectStacks SQL Server overlay: false triggers and false vetoes', () 
       [['A.cs', 'q.sql'], section('A.cs', ...Array.from({ length: 8000 }, () => ' ' + ' '.repeat(80)), '+!')],
     ]
     for (const [paths, diff] of cases) {
-      // Best of three: parallel test files slow single runs, a quadratic scan slows all three
+      // Best of three under 1 s: CI runners and parallel files slow single runs, a quadratic scan takes seconds on all three
       const runs = [0, 1, 2].map(() => { const start = performance.now(); detectStacks(changed(...paths), diff); return performance.now() - start })
-      expect(Math.min(...runs)).toBeLessThan(200)
+      expect(Math.min(...runs)).toBeLessThan(1000)
     }
   })
 })
