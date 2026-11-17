@@ -4,7 +4,7 @@
 
 import { config } from '../config.js'
 import { contextWindowFor } from '../llm/context-window.js'
-import { loadPrompt } from '../prompt/loader.js'
+import { loadPrompt, type LoadedPrompt } from '../prompt/loader.js'
 import { describeHttpError } from '../vcs/http-retry.js'
 import { fetchContext } from '../context/fetcher.js'
 import { runReview, runCommentResponse, runJudge, runBreadth, runLens } from './client.js'
@@ -22,6 +22,7 @@ import { orderPosted } from './posted-order.js'
 import { buildUsageRecord, logUsageRecord, getBuildCommit, getJobUrl } from './usage.js'
 import { ignoredCommentAuthor } from './trigger.js'
 import { headMatches } from './checked-commit.js'
+import { outsideSections, changedPrFiles, narrowDelta, readableDiff, sameHead, diffPaths } from './target-merge.js'
 import { State } from './types.js'
 
 // Supersede boundary: the latest review that isn't human-resolved (a resolved review is dismissed, so it must not bury an unanswered reply); falls back to the last review when all are resolved.
@@ -60,10 +61,79 @@ function questionsForAgent(replies: CommentReply[]): CommentReply[] {
 // The CLI maps an empty --force to 'off', but review() is also called directly, so '' or an unknown mode must not count as forced.
 const forced = (ctx: ReviewContext): boolean => ctx.force === 'clean' || ctx.force === 're-review'
 
+// `source` itself stays unsuffixed because records and dashboards group on it.
+const promptLabel = (p: LoadedPrompt): string => (p.lookupFailed ? `${p.source} (lookup failed)` : p.source)
+
 // CI stores checked_commit from this, so only points where the head's reviewable content was really checked may set it.
 function markHeadChecked(ctx: ReviewContext): void {
   if (forced(ctx) || ctx.dryRun || ctx.outcomeSink || ctx.bundleUncertain || ctx.deltaFetchFailed) return
   ctx.headChecked = true
+}
+
+// A rejection can be any value, even a prototype-less object, so describing it must never throw out of a fail-open path.
+function errorText(err: unknown): string {
+  try { return String((err as Error | undefined)?.message ?? err) } catch { return 'unknown error' }
+}
+
+// Null when a target merge left the PR diff unchanged; every failure keeps the full delta, so a review never depends on this check.
+async function narrowTargetMergeDelta(ctx: ReviewContext, base: string, head: string, delta: string): Promise<string | null> {
+  const targetCommit = ctx.prInfo!.targetCommit
+  if (!config.review.targetMergeCheck || !ctx.adapter.getPrDiffAt || !targetCommit) return delta
+  const base12 = base.slice(0, 12)
+  let at = base
+  // Pinned, since the PR diff fetched by id may be another head's; unfiltered, since the exclude filter keys on a rename's old path and could hide a PR file the delta holds.
+  const pinned = async (commit: string): Promise<string> => {
+    at = commit
+    const diff = await ctx.adapter.getPrDiffAt!(commit, targetCommit)
+    if (!/^diff --git /m.test(diff)) throw new Error('empty diff')
+    return diff
+  }
+  try {
+    const outside = outsideSections(delta, (ctx.changedFiles ?? []).map(f => f.path))
+    if (outside.length === 0) return delta
+    console.log(`  Delta has ${outside.length} file(s) outside the PR diff — comparing the PR diff at ${base12} with the current one...`)
+    const prev = await pinned(base)
+    const curr = await pinned(head)
+    if (![delta, prev, curr].every(readableDiff)) {
+      console.warn('  Target merge check skipped: a diff section\'s paths could not be read unambiguously — keeping the full delta')
+      return delta
+    }
+    if (outsideSections(delta, diffPaths(curr)).length === 0) {
+      console.log(`  Target merge: every delta file is in the PR diff at ${head.slice(0, 12)} — keeping the full delta`)
+      return delta
+    }
+    if (!sameHead(delta, curr)) {
+      console.warn('  Target merge check skipped: the PR diff does not end at the same file versions as the delta — keeping the full delta')
+      return delta
+    }
+    const { changed, baseChanged } = changedPrFiles(prev, curr)
+    const narrowed = narrowDelta(delta, changed)
+    if (narrowed.dropped.length === 0) return delta
+    if (narrowed.kept.length === 0) {
+      console.log(`  Target merge: PR diff unchanged since ${base12} (${narrowed.dropped.length} delta file(s) dropped) — checking for unanswered replies...`)
+      return null
+    }
+    console.log(`  Target merge: delta narrowed to ${narrowed.kept.length} of ${narrowed.kept.length + narrowed.dropped.length} file(s): ${narrowed.kept.join(', ')}`)
+    ctx.deltaBase = base
+    if (narrowed.kept.every(k => baseChanged.has(k))) ctx.mergeNarrowed = true
+    return narrowed.diff
+  } catch (err: unknown) {
+    console.warn(`  PR diff at ${at.slice(0, 12)} unavailable (${errorText(err)}) — keeping the full delta`)
+    return delta
+  }
+}
+
+// Only a merge straight on top of the reviewed commit may skip the confirmation; any other commit in the push could hold new work.
+async function headIsMergeOnReviewed(ctx: ReviewContext): Promise<boolean> {
+  const head12 = ctx.prInfo!.sourceCommit.slice(0, 12)
+  try {
+    if (!ctx.adapter.getCommitParents) throw new Error('not supported')
+    const parents = await ctx.adapter.getCommitParents(ctx.prInfo!.sourceCommit)
+    return parents.length >= 2 && headMatches(ctx.deltaBase!, parents[0])
+  } catch (err: unknown) {
+    console.warn(`  Parents of ${head12} unavailable (${errorText(err)}) — posting as usual`)
+    return false
+  }
 }
 
 // Temporary signal: shows whether the footer-anchored hash ever differs from the old first-match reading on real PRs.
@@ -264,7 +334,14 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
                 ctx.reviewNumber = ctx.previousReviews!.length
                 return State.CHECK_REPLIES
               }
-              ctx.deltaDiff = filtered   // feed the exact changes-since-last-review to the reviewer
+              const delta = await narrowTargetMergeDelta(ctx, commitHash, ctx.prInfo!.sourceCommit, filtered)
+              if (delta === null) {
+                ctx.dedupHit = 'target_merge'
+                markHeadChecked(ctx)
+                ctx.reviewNumber = ctx.previousReviews!.length
+                return State.CHECK_REPLIES
+              }
+              ctx.deltaDiff = delta   // feed the exact changes-since-last-review to the reviewer
             } catch (err: unknown) {
               console.log(`  Delta diff fetch failed (${(err as Error).message}) — falling back to full PR diff`)
               // The fallback review was told to report only new findings but cannot see what is new.
@@ -316,7 +393,9 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       // dedup path, where no action was set yet.
       if (ctx.action !== 'NO_CHANGE') {
         ctx.action = 'DEDUP_SKIP'
-        ctx.skipReason = ctx.dedupHit === 'checked_commit' ? 'head already checked by an earlier run and no unanswered questions' : 'no new commits and no unanswered questions'
+        ctx.skipReason = ctx.dedupHit === 'checked_commit' ? 'head already checked by an earlier run and no unanswered questions'
+          : ctx.dedupHit === 'target_merge' ? 'target branch merged in; PR diff unchanged since the last review and no unanswered questions'
+          : 'no new commits and no unanswered questions'
       }
       return State.SKIP
     }
@@ -353,7 +432,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
     case State.LOAD_PROMPT: {
       console.log('Loading prompt...')
       ctx.prompt = await loadPrompt(ctx.adapter, ctx.prInfo!, ctx.promptPath, ctx.changedFiles, ctx.diff)
-      console.log(`  Prompt source: ${ctx.prompt.source}`)
+      console.log(`  Prompt source: ${promptLabel(ctx.prompt)}`)
       return State.FETCH_CONTEXT
     }
 
@@ -408,6 +487,9 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       if (ctx.deltaDiff && s.delta > s.diff) {
         console.warn(`  Delta (${s.delta.toLocaleString()} tok) exceeds full PR diff (${s.diff.toLocaleString()} tok) — likely a merged target branch; dropping delta, reviewing full diff`)
         ctx.deltaDiff = ''
+        // A full-diff review saw more than the narrowed files, so it must never be silenced as a quiet merge.
+        ctx.mergeNarrowed = undefined
+        ctx.deltaBase = undefined
         s = sizes()
         console.log(`  Re-estimated input: ~${s.total.toLocaleString()} tokens (full diff, no delta)  [${fmt(s)}]`)
       }
@@ -732,6 +814,9 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
 
         const priorHadFindings = !!lastReview && markdownHasFindings(lastReview.body)
         const stillOpen = (ctx.reviewObject?.delta_stats?.still_open ?? 0) > 0
+        const cleanPrior = !priorHadFindings && !stillOpen
+        // A fix made while resolving the conflict still owes its confirmation, so only an explicit resolved count of 0 may stay quiet.
+        const mergeQuiet = async () => !cleanPrior && ctx.mergeNarrowed === true && ctx.reviewObject?.delta_stats?.resolved === 0 && await headIsMergeOnReviewed(ctx)
         if (unanswered.length > 0) {
           const agentReplies = replies.filter(r => hasReplyFooter(r.body)).length
           if (config.reply.maxComments > 0 && agentReplies >= config.reply.maxComments) {
@@ -744,14 +829,21 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
           ctx.replies = unanswered
           console.log('  Re-review found nothing new, but a developer reply is unanswered — answering it in-thread')
           // A non-quiet re-review still owes the confirmation post on the next event, so only a quiet one counts as checked.
-          if (!priorHadFindings && !stillOpen) markHeadChecked(ctx)
+          if (cleanPrior || await mergeQuiet()) markHeadChecked(ctx)
           return State.RESPOND_TO_REPLIES
         }
 
-        if (!priorHadFindings && !stillOpen) {
+        if (cleanPrior) {
           console.log('  Re-review: no findings, prior clean, nothing open, no discussion — nothing to post, skipping')
           ctx.action = 'NO_NEW_FINDINGS'
           ctx.skipReason = 'Re-review found no new findings (prior review already clean)'
+          markHeadChecked(ctx)
+          return State.SKIP
+        }
+        if (await mergeQuiet()) {
+          console.log('  Re-review after a target merge: no new findings — not posting a confirmation')
+          ctx.action = 'NO_NEW_FINDINGS'
+          ctx.skipReason = 'Re-review after a target-branch merge found no new findings'
           markHeadChecked(ctx)
           return State.SKIP
         }
@@ -935,7 +1027,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       }
 
       const commitShort = ctx.prInfo!.sourceCommit.slice(0, 12)
-      const footer = buildReviewFooter(config.agentIdentity, config.anthropic.model, ctx.prompt!.source, ctx.reviewNumber, commitShort, getBuildCommit(), getJobUrl())
+      const footer = buildReviewFooter(config.agentIdentity, config.anthropic.model, promptLabel(ctx.prompt!), ctx.reviewNumber, commitShort, getBuildCommit(), getJobUrl())
       // Only the posted comment is severity-ordered; a judged bundle has no render closure and its merge already sorts by severity.
       const judgedRender = ctx.renderJudged
       const reviewObject = ctx.reviewObject

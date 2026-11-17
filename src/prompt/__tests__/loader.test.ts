@@ -105,6 +105,109 @@ describe('loadPrompt when the instructions lookup fails', () => {
     expect((await loadPrompt(found as unknown as VCSAdapter, PR, undefined, changed('src/a.ts'))).source).toBe('repo')
     warn.mockRestore()
   })
+
+  const quiet = () => {
+    const logs: string[] = []
+    const log = vi.spyOn(console, 'log').mockImplementation((...a: unknown[]) => { logs.push(a.map(String).join(' ')) })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    return { logs, restore: () => { log.mockRestore(); warn.mockRestore() } }
+  }
+
+  it('only the symlink target is fetched with { found: true }; the probes keep two arguments', async () => {
+    const files: Record<string, string> = { 'docs/.agent-review-instructions.md': '../.github/review.prompt.md', '.github/review.prompt.md': MODULE_PROMPT }
+    const adapter = { getRepoFileContent: vi.fn(async (path: string) => files[path] ?? null) }
+    const q = quiet()
+    try {
+      const result = await loadPrompt(adapter as unknown as VCSAdapter, PR, undefined, changed('src/a.ts'))
+      expect(result.source).toBe('repo')
+      expect('lookupFailed' in result).toBe(false)
+      expect(adapter.getRepoFileContent.mock.calls).toEqual([
+        ['.agent-review-instructions.md', PR.sourceCommit],
+        ['docs/.agent-review-instructions.md', PR.sourceCommit],
+        ['.github/review.prompt.md', PR.sourceCommit, { found: true }],
+      ])
+    } finally { q.restore() }
+  })
+
+  it('a failed lookup sets lookupFailed and logs "Could not check", not "No … found", for the default and the stack prompt', async () => {
+    const q = quiet()
+    try {
+      const def = await loadPrompt(failing('.agent-review-instructions.md') as unknown as VCSAdapter, PR, undefined, changed('notes.txt'))
+      expect(def).toMatchObject({ source: 'default', lookupFailed: true })
+      const stack = await loadPrompt(failing('.agent-review-instructions.md') as unknown as VCSAdapter, PR, undefined, changed('src/a.ts'))
+      expect(stack).toMatchObject({ source: 'stack:typescript-node', lookupFailed: true })
+      expect(q.logs).toContain('Could not check for .agent-review-instructions.md (lookup failed) — using default prompt')
+      expect(q.logs).toContain('Could not check for .agent-review-instructions.md (lookup failed) — using stack:typescript-node prompt')
+      expect(q.logs.some(l => l.startsWith('No .agent-review-instructions.md found'))).toBe(false)
+    } finally { q.restore() }
+  })
+
+  it('a symlink target that cannot be fetched is a failed lookup too', async () => {
+    const adapter = failing('.github/review.prompt.md', { '.agent-review-instructions.md': './.github/review.prompt.md' })
+    const q = quiet()
+    try {
+      const result = await loadPrompt(adapter as unknown as VCSAdapter, PR, undefined, changed('notes.txt'))
+      expect(result).toMatchObject({ source: 'default', lookupFailed: true })
+      expect(adapter.getRepoFileContent.mock.calls[1]).toEqual(['.github/review.prompt.md', PR.sourceCommit, { found: true }])
+    } finally { q.restore() }
+  })
+
+  it('a file found before a failure, or a run with no failure, carries no lookupFailed', async () => {
+    const q = quiet()
+    try {
+      const found = await loadPrompt(failing('docs/.agent-review-instructions.md', { '.agent-review-instructions.md': MODULE_PROMPT }) as unknown as VCSAdapter, PR, undefined, changed('src/a.ts'))
+      expect(found.source).toBe('repo')
+      expect('lookupFailed' in found).toBe(false)
+      const none = await loadPrompt(adapterWith({}), PR, undefined, changed('notes.txt'))
+      expect(none.source).toBe('default')
+      expect('lookupFailed' in none).toBe(false)
+      expect(q.logs).toContain('No .agent-review-instructions.md found in source or target branch — using default prompt')
+      expect(q.logs.some(l => l.startsWith('Could not check'))).toBe(false)
+    } finally { q.restore() }
+  })
+
+  describe('ENABLE_INSTRUCTIONS_LOOKUP_RETRY=false', () => {
+    afterEach(() => { config.review.instructionsLookupRetry = true })
+
+    it('a failed lookup returns exactly the not-found object (no lookupFailed key) and logs "No … found", for the default and the stack prompt', async () => {
+      const q = quiet()
+      try {
+        const notFoundDefault = await loadPrompt(adapterWith({}), PR, undefined, changed('notes.txt'))
+        const notFoundStack = await loadPrompt(adapterWith({}), PR, undefined, changed('src/a.ts'))
+        q.logs.length = 0
+        config.review.instructionsLookupRetry = false
+
+        const def = await loadPrompt(failing('.agent-review-instructions.md') as unknown as VCSAdapter, PR, undefined, changed('notes.txt'))
+        const stack = await loadPrompt(failing('.agent-review-instructions.md') as unknown as VCSAdapter, PR, undefined, changed('src/a.ts'))
+
+        expect(def).toStrictEqual(notFoundDefault)
+        expect(Object.keys(def)).toEqual(['content', 'source'])
+        expect(def.source).toBe('default')
+        expect(stack).toStrictEqual(notFoundStack)
+        expect(Object.keys(stack)).toEqual(['content', 'source'])
+        expect(stack.source).toBe('stack:typescript-node')
+        expect(q.logs).toContain('No .agent-review-instructions.md found in source or target branch — using default prompt')
+        expect(q.logs.some(l => l.startsWith('Could not check'))).toBe(false)
+      } finally { q.restore() }
+    })
+
+    it('the symlink target is fetched with two arguments, and its failure is not marked', async () => {
+      config.review.instructionsLookupRetry = false
+      const adapter = failing('.github/review.prompt.md', { '.agent-review-instructions.md': './.github/review.prompt.md' })
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+      try {
+        const result = await loadPrompt(adapter as unknown as VCSAdapter, PR, undefined, changed('notes.txt'))
+        expect(Object.keys(result)).toEqual(['content', 'source'])
+        expect(result.source).toBe('default')
+        expect(adapter.getRepoFileContent.mock.calls).toEqual([
+          ['.agent-review-instructions.md', PR.sourceCommit],
+          ['.github/review.prompt.md', PR.sourceCommit],
+        ])
+        expect(warn.mock.calls).toEqual([['Warning: lookup of .agent-review-instructions.md failed (Request failed with status code 429; GET /src/abc/.github/review.prompt.md; X-RateLimit-Resource: api) - continuing without repo instructions']])
+      } finally { warn.mockRestore(); log.mockRestore() }
+    })
+  })
 })
 
 describe('security baseline', () => {

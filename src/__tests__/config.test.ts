@@ -230,6 +230,23 @@ describe('checked commit setting', () => {
   })
 })
 
+describe('instructions lookup retry setting', () => {
+  afterEach(() => { vi.unstubAllEnvs() })
+
+  const load = async (value: string | undefined) => {
+    vi.unstubAllEnvs()
+    vi.stubEnv('ENABLE_INSTRUCTIONS_LOOKUP_RETRY', value as string)
+    vi.resetModules()
+    return (await import('../config.js')).config.review.instructionsLookupRetry
+  }
+
+  it('ENABLE_INSTRUCTIONS_LOOKUP_RETRY defaults on and turns off only from the exact string false', async () => {
+    expect(await load(undefined)).toBe(true)
+    expect(await load('false')).toBe(false)
+    for (const value of ['', 'true', '0', 'FALSE', ' false', 'no']) expect(await load(value), value).toBe(true)
+  })
+})
+
 describe('llmApiKey — conditional required key per provider', () => {
   afterEach(() => { vi.unstubAllEnvs() })
 

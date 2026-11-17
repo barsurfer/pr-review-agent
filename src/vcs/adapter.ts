@@ -6,6 +6,7 @@ export interface PRInfo {
   sourceBranch: string
   targetBranch: string
   sourceCommit: string
+  targetCommit?: string
 }
 
 export interface ChangedFile {
@@ -59,7 +60,7 @@ export interface VCSAdapter {
   getFileContent(filePath: string, ref: string): Promise<string>
   getChangedFiles(prId: string): Promise<ChangedFile[]>
   /** Fetch a file from the repo at a given ref (branch/commit). Returns null if not found. */
-  getRepoFileContent(filePath: string, ref?: string): Promise<string | null>
+  getRepoFileContent(filePath: string, ref?: string, opts?: { found?: boolean }): Promise<string | null>
   postComment(prId: string, body: string): Promise<void>
   /** Fetch previous review comments posted by this agent on the PR. */
   getPreviousReviewComments(prId: string): Promise<ReviewComment[]>
@@ -74,4 +75,8 @@ export interface VCSAdapter {
   filterAddressedToAgent?(replies: CommentReply[], agentIds: ReadonlySet<string>): Promise<CommentReply[]>
   /** Fetch the diff between two commits (for delta reviews). */
   getCommitDiff(fromCommit: string, toCommit: string): Promise<string>
+  /** The PR diff as it was when sourceCommit was the head; without it a target merge is reviewed on the full delta. */
+  getPrDiffAt?(sourceCommit: string, targetCommit: string): Promise<string>
+  /** A commit's parents, first parent first; without it a quiet re-review after a target merge still posts its confirmation. */
+  getCommitParents?(commit: string): Promise<string[]>
 }

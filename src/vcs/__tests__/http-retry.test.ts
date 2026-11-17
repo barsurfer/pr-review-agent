@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { AxiosInstance } from 'axios'
-import { withRetry, withCallLog, retryDelayMs, describeHttpError, MAX_RETRIES, RETRY_BUDGET_MS, OPTIONAL_RETRY_BUDGET_MS } from '../http-retry.js'
+import { withRetry, withCallLog, retryDelayMs, describeHttpError, MAX_RETRIES, RETRY_BUDGET_MS, OPTIONAL_RETRY_BUDGET_MS, OPTIONAL_RETRY_DELAYS_MS, FOUND_FILE_RETRY_BUDGET_MS } from '../http-retry.js'
 
 const httpError = (status: number, headers: Record<string, string> = {}, method = 'get', url = '/repositories/ws/repo/src/abc/file.md?x=1') =>
   Object.assign(new Error(`Request failed with status code ${status}`), { config: { method, url }, response: { status, headers } })
@@ -129,6 +129,38 @@ describe('withRetry budget', () => {
     fresh.raw.get.mockRejectedValueOnce(httpError(429)).mockResolvedValue({ status: 200 })
     await fresh.client.get('/a')
     expect(fresh.sleep).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('optional lookup schedule', () => {
+  const optional = (budgetMs: number) => {
+    const raw = { get: vi.fn() }
+    const sleep = vi.fn(async (_ms: number) => {})
+    return { raw, sleep, client: withRetry(raw as unknown as AxiosInstance, 'bitbucket', sleep, budgetMs, OPTIONAL_RETRY_DELAYS_MS) }
+  }
+
+  it('waits 3 s, 8 s and 24 s under the 35 s found-file budget, logging n/3', async () => {
+    const { raw, sleep, client } = optional(FOUND_FILE_RETRY_BUDGET_MS)
+    raw.get.mockRejectedValue(httpError(429))
+    await expect(client.get('/a')).rejects.toThrow('429')
+    expect(OPTIONAL_RETRY_DELAYS_MS).toEqual([3000, 8000, 24_000])
+    expect(FOUND_FILE_RETRY_BUDGET_MS).toBe(35_000)
+    expect(sleep.mock.calls).toEqual([[3000], [8000], [24_000]])
+    expect(raw.get).toHaveBeenCalledTimes(4)
+    expect(warn.mock.calls.map((c: unknown[]) => c[0])).toEqual(['  [bitbucket] retry 1/3 in 3s', '  [bitbucket] retry 2/3 in 8s', '  [bitbucket] retry 3/3 in 24s'])
+  })
+
+  it('stops after the 3 s and 8 s waits under the 30 s probe budget', async () => {
+    const { raw, sleep, client } = optional(OPTIONAL_RETRY_BUDGET_MS)
+    raw.get.mockRejectedValue(httpError(429))
+    await expect(client.get('/a')).rejects.toThrow('429')
+    expect(sleep.mock.calls).toEqual([[3000], [8000]])
+    expect(raw.get).toHaveBeenCalledTimes(3)
+  })
+
+  it('Retry-After still overrides a custom schedule', () => {
+    expect(retryDelayMs(1, httpError(429, { 'retry-after': '5' }), OPTIONAL_RETRY_DELAYS_MS)).toBe(5000)
+    expect([0, 1, 2, 3].map(n => retryDelayMs(n, httpError(429), OPTIONAL_RETRY_DELAYS_MS))).toEqual([3000, 8000, 24_000, 24_000])
   })
 })
 

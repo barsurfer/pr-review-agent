@@ -344,6 +344,37 @@ describe('characterization: record key order (not snapshotted, which sorts keys)
   })
 })
 
+describe('characterization: ENABLE_TARGET_MERGE_CHECK on, with an adapter that supports it, is the same run', () => {
+  const NEW_METHODS = new Set(['getPrDiffAt', 'getCommitParents'])
+  const able = (s: Scenario): Scenario => ({
+    ...s,
+    setup: () => { s.setup?.(); cfg.review.targetMergeCheck = true },
+    adapter: () => ({
+      ...s.adapter?.(),
+      getPullRequestInfo: async () => ({ ...pr(), targetCommit: 'ddd444555666'.padEnd(40, '0') }),
+      getPrDiffAt: async () => { throw new Error('old PR diff unavailable') },
+      getCommitParents: async () => { throw new Error('parents unavailable') },
+    }),
+  })
+  // The model call takes prInfo as an object, so the extra targetCommit key is dropped before comparing.
+  const comparable = (r: Awaited<ReturnType<typeof runScenario>>) => ({
+    ...r,
+    vcs: r.vcs.filter(([name]) => !NEW_METHODS.has(name)),
+    model: JSON.parse(JSON.stringify(r.model, (k, v) => (k === 'targetCommit' ? undefined : v))),
+    console: r.console.filter(l => !/outside the PR diff|unavailable \(old PR diff unavailable\)/.test(l)),
+  })
+
+  it.each(Object.keys(SCENARIOS))('%s', async (name) => {
+    const off = await runScenario(SCENARIOS[name])
+    const on = await runScenario(able(SCENARIOS[name]))
+
+    expect(comparable(on)).toEqual(comparable(off))
+    // Only the merge-shaped delta (a file outside the PR) fetches the old diff; its failure falls back to today's run.
+    expect(on.vcs.filter(([n]) => n === 'getPrDiffAt').length).toBe(name === 'K15 delta > diff' ? 1 : 0)
+    expect(on.vcs.filter(([n]) => n === 'getCommitParents')).toEqual([])
+  })
+})
+
 describe('characterization: an explicit undefined checked commit is the same run', () => {
   it.each(Object.keys(SCENARIOS))('%s', async (name) => {
     const nineArgs = await runScenario(SCENARIOS[name])

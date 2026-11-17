@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { buildReviewFooter, buildReplyFooter, stripPreviousFooter, stripDeltaStats, stripJudgeNotes, stripJenkinsMeta, stripPreamble, isNoChange, extractCommitHash, legacyCommitHash, REVIEW_FOOTER_SOURCE, REPLY_FOOTER_SOURCE, hasReviewFooter, hasReplyFooter, renderReview, countFindings, markdownHasFindings, type ReviewObject } from '../formatter.js'
 import { parseFindings } from '../parsers.js'
+import { fixCodeContent, renderFixBlock, stripOwnSuggestedFixes } from '../suggested-fix.js'
 
 // ---------------------------------------------------------------------------
 // buildReviewFooter
@@ -476,5 +477,29 @@ describe('countFindings', () => {
   it('agrees with parseFindings over the rendered markdown (migration is faithful)', () => {
     const obj = mk([{ severity: 'HIGH', title: 'a', file: 'x.ts', lines: '1', body: 'x' }, { severity: 'LOW', title: 'b', body: 'y' }])
     expect(countFindings(obj)).toEqual(parseFindings(renderReview(obj)))
+  })
+})
+
+describe('a failed-lookup footer (`Prompt: … (lookup failed)`) passes every footer reader', () => {
+  const variants = ['default (lookup failed)', 'stack:java (lookup failed)'].flatMap(source => [
+    { name: `${source}, plain`, footer: buildReviewFooter('bot', 'model', source, 2, 'abc123def456', 'deadbee') },
+    { name: `${source}, CI link`, footer: buildReviewFooter('bot', 'model', source, 2, 'abc123def456', 'deadbee', 'https://ci/job/x/7/') },
+    { name: `${source}, no Build`, footer: `\n\n---\n*Reviewed by bot (model) | Prompt: ${source} | Review #2 | Commit: abc123def456*` },
+    { name: `${source}, no Build, CI link`, footer: `\n\n---\n*Reviewed by bot (model) | Prompt: ${source} | [Review #2](https://ci/job/x/7/) | Commit: abc123def456*` },
+  ])
+
+  it.each(variants)('$name: hasReviewFooter, extractCommitHash, REVIEW_FOOTER_SOURCE and stripPreviousFooter', ({ footer }) => {
+    const body = '### Summary\nAll good.' + footer
+    expect(footer).toContain('(lookup failed)')
+    expect(hasReviewFooter(body)).toBe(true)
+    expect(extractCommitHash(body)).toBe('abc123def456')
+    expect(new RegExp(REVIEW_FOOTER_SOURCE, 'm').test(body)).toBe(true)
+    expect(stripPreviousFooter(body)).toBe('### Summary\nAll good.')
+  })
+
+  it.each(variants)('$name: the suggested-fix strip still treats it as the agent review, and a proposal copying it is refused', ({ footer }) => {
+    const plain = '### Findings\n- **LOW – x** (`a.ts:1`)\n  y'
+    expect(stripOwnSuggestedFixes(plain + renderFixBlock('fix()', '```') + footer, 'review')).toBe(plain + footer)
+    expect(fixCodeContent(`fix()\n${footer.trim().split('\n').at(-1)}`)).toBeNull()
   })
 })

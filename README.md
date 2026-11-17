@@ -216,6 +216,14 @@ previous review's prose (the full PR diff is still included for context). Claude
 a **delta review** focused on new code only — previous findings are briefly referenced in
 the Summary ("still open" or "fixed") but not re-listed in Findings or Unresolved Questions.
 
+On Bitbucket, when the author merges the target branch into the PR, that section would hold
+everything the target gained. The agent compares the PR diff as of the last-reviewed commit
+with the one as of the new head (both fetched pinned to those commits) and keeps only files
+whose diff changed, compared exactly, so a PR file
+the target also changed is always re-reviewed (if that finds nothing new and nothing resolved,
+no confirmation is posted). A merge that touches no PR file posts nothing (`DEDUP_SKIP`, or
+answers a pending reply). `ENABLE_TARGET_MERGE_CHECK=false` turns this off.
+
 If developers have replied to the previous review with explanations (e.g. "this is handled
 in a different PR" or "the API contract guarantees X"), the agent includes those replies in
 context. The prompt instructs Claude to treat developer replies as authoritative about
@@ -425,6 +433,8 @@ All credentials and settings are provided via environment variables.
 | `IGNORE_COMMENT_AUTHORS` | — (off) | Actor ids whose **comment** events skip the run before any VCS call (needs `--event`/`--comment-author`); pushes are never skipped. An ignored event never catches up a push a skip-if-locked CI lock dropped, so list an actor only when CI queues push events (Bitbucket `pullrequest:updated`). See [skip-logic.md](docs/context/review/skip-logic.md) |
 | `TRIGGER_EVENT_KIND` | — (name rule) | From 0.0.46. `comment` \| `other`: overrides whether the event counts as a comment event. Set it per event, not job-wide, unless the job receives only comment events. See [skip-logic.md §7](docs/context/review/skip-logic.md) |
 | `LAST_CHECKED_COMMIT` | — (off) | The `checked_commit` an earlier run reported for this PR; CI stores it per PR and passes it back, and a run on that same head goes to the reply check like a footer match. Prefer it over `--checked-commit` in CI. See [skip-logic.md §8](docs/context/review/skip-logic.md) |
+| `ENABLE_TARGET_MERGE_CHECK` | `true` | Bitbucket: after the author merges the target branch, re-review only PR files whose diff changed since the last review (exact comparison, so files the target also changed always are); skip (`DEDUP_SKIP`, `dedup_source: target_merge`) when none did. `false` reviews the full delta as before. See [skip-logic.md §2](docs/context/review/skip-logic.md) |
+| `ENABLE_INSTRUCTIONS_LOOKUP_RETRY` | `true` | Bitbucket: the `.agent-review-instructions.md` lookup retries a 429 after 3/8/24 s (a found symlink target on its own 35 s budget) and marks a failed lookup (`Prompt: default (lookup failed)`, `prompt_lookup: failed`). `false` restores the previous lookup (3/24/96 s on one 30 s budget, failure reported as not found). Temporary kill switch, like `ENABLE_TARGET_MERGE_CHECK`. See [composition.md](docs/context/prompt/composition.md) |
 | `USAGE_RECORD_FILE` | — (off) | From 0.0.46. A path that receives only this run's usage record (overwritten each run), so any CI can find it without Jenkins env vars; delete it before the run (can also use `--usage-record-file`). See [usage-logging.md](docs/reference/usage-logging.md#finding-this-runs-record) |
 | `DIFF_EXCLUDE_PATTERNS` | `*.lock,package-lock.json,yarn.lock,pnpm-lock.yaml,*.json,*.spec.ts` | Globs excluded from the reviewable diff |
 | `ANTHROPIC_WORKSPACE_ID` | — | Sets the `anthropic-workspace-id` header; required for a user-scoped key (`sk-ant-usr-…`) that isn't bound to a workspace, unneeded for a workspace-scoped key |

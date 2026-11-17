@@ -146,7 +146,9 @@ export interface ReviewContext {
   inputBudget?: number
   bundleCount?: number  // set when the PR was reviewed as bundles instead of one pass
   degraded?: boolean  // file contexts dropped to fit MAX_INPUT_TOKENS (diff-only review)
-  dedupHit?: 'checked_commit'
+  dedupHit?: 'checked_commit' | 'target_merge'
+  mergeNarrowed?: boolean
+  deltaBase?: string
   headChecked?: boolean
   deltaFetchFailed?: boolean
   bundleUncertain?: boolean
