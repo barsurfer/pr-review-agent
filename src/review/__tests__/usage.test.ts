@@ -204,6 +204,21 @@ describe('buildUsageRecord provenance fields', () => {
     expect('dedup_source' in buildUsageRecord(baseCtx({ headChecked: true, prInfo: { sourceCommit: 'abc' } as never }), 1, null)).toBe(false)
   })
 
+  it('U3b dedup_source target_merge passes through, kept on an errored run', () => {
+    expect(buildUsageRecord(baseCtx({ dedupHit: 'target_merge' }), 1, null).dedup_source).toBe('target_merge')
+    expect(buildUsageRecord(baseCtx({ dedupHit: 'target_merge' }), 1, { type: 'Error', message: 'boom', status: null }).dedup_source).toBe('target_merge')
+  })
+
+  it('prompt_lookup: failed only on a failed lookup, right after prompt_source, which keeps its value', () => {
+    const failed = buildUsageRecord(baseCtx({ prompt: { content: 'SYS', source: 'default', lookupFailed: true } }), 1, null)
+    expect(failed.prompt_source).toBe('default')
+    expect(failed.prompt_lookup).toBe('failed')
+    const keys = Object.keys(failed)
+    expect(keys[keys.indexOf('prompt_source') + 1]).toBe('prompt_lookup')
+    expect('prompt_lookup' in buildUsageRecord(baseCtx({ prompt: { content: 'SYS', source: 'default' } }), 1, null)).toBe(false)
+    expect('prompt_lookup' in buildUsageRecord(baseCtx(), 1, null)).toBe(false)
+  })
+
   it('U4 checked_commit is emitted only for a 12-64 hex head, unchanged; an empty or odd head never gives a storable value', () => {
     const marked = (sourceCommit: string) => buildUsageRecord(baseCtx({ prInfo: { sourceCommit } as never, headChecked: true }), 1, null)
     for (const head of ['abcdef012345', 'abc123abc123abc', 'a'.repeat(40), 'ABCDEF0123456789ABCDEF0123456789ABCDEF01', 'f'.repeat(64)]) {

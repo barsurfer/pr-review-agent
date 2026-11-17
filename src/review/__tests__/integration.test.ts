@@ -62,7 +62,7 @@ import { loadPrompt } from '../../prompt/loader.js'
 import { fetchContext } from '../../context/fetcher.js'
 import { logUsageRecord } from '../usage.js'
 import { applyJudgeDecisions, PROPOSAL_CAP } from '../judge-decisions.js'
-import { renderReview, buildReplyFooter, hasReplyFooter, extractCommitHash, markdownHasFindings, type ReviewObject } from '../formatter.js'
+import { renderReview, buildReplyFooter, hasReplyFooter, hasReviewFooter, extractCommitHash, markdownHasFindings, type ReviewObject } from '../formatter.js'
 import { createProvider } from '../../llm/provider.js'
 import { renderFixBlock, stripSuggestedFixes, SUGGESTED_FIX_MARKER } from '../suggested-fix.js'
 import { createHash } from 'crypto'
@@ -4092,5 +4092,559 @@ describe('nested Bitbucket reply thread through review() (live PR 9099 shape)', 
     expect(record!.skip_reason).toContain('no unanswered questions')
     expect(mockRunCommentResponse).not.toHaveBeenCalled()
     expect(post).not.toHaveBeenCalled()
+  })
+})
+
+describe('target-branch merge check (ENABLE_TARGET_MERGE_CHECK)', () => {
+  const TARGET = 'ddd444555666'.padEnd(40, '0')
+  const PRIOR_FULL = PRIOR_COMMIT.padEnd(40, '9')
+  const SKIP_REASON = 'target branch merged in; PR diff unchanged since the last review and no unanswered questions'
+  const QUIET_REASON = 'Re-review after a target-branch merge found no new findings'
+  const sec = (path: string, index: string, ...body: string[]) =>
+    [`diff --git a/${path} b/${path}`, `index ${index}`, `--- a/${path}`, `+++ b/${path}`, ...body].join('\n') + '\n'
+
+  // Synthetic shape of the incident: both the PR and the target append to one enum tail, so the merge rewrites the PR's last line.
+  const FEATURE = sec('src/Feature.java', '5555555..6666666 100644', '@@ -1,2 +1,3 @@', ' class Feature {', '+  void run() {}', ' }')
+  const FEATURE_FIXED = sec('src/Feature.java', '5555555..9999999 100644', '@@ -1,2 +1,3 @@', ' class Feature {', '+  void run() { check(); }', ' }')
+  // Flags.java: fork `ALPHA, BETA;` (1111111), PR head adds NEW_FLAG (8888888), target adds TARGET_FLAG (2222222), merge keeps both (7777777) or edits NEW_FLAG while resolving (abcdef1).
+  const FLAGS_PRE = sec('src/Flags.java', '1111111..8888888 100644', '@@ -1,4 +1,5 @@', ' enum Flags {', '   ALPHA,', '-  BETA;', '+  BETA,', '+  NEW_FLAG;', ' }')
+  const FLAGS_POST = sec('src/Flags.java', '2222222..7777777 100644', '@@ -1,5 +1,6 @@', ' enum Flags {', '   ALPHA,', '   BETA,', '-  TARGET_FLAG;', '+  TARGET_FLAG,', '+  NEW_FLAG;', ' }')
+  const FLAGS_POST_EDITED = sec('src/Flags.java', '2222222..abcdef1 100644', '@@ -1,5 +1,6 @@', ' enum Flags {', '   ALPHA,', '   BETA,', '-  TARGET_FLAG;', '+  TARGET_FLAG,', '+  NEW_FLAG(true);', ' }')
+  const OTHER = sec('src/Other.java', 'aaaaaaa..bbbbbbb 100644', '@@ -1,2 +1,3 @@', ' class Other {', '+  int target = 1;', ' }')
+  const NOTES = sec('docs/notes.md', 'ccccccc..eeeeeee 100644', '@@ -1 +1,2 @@', ' # Notes', '+target line')
+  const FLAGS_DELTA = sec('src/Flags.java', '8888888..7777777 100644', '@@ -1,5 +1,6 @@', ' enum Flags {', '   ALPHA,', '   BETA,', '+  TARGET_FLAG,', '   NEW_FLAG;', ' }')
+  const FLAGS_DELTA_EDITED = sec('src/Flags.java', '8888888..abcdef1 100644', '@@ -1,5 +1,6 @@', ' enum Flags {', '   ALPHA,', '   BETA,', '-  NEW_FLAG;', '+  TARGET_FLAG,', '+  NEW_FLAG(true);', ' }')
+  const FEATURE_DELTA = sec('src/Feature.java', '6666666..9999999 100644', '@@ -1,3 +1,3 @@', ' class Feature {', '-  void run() {}', '+  void run() { check(); }', ' }')
+  const GONE = sec('src/Gone.java', '0123456..789abcd 100644', '@@ -1,2 +1,3 @@', ' class Gone {', '+  int x;', ' }')
+  const GONE_DELTA = sec('src/Gone.java', '789abcd..0123456 100644', '@@ -1,3 +1,2 @@', ' class Gone {', '-  int x;', ' }')
+  const MERGE_DELTA = OTHER + FLAGS_DELTA + NOTES
+  const PR_FILES = [{ path: 'src/Feature.java', status: 'modified' }, { path: 'src/Flags.java', status: 'modified' }]
+  const ZERO = { delta_stats: { resolved: 0, still_open: 0, new_findings: 0 } }
+
+  // `pinned` is the PR diff at the head the delta ends at; it defaults to `diff`, the PR diff fetched by id.
+  type MergeOpts = { diff?: string; pinned?: string; before?: string; delta?: string; replies?: CommentReply[]; prior?: string; overrides?: Partial<VCSAdapter> }
+  // A merge that touches no PR file: the PR diff stays byte-identical and the delta holds only target files.
+  const CLEAN: MergeOpts = { diff: FEATURE + FLAGS_PRE, delta: OTHER + NOTES }
+  const EDITED: MergeOpts = { diff: FEATURE + FLAGS_POST_EDITED, delta: OTHER + FLAGS_DELTA_EDITED + NOTES }
+  const mergeAdapter = (o: MergeOpts = {}) => makeAdapter({
+    getPullRequestInfo: vi.fn().mockResolvedValue({ ...makePRInfo(), targetCommit: TARGET }),
+    getDiff: vi.fn().mockResolvedValue(o.diff ?? FEATURE + FLAGS_POST),
+    getChangedFiles: vi.fn().mockResolvedValue(PR_FILES),
+    getPreviousReviewComments: vi.fn().mockResolvedValue([{ id: '200', body: (o.prior ?? FLAGGED_PRIOR) + footer(1, PRIOR_COMMIT), createdOn: PRIOR_AT }]),
+    getRepliesToReviewComments: vi.fn().mockResolvedValue({ replies: o.replies ?? [], agentReplyCount: 0 }),
+    getCommitDiff: vi.fn().mockResolvedValue(o.delta ?? MERGE_DELTA),
+    getPrDiffAt: vi.fn(async (source: string) => (source === PRIOR_COMMIT ? o.before ?? FEATURE + FLAGS_PRE : o.pinned ?? o.diff ?? FEATURE + FLAGS_POST)),
+    getCommitParents: vi.fn().mockResolvedValue([PRIOR_FULL, TARGET]),
+    ...o.overrides,
+  })
+
+  type RunOpts = { dryRun?: boolean; force?: 'off' | 'clean' | 're-review'; checkedCommit?: string }
+  const run = async (adapter: VCSAdapter, opts: RunOpts = {}) => {
+    const logs: string[] = []
+    const capture = (...a: unknown[]) => { const l = a.map(String).join(' '); if (!l.startsWith('\n=== Usage ===')) logs.push(l) }
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(capture)
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(capture)
+    try {
+      const record = await review(adapter, '100', opts.dryRun ?? false, undefined, opts.force ?? 'off', true, 'repo', undefined, undefined, opts.checkedCommit)
+      return { record: record!, logs }
+    } finally {
+      logSpy.mockRestore(); warnSpy.mockRestore()
+    }
+  }
+  const isMergeLog = (l: string) => l.includes('outside the PR diff') || l.includes('Target merge') || l.includes('unavailable (') || l.includes('target merge')
+
+  beforeEach(() => { cfg.review.targetMergeCheck = true })
+
+  it('I1 a merge that touches no PR file → DEDUP_SKIP target_merge, head marked, no model call, no comment, both PR diffs fetched pinned', async () => {
+    const adapter = mergeAdapter(CLEAN)
+
+    const { record, logs } = await run(adapter)
+
+    expect(record.action).toBe('DEDUP_SKIP')
+    expect(record.skip_reason).toBe(SKIP_REASON)
+    expect(record.dedup_source).toBe('target_merge')
+    expect(record.checked_commit).toBe(COMMIT_A)
+    expect(record.review_number).toBe(1)
+    expect(record.cost_usd).toBe(0)
+    expect(mockRunReview).not.toHaveBeenCalled()
+    expect(adapter.postComment).not.toHaveBeenCalled()
+    expect(vi.mocked(adapter.getPrDiffAt!).mock.calls).toEqual([[PRIOR_COMMIT, TARGET], [COMMIT_A, TARGET]])
+    expect(adapter.getCommitDiff).toHaveBeenCalledWith(PRIOR_COMMIT, COMMIT_A)
+    expect(adapter.getCommitParents).not.toHaveBeenCalled()
+    expect(logs.filter(isMergeLog)).toEqual([
+      `  Delta has 2 file(s) outside the PR diff — comparing the PR diff at ${PRIOR_COMMIT} with the current one...`,
+      `  Target merge: PR diff unchanged since ${PRIOR_COMMIT} (2 delta file(s) dropped) — checking for unanswered replies...`,
+    ])
+  })
+
+  it('I2 clean merge + a pending dev reply → REPLY, dedup_source and checked_commit kept', async () => {
+    const adapter = mergeAdapter({ ...CLEAN, replies: [devReply('2026-03-09T12:00:00Z')] })
+
+    const { record } = await run(adapter)
+
+    expect(record.action).toBe('REPLY')
+    expect(record.dedup_source).toBe('target_merge')
+    expect(record.checked_commit).toBe(COMMIT_A)
+    expect(mockRunReview).not.toHaveBeenCalled()
+    expect(adapter.postReply).toHaveBeenCalledTimes(1)
+    expect(adapter.postComment).not.toHaveBeenCalled()
+  })
+
+  it('I3a the target appended to the same enum → a 1-file review; no findings, nothing resolved → no comment, head marked', async () => {
+    mockReviewer(reviewWith([], ZERO))
+    const adapter = mergeAdapter()
+
+    const { record, logs } = await run(adapter)
+
+    expect(mockRunReview).toHaveBeenCalledTimes(1)
+    expect(mockRunReview.mock.calls[0][11]).toBe(FLAGS_DELTA)
+    expect(logs).toContain('  Target merge: delta narrowed to 1 of 3 file(s): src/Flags.java')
+    expect(record.action).toBe('NO_NEW_FINDINGS')
+    expect(record.skip_reason).toBe(QUIET_REASON)
+    expect(record.checked_commit).toBe(COMMIT_A)
+    expect(adapter.postComment).not.toHaveBeenCalled()
+    expect(adapter.getCommitParents).toHaveBeenCalledTimes(1)
+  })
+
+  it('I3b the same enum merge, but the reviewer reports a finding resolved → the confirmation is posted', async () => {
+    mockReviewer(reviewWith([], { delta_stats: { resolved: 1, still_open: 0, new_findings: 0 } }))
+    const adapter = mergeAdapter()
+
+    const { record } = await run(adapter)
+
+    expect(mockRunReview.mock.calls[0][11]).toBe(FLAGS_DELTA)
+    expect(record.action).toBe('RE_REVIEW')
+    expect(record.checked_commit).toBe(COMMIT_A)
+    expect(adapter.postComment).toHaveBeenCalledTimes(1)
+    expect(adapter.getCommitParents).not.toHaveBeenCalled()
+  })
+
+  it('I3 a conflict resolution that changes a PR line → the reviewer gets exactly that file\'s delta section', async () => {
+    mockReviewer(reviewWith([NEW_FINDING]))
+    const adapter = mergeAdapter(EDITED)
+
+    const { record, logs } = await run(adapter)
+
+    expect(record.action).toBe('RE_REVIEW')
+    expect(mockRunReview.mock.calls[0][11]).toBe(FLAGS_DELTA_EDITED)
+    expect(logs).toContain('  Target merge: delta narrowed to 1 of 3 file(s): src/Flags.java')
+    expect('dedup_source' in record).toBe(false)
+    expect(adapter.getCommitParents).not.toHaveBeenCalled()
+  })
+
+  it('I4 I3 + no findings, nothing resolved, prior findings, head a merge on the reviewed commit → NO_NEW_FINDINGS, marked, nothing posted', async () => {
+    mockReviewer(reviewWith([], ZERO))
+    const adapter = mergeAdapter(EDITED)
+
+    const { record, logs } = await run(adapter)
+
+    expect(record.action).toBe('NO_NEW_FINDINGS')
+    expect(record.skip_reason).toBe(QUIET_REASON)
+    expect(record.checked_commit).toBe(COMMIT_A)
+    expect(adapter.postComment).not.toHaveBeenCalled()
+    expect(adapter.getCommitParents).toHaveBeenCalledTimes(1)
+    expect(adapter.getCommitParents).toHaveBeenCalledWith(COMMIT_A)
+    expect(logs).toContain('  Re-review after a target merge: no new findings — not posting a confirmation')
+  })
+
+  it.each([
+    ['the first parent is not the reviewed commit', { getCommitParents: vi.fn().mockResolvedValue(['f'.repeat(40), PRIOR_FULL]) }],
+    ['the head is not a merge', { getCommitParents: vi.fn().mockResolvedValue([PRIOR_FULL]) }],
+    ['the parents lookup throws', { getCommitParents: vi.fn().mockRejectedValue(new Error('429')) }],
+    ['the parents lookup rejects with undefined', { getCommitParents: vi.fn().mockRejectedValue(undefined) }],
+    ['the parents lookup rejects with a prototype-less object', { getCommitParents: vi.fn().mockRejectedValue(Object.create(null)) }],
+    ['the adapter has no parents lookup', { getCommitParents: undefined }],
+  ])('I5 I4, but %s → posts the confirmation as today', async (_name, overrides) => {
+    mockReviewer(reviewWith([], ZERO))
+    const adapter = mergeAdapter({ ...EDITED, overrides: overrides as Partial<VCSAdapter> })
+
+    const { record } = await run(adapter)
+
+    expect(record.action).toBe('RE_REVIEW')
+    expect(adapter.postComment).toHaveBeenCalledTimes(1)
+    expect(record.checked_commit).toBe(COMMIT_A)
+  })
+
+  it('I4b I4, but the reviewer reports a finding resolved (fixed while resolving the conflict) → posts the confirmation, parents never fetched', async () => {
+    mockReviewer(reviewWith([], { delta_stats: { resolved: 1, still_open: 0, new_findings: 0 } }))
+    const adapter = mergeAdapter(EDITED)
+
+    const { record } = await run(adapter)
+
+    expect(record.action).toBe('RE_REVIEW')
+    expect(adapter.postComment).toHaveBeenCalledTimes(1)
+    expect(adapter.getCommitParents).not.toHaveBeenCalled()
+  })
+
+  it('I4c I4, but the reviewer omits delta_stats (resolution count unknown) → posts the confirmation, parents never fetched', async () => {
+    mockReviewer(reviewWith([]))
+    const adapter = mergeAdapter(EDITED)
+
+    const { record } = await run(adapter)
+
+    expect(record.action).toBe('RE_REVIEW')
+    expect(adapter.postComment).toHaveBeenCalledTimes(1)
+    expect(adapter.getCommitParents).not.toHaveBeenCalled()
+  })
+
+  it('a narrowed delta dropped as larger than the PR diff → full-diff review that is never silenced as a quiet merge', async () => {
+    const tail = Array.from({ length: 60 }, (_, i) => `TARGET_${i}`)
+    const bigPost = sec('src/Flags.java', '3333333..abcdef2 100644', '@@ -61,3 +61,4 @@', `   ${tail[58]},`, `-  ${tail[59]};`, `+  ${tail[59]},`, '+  NEW_FLAG(true);', ' }')
+    const bigDelta = sec('src/Flags.java', '8888888..abcdef2 100644', '@@ -1,5 +1,65 @@', ' enum Flags {', '   ALPHA,', '   BETA,', '-  NEW_FLAG;', ...tail.map(t => `+  ${t},`), '+  NEW_FLAG(true);', ' }')
+    mockReviewer(reviewWith([], ZERO))
+    const adapter = mergeAdapter({ diff: FEATURE + bigPost, delta: OTHER + bigDelta + NOTES })
+
+    const { record, logs } = await run(adapter)
+
+    expect(logs).toContain('  Target merge: delta narrowed to 1 of 3 file(s): src/Flags.java')
+    expect(logs.some(l => l.includes('exceeds full PR diff'))).toBe(true)
+    expect(mockRunReview.mock.calls[0][11]).toBe('')
+    expect(record.action).toBe('RE_REVIEW')
+    expect(adapter.postComment).toHaveBeenCalledTimes(1)
+    expect(adapter.getCommitParents).not.toHaveBeenCalled()
+  })
+
+  it('I6 merge + fix in one push: the narrowed delta keeps a file the target did not touch → posts, parents never fetched', async () => {
+    mockReviewer(reviewWith([], ZERO))
+    const adapter = mergeAdapter({ diff: FEATURE_FIXED + FLAGS_POST, delta: OTHER + FEATURE_DELTA + FLAGS_DELTA })
+
+    const { record, logs } = await run(adapter)
+
+    expect(mockRunReview.mock.calls[0][11]).toBe(FEATURE_DELTA + FLAGS_DELTA)
+    expect(logs).toContain('  Target merge: delta narrowed to 2 of 3 file(s): src/Feature.java, src/Flags.java')
+    expect(record.action).toBe('RE_REVIEW')
+    expect(adapter.postComment).toHaveBeenCalledTimes(1)
+    expect(adapter.getCommitParents).not.toHaveBeenCalled()
+  })
+
+  it('I7 I4 + an unanswered dev reply → REPLY, marked', async () => {
+    mockReviewer(reviewWith([], ZERO))
+    const adapter = mergeAdapter({ ...EDITED, replies: [devReply('2026-03-09T12:00:00Z')] })
+
+    const { record } = await run(adapter)
+
+    expect(record.action).toBe('REPLY')
+    expect(record.checked_commit).toBe(COMMIT_A)
+    expect(adapter.postReply).toHaveBeenCalledTimes(1)
+    expect(adapter.postComment).not.toHaveBeenCalled()
+    expect(adapter.getCommitParents).toHaveBeenCalledTimes(1)
+  })
+
+  // Everything a run exposes except the two new adapter methods; prInfo.targetCommit is dropped because the model call takes prInfo as an object.
+  const snapshot = async (adapter: VCSAdapter, opts: RunOpts = {}) => {
+    mockRunReview.mockClear()
+    const { record, logs } = await run(adapter, opts)
+    const { timestamp, duration_ms, ...stable } = record as unknown as Record<string, unknown>
+    const vcs = Object.fromEntries(Object.entries(adapter).filter(([k, f]) => f && k !== 'getPrDiffAt' && k !== 'getCommitParents').map(([k, f]) => [k, structuredClone(vi.mocked(f).mock.calls)]))
+    const model = JSON.parse(JSON.stringify(mockRunReview.mock.calls, (k, v) => (k === 'targetCommit' ? undefined : v)))
+    return { record: stable, logs, vcs, model }
+  }
+  const flagOff = async (adapter: VCSAdapter, opts: RunOpts = {}) => {
+    cfg.review.targetMergeCheck = false
+    try { return await snapshot(adapter, opts) } finally { cfg.review.targetMergeCheck = true }
+  }
+
+  it('I8 normal fix commit (every delta file is a PR file) → no old-diff fetch, and the run is byte-identical to the flag-off run', async () => {
+    mockReviewer(reviewWith([NEW_FINDING]))
+    const opts: MergeOpts = { diff: FEATURE_FIXED + FLAGS_PRE, delta: FEATURE_DELTA }
+    const offAdapter = mergeAdapter(opts)
+    const off = await flagOff(offAdapter)
+    const onAdapter = mergeAdapter(opts)
+    const on = await snapshot(onAdapter)
+
+    expect(on).toEqual(off)
+    expect(on.model[0][11]).toBe(FEATURE_DELTA)
+    expect(onAdapter.getPrDiffAt).not.toHaveBeenCalled()
+    expect(offAdapter.getPrDiffAt).not.toHaveBeenCalled()
+    expect(on.record.action).toBe('RE_REVIEW')
+  })
+
+  it('I9 a fix that reverts a file out of the PR → both pinned PR diffs fetched, every section kept, model input identical to the flag-off run', async () => {
+    mockReviewer(reviewWith([NEW_FINDING]))
+    const opts: MergeOpts = { diff: FEATURE_FIXED + FLAGS_PRE, delta: FEATURE_DELTA + GONE_DELTA, before: FEATURE + FLAGS_PRE + GONE }
+    const off = await flagOff(mergeAdapter(opts))
+    const onAdapter = mergeAdapter(opts)
+    const on = await snapshot(onAdapter)
+
+    expect(onAdapter.getPrDiffAt).toHaveBeenCalledTimes(2)
+    expect(on.model).toEqual(off.model)
+    expect(on.model[0][11]).toBe(FEATURE_DELTA + GONE_DELTA)
+    expect(on.vcs).toEqual(off.vcs)
+    expect(on.record).toEqual(off.record)
+    expect(on.logs.filter(isMergeLog)).toEqual([`  Delta has 1 file(s) outside the PR diff — comparing the PR diff at ${PRIOR_COMMIT} with the current one...`])
+    expect(on.logs.filter(l => !isMergeLog(l))).toEqual(off.logs)
+  })
+
+  it.each([
+    ['rejects', vi.fn().mockRejectedValue(new Error('Request failed with status code 500')), 'Request failed with status code 500'],
+    ['returns an empty diff', vi.fn().mockResolvedValue(''), 'empty diff'],
+    ['rejects with undefined', vi.fn().mockRejectedValue(undefined), 'undefined'],
+    ['rejects with a prototype-less object', vi.fn().mockRejectedValue(Object.create(null)), 'unknown error'],
+  ])('I10 the old-diff fetch %s → one warning, the full delta, the review runs exactly as with the flag off', async (_name, getPrDiffAt, reason) => {
+    mockReviewer(reviewWith([NEW_FINDING]))
+    const off = await flagOff(mergeAdapter())
+    const on = await snapshot(mergeAdapter({ overrides: { getPrDiffAt } }))
+
+    expect(getPrDiffAt).toHaveBeenCalledTimes(1)
+    expect(on.logs.filter(isMergeLog)).toEqual([
+      `  Delta has 2 file(s) outside the PR diff — comparing the PR diff at ${PRIOR_COMMIT} with the current one...`,
+      `  PR diff at ${PRIOR_COMMIT} unavailable (${reason}) — keeping the full delta`,
+    ])
+    expect(on.logs.filter(l => !isMergeLog(l))).toEqual(off.logs)
+    expect(on.model).toEqual(off.model)
+    expect(on.vcs).toEqual(off.vcs)
+    expect(on.record).toEqual(off.record)
+    expect(on.record.action).toBe('RE_REVIEW')
+    expect(on.record.checked_commit).toBe(COMMIT_A)
+    expect('dedup_source' in on.record).toBe(false)
+  })
+
+  const QUOTED = 'diff --git "a/docs/caf\\303\\251.md" "b/docs/caf\\303\\251.md"\nindex 1212121..3434343 100644\n--- "a/docs/caf\\303\\251.md"\n+++ "b/docs/caf\\303\\251.md"\n@@ -1 +1,2 @@\n # Cafe\n+changed\n'
+  // Keeps the PR diff larger than the delta, so the size guard does not drop the delta first.
+  const PAD = sec('src/Pad.java', '1313131..2424242 100644', '@@ -1,2 +1,12 @@', ' class Pad {', ...Array.from({ length: 10 }, (_, i) => `+  int pad${i};`), ' }')
+  it.each([
+    ['the delta', { diff: FEATURE + FLAGS_PRE + PAD, before: FEATURE + FLAGS_PRE + PAD, delta: OTHER + NOTES + QUOTED }],
+    ['the previous PR diff', { ...CLEAN, before: FEATURE + FLAGS_PRE + QUOTED }],
+    ['the current PR diff pinned to the head', { ...CLEAN, pinned: FEATURE + FLAGS_PRE + QUOTED }],
+  ])('I10b a git-quoted path in %s → one warning, the full delta, the review runs exactly as with the flag off', async (_name, opts: MergeOpts) => {
+    mockReviewer(reviewWith([NEW_FINDING]))
+    const off = await flagOff(mergeAdapter(opts))
+    const onAdapter = mergeAdapter(opts)
+    const on = await snapshot(onAdapter)
+
+    expect(onAdapter.getPrDiffAt).toHaveBeenCalledTimes(2)
+    expect(on.logs.filter(isMergeLog)).toEqual([
+      `  Delta has 2 file(s) outside the PR diff — comparing the PR diff at ${PRIOR_COMMIT} with the current one...`,
+      '  Target merge check skipped: a diff section\'s paths could not be read unambiguously — keeping the full delta',
+    ])
+    expect(on.model[0][11]).toBe(opts.delta)
+    expect(on.logs.filter(l => !isMergeLog(l))).toEqual(off.logs)
+    expect(on.model).toEqual(off.model)
+    expect(on.vcs).toEqual(off.vcs)
+    expect(on.record).toEqual(off.record)
+    expect(on.record.action).toBe('RE_REVIEW')
+    expect('dedup_source' in on.record).toBe(false)
+  })
+
+  it('I10c the PR diff pinned to the head ends Flags.java at another blob than the delta → one warning, the full delta, no skip', async () => {
+    mockReviewer(reviewWith([NEW_FINDING]))
+    const opts: MergeOpts = { diff: FEATURE + FLAGS_PRE + PAD, pinned: FEATURE + FLAGS_PRE + PAD, before: FEATURE + FLAGS_PRE + PAD, delta: MERGE_DELTA }
+    const off = await flagOff(mergeAdapter(opts))
+    const onAdapter = mergeAdapter(opts)
+    const on = await snapshot(onAdapter)
+
+    expect(onAdapter.getPrDiffAt).toHaveBeenCalledTimes(2)
+    expect(on.logs.filter(isMergeLog)).toEqual([
+      `  Delta has 2 file(s) outside the PR diff — comparing the PR diff at ${PRIOR_COMMIT} with the current one...`,
+      '  Target merge check skipped: the PR diff does not end at the same file versions as the delta — keeping the full delta',
+    ])
+    expect(on.model[0][11]).toBe(MERGE_DELTA)
+    expect(on.logs.filter(l => !isMergeLog(l))).toEqual(off.logs)
+    expect(on.model).toEqual(off.model)
+    expect(on.record).toEqual(off.record)
+    expect(on.record.action).toBe('RE_REVIEW')
+  })
+
+  // The PR diff fetched by id is stale (previous head); only the PR diff pinned to the delta's head shows the file this push changed.
+  const AUTH = sec('src/auth.ts', '0000000..a17a17a', '@@ -0,0 +1 @@', '+export const auth = true')
+  const RUN_MODE = 'diff --git a/run.sh b/run.sh\nold mode 100644\nnew mode 100755\n'
+  const RUN_PINNED = 'diff --git a/run.sh b/run.sh\nold mode 100644\nnew mode 100755\nindex 1111111..2222222\n--- a/run.sh\n+++ b/run.sh\n@@ -1 +1,2 @@\n echo\n+exit 0\n'
+  const RUN_DELTA = sec('run.sh', '1111111..2222222 100755', '@@ -1 +1,2 @@', ' echo', '+exit 0')
+  it.each([
+    ['a file newly added in this push', { diff: FEATURE + FLAGS_PRE, before: FEATURE + FLAGS_PRE, pinned: FEATURE + FLAGS_PRE + AUTH, delta: OTHER + AUTH + NOTES }, AUTH, 'src/auth.ts'],
+    ['only a mode change for the file this push edited', { diff: FEATURE + FLAGS_PRE + RUN_MODE, before: FEATURE + FLAGS_PRE + RUN_MODE, pinned: FEATURE + FLAGS_PRE + RUN_PINNED, delta: OTHER + RUN_DELTA + NOTES }, RUN_DELTA, 'run.sh'],
+  ])('I15 the PR diff fetched by id is stale and shows %s → the pinned diff keeps that file, the reviewer gets it, no skip', async (_name, opts: MergeOpts, kept, path) => {
+    mockReviewer(reviewWith([NEW_FINDING]))
+    const adapter = mergeAdapter(opts)
+
+    const { record, logs } = await run(adapter)
+
+    expect(vi.mocked(adapter.getPrDiffAt!).mock.calls).toEqual([[PRIOR_COMMIT, TARGET], [COMMIT_A, TARGET]])
+    expect(logs).toContain(`  Target merge: delta narrowed to 1 of 3 file(s): ${path}`)
+    expect(mockRunReview.mock.calls[0][11]).toBe(kept)
+    expect(record.action).toBe('RE_REVIEW')
+    expect('dedup_source' in record).toBe(false)
+    expect(adapter.postComment).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    ['rejects', (source: string) => (source === PRIOR_COMMIT ? Promise.resolve(FEATURE + FLAGS_PRE) : Promise.reject(new Error('Request failed with status code 500'))), 'Request failed with status code 500'],
+    ['returns an empty diff', (source: string) => Promise.resolve(source === PRIOR_COMMIT ? FEATURE + FLAGS_PRE : ''), 'empty diff'],
+  ])('I16 the second pinned fetch (at the head) %s → one warning naming the head, the full delta, the review runs exactly as with the flag off', async (_name, impl, reason) => {
+    mockReviewer(reviewWith([NEW_FINDING]))
+    const off = await flagOff(mergeAdapter())
+    const getPrDiffAt = vi.fn(impl)
+    const on = await snapshot(mergeAdapter({ overrides: { getPrDiffAt } }))
+
+    expect(getPrDiffAt.mock.calls).toEqual([[PRIOR_COMMIT, TARGET], [COMMIT_A, TARGET]])
+    expect(on.logs.filter(isMergeLog)).toEqual([
+      `  Delta has 2 file(s) outside the PR diff — comparing the PR diff at ${PRIOR_COMMIT} with the current one...`,
+      `  PR diff at ${COMMIT_A} unavailable (${reason}) — keeping the full delta`,
+    ])
+    expect(on.logs.filter(l => !isMergeLog(l))).toEqual(off.logs)
+    expect(on.model).toEqual(off.model)
+    expect(on.record).toEqual(off.record)
+    expect('dedup_source' in on.record).toBe(false)
+  })
+
+  it('I17 the file list is stale but the pinned PR diff holds every delta file → the full delta, nothing narrowed', async () => {
+    mockReviewer(reviewWith([NEW_FINDING]))
+    const adapter = mergeAdapter({ diff: FEATURE + FLAGS_PRE, before: FEATURE + FLAGS_PRE, pinned: FEATURE + FLAGS_PRE + AUTH, delta: AUTH })
+
+    const { record, logs } = await run(adapter)
+
+    expect(logs.filter(isMergeLog)).toEqual([
+      `  Delta has 1 file(s) outside the PR diff — comparing the PR diff at ${PRIOR_COMMIT} with the current one...`,
+      `  Target merge: every delta file is in the PR diff at ${COMMIT_A} — keeping the full delta`,
+    ])
+    expect(mockRunReview.mock.calls[0][11]).toBe(AUTH)
+    expect(record.action).toBe('RE_REVIEW')
+  })
+
+  // The PR renames an excluded `ignored.gen` to `src/auth.ts`; the exclusion filter keys on the old path, so a filtered PR diff would lose auth.ts.
+  const renamed = (blob: string, line: string) =>
+    `diff --git a/ignored.gen b/src/auth.ts\nsimilarity index 80%\nrename from ignored.gen\nrename to src/auth.ts\nindex 1a1a1a1..${blob} 100644\n--- a/ignored.gen\n+++ b/src/auth.ts\n@@ -1 +1 @@\n-generated\n+${line}\n`
+  const AUTH_DELTA = sec('src/auth.ts', '2b2b2b2..3c3c3c3 100644', '@@ -1 +1 @@', '-checkUser()', '+allowAll()')
+  it.each([
+    ['a stale file list', PR_FILES, { diff: FEATURE + FLAGS_PRE + renamed('3c3c3c3', 'allowAll()'), before: FEATURE + FLAGS_PRE + renamed('2b2b2b2', 'checkUser()'), delta: OTHER + AUTH_DELTA + NOTES },
+      AUTH_DELTA, '1 of 3 file(s): src/auth.ts'],
+    ['a fresh file list and a file reverted out of the PR', [...PR_FILES, { path: 'src/auth.ts', status: 'renamed' }],
+      { diff: FEATURE + FLAGS_PRE + renamed('3c3c3c3', 'allowAll()'), before: FEATURE + FLAGS_PRE + renamed('2b2b2b2', 'checkUser()') + GONE, delta: OTHER + AUTH_DELTA + GONE_DELTA + NOTES },
+      AUTH_DELTA + GONE_DELTA, '2 of 4 file(s): src/auth.ts, src/Gone.java'],
+  ])('I18 a PR file renamed from an excluded path changed in this push, with %s → compared unfiltered, kept and reviewed, no skip', async (_name, files, opts: MergeOpts, kept, narrowedTo) => {
+    cfg.diffExcludePatterns = [...cfg.diffExcludePatterns, '*.gen']
+    mockReviewer(reviewWith([NEW_FINDING]))
+    const adapter = mergeAdapter({ ...opts, overrides: { getChangedFiles: vi.fn().mockResolvedValue(files) } })
+
+    const { record, logs } = await run(adapter)
+
+    expect(logs).toContain(`  Target merge: delta narrowed to ${narrowedTo}`)
+    expect(mockRunReview.mock.calls[0][11]).toBe(kept)
+    expect(record.action).toBe('RE_REVIEW')
+    expect('dedup_source' in record).toBe(false)
+  })
+
+  it('I19 an excluded file (package-lock.json) that changed between the pinned PR diffs but is not in the filtered delta → the clean merge is still skipped', async () => {
+    const lock = (blob: string, line: string) => sec('package-lock.json', `4d4d4d4..${blob} 100644`, '@@ -1 +1 @@', '-{}', `+${line}`)
+    const adapter = mergeAdapter({ diff: FEATURE + FLAGS_PRE + lock('5e5e5e5', '{"a":2}'), before: FEATURE + FLAGS_PRE + lock('6f6f6f6', '{"a":1}'),
+      delta: OTHER + sec('package-lock.json', '6f6f6f6..5e5e5e5 100644', '@@ -1 +1 @@', '-{"a":1}', '+{"a":2}') + NOTES })
+
+    const { record } = await run(adapter)
+
+    expect(record.action).toBe('DEDUP_SKIP')
+    expect(record.dedup_source).toBe('target_merge')
+    expect(mockRunReview).not.toHaveBeenCalled()
+  })
+
+  it('I20 a quoted header in a lockfile section of the pinned PR diff → the unfiltered diff is unreadable, so the check fails open with the full delta', async () => {
+    mockReviewer(reviewWith([NEW_FINDING]))
+    const quotedLock = 'diff --git "a/caf\\303\\251.lock" "b/caf\\303\\251.lock"\nindex 7a7a7a7..8b8b8b8 100644\n--- "a/caf\\303\\251.lock"\n+++ "b/caf\\303\\251.lock"\n@@ -1 +1 @@\n-a\n+b\n'
+    const adapter = mergeAdapter({ ...CLEAN, pinned: FEATURE + FLAGS_PRE + quotedLock })
+
+    const { record, logs } = await run(adapter)
+
+    expect(logs).toContain('  Target merge check skipped: a diff section\'s paths could not be read unambiguously — keeping the full delta')
+    expect(mockRunReview.mock.calls[0][11]).toBe(OTHER + NOTES)
+    expect(record.action).toBe('RE_REVIEW')
+  })
+
+  it('I11 flag false, no getPrDiffAt or no targetCommit → no old-diff fetch, and all three runs are the same run', async () => {
+    mockReviewer(reviewWith([NEW_FINDING]))
+    const offAdapter = mergeAdapter()
+    const off = await flagOff(offAdapter)
+    const noMethod = await snapshot(mergeAdapter({ overrides: { getPrDiffAt: undefined } }))
+    const noTargetAdapter = mergeAdapter({ overrides: { getPullRequestInfo: vi.fn().mockResolvedValue(makePRInfo()) } })
+    const noTarget = await snapshot(noTargetAdapter)
+
+    expect(noMethod).toEqual(off)
+    expect(noTarget).toEqual(off)
+    expect(offAdapter.getPrDiffAt).not.toHaveBeenCalled()
+    expect(noTargetAdapter.getPrDiffAt).not.toHaveBeenCalled()
+    expect(off.logs.some(isMergeLog)).toBe(false)
+    expect(off.record.action).toBe('RE_REVIEW')
+  })
+
+  it.each([
+    ['--force re-review', { force: 're-review' as const, dryRun: true }, {}],
+    ['--force clean', { force: 'clean' as const, dryRun: true }, {}],
+    ['a checked-commit match', { checkedCommit: COMMIT_A }, {}],
+    ['a failed delta fetch', {}, { getCommitDiff: vi.fn().mockRejectedValue(new Error('404 commit gone after force-push')) }],
+  ])('I12 %s → the old PR diff is never fetched', async (_name, opts: RunOpts, overrides) => {
+    mockReviewer(reviewWith([NEW_FINDING]))
+    const adapter = mergeAdapter({ overrides })
+
+    const { record, logs } = await run(adapter, opts)
+
+    expect(adapter.getPrDiffAt).not.toHaveBeenCalled()
+    expect(logs.some(isMergeLog)).toBe(false)
+    expect(record.dedup_source).not.toBe('target_merge')
+  })
+
+  it('a first review and a previous review whose footer names no commit → never consulted', async () => {
+    mockReviewer(reviewWith([NEW_FINDING]))
+    const first = mergeAdapter({ overrides: { getPreviousReviewComments: vi.fn().mockResolvedValue([]) } })
+    expect((await run(first, { dryRun: true })).record.action).toBe('REVIEW')
+    expect(first.getPrDiffAt).not.toHaveBeenCalled()
+
+    const noCommit = mergeAdapter({ overrides: { getPreviousReviewComments: vi.fn().mockResolvedValue([{ id: '200', body: FLAGGED_PRIOR, createdOn: PRIOR_AT }]) } })
+    const { record } = await run(noCommit, { dryRun: true })
+    expect(record.action).toBe('RE_REVIEW')
+    expect(noCommit.getCommitDiff).not.toHaveBeenCalled()
+    expect(noCommit.getPrDiffAt).not.toHaveBeenCalled()
+    expect(mockRunReview.mock.calls.at(-1)![11]).toBe('')
+  })
+
+  it('I14 a prompt whose lookup failed → footer and console say "(lookup failed)", the record keeps prompt_source and adds prompt_lookup', async () => {
+    mockReviewer(reviewWith([NEW_FINDING]))
+    mockLoadPrompt.mockResolvedValue({ content: 'System prompt here', source: 'default', lookupFailed: true })
+    const adapter = makeAdapter()
+
+    const { record, logs } = await run(adapter)
+
+    const posted = vi.mocked(adapter.postComment).mock.calls[0][1]
+    expect(posted).toContain('| Prompt: default (lookup failed) | Review #1 |')
+    expect(hasReviewFooter(posted)).toBe(true)
+    expect(extractCommitHash(posted)).toBe(COMMIT_A)
+    expect(logs).toContain('  Prompt source: default (lookup failed)')
+    expect(record.prompt_source).toBe('default')
+    expect(record.prompt_lookup).toBe('failed')
+
+    vi.clearAllMocks(); mockReviewer(reviewWith([NEW_FINDING]))
+    const ok = makeAdapter()
+    const plain = await run(ok)
+    expect(vi.mocked(ok.postComment).mock.calls[0][1]).toContain('| Prompt: repo | Review #1 |')
+    expect('prompt_lookup' in plain.record).toBe(false)
+    expect(plain.logs).toContain('  Prompt source: repo')
+  })
+
+  it.each([
+    [true, '| Prompt: default (lookup failed) | Review #1 |', '  Prompt source: default (lookup failed)', 'failed'],
+    [false, '| Prompt: default | Review #1 |', '  Prompt source: default', undefined],
+  ])('I15 real loader, instructions lookup 429, ENABLE_INSTRUCTIONS_LOOKUP_RETRY=%s → footer %s', async (retry, footerCell, sourceLog, promptLookup) => {
+    mockReviewer(reviewWith([NEW_FINDING]))
+    const { loadPrompt: realLoadPrompt } = await vi.importActual<typeof import('../../prompt/loader.js')>('../../prompt/loader.js')
+    mockLoadPrompt.mockImplementation(realLoadPrompt)
+    cfg.review.instructionsLookupRetry = retry
+    const adapter = makeAdapter({
+      getChangedFiles: vi.fn().mockResolvedValue([{ path: 'notes.txt', status: 'modified' }]),
+      getRepoFileContent: vi.fn().mockRejectedValue(Object.assign(new Error('Request failed with status code 429'), { response: { status: 429 } })),
+    })
+
+    const { record, logs } = await run(adapter)
+
+    expect(vi.mocked(adapter.postComment).mock.calls[0][1]).toContain(footerCell)
+    expect(logs).toContain(sourceLog)
+    expect(logs).toContain('Warning: lookup of .agent-review-instructions.md failed (Request failed with status code 429) - continuing without repo instructions')
+    expect(record.prompt_source).toBe('default')
+    expect(record.prompt_lookup).toBe(promptLookup)
+    expect('prompt_lookup' in record).toBe(retry)
+  })
+
+  it('I13 dry-run clean merge → the same DEDUP_SKIP, never marked', async () => {
+    const { record } = await run(mergeAdapter(CLEAN), { dryRun: true })
+
+    expect(record.action).toBe('DEDUP_SKIP')
+    expect(record.dedup_source).toBe('target_merge')
+    expect('checked_commit' in record).toBe(false)
   })
 })

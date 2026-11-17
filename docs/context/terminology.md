@@ -25,6 +25,7 @@ Focus on shared vocabulary used across code, docs, and prompts.
 | **Commit Hash Dedup** | Skip mechanism: agent parses the commit hash from the Review Footer and compares to current PR head; matching hash = skip | Hash check |
 | **Checked Commit** | Head an earlier run genuinely checked, reported as `checked_commit` in its `results.jsonl` record; CI stores it per PR and passes it back (`LAST_CHECKED_COMMIT`), so a later run on that same head goes to `CHECK_REPLIES` like a footer match. Never changes the delta base | Last reviewed commit, head_checked |
 | **Delta Diff Pre-Check** | Deterministic check: fetches commit-to-commit diff (last reviewed → current head), applies exclusions; if zero lines remain, skip without any API call | Incremental diff |
+| **Target Merge** | A delta with files outside the PR, typically after the author merged the target branch. The agent compares the PR diff as of the reviewed commit with the one as of the delta's head (both fetched pinned to commits) and keeps only delta files whose PR diff section changed (exact comparison, so a PR file the target also touched always stays); none left → skip (`dedup_source: target_merge`). `ENABLE_TARGET_MERGE_CHECK`, Bitbucket only | Merge noise, develop merge |
 | **Branch Exclusion** | Configurable glob patterns for source/target branches that skip review entirely (e.g. `release/*`, `main`) | Branch filter |
 
 ## Prompt System

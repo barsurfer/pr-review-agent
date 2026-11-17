@@ -34,6 +34,9 @@ FETCH_PR_INFO
                       ├─ [delta diff empty after filter] → CHECK_REPLIES
                       │    ├─ [unanswered replies] → RESPOND_TO_REPLIES → DONE
                       │    └─ [none] → SKIP → DONE
+                      ├─ [target merge: PR diff unchanged since the reviewed commit (ENABLE_TARGET_MERGE_CHECK, Bitbucket)] → CHECK_REPLIES
+                      │    ├─ [unanswered replies] → RESPOND_TO_REPLIES → DONE
+                      │    └─ [none] → SKIP → DONE
                       └─ LOAD_PROMPT → FETCH_CONTEXT → ESTIMATE_TOKENS (still over budget → BUNDLED_REVIEW when enabled, else SKIP) → CALL_MODEL
                            └─ CHECK_NO_CHANGE
                                 ├─ [NO_CHANGE] → CHECK_REPLIES (answer a dev reply even with no code change; else SKIP, label kept NO_CHANGE)
@@ -42,6 +45,7 @@ FETCH_PR_INFO
                                           ├─ [ENABLE_LENSES + ≥1 known name in LENSES] → LENS_REVIEW → JUDGE_REVIEW
                                           └─ JUDGE_REVIEW
                                                ├─ [0-finding re-review + unanswered dev reply] → RESPOND_TO_REPLIES → DONE (reply priority)
+                                               ├─ [0-finding re-review, prior clean, or narrowed target merge on a pure merge] → SKIP (NO_NEW_FINDINGS) → DONE
                                                ├─ [JUDGING_MODEL set] → validate reviewer + breadth + second-look + lens candidates → POST_REVIEW → DONE
                                                └─ [no judge] → POST_REVIEW → DONE
 ```
@@ -56,10 +60,10 @@ Both inbound edges to `RESPOND_TO_REPLIES` (`CHECK_REPLIES` and this `JUDGE_REVI
 3. Skip — no reviewable changes after exclusions
 4. Skip — threshold (too few/many reviewable files or lines)
 5. Skip — same commit (or the head CI reported as checked), no replies
-6. Skip — delta diff empty, no replies
+6. Skip — delta diff empty, or a target merge left the PR diff unchanged (`dedup_source: target_merge`), no replies
 7. Skip — reply limit reached
 8. Skip — NO_CHANGE re-review (falls through to CHECK_REPLIES first; skips only when no reply is pending)
-9. Skip — re-review produced no new findings and the prior review was clean (`NO_NEW_FINDINGS`)
+9. Skip — re-review produced no new findings and the prior review was clean, or a narrowed re-review after a target merge found nothing (`NO_NEW_FINDINGS`)
 10. Reply — developer question answered (including after a NO_CHANGE re-review)
 11. Post review — new review comment
 
@@ -75,8 +79,8 @@ Both inbound edges to `RESPOND_TO_REPLIES` (`CHECK_REPLIES` and this `JUDGE_REVI
 | `FETCH_DIFF` | Fetches raw diff from VCS API; calls `filterDiff()` to produce filtered copy; computes reviewable (post-filter) line/file counts; skips immediately if zero reviewable lines. A `PrTooLargeError` from the adapter (diff over the provider's size ceilings — GitHub only today) is caught here and becomes a clean SKIP, not an ERROR |
 | `CHECK_THRESHOLDS` | Compares reviewable (post-filter) line/file counts against `MIN/MAX_CHANGED_*` env vars |
 | `CHECK_BRANCHES` | Compares source/target branch names against `SKIP_SOURCE_BRANCHES` / `SKIP_TARGET_BRANCHES` glob patterns, then (when set) skips a target matching none of `ONLY_TARGET_BRANCHES`; the skip lists win on overlap. Each list can be overridden per repo by its CLI flag (`--skip-source-branches` etc.), where an empty value turns that list off |
-| `CHECK_PREVIOUS_REVIEWS` | Parses commit hash from last review footer; same commit → `CHECK_REPLIES`. On a footer miss, a checked commit passed by CI (`LAST_CHECKED_COMMIT` / `--checked-commit`) that equals the head → `CHECK_REPLIES` too (`dedup_source: checked_commit`); not consulted on a first review or under `--force clean` / `re-review`, and never changes the delta base. Otherwise triggers the delta diff pre-check. See [skip-logic.md §8](skip-logic.md) |
-| `LOAD_PROMPT` | Fetches `.agent-review-instructions.md` from the target repo (CLI `--prompt` → source commit → target branch; each ref probes root → `docs/` → single-module-dir fallback; then composed tech-stack rule sets; defaults last) |
+| `CHECK_PREVIOUS_REVIEWS` | Parses commit hash from last review footer; same commit → `CHECK_REPLIES`. On a footer miss, a checked commit passed by CI (`LAST_CHECKED_COMMIT` / `--checked-commit`) that equals the head → `CHECK_REPLIES` too (`dedup_source: checked_commit`); not consulted on a first review or under `--force clean` / `re-review`, and never changes the delta base. Otherwise triggers the delta diff pre-check; for a delta with a file outside the PR, the PR diffs pinned to the reviewed commit and to the delta's head are compared exactly, per file, and the delta is narrowed to the files whose PR diff section changed (a PR file the target also touched always stays), or ends at `CHECK_REPLIES` when nothing is left (`dedup_source: target_merge`; sets `ctx.deltaBase` and `ctx.mergeNarrowed` for the JUDGE gate). See [skip-logic.md §2 and §8](skip-logic.md) |
+| `LOAD_PROMPT` | Fetches `.agent-review-instructions.md` from the target repo (CLI `--prompt` → source commit → target branch; each ref probes root → `docs/` → single-module-dir fallback; then composed tech-stack rule sets; defaults last). A lookup that failed (rate limit past its retry budget) is shown as `Prompt source: <source> (lookup failed)`, in the footer the same way, and as `prompt_lookup: failed` in the record; see [prompt/composition.md](../prompt/composition.md) |
 | `FETCH_CONTEXT` | Fetches full file content for changed files (see [fetching/strategy.md](../fetching/strategy.md)) |
 | `ESTIMATE_TOKENS` | Estimates input (~chars/4); over the input budget (min of `MAX_INPUT_TOKENS` and the context window — the smaller of the reviewer's and judge's, each from the model id (OpenRouter `anthropic/` slugs resolve as their bare id; a model the table doesn't map takes its window from OpenRouter's model list, looked up once before the FSM, else 200K), with `MODEL_CONTEXT_TOKENS` replacing the reviewer's and standing in for an unmapped judge — minus the output reserve) → drops file contexts (diff-only); still over → `BUNDLED_REVIEW` when enabled, else SKIP |
 | `CALL_MODEL` | Assembles payload (PR info, prior review, developer discussion, diff, file context; suggested-fix blocks stripped from the agent's own review and replies, see [fetching/strategy.md](../fetching/strategy.md)); calls reviewer model. The reviewer returns a typed object (`ctx.reviewObject`); `renderReview` builds `reviewText`. See [llm/structured-output.md](../llm/structured-output.md). With `ENABLE_LENS_RECOMMENDATION` (or `--lens-recommendation`, or the `LENS_REC` label) on and a first review, `runReview` gets one trailing `true`, so the same call also returns which lenses the reviewer recommends; they go to `ctx.lensRecommendations`, one `Lens recommendations: <lens> (<reason>), …` / `none` / `unavailable` (field not returned) log line and `lens_recommendations` in the usage record — never into `reviewObject`, the judge or the post. Log-only: `LENS_REVIEW` still runs every listed lens. Re-reviews and bundle reviewers never request it, and the context-length retry repeats the same call |
@@ -116,7 +120,7 @@ Always on, no flag. Findings are ordered only in the comment body that is posted
 
 The comment is left exactly as cleaned when: the findings are already in order (the same string is returned, so ordered reviews are byte-identical to before); the rendered findings block is not found in the cleaned text (cleanup edited a finding); the text before the findings or any finding has a fence that is not closed by the identical fence line, holds another fence-shaped line, or opens with more than a bare language tag (CommonMark and Python-Markdown could then pair fences across findings); or the re-render is not the cleaned text with only the findings block permuted (cleanup edited any other section). Nothing else changes: `ctx.reviewText`, the usage record and its arrays, `findings`/`verdict_score`, console lines, model inputs, the `--benchmark` outcome (the sink returns before cleanup) and previously posted reviews keep production order. The next run reads the posted body only through `extractCommitHash` (last footer line), `hasReviewFooter`/`hasReplyFooter`, `markdownHasFindings` (any finding line) and the suggested-fix strip (position-independent), none of which depends on finding order.
 
-**Checked-commit mark:** the states that end a run on a genuinely checked head (posted review, pre-post race, footer or checked-commit match, zero-reviewable delta, coherent structured `NO_CHANGE`, `NO_NEW_FINDINGS`, a quiet reply, the JUDGE-gate reply limit) set `ctx.headChecked`, which emits `checked_commit` in the record. Dry-run, benchmark, forced runs, a failed delta fetch and an uncertain bundle never mark, and an error after the mark drops it. Full table in [skip-logic.md §8](skip-logic.md).
+**Checked-commit mark:** the states that end a run on a genuinely checked head (posted review, pre-post race, footer or checked-commit match, zero-reviewable delta, target-merge skip, coherent structured `NO_CHANGE`, `NO_NEW_FINDINGS` incl. the target-merge one, a quiet reply, the JUDGE-gate reply limit) set `ctx.headChecked`, which emits `checked_commit` in the record. Dry-run, benchmark, forced runs, a failed delta fetch and an uncertain bundle never mark, and an error after the mark drops it. Full table in [skip-logic.md §8](skip-logic.md).
 
 ---
 

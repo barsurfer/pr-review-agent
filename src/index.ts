@@ -150,7 +150,8 @@ async function main(): Promise<void> {
       config.bitbucket.baseUrl,
       config.bitbucket.workspace,
       config.bitbucket.username,
-      config.bitbucket.token
+      config.bitbucket.token,
+      config.review.instructionsLookupRetry
     )
 
     if (!opts.repoSlug) {

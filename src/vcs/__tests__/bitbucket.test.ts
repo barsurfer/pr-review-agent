@@ -1,6 +1,13 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+
+// loadPrompt imports config, which requires ANTHROPIC_API_KEY at load.
+vi.hoisted(() => { process.env.ANTHROPIC_API_KEY ??= 'test-key' })
+
 import { BitbucketAdapter } from '../bitbucket.js'
 import { buildReviewFooter, buildReplyFooter } from '../../review/formatter.js'
+import { loadPrompt } from '../../prompt/loader.js'
+import { config } from '../../config.js'
+import type { PRInfo } from '../adapter.js'
 
 // ---------------------------------------------------------------------------
 // Agent comment detection against a realistic PR thread.
@@ -619,5 +626,313 @@ describe('redirect follow-up retry', () => {
     expect(log.mock.calls.flat().join('\n')).not.toContain('secret')
     log.mockRestore()
     warn.mockRestore()
+  })
+})
+
+describe('target-merge check: PR info and the optional adapter methods', () => {
+  const silence = () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    return () => { log.mockRestore(); warn.mockRestore() }
+  }
+
+  it('maps destination.commit.hash to targetCommit', async () => {
+    const restore = silence()
+    clientMock.get.mockResolvedValue({ status: 200, data: {
+      id: 7, title: 't', description: '', author: { display_name: 'Dev' },
+      source: { branch: { name: 'feature/x' }, commit: { hash: 'aaa111222333' } },
+      destination: { branch: { name: 'develop' }, commit: { hash: 'ddd444555666' } },
+    } })
+    try {
+      const info = await makeAdapter().getPullRequestInfo('7')
+      expect(info.targetCommit).toBe('ddd444555666')
+      expect(info.sourceCommit).toBe('aaa111222333')
+    } finally { restore() }
+  })
+
+  // Stand-ins for every client the merge check must leave alone, so a call through one of them shows up.
+  const isolate = (adapter: BitbucketAdapter) => {
+    const others = { client: { get: vi.fn() }, redirectClient: { get: vi.fn() }, optionalClient: { get: vi.fn() }, foundFileClient: { get: vi.fn() } }
+    Object.assign(adapter as unknown as Record<string, unknown>, others)
+    return Object.values(others).map(c => c.get)
+  }
+
+  it('getPrDiffAt fetches /diff/{source}..{target} as text on the merge-check clients and follows the 302 with auth', async () => {
+    const axios = (await import('axios')).default as unknown as { get: ReturnType<typeof vi.fn> }
+    const restore = silence()
+    const location = 'https://api.bitbucket.org/2.0/repositories/ws/repo/diff/aabbcc112233..ddd444555666?topic=true'
+    clientMock.get.mockResolvedValue({ status: 302, headers: { location } })
+    axios.get.mockResolvedValue({ status: 200, data: 'diff --git a/x b/x\n' })
+    const adapter = makeAdapter()
+    const untouched = isolate(adapter)
+    try {
+      expect(await adapter.getPrDiffAt('aabbcc112233', 'ddd444555666')).toBe('diff --git a/x b/x\n')
+      expect(clientMock.get).toHaveBeenCalledTimes(1)
+      expect(clientMock.get.mock.calls[0][0]).toBe('/repositories/ws/repo/diff/aabbcc112233..ddd444555666')
+      expect(clientMock.get.mock.calls[0][1]).toMatchObject({ headers: { Accept: 'text/plain' }, responseType: 'text', maxRedirects: 0 })
+      expect(axios.get.mock.calls[0][0]).toBe(location)
+      expect(axios.get.mock.calls[0][1]).toMatchObject({ headers: { Accept: 'text/plain', Authorization: expect.stringMatching(/^Basic /) }, responseType: 'text' })
+      for (const get of untouched) expect(get).not.toHaveBeenCalled()
+    } finally { restore() }
+  })
+
+  it('getPrDiffAt follows a redirect to another host without the auth header', async () => {
+    const axios = (await import('axios')).default as unknown as { get: ReturnType<typeof vi.fn> }
+    const restore = silence()
+    clientMock.get.mockResolvedValue({ status: 302, headers: { location: 'https://cdn.example/diff?sig=x' } })
+    axios.get.mockResolvedValue({ status: 200, data: 'diff --git a/x b/x\n' })
+    try {
+      expect(await makeAdapter().getPrDiffAt('aabbcc112233', 'ddd444555666')).toBe('diff --git a/x b/x\n')
+      expect(axios.get.mock.calls[0][0]).toBe('https://cdn.example/diff?sig=x')
+      expect(axios.get.mock.calls[0][1].headers).toEqual({ Accept: 'text/plain' })
+    } finally { restore() }
+  })
+
+  it('getCommitParents reads /commit/{sha} on the merge-check client and maps the parent hashes in order', async () => {
+    const restore = silence()
+    clientMock.get.mockResolvedValue({ status: 200, data: { hash: 'm'.repeat(40), parents: [{ hash: 'p'.repeat(40) }, { hash: 't'.repeat(40) }] } })
+    const adapter = makeAdapter()
+    const untouched = isolate(adapter)
+    try {
+      expect(await adapter.getCommitParents('abc123')).toEqual(['p'.repeat(40), 't'.repeat(40)])
+      expect(clientMock.get).toHaveBeenCalledWith('/repositories/ws/repo/commit/abc123')
+      for (const get of untouched) expect(get).not.toHaveBeenCalled()
+    } finally { restore() }
+  })
+})
+
+describe('instructions lookup under rate limits (real adapter, fake timers)', () => {
+  const httpErr = (status: number, url: string, headers: Record<string, string> = {}) =>
+    Object.assign(new Error(`Request failed with status code ${status}`), { config: { method: 'get', url }, response: { status, headers } })
+  let warnLines: string[]
+  let logLines: string[]
+  let restore: () => void
+  let axiosMock: { isAxiosError: ReturnType<typeof vi.fn> }
+
+  beforeEach(async () => {
+    vi.useFakeTimers()
+    warnLines = []
+    logLines = []
+    const log = vi.spyOn(console, 'log').mockImplementation((...a: unknown[]) => { logLines.push(a.map(String).join(' ')) })
+    const warn = vi.spyOn(console, 'warn').mockImplementation((...a: unknown[]) => { warnLines.push(a.map(String).join(' ')) })
+    restore = () => { log.mockRestore(); warn.mockRestore() }
+    axiosMock = (await import('axios')).default as unknown as { isAxiosError: ReturnType<typeof vi.fn> }
+    axiosMock.isAxiosError.mockImplementation((e: { response?: { status?: number } }) => e?.response?.status === 404)
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    axiosMock.isAxiosError.mockImplementation(() => false)
+    clientMock.get.mockReset()
+    restore()
+  })
+
+  const sleeps = () => warnLines.map(l => l.match(/retry \d\/\d in (\d+)s$/)?.[1]).filter((s): s is string => !!s).map(Number)
+  const settle = async <T>(p: Promise<T>): Promise<{ v?: T; e?: unknown }> => {
+    const out = p.then(v => ({ v }), (e: unknown) => ({ e }))
+    await vi.runAllTimersAsync()
+    return out
+  }
+
+  it('once the probe budget is spent, a found-file fetch still retries, and a second found fetch shares the 35 s', async () => {
+    const waitAll = { 'retry-after': '30' }
+    clientMock.get
+      .mockRejectedValueOnce(httpErr(429, '/p1', waitAll)).mockRejectedValueOnce(httpErr(429, '/p1', waitAll))
+      .mockRejectedValueOnce(httpErr(429, '/p2', waitAll))
+      .mockRejectedValueOnce(httpErr(429, '/f1')).mockRejectedValueOnce(httpErr(429, '/f1')).mockResolvedValueOnce({ status: 200, data: 'content' })
+      .mockRejectedValue(httpErr(429, '/f2'))
+    const adapter = makeAdapter()
+
+    expect((await settle(adapter.getRepoFileContent('p1.md', 'abc'))).e).toBeDefined()
+    expect((await settle(adapter.getRepoFileContent('p2.md', 'abc'))).e).toBeDefined()
+    expect(await settle(adapter.getRepoFileContent('f1.md', 'abc', { found: true }))).toEqual({ v: 'content' })
+    expect((await settle(adapter.getRepoFileContent('f2.md', 'abc', { found: true }))).e).toBeDefined()
+
+    expect(sleeps()).toEqual([30, 3, 8, 3, 8])
+    expect(clientMock.get).toHaveBeenCalledTimes(9)
+    expect(warnLines.filter(l => l.includes('retry budget'))).toEqual([
+      '  [bitbucket] retry budget (30s) spent - failing without further retries',
+      '  [bitbucket] retry budget (35s) spent - failing without further retries',
+    ])
+  })
+
+  it('lookupRetry false: 3 s then 24 s on the 30 s budget, and { found: true } spends that same budget', async () => {
+    clientMock.get
+      .mockRejectedValueOnce(httpErr(429, '/p1')).mockRejectedValueOnce(httpErr(429, '/p1')).mockResolvedValueOnce({ status: 200, data: 'link' })
+      .mockRejectedValueOnce(httpErr(429, '/f1')).mockResolvedValueOnce({ status: 200, data: 'content' })
+      .mockRejectedValue(httpErr(429, '/f2'))
+    const adapter = new BitbucketAdapter('https://api.bitbucket.org/2.0', 'ws', 'bot@co.com', 'token', false)
+    adapter.setRepoSlug('repo')
+
+    expect(await settle(adapter.getRepoFileContent('p1.md', 'abc'))).toEqual({ v: 'link' })
+    expect(await settle(adapter.getRepoFileContent('f1.md', 'abc', { found: true }))).toEqual({ v: 'content' })
+    expect((await settle(adapter.getRepoFileContent('f2.md', 'abc', { found: true }))).e).toBeDefined()
+
+    expect(sleeps()).toEqual([3, 24, 3])
+    expect(clientMock.get).toHaveBeenCalledTimes(6)
+    expect(warnLines.filter(l => l.includes('retry budget'))).toEqual(['  [bitbucket] retry budget (30s) spent - failing without further retries'])
+  })
+
+  const PR: PRInfo = { id: '1', title: 't', description: '', author: 'dev', sourceBranch: 'feature/x', targetBranch: 'develop', sourceCommit: 'abc123def456' }
+  const ROLE = '## ROLE\nShared reviewer.'
+  const MISS = [429, 404]
+  const sourceProbes = (last: (number | string)[]) => ({
+    'abc123def456/.agent-review-instructions.md': [...MISS],
+    'abc123def456/docs/.agent-review-instructions.md': [...MISS],
+    'abc123def456/app/.agent-review-instructions.md': [...MISS],
+    'abc123def456/app/docs/.agent-review-instructions.md': last,
+  })
+  const script = (plan: Record<string, (number | string)[]>) => clientMock.get.mockImplementation(async (url: string) => {
+    const next = plan[url.replace('/repositories/ws/repo/src/', '')]?.shift() ?? 404
+    if (typeof next === 'number') throw httpErr(next, url)
+    return { status: 200, data: next }
+  })
+  const lookup = () => settle(loadPrompt(makeAdapter(), PR, undefined, [{ path: 'app/src/Main.groovy', status: 'modified' }]))
+
+  it.each([
+    ['four probes, the last holding the symlink', {
+      ...sourceProbes([429, '../../.github/prompts/review.prompt.md']),
+      'abc123def456/.github/prompts/review.prompt.md': [429, 429, ROLE],
+    }, [3, 3, 3, 3, 3, 8]],
+    ['five probes, the symlink at the target branch root', {
+      ...sourceProbes([...MISS]),
+      'develop/.agent-review-instructions.md': [429, './.github/prompts/review.prompt.md'],
+      'develop/.github/prompts/review.prompt.md': [429, 429, ROLE],
+    }, [3, 3, 3, 3, 3, 3, 8]],
+  ])('PR 9104 replay, %s: every probe 429 then answered, the found file 429, 429, 200 → the repo prompt loads', async (_name, plan, waits) => {
+    script(plan as Record<string, (number | string)[]>)
+
+    const { v } = await lookup()
+
+    expect(v!.source).toBe('repo')
+    expect(v!.content).toContain('Shared reviewer.')
+    expect('lookupFailed' in v!).toBe(false)
+    expect(sleeps()).toEqual(waits)
+  })
+
+  it('PR 9104 replay, the found file still 429 after 3 s, 8 s and 24 s → lookupFailed and the default prompt, with the log line', async () => {
+    script({
+      ...sourceProbes([429, '../../.github/prompts/review.prompt.md']),
+      'abc123def456/.github/prompts/review.prompt.md': [429, 429, 429, 429],
+    })
+
+    const { v } = await lookup()
+
+    expect(v).toMatchObject({ source: 'default', lookupFailed: true })
+    expect(sleeps()).toEqual([3, 3, 3, 3, 3, 8, 24])
+    expect(logLines).toContain('Could not check for .agent-review-instructions.md (lookup failed) — using default prompt')
+  })
+
+  it('ENABLE_INSTRUCTIONS_LOOKUP_RETRY=false, PR 9104 replay: 3/24/96 s on one 30 s budget shared with the found file → the lookup fails, reported as not found', async () => {
+    script({
+      ...sourceProbes([429, '../../.github/prompts/review.prompt.md']),
+      'abc123def456/.github/prompts/review.prompt.md': [429, 429, ROLE],
+    })
+    config.review.instructionsLookupRetry = false
+    try {
+      const adapter = new BitbucketAdapter('https://api.bitbucket.org/2.0', 'ws', 'bot@co.com', 'token', false)
+      adapter.setRepoSlug('repo')
+      const internals = adapter as unknown as Record<string, unknown>
+      expect(internals.foundFileClient).toBe(internals.optionalClient)
+
+      const { v } = await settle(loadPrompt(adapter, PR, undefined, [{ path: 'app/src/Main.groovy', status: 'modified' }]))
+
+      expect(Object.keys(v!)).toEqual(['content', 'source'])
+      expect(v!.source).toBe('default')
+      expect(sleeps()).toEqual([3, 3, 3, 3, 3])
+      expect(warnLines.filter(l => /retry \d\/\d in/.test(l)).every(l => l.endsWith('/3 in 3s'))).toBe(true)
+      expect(warnLines.filter(l => l.includes('retry budget'))).toEqual(['  [bitbucket] retry budget (30s) spent - failing without further retries'])
+      expect(warnLines).toContain('Warning: lookup of .agent-review-instructions.md failed (Request failed with status code 429; GET /repositories/ws/repo/src/abc123def456/.github/prompts/review.prompt.md) - continuing without repo instructions')
+      expect(logLines).toContain('No .agent-review-instructions.md found in source or target branch — using default prompt')
+      expect(logLines.some(l => l.startsWith('Could not check'))).toBe(false)
+      expect(clientMock.get.mock.calls.filter(([url]) => String(url).endsWith('/.github/prompts/review.prompt.md'))).toHaveLength(2)
+      expect(clientMock.get).toHaveBeenCalledTimes(10)
+    } finally { config.review.instructionsLookupRetry = true }
+  })
+})
+
+describe('target-merge check retry budget (real adapter, fake timers)', () => {
+  const httpErr = (status: number, url: string, after?: string) =>
+    Object.assign(new Error(`Request failed with status code ${status}`), { config: { method: 'get', url }, response: { status, headers: after ? { 'retry-after': after } : {} } })
+  let warnLines: string[]
+  let restore: () => void
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    clientMock.get.mockReset()
+    warnLines = []
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const warn = vi.spyOn(console, 'warn').mockImplementation((...a: unknown[]) => { warnLines.push(a.map(String).join(' ')) })
+    restore = () => { log.mockRestore(); warn.mockRestore() }
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    clientMock.get.mockReset()
+    restore()
+  })
+
+  const sleeps = () => warnLines.map(l => l.match(/retry \d\/\d in (\d+)s$/)?.[1]).filter((s): s is string => !!s).map(Number)
+  const settle = async <T>(p: Promise<T>): Promise<{ v?: T; e?: unknown }> => {
+    const out = p.then(v => ({ v }), (e: unknown) => ({ e }))
+    await vi.runAllTimersAsync()
+    return out
+  }
+  // Per URL fragment: a number fails with that status, [status, retryAfter] adds the header, anything else is the response body; the last entry repeats.
+  const script = (plan: Record<string, unknown[]>) => clientMock.get.mockImplementation(async (url: string) => {
+    const queue = plan[Object.keys(plan).find(k => url.includes(k)) ?? ''] ?? [404]
+    const next = queue.length > 1 ? queue.shift() : queue[0]
+    if (typeof next === 'number') throw httpErr(next, url)
+    if (Array.isArray(next)) throw httpErr(next[0] as number, url, next[1] as string)
+    return { status: 200, data: next }
+  })
+  const REVIEWS = { values: [comment(1, REVIEW_BODY, '2026-07-01T10:00:00Z')] }
+
+  it.each([
+    ['getPrDiffAt, repeated 500s', '/diff/', 500, (a: BitbucketAdapter) => a.getPrDiffAt('aabbcc112233', 'ddd444555666')],
+    ['getCommitParents, repeated 429s', '/commit/', 429, (a: BitbucketAdapter) => a.getCommitParents('abc123')],
+  ])('%s → gives up on its own 30 s budget, and a later required call still gets the full 3/24/96 s schedule', async (_name, path, status, call) => {
+    script({ [path]: [status], '/comments': [500, 500, 500, REVIEWS] })
+    const adapter = makeAdapter()
+
+    expect((await settle<unknown>(call(adapter))).e).toBeDefined()
+    const { v } = await settle(adapter.getPreviousReviewComments('100'))
+
+    expect(v!.map(r => r.id)).toEqual(['1'])
+    expect(sleeps()).toEqual([3, 8, 3, 24, 96])
+    expect(warnLines.filter(l => l.includes('retry budget'))).toEqual(['  [bitbucket] retry budget (30s) spent - failing without further retries'])
+  })
+
+  it('a failing redirect hop of getPrDiffAt gives up on its own 30 s budget, and a later getDiff redirect still gets the full 3/24/96 s schedule', async () => {
+    const axios = (await import('axios')).default as unknown as { get: ReturnType<typeof vi.fn> }
+    const hop = 'https://api.bitbucket.org/2.0/hop/'
+    clientMock.get.mockImplementation(async (url: string) => ({ status: 302, headers: { location: hop + (url.includes('/diff/') ? 'merge' : 'pr') } }))
+    let prFailures = 3
+    axios.get.mockImplementation(async (url: string) => {
+      if (url.endsWith('/merge') || prFailures-- > 0) throw httpErr(500, url)
+      return { status: 200, data: 'diff --git a/x b/x\n' }
+    })
+    try {
+      const adapter = makeAdapter()
+      expect((await settle(adapter.getPrDiffAt('aabbcc112233', 'ddd444555666'))).e).toBeDefined()
+      expect(await settle(adapter.getDiff('1'))).toEqual({ v: 'diff --git a/x b/x\n' })
+      expect(sleeps()).toEqual([3, 8, 3, 24, 96])
+    } finally { axios.get.mockReset() }
+  })
+
+  it('the merge check and the instructions lookup never spend each other\'s budget', async () => {
+    script({ '/diff/': [[429, '30'], [429, '20']], '/src/': [[429, '30'], 'content'] })
+    const adapter = makeAdapter()
+
+    expect((await settle(adapter.getPrDiffAt('aabbcc112233', 'ddd444555666'))).e).toBeDefined()
+    expect(await settle(adapter.getRepoFileContent('x.md', 'abc'))).toEqual({ v: 'content' })
+    expect(sleeps()).toEqual([30, 30])
+
+    warnLines = []
+    const fresh = makeAdapter()
+    script({ '/src/': [[429, '30'], [429, '20']], '/diff/': [[429, '20'], 'diff --git a/x b/x\n'] })
+    expect((await settle(fresh.getRepoFileContent('x.md', 'abc'))).e).toBeDefined()
+    expect(await settle(fresh.getPrDiffAt('aabbcc112233', 'ddd444555666'))).toEqual({ v: 'diff --git a/x b/x\n' })
+    expect(sleeps()).toEqual([30, 20])
   })
 })

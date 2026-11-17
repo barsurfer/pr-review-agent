@@ -3,8 +3,12 @@ const RETRY_DELAYS_MS = [3_000, 24_000, 96_000]
 export const MAX_RETRIES = RETRY_DELAYS_MS.length
 const MAX_DELAY_MS = 96_000
 export const RETRY_BUDGET_MS = 180_000
-// Covers the 3 s and 24 s waits only: an optional lookup is not worth the 96 s one.
+// Short steps so a lookup that is 429ed twice still retries inside its budget instead of meeting a 24 s wait first.
+export const OPTIONAL_RETRY_DELAYS_MS = [3_000, 8_000, 24_000]
+// An optional lookup is not worth the 96 s wait, and every probe shares this budget.
 export const OPTIONAL_RETRY_BUDGET_MS = 30_000
+// A file the probes already found exists, so its fetch gets the whole optional schedule on a budget of its own.
+export const FOUND_FILE_RETRY_BUDGET_MS = 35_000
 const METHODS = new Set(['get', 'post', 'put', 'delete'])
 
 interface HttpError {
@@ -40,9 +44,9 @@ function isRetryable(err: unknown, read: boolean): boolean {
   return e.code === 'ECONNRESET' || e.code === 'EAI_AGAIN'
 }
 
-export function retryDelayMs(attempt: number, err: unknown): number {
+export function retryDelayMs(attempt: number, err: unknown, delays: readonly number[] = RETRY_DELAYS_MS): number {
   const retryAfter = Number(header((err ?? {}) as HttpError, 'retry-after'))
-  const ms = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : RETRY_DELAYS_MS[Math.min(attempt, MAX_RETRIES - 1)]
+  const ms = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : delays[Math.min(attempt, delays.length - 1)]
   return Math.min(ms, MAX_DELAY_MS)
 }
 
@@ -95,7 +99,7 @@ export function withCallLog<T extends object>(client: T, label: string): T {
 }
 
 // Sits on top of withCallLog so each attempt is logged by the layer below.
-export function withRetry<T extends object>(client: T, label: string, sleep: (ms: number) => Promise<void> = delay, budgetMs = RETRY_BUDGET_MS): T {
+export function withRetry<T extends object>(client: T, label: string, sleep: (ms: number) => Promise<void> = delay, budgetMs = RETRY_BUDGET_MS, delays: readonly number[] = RETRY_DELAYS_MS): T {
   // Per client: many files failing at once must not stack their waits into an hour.
   let slept = 0
   let budgetLogged = false
@@ -104,8 +108,8 @@ export function withRetry<T extends object>(client: T, label: string, sleep: (ms
       try {
         return await call(...args)
       } catch (err: unknown) {
-        if (attempt >= MAX_RETRIES || !isRetryable(err, method === 'get')) throw err
-        const ms = retryDelayMs(attempt, err)
+        if (attempt >= delays.length || !isRetryable(err, method === 'get')) throw err
+        const ms = retryDelayMs(attempt, err, delays)
         if (slept + ms > budgetMs) {
           if (!budgetLogged) {
             budgetLogged = true
@@ -114,7 +118,7 @@ export function withRetry<T extends object>(client: T, label: string, sleep: (ms
           throw err
         }
         slept += ms
-        console.warn(`  [${label}] retry ${attempt + 1}/${MAX_RETRIES} in ${ms / 1000}s`)
+        console.warn(`  [${label}] retry ${attempt + 1}/${delays.length} in ${ms / 1000}s`)
         await sleep(ms)
       }
     }

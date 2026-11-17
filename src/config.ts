@@ -182,6 +182,10 @@ export const config = {
     secondLookBreadthTargets: optional('ENABLE_SECOND_LOOK_BREADTH_TARGETS', 'false') === 'true',
     // On by default: without numbered lines ~40% of findings carried no line; set false to send the raw diff/context (saves the per-line gutter tokens).
     lineNumbers: optional('ENABLE_LINE_NUMBERS', 'true') !== 'false',
+    // On by default with a kill switch: false always reviews the full delta after a target merge.
+    targetMergeCheck: optional('ENABLE_TARGET_MERGE_CHECK', 'true') !== 'false',
+    // On by default with a kill switch: false restores the 3/24/96 s lookup on one 30 s budget and reports a failed lookup like a missing file.
+    instructionsLookupRetry: optional('ENABLE_INSTRUCTIONS_LOOKUP_RETRY', 'true') !== 'false',
   },
 
   context: {

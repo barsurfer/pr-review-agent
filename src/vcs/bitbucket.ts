@@ -3,7 +3,7 @@ import { hasReviewFooter, hasReplyFooter } from '../review/formatter.js'
 import { decideDirectedElsewhere, mentionsAgent } from './mention-filter.js'
 import type { VCSAdapter, PRInfo, ChangedFile, ReviewComment, CommentReply, ReplyResult } from './adapter.js'
 import { AGENT_REPLY_AUTHOR, authorIdOf } from './adapter.js'
-import { withCallLog, withRetry, OPTIONAL_RETRY_BUDGET_MS } from './http-retry.js'
+import { withCallLog, withRetry, OPTIONAL_RETRY_BUDGET_MS, OPTIONAL_RETRY_DELAYS_MS, FOUND_FILE_RETRY_BUDGET_MS } from './http-retry.js'
 
 // Bound every Bitbucket call so a hung request fails fast instead of stalling the whole run
 const REQUEST_TIMEOUT_MS = 30_000
@@ -38,11 +38,16 @@ export class BitbucketAdapter implements VCSAdapter {
   private readonly redirectClient: Pick<AxiosInstance, 'get'>
   // Own small budget, so a rate-limited optional lookup cannot spend the waits that required calls need.
   private readonly optionalClient: AxiosInstance
+  // One per run, so a found file never inherits the probes' spent waits and every symlink target together stays capped.
+  private readonly foundFileClient: AxiosInstance
+  // Own small budgets, so the optional target-merge check never spends the retry budget of required calls or of the instructions lookup.
+  private readonly mergeCheckClient: AxiosInstance
+  private readonly mergeCheckRedirectClient: Pick<AxiosInstance, 'get'>
   private readonly workspace: string
   private readonly authHeader: string
   private readonly baseHost: string
 
-  constructor(baseUrl: string, workspace: string, username: string, token: string) {
+  constructor(baseUrl: string, workspace: string, username: string, token: string, lookupRetry = true) {
     this.workspace = workspace
     this.authHeader = 'Basic ' + Buffer.from(`${username}:${token}`).toString('base64')
     try { this.baseHost = new URL(baseUrl).host } catch { this.baseHost = '' }
@@ -55,14 +60,17 @@ export class BitbucketAdapter implements VCSAdapter {
       },
     }), 'bitbucket')
     this.client = withRetry(logged, 'bitbucket')
-    this.optionalClient = withRetry(logged, 'bitbucket', undefined, OPTIONAL_RETRY_BUDGET_MS)
+    this.optionalClient = withRetry(logged, 'bitbucket', undefined, OPTIONAL_RETRY_BUDGET_MS, lookupRetry ? OPTIONAL_RETRY_DELAYS_MS : undefined)
+    this.foundFileClient = lookupRetry ? withRetry(logged, 'bitbucket', undefined, FOUND_FILE_RETRY_BUDGET_MS, OPTIONAL_RETRY_DELAYS_MS) : this.optionalClient
     this.redirectClient = withRetry(withCallLog(axios, 'bitbucket'), 'bitbucket')
+    this.mergeCheckClient = withRetry(logged, 'bitbucket', undefined, OPTIONAL_RETRY_BUDGET_MS, OPTIONAL_RETRY_DELAYS_MS)
+    this.mergeCheckRedirectClient = withRetry(withCallLog(axios, 'bitbucket'), 'bitbucket', undefined, OPTIONAL_RETRY_BUDGET_MS, OPTIONAL_RETRY_DELAYS_MS)
   }
 
   /** Follow 302 redirects while preserving auth (axios strips auth on redirect).
    *  Only re-attach auth on same-host redirects — never leak the token to another host. */
-  private async getFollowingRedirects(url: string, config: AxiosRequestConfig = {}): Promise<any> {
-    const res = await this.client.get(url, { ...config, maxRedirects: 0, timeout: REQUEST_TIMEOUT_MS, validateStatus: s => s < 400 || s === 302 })
+  private async getFollowingRedirects(url: string, config: AxiosRequestConfig = {}, via: Pick<AxiosInstance, 'get'> = this.client, redirectVia: Pick<AxiosInstance, 'get'> = this.redirectClient): Promise<any> {
+    const res = await via.get(url, { ...config, maxRedirects: 0, timeout: REQUEST_TIMEOUT_MS, validateStatus: s => s < 400 || s === 302 })
     if (res.status === 302 && res.headers.location) {
       const location = res.headers.location as string
       let sameHost = false
@@ -70,7 +78,7 @@ export class BitbucketAdapter implements VCSAdapter {
       if (!sameHost) {
         console.warn(`  Redirect to a different host — not forwarding auth`)
       }
-      return this.redirectClient.get(location, {
+      return redirectVia.get(location, {
         ...config,
         timeout: REQUEST_TIMEOUT_MS,
         headers: sameHost ? { ...config.headers, Authorization: this.authHeader } : { ...config.headers },
@@ -92,6 +100,7 @@ export class BitbucketAdapter implements VCSAdapter {
       sourceBranch: data.source.branch.name,
       targetBranch: data.destination.branch.name,
       sourceCommit: data.source.commit.hash,
+      targetCommit: data.destination?.commit?.hash,
     }
   }
 
@@ -142,10 +151,10 @@ export class BitbucketAdapter implements VCSAdapter {
     return data as string
   }
 
-  async getRepoFileContent(filePath: string, ref = 'HEAD'): Promise<string | null> {
+  async getRepoFileContent(filePath: string, ref = 'HEAD', opts?: { found?: boolean }): Promise<string | null> {
     const repoSlug = this.getRepoSlug()
     try {
-      const { data } = await this.optionalClient.get(
+      const { data } = await (opts?.found ? this.foundFileClient : this.optionalClient).get(
         `/repositories/${this.workspace}/${repoSlug}/src/${ref}/${filePath}`,
         { responseType: 'text' }
       )
@@ -307,6 +316,23 @@ export class BitbucketAdapter implements VCSAdapter {
       { headers: { Accept: 'text/plain' }, responseType: 'text' }
     )
     return data as string
+  }
+
+  async getPrDiffAt(sourceCommit: string, targetCommit: string): Promise<string> {
+    const repoSlug = this.getRepoSlug()
+    const { data } = await this.getFollowingRedirects(
+      `/repositories/${this.workspace}/${repoSlug}/diff/${sourceCommit}..${targetCommit}`,
+      { headers: { Accept: 'text/plain' }, responseType: 'text' },
+      this.mergeCheckClient,
+      this.mergeCheckRedirectClient,
+    )
+    return data as string
+  }
+
+  async getCommitParents(commit: string): Promise<string[]> {
+    const repoSlug = this.getRepoSlug()
+    const { data } = await this.mergeCheckClient.get(`/repositories/${this.workspace}/${repoSlug}/commit/${commit}`)
+    return (data.parents ?? []).map((p: { hash: string }) => String(p.hash))
   }
 
   // repo slug is passed in at call sites via CLI — store it after construction

@@ -75,6 +75,7 @@ export interface UsageRecord {
   dry_run: boolean
   force: string
   prompt_source: string
+  prompt_lookup?: 'failed'
   agent_commit: string
   prompt_hash: string | null
   judge_prompt_hash: string | null
@@ -112,7 +113,7 @@ export interface UsageRecord {
   delta: { developer_replies: number; human_replies: number; agent_replies: number; resolved: number; still_open: number; new_findings: number } | null
   reply_authors?: string[]
   checked_commit?: string
-  dedup_source?: 'checked_commit'
+  dedup_source?: 'checked_commit' | 'target_merge'
   jenkins: { job: string; build: string; url: string } | null
   trigger?: { event: string | null; comment_author: string | null; event_kind?: EventKind }
   error: { type: string; message: string; status: number | null } | null
@@ -317,6 +318,7 @@ export function buildUsageRecord(
     dry_run: ctx.dryRun,
     force: ctx.force,
     prompt_source: ctx.prompt?.source ?? 'none',
+    ...(ctx.prompt?.lookupFailed ? { prompt_lookup: 'failed' as const } : {}),
     agent_commit: getBuildCommit(),
     prompt_hash: ctx.prompt ? hash12(ctx.prompt.content) : null,
     judge_prompt_hash: ctx.judgePromptHash ?? null,
@@ -385,7 +387,7 @@ export function buildUsageRecord(
     ...(replyAuthors.length ? { reply_authors: replyAuthors } : {}),
     // Present only when the head was really checked and the run did not fail afterwards; CI stores exactly this value, so it must pass the LAST_CHECKED_COMMIT rule too, whatever head the adapter reported.
     ...(ctx.headChecked && !error && isCheckedCommitHash(ctx.prInfo!.sourceCommit) ? { checked_commit: ctx.prInfo!.sourceCommit } : {}),
-    ...(ctx.dedupHit === 'checked_commit' ? { dedup_source: 'checked_commit' as const } : {}),
+    ...(ctx.dedupHit ? { dedup_source: ctx.dedupHit } : {}),
     jenkins: getJenkinsMeta(),
     // Absent when CI passed no trigger, so those records serialize exactly as before.
     ...(ctx.trigger ? { trigger: { event: ctx.trigger.event || null, comment_author: ctx.trigger.commentAuthor || null, ...(ctx.trigger.kind ? { event_kind: ctx.trigger.kind } : {}) } } : {}),

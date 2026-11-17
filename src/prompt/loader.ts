@@ -203,6 +203,7 @@ export type PromptSource = 'repo' | 'default' | string
 export interface LoadedPrompt {
   content: string
   source: PromptSource
+  lookupFailed?: true
 }
 
 export async function loadPrompt(adapter: VCSAdapter, prInfo: PRInfo, localPromptPath?: string, changedFiles?: ChangedFile[], diff?: string): Promise<LoadedPrompt> {
@@ -231,10 +232,12 @@ export async function loadPrompt(adapter: VCSAdapter, prInfo: PRInfo, localPromp
   }
   // The instructions file is optional, so a failed lookup (rate limit, outage) must not cost the whole review; one failure ends the probing.
   let lookupFailed = false
-  const fetchOptional = async (path: string, ref: string): Promise<string | null> => {
+  // Only an explicit false turns it off, matching the config default and the Bitbucket constructor's.
+  const lookupRetry = config.review.instructionsLookupRetry !== false
+  const fetchOptional = async (path: string, ref: string, found = false): Promise<string | null> => {
     if (lookupFailed) return null
     try {
-      return await adapter.getRepoFileContent(path, ref)
+      return await (found && lookupRetry ? adapter.getRepoFileContent(path, ref, { found: true }) : adapter.getRepoFileContent(path, ref))
     } catch (err: unknown) {
       lookupFailed = true
       const where = describeHttpError(err)
@@ -251,7 +254,7 @@ export async function loadPrompt(adapter: VCSAdapter, prInfo: PRInfo, localPromp
           const dir = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : ''
           const resolved = resolveSymlink(dir, repoPrompt.trim())
           console.log(`  ${path} is a symlink → ${resolved}`)
-          repoPrompt = await fetchOptional(resolved, ref)
+          repoPrompt = await fetchOptional(resolved, ref, true)
           if (!repoPrompt) continue
         }
         console.log(`Using repo-specific prompt from ${path} (${ref.slice(0, 12)})`)
@@ -263,18 +266,24 @@ export async function loadPrompt(adapter: VCSAdapter, prInfo: PRInfo, localPromp
     }
   }
 
+  const reportFailed = lookupFailed && lookupRetry
+  const failed = reportFailed ? { lookupFailed: true as const } : {}
+  const logFailed = (source: string) => console.log(`Could not check for ${REPO_PROMPT_FILE} (lookup failed) — using ${source} prompt`)
+
   // 3. No repo prompt: compose the bundled base + overlay rule sets detected from the PR
   const { bases, overlays } = changedFiles?.length ? detectStacks(changedFiles, diff) : { bases: [], overlays: [] }
   if (bases.length) {
     const names = [...bases, ...overlays]
     console.log(`Detected tech stack: ${names.join(' + ')} — using bundled rule sets`)
+    if (reportFailed) logFailed(`stack:${names.join('+')}`)
     const sections = composeSections(names.map(n => parseRepoPrompt(getStackPrompt(n))))
     logSections(sections)
-    return { content: fillTemplate(template, sections), source: `stack:${names.join('+')}` }
+    return { content: fillTemplate(template, sections), source: `stack:${names.join('+')}`, ...failed }
   }
 
   // 4. Fall back to all defaults
-  console.log(`No ${REPO_PROMPT_FILE} found in source or target branch — using default prompt`)
+  if (reportFailed) logFailed('default')
+  else console.log(`No ${REPO_PROMPT_FILE} found in source or target branch — using default prompt`)
   const filled = fillTemplate(template, {})
-  return { content: filled, source: 'default' }
+  return { content: filled, source: 'default', ...failed }
 }
