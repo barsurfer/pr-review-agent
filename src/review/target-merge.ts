@@ -56,6 +56,13 @@ export function outsideSections(delta: string, prPaths: readonly string[]): stri
   return [...splitDiffByFile(delta)].filter(([key, section]) => !sectionPaths(key, section).some(p => pr.has(p))).map(([key]) => key)
 }
 
+// With a rename or copy the two PR diffs can show different source files under one key, so their base blobs are not comparable.
+function samePath(key: string, section: string): boolean {
+  const meta = section.split(/^@@/m)[0]
+  const side = (re: RegExp) => meta.match(re)?.[1].replace(/\t.*$/, '')
+  return !/^(rename|copy) (from|to) /m.test(meta) && side(/^--- a\/(.+)$/m) === key && side(/^\+\+\+ b\/(.+)$/m) === key
+}
+
 // "Unchanged" must be provable, so only an exact match counts; a file the target also edited differs in its base blob and is always changed.
 export function changedPrFiles(prev: string, curr: string): { changed: Set<string>; baseChanged: Set<string> } {
   const before = splitDiffByFile(prev)
@@ -69,10 +76,11 @@ export function changedPrFiles(prev: string, curr: string): { changed: Set<strin
     const p = before.get(key)
     const c = after.get(key)
     if (p === undefined || c === undefined || !identical(p, c)) mark(changed, key)
-    const bp = p && baseBlob(p)
-    const bc = c && baseBlob(c)
-    // Only provably different base blobs count as a target edit, because this set can silence a confirmation.
-    if (bp && bc && !prefixed(bp, bc)) mark(baseChanged, key)
+    if (p === undefined || c === undefined || !samePath(key, p) || !samePath(key, c)) continue
+    const bp = baseBlob(p)
+    const bc = baseBlob(c)
+    // Only provably different base blobs of one unrenamed path count as a target edit, because this set can silence a confirmation.
+    if (bp && bc && !prefixed(bp, bc)) baseChanged.add(key)
   }
   return { changed, baseChanged }
 }

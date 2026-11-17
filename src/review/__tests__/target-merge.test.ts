@@ -194,3 +194,19 @@ describe('sameHead', () => {
     expect(sameHead(runContent, mode)).toBe(false)
   })
 })
+
+describe('changedPrFiles: target-touched files and renames', () => {
+  const renameEdit = (from: string, to: string, index: string, line: string) =>
+    `diff --git a/${from} b/${to}\nsimilarity index 90%\nrename from ${from}\nrename to ${to}\nindex ${index} 100644\n--- a/${from}\n+++ b/${to}\n@@ -1 +1 @@\n-x\n+${line}\n`
+
+  it('20 a key whose sections rename different source files (A.ts → B.ts before, C.ts → B.ts after) → all paths changed, none target-touched', () => {
+    const prev = renameEdit('A.ts', 'B.ts', 'aaaaaaa..bbbbbbb', 'b') + 'diff --git a/C.ts b/C.ts\ndeleted file mode 100644\nindex ccccccc..0000000\n--- a/C.ts\n+++ /dev/null\n@@ -1 +0,0 @@\n-c\n'
+    const curr = file('A.ts', 'aaaaaaa..ddddddd 100644', '@@ -1 +1 @@', '-a', '+a2') + renameEdit('C.ts', 'B.ts', 'eeeeeee..bbbbbbc', 'b')
+    expect(sorted(changedPrFiles(prev, curr))).toEqual({ changed: ['A.ts', 'B.ts', 'C.ts'], baseChanged: [] })
+  })
+
+  it('21 a changed base blob counts as target-touched only for one unrenamed path: a plain file → baseChanged, the same rename on both sides → changed only', () => {
+    expect(sorted(changedPrFiles(file('a.ts', '1111111..3333333 100644', ...BODY), file('a.ts', '2222222..4444444 100644', ...BODY)))).toEqual({ changed: ['a.ts'], baseChanged: ['a.ts'] })
+    expect(sorted(changedPrFiles(renameEdit('old.ts', 'new.ts', '1111111..3333333', 'y'), renameEdit('old.ts', 'new.ts', '2222222..4444444', 'y')))).toEqual({ changed: ['new.ts', 'old.ts'], baseChanged: [] })
+  })
+})

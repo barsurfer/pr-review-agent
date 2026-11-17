@@ -4548,6 +4548,24 @@ describe('target-branch merge check (ENABLE_TARGET_MERGE_CHECK)', () => {
     expect(record.action).toBe('RE_REVIEW')
   })
 
+  it('I21 B.ts renamed from A.ts before and from C.ts after (only C.ts touched by the target) → no file counts as target-touched, so the 0-finding confirmation is posted', async () => {
+    const renameEdit = (from: string, index: string, line: string) =>
+      `diff --git a/${from} b/B.ts\nsimilarity index 90%\nrename from ${from}\nrename to B.ts\nindex ${index} 100644\n--- a/${from}\n+++ b/B.ts\n@@ -1 +1 @@\n-x\n+${line}\n`
+    const prevPr = renameEdit('A.ts', 'aaaaaaa..bbbbbbb', 'b') + 'diff --git a/C.ts b/C.ts\ndeleted file mode 100644\nindex ccccccc..0000000\n--- a/C.ts\n+++ /dev/null\n@@ -1 +0,0 @@\n-c\n'
+    const currPr = sec('A.ts', 'aaaaaaa..ddddddd 100644', '@@ -1 +1 @@', '-a', '+a2') + renameEdit('C.ts', 'eeeeeee..bbbbbbc', 'b2')
+    const delta = OTHER + sec('A.ts', '0000000..ddddddd 100644', '@@ -0,0 +1 @@', '+a2') + sec('B.ts', 'bbbbbbb..bbbbbbc 100644', '@@ -1 +1 @@', '-b', '+b2')
+    mockReviewer(reviewWith([], ZERO))
+    const adapter = mergeAdapter({ diff: currPr + PAD, pinned: currPr, before: prevPr, delta,
+      overrides: { getChangedFiles: vi.fn().mockResolvedValue([{ path: 'A.ts', status: 'modified' }, { path: 'B.ts', status: 'renamed' }]) } })
+
+    const { record, logs } = await run(adapter)
+
+    expect(logs).toContain('  Target merge: delta narrowed to 2 of 3 file(s): A.ts, B.ts')
+    expect(record.action).toBe('RE_REVIEW')
+    expect(adapter.postComment).toHaveBeenCalledTimes(1)
+    expect(adapter.getCommitParents).not.toHaveBeenCalled()
+  })
+
   it('I11 flag false, no getPrDiffAt or no targetCommit → no old-diff fetch, and all three runs are the same run', async () => {
     mockReviewer(reviewWith([NEW_FINDING]))
     const offAdapter = mergeAdapter()
