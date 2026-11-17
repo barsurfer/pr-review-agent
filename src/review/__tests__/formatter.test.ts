@@ -503,3 +503,14 @@ describe('a failed-lookup footer (`Prompt: … (lookup failed)`) passes every fo
     expect(fixCodeContent(`fix()\n${footer.trim().split('\n').at(-1)}`)).toBeNull()
   })
 })
+
+describe('VB.NET, VBScript and SQL Server stack labels pass the footer readers', () => {
+  it.each(['stack:vbnet', 'stack:vbnet+winforms', 'stack:csharp+vbnet', 'stack:csharp+aspnet+sqlserver', 'stack:csharp+sqlserver (lookup failed)',
+    'stack:vbscript', 'stack:vbscript+sqlserver', 'stack:vbnet+vbscript'])('%s', source => {
+    const body = '### Summary\nAll good.' + buildReviewFooter('bot', 'model', source, 2, 'abc123def456', 'deadbee')
+    expect(body).toContain(`| Prompt: ${source} |`)
+    expect(hasReviewFooter(body)).toBe(true)
+    expect(extractCommitHash(body)).toBe('abc123def456')
+    expect(stripPreviousFooter(body)).toBe('### Summary\nAll good.')
+  })
+})
