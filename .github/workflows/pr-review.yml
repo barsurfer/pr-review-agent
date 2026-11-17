@@ -72,6 +72,8 @@ jobs:
           REPLY_MODEL: anthropic/claude-haiku-5.5
           REVIEW_EFFORT: high
           JUDGE_EFFORT: high
+          # Reasoning counts against the output limit; at high effort a hard diff used all of the 32000 default
+          MAX_OUTPUT_TOKENS: "64000"
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           AGENT_IDENTITY: github-actions[bot]
           # GitHub flow targets main directly; the default main,master would skip every PR
