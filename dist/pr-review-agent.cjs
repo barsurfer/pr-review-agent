@@ -36401,7 +36401,11 @@ var config = {
     // Off by default: second-look also re-reads files that only the breadth pass flagged.
     secondLookBreadthTargets: optional("ENABLE_SECOND_LOOK_BREADTH_TARGETS", "false") === "true",
     // On by default: without numbered lines ~40% of findings carried no line; set false to send the raw diff/context (saves the per-line gutter tokens).
-    lineNumbers: optional("ENABLE_LINE_NUMBERS", "true") !== "false"
+    lineNumbers: optional("ENABLE_LINE_NUMBERS", "true") !== "false",
+    // On by default with a kill switch: false always reviews the full delta after a target merge.
+    targetMergeCheck: optional("ENABLE_TARGET_MERGE_CHECK", "true") !== "false",
+    // On by default with a kill switch: false restores the 3/24/96 s lookup on one 30 s budget and reports a failed lookup like a missing file.
+    instructionsLookupRetry: optional("ENABLE_INSTRUCTIONS_LOOKUP_RETRY", "true") !== "false"
   },
   context: {
     maxFiles: parseInt(optional("MAX_CONTEXT_FILES", "20"), 10),
@@ -42338,7 +42342,9 @@ var RETRY_DELAYS_MS = [3e3, 24e3, 96e3];
 var MAX_RETRIES = RETRY_DELAYS_MS.length;
 var MAX_DELAY_MS = 96e3;
 var RETRY_BUDGET_MS = 18e4;
+var OPTIONAL_RETRY_DELAYS_MS = [3e3, 8e3, 24e3];
 var OPTIONAL_RETRY_BUDGET_MS = 3e4;
+var FOUND_FILE_RETRY_BUDGET_MS = 35e3;
 var METHODS = /* @__PURE__ */ new Set(["get", "post", "put", "delete"]);
 function header(err, name) {
   const v = err.response?.headers?.[name];
@@ -42362,9 +42368,9 @@ function isRetryable(err, read) {
   if (status !== void 0) return status >= 500;
   return e.code === "ECONNRESET" || e.code === "EAI_AGAIN";
 }
-function retryDelayMs(attempt, err) {
+function retryDelayMs(attempt, err, delays = RETRY_DELAYS_MS) {
   const retryAfter = Number(header(err ?? {}, "retry-after"));
-  const ms = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1e3 : RETRY_DELAYS_MS[Math.min(attempt, MAX_RETRIES - 1)];
+  const ms = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1e3 : delays[Math.min(attempt, delays.length - 1)];
   return Math.min(ms, MAX_DELAY_MS);
 }
 var delay = (ms) => new Promise((resolve4) => setTimeout(resolve4, ms));
@@ -42407,7 +42413,7 @@ function withCallLog(client, label) {
     }
   });
 }
-function withRetry(client, label, sleep2 = delay, budgetMs = RETRY_BUDGET_MS) {
+function withRetry(client, label, sleep2 = delay, budgetMs = RETRY_BUDGET_MS, delays = RETRY_DELAYS_MS) {
   let slept = 0;
   let budgetLogged = false;
   return wrapMethods(client, (method, call) => async (...args) => {
@@ -42415,8 +42421,8 @@ function withRetry(client, label, sleep2 = delay, budgetMs = RETRY_BUDGET_MS) {
       try {
         return await call(...args);
       } catch (err) {
-        if (attempt >= MAX_RETRIES || !isRetryable(err, method === "get")) throw err;
-        const ms = retryDelayMs(attempt, err);
+        if (attempt >= delays.length || !isRetryable(err, method === "get")) throw err;
+        const ms = retryDelayMs(attempt, err, delays);
         if (slept + ms > budgetMs) {
           if (!budgetLogged) {
             budgetLogged = true;
@@ -42425,7 +42431,7 @@ function withRetry(client, label, sleep2 = delay, budgetMs = RETRY_BUDGET_MS) {
           throw err;
         }
         slept += ms;
-        console.warn(`  [${label}] retry ${attempt + 1}/${MAX_RETRIES} in ${ms / 1e3}s`);
+        console.warn(`  [${label}] retry ${attempt + 1}/${delays.length} in ${ms / 1e3}s`);
         await sleep2(ms);
       }
     }
@@ -42468,10 +42474,15 @@ var BitbucketAdapter = class {
   redirectClient;
   // Own small budget, so a rate-limited optional lookup cannot spend the waits that required calls need.
   optionalClient;
+  // One per run, so a found file never inherits the probes' spent waits and every symlink target together stays capped.
+  foundFileClient;
+  // Own small budgets, so the optional target-merge check never spends the retry budget of required calls or of the instructions lookup.
+  mergeCheckClient;
+  mergeCheckRedirectClient;
   workspace;
   authHeader;
   baseHost;
-  constructor(baseUrl, workspace, username, token) {
+  constructor(baseUrl, workspace, username, token, lookupRetry = true) {
     this.workspace = workspace;
     this.authHeader = "Basic " + Buffer.from(`${username}:${token}`).toString("base64");
     try {
@@ -42488,13 +42499,16 @@ var BitbucketAdapter = class {
       }
     }), "bitbucket");
     this.client = withRetry(logged, "bitbucket");
-    this.optionalClient = withRetry(logged, "bitbucket", void 0, OPTIONAL_RETRY_BUDGET_MS);
+    this.optionalClient = withRetry(logged, "bitbucket", void 0, OPTIONAL_RETRY_BUDGET_MS, lookupRetry ? OPTIONAL_RETRY_DELAYS_MS : void 0);
+    this.foundFileClient = lookupRetry ? withRetry(logged, "bitbucket", void 0, FOUND_FILE_RETRY_BUDGET_MS, OPTIONAL_RETRY_DELAYS_MS) : this.optionalClient;
     this.redirectClient = withRetry(withCallLog(axios_default, "bitbucket"), "bitbucket");
+    this.mergeCheckClient = withRetry(logged, "bitbucket", void 0, OPTIONAL_RETRY_BUDGET_MS, OPTIONAL_RETRY_DELAYS_MS);
+    this.mergeCheckRedirectClient = withRetry(withCallLog(axios_default, "bitbucket"), "bitbucket", void 0, OPTIONAL_RETRY_BUDGET_MS, OPTIONAL_RETRY_DELAYS_MS);
   }
   /** Follow 302 redirects while preserving auth (axios strips auth on redirect).
    *  Only re-attach auth on same-host redirects — never leak the token to another host. */
-  async getFollowingRedirects(url2, config2 = {}) {
-    const res = await this.client.get(url2, { ...config2, maxRedirects: 0, timeout: REQUEST_TIMEOUT_MS, validateStatus: (s) => s < 400 || s === 302 });
+  async getFollowingRedirects(url2, config2 = {}, via = this.client, redirectVia = this.redirectClient) {
+    const res = await via.get(url2, { ...config2, maxRedirects: 0, timeout: REQUEST_TIMEOUT_MS, validateStatus: (s) => s < 400 || s === 302 });
     if (res.status === 302 && res.headers.location) {
       const location = res.headers.location;
       let sameHost = false;
@@ -42506,7 +42520,7 @@ var BitbucketAdapter = class {
       if (!sameHost) {
         console.warn(`  Redirect to a different host \u2014 not forwarding auth`);
       }
-      return this.redirectClient.get(location, {
+      return redirectVia.get(location, {
         ...config2,
         timeout: REQUEST_TIMEOUT_MS,
         headers: sameHost ? { ...config2.headers, Authorization: this.authHeader } : { ...config2.headers }
@@ -42526,7 +42540,8 @@ var BitbucketAdapter = class {
       author: data.author?.display_name ?? "Unknown",
       sourceBranch: data.source.branch.name,
       targetBranch: data.destination.branch.name,
-      sourceCommit: data.source.commit.hash
+      sourceCommit: data.source.commit.hash,
+      targetCommit: data.destination?.commit?.hash
     };
   }
   async getDiff(prId) {
@@ -42568,10 +42583,10 @@ var BitbucketAdapter = class {
     );
     return data;
   }
-  async getRepoFileContent(filePath, ref = "HEAD") {
+  async getRepoFileContent(filePath, ref = "HEAD", opts2) {
     const repoSlug = this.getRepoSlug();
     try {
-      const { data } = await this.optionalClient.get(
+      const { data } = await (opts2?.found ? this.foundFileClient : this.optionalClient).get(
         `/repositories/${this.workspace}/${repoSlug}/src/${ref}/${filePath}`,
         { responseType: "text" }
       );
@@ -42714,6 +42729,21 @@ var BitbucketAdapter = class {
       { headers: { Accept: "text/plain" }, responseType: "text" }
     );
     return data;
+  }
+  async getPrDiffAt(sourceCommit, targetCommit) {
+    const repoSlug = this.getRepoSlug();
+    const { data } = await this.getFollowingRedirects(
+      `/repositories/${this.workspace}/${repoSlug}/diff/${sourceCommit}..${targetCommit}`,
+      { headers: { Accept: "text/plain" }, responseType: "text" },
+      this.mergeCheckClient,
+      this.mergeCheckRedirectClient
+    );
+    return data;
+  }
+  async getCommitParents(commit) {
+    const repoSlug = this.getRepoSlug();
+    const { data } = await this.mergeCheckClient.get(`/repositories/${this.workspace}/${repoSlug}/commit/${commit}`);
+    return (data.parents ?? []).map((p) => String(p.hash));
   }
   // repo slug is passed in at call sites via CLI — store it after construction
   repoSlug = "";
@@ -44083,10 +44113,11 @@ async function loadPrompt(adapter2, prInfo, localPromptPath, changedFiles, diff)
     paths.push(`${moduleDir}/${REPO_PROMPT_FILE}`, `${moduleDir}/docs/${REPO_PROMPT_FILE}`);
   }
   let lookupFailed = false;
-  const fetchOptional = async (path4, ref) => {
+  const lookupRetry = config.review.instructionsLookupRetry !== false;
+  const fetchOptional = async (path4, ref, found = false) => {
     if (lookupFailed) return null;
     try {
-      return await adapter2.getRepoFileContent(path4, ref);
+      return await (found && lookupRetry ? adapter2.getRepoFileContent(path4, ref, { found: true }) : adapter2.getRepoFileContent(path4, ref));
     } catch (err) {
       lookupFailed = true;
       const where = describeHttpError(err);
@@ -44102,7 +44133,7 @@ async function loadPrompt(adapter2, prInfo, localPromptPath, changedFiles, diff)
           const dir = path4.includes("/") ? path4.slice(0, path4.lastIndexOf("/")) : "";
           const resolved2 = resolveSymlink(dir, repoPrompt.trim());
           console.log(`  ${path4} is a symlink \u2192 ${resolved2}`);
-          repoPrompt = await fetchOptional(resolved2, ref);
+          repoPrompt = await fetchOptional(resolved2, ref, true);
           if (!repoPrompt) continue;
         }
         console.log(`Using repo-specific prompt from ${path4} (${ref.slice(0, 12)})`);
@@ -44113,17 +44144,22 @@ async function loadPrompt(adapter2, prInfo, localPromptPath, changedFiles, diff)
       }
     }
   }
+  const reportFailed = lookupFailed && lookupRetry;
+  const failed = reportFailed ? { lookupFailed: true } : {};
+  const logFailed = (source) => console.log(`Could not check for ${REPO_PROMPT_FILE} (lookup failed) \u2014 using ${source} prompt`);
   const { bases, overlays } = changedFiles?.length ? detectStacks(changedFiles, diff) : { bases: [], overlays: [] };
   if (bases.length) {
     const names = [...bases, ...overlays];
     console.log(`Detected tech stack: ${names.join(" + ")} \u2014 using bundled rule sets`);
+    if (reportFailed) logFailed(`stack:${names.join("+")}`);
     const sections2 = composeSections(names.map((n) => parseRepoPrompt(getStackPrompt(n))));
     logSections(sections2);
-    return { content: fillTemplate(template, sections2), source: `stack:${names.join("+")}` };
+    return { content: fillTemplate(template, sections2), source: `stack:${names.join("+")}`, ...failed };
   }
-  console.log(`No ${REPO_PROMPT_FILE} found in source or target branch \u2014 using default prompt`);
+  if (reportFailed) logFailed("default");
+  else console.log(`No ${REPO_PROMPT_FILE} found in source or target branch \u2014 using default prompt`);
   const filled = fillTemplate(template, {});
-  return { content: filled, source: "default" };
+  return { content: filled, source: "default", ...failed };
 }
 
 // src/context/fetcher.ts
@@ -46755,7 +46791,7 @@ function getAgentVersion() {
     const pkg = JSON.parse((0, import_fs4.readFileSync)(pkgPath, "utf-8"));
     return pkg.version;
   } catch {
-    if (true) return "0.0.54";
+    if (true) return "0.0.55";
     return "unknown";
   }
 }
@@ -46767,7 +46803,7 @@ function getBuildCommit() {
     const dirty = (0, import_child_process.execSync)("git status --porcelain", opts2).toString().trim() ? "-dirty" : "";
     return hash + dirty;
   } catch {
-    if (true) return "d86603d";
+    if (true) return "8f4b162";
     return "unknown";
   }
 }
@@ -46870,6 +46906,7 @@ function buildUsageRecord(ctx, durationMs, error) {
     dry_run: ctx.dryRun,
     force: ctx.force,
     prompt_source: ctx.prompt?.source ?? "none",
+    ...ctx.prompt?.lookupFailed ? { prompt_lookup: "failed" } : {},
     agent_commit: getBuildCommit(),
     prompt_hash: ctx.prompt ? hash12(ctx.prompt.content) : null,
     judge_prompt_hash: ctx.judgePromptHash ?? null,
@@ -46930,7 +46967,7 @@ function buildUsageRecord(ctx, durationMs, error) {
     ...replyAuthors.length ? { reply_authors: replyAuthors } : {},
     // Present only when the head was really checked and the run did not fail afterwards; CI stores exactly this value, so it must pass the LAST_CHECKED_COMMIT rule too, whatever head the adapter reported.
     ...ctx.headChecked && !error && isCheckedCommitHash(ctx.prInfo.sourceCommit) ? { checked_commit: ctx.prInfo.sourceCommit } : {},
-    ...ctx.dedupHit === "checked_commit" ? { dedup_source: "checked_commit" } : {},
+    ...ctx.dedupHit ? { dedup_source: ctx.dedupHit } : {},
     jenkins: getJenkinsMeta(),
     // Absent when CI passed no trigger, so those records serialize exactly as before.
     ...ctx.trigger ? { trigger: { event: ctx.trigger.event || null, comment_author: ctx.trigger.commentAuthor || null, ...ctx.trigger.kind ? { event_kind: ctx.trigger.kind } : {} } } : {},
@@ -46981,6 +47018,86 @@ function ignoredCommentAuthor(trigger, ignoreList) {
   return ignoreList.find((entry) => normalizeAuthorId(entry) === author) ?? null;
 }
 
+// src/review/target-merge.ts
+init_define_STACK_PROMPTS();
+var INDEX = /^index ([0-9a-f]+)\.\.([0-9a-f]+)(?: (\d+))?$/;
+var prefixed = (x, y) => x.length <= y.length ? y.startsWith(x) : x.startsWith(y);
+var sameBlob = (x, y) => Math.min(x.length, y.length) >= 7 && prefixed(x, y);
+var baseBlob = (section) => section.match(/^index ([0-9a-f]+)\.\./m)?.[1];
+var headBlob = (section) => section.match(/^index [0-9a-f]+\.\.([0-9a-f]+)/m)?.[1];
+function sectionPaths(key, section) {
+  const meta = section.split(/^@@/m)[0];
+  const path4 = (named, unified) => (meta.match(named)?.[1] ?? meta.match(unified)?.[1])?.replace(/\t.*$/, "");
+  return [key, path4(/^rename from (.+)$/m, /^--- a\/(.+)$/m), path4(/^rename to (.+)$/m, /^\+\+\+ b\/(.+)$/m)].filter((p) => !!p);
+}
+function readableDiff(diff) {
+  const headers = diff.match(/^diff .*$/gm) ?? [];
+  return headers.length === splitDiffByFile(diff).size && headers.every((h) => h.startsWith("diff --git a/") && h.split(" b/").length === 2);
+}
+function sameHead(delta, curr) {
+  const after = splitDiffByFile(curr);
+  return [...splitDiffByFile(delta)].every(([key, section]) => {
+    const other = after.get(key);
+    if (other === void 0) return true;
+    const x = headBlob(section);
+    const y = headBlob(other);
+    return x && y ? sameBlob(x, y) : !x && !y;
+  });
+}
+function identical(prev, curr) {
+  const a = prev.split("\n");
+  const b = curr.split("\n");
+  if (a.length !== b.length) return false;
+  const tolerant = /^@@/m.test(prev) && /^@@/m.test(curr);
+  return a.every((line, i) => {
+    if (line === b[i]) return true;
+    const x = tolerant && line.match(INDEX);
+    const y = tolerant && b[i].match(INDEX);
+    return !!x && !!y && sameBlob(x[1], y[1]) && sameBlob(x[2], y[2]) && (x[3] ?? "") === (y[3] ?? "");
+  });
+}
+var diffPaths = (diff) => [...splitDiffByFile(diff)].flatMap(([key, section]) => sectionPaths(key, section));
+function outsideSections(delta, prPaths) {
+  const pr = new Set(prPaths);
+  return [...splitDiffByFile(delta)].filter(([key, section]) => !sectionPaths(key, section).some((p) => pr.has(p))).map(([key]) => key);
+}
+function samePath(key, section) {
+  const meta = section.split(/^@@/m)[0];
+  const side = (re) => meta.match(re)?.[1].replace(/\t.*$/, "");
+  return !/^(rename|copy) (from|to) /m.test(meta) && side(/^--- a\/(.+)$/m) === key && side(/^\+\+\+ b\/(.+)$/m) === key;
+}
+function changedPrFiles(prev, curr) {
+  const before = splitDiffByFile(prev);
+  const after = splitDiffByFile(curr);
+  const changed = /* @__PURE__ */ new Set();
+  const baseChanged = /* @__PURE__ */ new Set();
+  const mark = (set, key) => {
+    for (const s of [before.get(key), after.get(key)]) if (s !== void 0) for (const p of sectionPaths(key, s)) set.add(p);
+  };
+  for (const key of /* @__PURE__ */ new Set([...before.keys(), ...after.keys()])) {
+    const p = before.get(key);
+    const c = after.get(key);
+    if (p === void 0 || c === void 0 || !identical(p, c)) mark(changed, key);
+    if (p === void 0 || c === void 0 || !samePath(key, p) || !samePath(key, c)) continue;
+    const bp = baseBlob(p);
+    const bc = baseBlob(c);
+    if (bp && bc && !prefixed(bp, bc)) baseChanged.add(key);
+  }
+  return { changed, baseChanged };
+}
+function narrowDelta(delta, changed) {
+  const kept = [];
+  const dropped = [];
+  const parts = [];
+  for (const [key, section] of splitDiffByFile(delta)) {
+    if (sectionPaths(key, section).some((p) => changed.has(p))) {
+      kept.push(key);
+      parts.push(section);
+    } else dropped.push(key);
+  }
+  return { diff: dropped.length ? parts.join("") : delta, kept, dropped };
+}
+
 // src/review/types.ts
 init_define_STACK_PROMPTS();
 
@@ -47008,9 +47125,73 @@ function questionsForAgent(replies) {
   return questions;
 }
 var forced = (ctx) => ctx.force === "clean" || ctx.force === "re-review";
+var promptLabel = (p) => p.lookupFailed ? `${p.source} (lookup failed)` : p.source;
 function markHeadChecked(ctx) {
   if (forced(ctx) || ctx.dryRun || ctx.outcomeSink || ctx.bundleUncertain || ctx.deltaFetchFailed) return;
   ctx.headChecked = true;
+}
+function errorText(err) {
+  try {
+    return String(err?.message ?? err);
+  } catch {
+    return "unknown error";
+  }
+}
+async function narrowTargetMergeDelta(ctx, base, head, delta) {
+  const targetCommit = ctx.prInfo.targetCommit;
+  if (!config.review.targetMergeCheck || !ctx.adapter.getPrDiffAt || !targetCommit) return delta;
+  const base12 = base.slice(0, 12);
+  let at = base;
+  const pinned = async (commit) => {
+    at = commit;
+    const diff = await ctx.adapter.getPrDiffAt(commit, targetCommit);
+    if (!/^diff --git /m.test(diff)) throw new Error("empty diff");
+    return diff;
+  };
+  try {
+    const outside = outsideSections(delta, (ctx.changedFiles ?? []).map((f) => f.path));
+    if (outside.length === 0) return delta;
+    console.log(`  Delta has ${outside.length} file(s) outside the PR diff \u2014 comparing the PR diff at ${base12} with the current one...`);
+    const prev = await pinned(base);
+    const curr = await pinned(head);
+    if (![delta, prev, curr].every(readableDiff)) {
+      console.warn("  Target merge check skipped: a diff section's paths could not be read unambiguously \u2014 keeping the full delta");
+      return delta;
+    }
+    if (outsideSections(delta, diffPaths(curr)).length === 0) {
+      console.log(`  Target merge: every delta file is in the PR diff at ${head.slice(0, 12)} \u2014 keeping the full delta`);
+      return delta;
+    }
+    if (!sameHead(delta, curr)) {
+      console.warn("  Target merge check skipped: the PR diff does not end at the same file versions as the delta \u2014 keeping the full delta");
+      return delta;
+    }
+    const { changed, baseChanged } = changedPrFiles(prev, curr);
+    const narrowed = narrowDelta(delta, changed);
+    if (narrowed.dropped.length === 0) return delta;
+    if (narrowed.kept.length === 0) {
+      console.log(`  Target merge: PR diff unchanged since ${base12} (${narrowed.dropped.length} delta file(s) dropped) \u2014 checking for unanswered replies...`);
+      return null;
+    }
+    console.log(`  Target merge: delta narrowed to ${narrowed.kept.length} of ${narrowed.kept.length + narrowed.dropped.length} file(s): ${narrowed.kept.join(", ")}`);
+    ctx.deltaBase = base;
+    if (narrowed.kept.every((k) => baseChanged.has(k))) ctx.mergeNarrowed = true;
+    return narrowed.diff;
+  } catch (err) {
+    console.warn(`  PR diff at ${at.slice(0, 12)} unavailable (${errorText(err)}) \u2014 keeping the full delta`);
+    return delta;
+  }
+}
+async function headIsMergeOnReviewed(ctx) {
+  const head12 = ctx.prInfo.sourceCommit.slice(0, 12);
+  try {
+    if (!ctx.adapter.getCommitParents) throw new Error("not supported");
+    const parents = await ctx.adapter.getCommitParents(ctx.prInfo.sourceCommit);
+    return parents.length >= 2 && headMatches(ctx.deltaBase, parents[0]);
+  } catch (err) {
+    console.warn(`  Parents of ${head12} unavailable (${errorText(err)}) \u2014 posting as usual`);
+    return false;
+  }
 }
 function warnOnHashDisagreement(prId, body, footerHash) {
   const legacy = legacyCommitHash(body);
@@ -47174,7 +47355,14 @@ async function transition(state, ctx) {
                 ctx.reviewNumber = ctx.previousReviews.length;
                 return 6 /* CHECK_REPLIES */;
               }
-              ctx.deltaDiff = filtered;
+              const delta = await narrowTargetMergeDelta(ctx, commitHash, ctx.prInfo.sourceCommit, filtered);
+              if (delta === null) {
+                ctx.dedupHit = "target_merge";
+                markHeadChecked(ctx);
+                ctx.reviewNumber = ctx.previousReviews.length;
+                return 6 /* CHECK_REPLIES */;
+              }
+              ctx.deltaDiff = delta;
             } catch (err) {
               console.log(`  Delta diff fetch failed (${err.message}) \u2014 falling back to full PR diff`);
               ctx.deltaFetchFailed = true;
@@ -47214,7 +47402,7 @@ async function transition(state, ctx) {
       }
       if (ctx.action !== "NO_CHANGE") {
         ctx.action = "DEDUP_SKIP";
-        ctx.skipReason = ctx.dedupHit === "checked_commit" ? "head already checked by an earlier run and no unanswered questions" : "no new commits and no unanswered questions";
+        ctx.skipReason = ctx.dedupHit === "checked_commit" ? "head already checked by an earlier run and no unanswered questions" : ctx.dedupHit === "target_merge" ? "target branch merged in; PR diff unchanged since the last review and no unanswered questions" : "no new commits and no unanswered questions";
       }
       return 19 /* SKIP */;
     }
@@ -47247,7 +47435,7 @@ async function transition(state, ctx) {
     case 8 /* LOAD_PROMPT */: {
       console.log("Loading prompt...");
       ctx.prompt = await loadPrompt(ctx.adapter, ctx.prInfo, ctx.promptPath, ctx.changedFiles, ctx.diff);
-      console.log(`  Prompt source: ${ctx.prompt.source}`);
+      console.log(`  Prompt source: ${promptLabel(ctx.prompt)}`);
       return 9 /* FETCH_CONTEXT */;
     }
     case 9 /* FETCH_CONTEXT */: {
@@ -47297,6 +47485,8 @@ async function transition(state, ctx) {
       if (ctx.deltaDiff && s.delta > s.diff) {
         console.warn(`  Delta (${s.delta.toLocaleString()} tok) exceeds full PR diff (${s.diff.toLocaleString()} tok) \u2014 likely a merged target branch; dropping delta, reviewing full diff`);
         ctx.deltaDiff = "";
+        ctx.mergeNarrowed = void 0;
+        ctx.deltaBase = void 0;
         s = sizes();
         console.log(`  Re-estimated input: ~${s.total.toLocaleString()} tokens (full diff, no delta)  [${fmt(s)}]`);
       }
@@ -47646,6 +47836,8 @@ If this PR spans multiple independent themes that could each be a separate, inde
         const unanswered = await dropRepliesDirectedElsewhere(ctx, questionsForAgent(replies.filter((r) => !hasReplyFooter(r.body) && !!lastReview && r.createdOn > lastReview.createdOn && r.createdOn > lastAgentReplyAt)));
         const priorHadFindings = !!lastReview && markdownHasFindings(lastReview.body);
         const stillOpen = (ctx.reviewObject?.delta_stats?.still_open ?? 0) > 0;
+        const cleanPrior = !priorHadFindings && !stillOpen;
+        const mergeQuiet = async () => !cleanPrior && ctx.mergeNarrowed === true && ctx.reviewObject?.delta_stats?.resolved === 0 && await headIsMergeOnReviewed(ctx);
         if (unanswered.length > 0) {
           const agentReplies = replies.filter((r) => hasReplyFooter(r.body)).length;
           if (config.reply.maxComments > 0 && agentReplies >= config.reply.maxComments) {
@@ -47657,13 +47849,20 @@ If this PR spans multiple independent themes that could each be a separate, inde
           }
           ctx.replies = unanswered;
           console.log("  Re-review found nothing new, but a developer reply is unanswered \u2014 answering it in-thread");
-          if (!priorHadFindings && !stillOpen) markHeadChecked(ctx);
+          if (cleanPrior || await mergeQuiet()) markHeadChecked(ctx);
           return 7 /* RESPOND_TO_REPLIES */;
         }
-        if (!priorHadFindings && !stillOpen) {
+        if (cleanPrior) {
           console.log("  Re-review: no findings, prior clean, nothing open, no discussion \u2014 nothing to post, skipping");
           ctx.action = "NO_NEW_FINDINGS";
           ctx.skipReason = "Re-review found no new findings (prior review already clean)";
+          markHeadChecked(ctx);
+          return 19 /* SKIP */;
+        }
+        if (await mergeQuiet()) {
+          console.log("  Re-review after a target merge: no new findings \u2014 not posting a confirmation");
+          ctx.action = "NO_NEW_FINDINGS";
+          ctx.skipReason = "Re-review after a target-branch merge found no new findings";
           markHeadChecked(ctx);
           return 19 /* SKIP */;
         }
@@ -47825,7 +48024,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
         todoSection = "\n\n### TODOs Introduced\n" + todos.map((t) => `- \`${t.file}:${t.line}\` \u2014 ${t.text}`).join("\n");
       }
       const commitShort = ctx.prInfo.sourceCommit.slice(0, 12);
-      const footer = buildReviewFooter(config.agentIdentity, config.anthropic.model, ctx.prompt.source, ctx.reviewNumber, commitShort, getBuildCommit(), getJobUrl());
+      const footer = buildReviewFooter(config.agentIdentity, config.anthropic.model, promptLabel(ctx.prompt), ctx.reviewNumber, commitShort, getBuildCommit(), getJobUrl());
       const judgedRender = ctx.renderJudged;
       const reviewObject = ctx.reviewObject;
       const posted = judgedRender ? orderPosted(cleaned, ctx.judgedFindings ?? [], (order) => judgedRender(/* @__PURE__ */ new Map(), order)) : !judged && reviewObject ? orderPosted(cleaned, reviewObject.findings, (order) => renderReview(reviewObject, { order })) : { text: cleaned };
@@ -48234,7 +48433,8 @@ async function main() {
       config.bitbucket.baseUrl,
       config.bitbucket.workspace,
       config.bitbucket.username,
-      config.bitbucket.token
+      config.bitbucket.token,
+      config.review.instructionsLookupRetry
     );
     if (!opts.repoSlug) {
       console.error("Error: --repo-slug is required for Bitbucket");
