@@ -4,19 +4,20 @@
 
 import { config } from '../config.js'
 import { contextWindowFor } from '../llm/context-window.js'
+import { DeadlineAbortError, type LLMUsage } from '../llm/shared.js'
 import { loadPrompt, type LoadedPrompt } from '../prompt/loader.js'
 import { describeHttpError } from '../vcs/http-retry.js'
 import { fetchContext } from '../context/fetcher.js'
-import { runReview, runCommentResponse, runJudge, runBreadth, runLens, findingsOutputSchema } from './client.js'
+import { runReview, runCommentResponse, runJudge, runBreadth, runLens, findingsOutputSchema, sanitizeFirstPassSites, type SiteDropReason } from './client.js'
 import { buildShownSource } from './shown-anchors.js'
-import type { JudgeOptions } from './judge-decisions.js'
+import { candidateId, type JudgeOptions } from './judge-decisions.js'
 import { fileCoverage, prioritizeUntouched, breadthSystemPrompt, breadthBriefing, flaggedFiles, findingsInFiles, secondLookSystemPrompt, secondLookBriefing, type LensStatus } from './breadth.js'
 import { activeLenses, parseLensList, lensSystemPrompt, lensBriefing } from './lenses.js'
 import { splitDiffByFile } from './bundler.js'
-import { normalizeFindingPath } from './findings-output.js'
+import { normalizeFindingPath, type FirstPassSite } from './findings-output.js'
 import { filterDiff, countChangedLines, parseVerdictScore, isPathExcluded, scanTodos, isContextLengthError, shownLength } from './parsers.js'
-import { buildReviewFooter, buildReplyFooter, stripPreviousFooter, stripDeltaStats, stripJudgeNotes, stripJenkinsMeta, stripPreamble, isNoChange, extractCommitHash, legacyCommitHash, countFindings, markdownHasFindings, hasReplyFooter, renderReview } from './formatter.js'
-import { runBundledReview, addUsage } from './bundled.js'
+import { buildReviewFooter, buildReplyFooter, stripPreviousFooter, stripDeltaStats, stripJudgeNotes, stripJenkinsMeta, stripPreamble, isNoChange, extractCommitHash, legacyCommitHash, countFindings, markdownHasFindings, hasReplyFooter, renderReview, type ReviewFinding } from './formatter.js'
+import { runBundledReview, addUsage, recordPassCall } from './bundled.js'
 import { composeSuggestedFixes, COMMENT_BUDGET } from './suggested-fix.js'
 import { orderPosted } from './posted-order.js'
 import { buildUsageRecord, logUsageRecord, getBuildCommit, getJobUrl } from './usage.js'
@@ -144,6 +145,57 @@ function warnOnHashDisagreement(prId: string, body: string, footerHash: string |
 
 // Also-affects rows exist only in findings.json, so production never asks for the field.
 const hiBench = (ctx: ReviewContext): boolean => !!config.review.highImpact && !!ctx.outcomeSink
+
+// Site rows exist only in findings.json, so production never asks for the field.
+const fpSites = (ctx: ReviewContext): boolean => !!config.review.firstPassSites && !!ctx.outcomeSink
+
+// Judge candidate ids of the first-pass findings a pass is briefed with, so a site maps back by id, never by position.
+function firstPassIds(firstPass: readonly ReviewFinding[], briefed: readonly ReviewFinding[]): { tags: Map<ReviewFinding, string>; index: Map<string, number> } {
+  const tags = new Map<ReviewFinding, string>()
+  const index = new Map<string, number>()
+  firstPass.forEach((f, i) => {
+    if (!briefed.includes(f)) return
+    tags.set(f, candidateId(i))
+    index.set(candidateId(i), i)
+  })
+  return { tags, index }
+}
+
+function addFirstPassSites(ctx: ReviewContext, found: ReturnType<typeof sanitizeFirstPassSites>, via: FirstPassSite['via'], label: string): void {
+  const all = ctx.firstPassSites ??= new Map()
+  for (const [i, sites] of found.sites) all.set(i, [...(all.get(i) ?? []), ...sites])
+  const named = [...found.sites.values()].flat()
+  ;(ctx.firstPassSitesNamed ??= []).push(...named)
+  const byPass = ctx.firstPassSitesDropped ??= {}
+  const sum = byPass[via] ??= {}
+  for (const [reason, n] of Object.entries(found.dropped) as Array<[SiteDropReason, number]>) sum[reason] = (sum[reason] ?? 0) + n
+  const reasons = Object.entries(found.dropped).map(([r, n]) => `${r} ${n}`).join(', ')
+  const dropped = Object.values(found.dropped).reduce((a, b) => a + b, 0)
+  console.log(`  ${label} sites: ${named.length} place(s) for ${found.sites.size} first-pass finding(s), dropped ${dropped}${reasons ? ` (${reasons})` : ''}`)
+}
+
+const extraPassMaxTokens = (): number => config.anthropic.extraPassMaxTokens || config.anthropic.maxTokens
+
+const passStopAtSeconds = (): number => config.breadth.benchmarkDeadlineSeconds - config.breadth.judgeReserveSeconds
+
+// Integer ms so limit_ms in the record is exact; undefined when no pass deadline applies (setting off, or not a benchmark run).
+function passTimeLeftMs(ctx: ReviewContext): number | undefined {
+  if (!config.breadth.passDeadline || !ctx.outcomeSink) return undefined
+  return Math.floor(passStopAtSeconds() * 1000 - (Date.now() - ctx.startTime))
+}
+
+// A plain cleared timer rather than AbortSignal.timeout, so no timer outlives the call and fake timers can drive it.
+async function withPassDeadline<T>(limitMs: number | undefined, call: (signal?: AbortSignal) => Promise<T>): Promise<T> {
+  if (limitMs === undefined) return call()
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), limitMs)
+  try {
+    return await call(controller.signal)
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 
 // The stage is entered only with at least one known lens, so a lens-off run never reaches it.
 function stageAfterSecondLook(): State {
@@ -556,8 +608,13 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       // and retry diff-only; if the diff alone won't fit, skip rather than let the API error.
       const result = await (async () => {
         for (;;) {
-          try { return await call() }
-          catch (err: unknown) {
+          try {
+            const answer = await call()
+            recordPassCall(ctx, 'review', config.anthropic.maxTokens, undefined, answer.usage)
+            return answer
+          } catch (err: unknown) {
+            // Every attempt is logged, so a truncated or context-rejected first try still shows in pass_calls.
+            recordPassCall(ctx, 'review', config.anthropic.maxTokens, undefined, (err as { usage?: LLMUsage }).usage, err)
             if (!isContextLengthError(err)) throw err
             if (ctx.fileContexts!.length === 0) return null
             console.warn('  Prompt exceeded the model context — dropping file contexts, retrying diff-only')
@@ -618,12 +675,14 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       // Resolved here, after benchmark labels were applied, so RB_CONFIG_JUDGE_MODEL also picks the breadth model.
       const model = config.breadth.model || config.judge.model
       const effort = config.breadth.effort || (config.breadth.model ? '' : config.judge.effort)
-      const system = breadthSystemPrompt(ctx.prompt!.content, remaining, config.judge.shownAnchors)
+      const fp = fpSites(ctx)
+      const ids = fp ? firstPassIds(firstPass, firstPass) : undefined
+      const system = breadthSystemPrompt(ctx.prompt!.content, remaining, config.judge.shownAnchors, fp)
       ctx.breadthPlan = config.breadth.priorityTargets ? prioritizeUntouched(coverage.untouched, ctx.filteredDiff!, firstPass) : undefined
-      const briefing = breadthBriefing(firstPass, coverage.untouched, ctx.breadthPlan)
+      const briefing = ids ? breadthBriefing(firstPass, coverage.untouched, ctx.breadthPlan, ids.tags) : breadthBriefing(firstPass, coverage.untouched, ctx.breadthPlan)
       const estimate = ctx.estimatedInputTokens + Math.ceil((system.length - ctx.prompt!.content.length + briefing.length) / 4)
       // A 0 limit means "disabled", as in ESTIMATE_TOKENS; without this filter MAX_INPUT_TOKENS=0 would skip every breadth pass.
-      const limits = [config.anthropic.maxInputTokens, contextWindowFor(model) - config.anthropic.maxTokens].filter(n => n > 0)
+      const limits = [config.anthropic.maxInputTokens, contextWindowFor(model) - extraPassMaxTokens()].filter(n => n > 0)
       const budget = limits.length ? Math.min(...limits) : Infinity
       if (estimate > budget) {
         ctx.breadthStatus = 'skipped_budget'
@@ -637,22 +696,34 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         console.log(`  Breadth review skipped: ${Math.round(elapsedSeconds)}s elapsed, over half the ${config.breadth.benchmarkDeadlineSeconds}s benchmark deadline`)
         return State.SECOND_LOOK
       }
+      const limitMs = passTimeLeftMs(ctx)
+      if (limitMs !== undefined && limitMs <= 0) {
+        ctx.breadthStatus = 'skipped_time'
+        console.log(`  Breadth review skipped: no time left before the ${passStopAtSeconds()}s pass deadline`)
+        return State.SECOND_LOOK
+      }
 
       ctx.breadthModel = model
       if (config.judge.shownAnchors) ctx.shownBreadth = buildShownSource(ctx.filteredDiff!, ctx.fileContexts ?? [])
       console.log(`  Breadth review: ${coverage.untouched.length} untouched of ${coverage.reviewable.length} reviewable file(s)`)
-      const breadthSchema: [string?, Record<string, unknown>?] = hiBench(ctx) ? ['breadth', findingsOutputSchema({ alsoAffects: true })] : []
+      const breadthSchema: [string?, Record<string, unknown>?] = hiBench(ctx) || fp ? ['breadth', findingsOutputSchema({ alsoAffects: hiBench(ctx), firstPassSites: fp })] : []
       try {
-        const result = await runBreadth(
-          config.llmApiKey, model, config.judge.maxRetries, config.anthropic.maxTokens, effort,
-          ctx.prInfo!, ctx.filteredDiff!, ctx.fileContexts ?? [], system, briefing, config.review.lineNumbers, ...breadthSchema,
-        )
+        const result = await withPassDeadline(limitMs, signal => {
+          const tail: [string?, Record<string, unknown>?, AbortSignal?] = signal ? ['breadth', breadthSchema[1], signal] : breadthSchema
+          return runBreadth(
+            config.llmApiKey, model, config.judge.maxRetries, extraPassMaxTokens(), effort,
+            ctx.prInfo!, ctx.filteredDiff!, ctx.fileContexts ?? [], system, briefing, config.review.lineNumbers, ...tail,
+          )
+        })
         ctx.breadthFindings = result.findings
         ctx.breadthPromptHash = result.promptHash
         ctx.breadthUsage = { input_tokens: result.usage.input_tokens, output_tokens: result.usage.output_tokens, cost_usd: result.usage.cost_usd }
         addUsage(ctx, result.usage)
+        if (ids) addFirstPassSites(ctx, sanitizeFirstPassSites(result.firstPassSites, ids.index, 'breadth'), 'breadth', 'Breadth')
         ctx.breadthStatus = 'succeeded'
         console.log(`  Breadth review: ${coverage.untouched.length} untouched file(s) → ${result.findings.length} finding(s)`)
+        // Last in the try, so a throw above is recorded once by the catch, never twice.
+        recordPassCall(ctx, 'breadth', extraPassMaxTokens(), limitMs, result.usage)
       } catch (err: unknown) {
         // A truncated response carries its usage; count it so the record shows what the failed call cost.
         const e = err as Error & { usage?: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number; cost_usd?: number; reasoning_tokens?: number } }
@@ -660,8 +731,14 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
           ctx.breadthUsage = { input_tokens: e.usage.input_tokens, output_tokens: e.usage.output_tokens, cost_usd: e.usage.cost_usd }
           addUsage(ctx, e.usage)
         }
-        ctx.breadthStatus = 'failed'
-        console.warn(`  Breadth review FAILED (${isContextLengthError(err) ? 'context length' : e.message}) — continuing with first-pass findings only`)
+        recordPassCall(ctx, 'breadth', extraPassMaxTokens(), limitMs, e.usage, err)
+        if (err instanceof DeadlineAbortError) {
+          ctx.breadthStatus = 'aborted_time'
+          console.warn(`  Breadth review stopped at the ${passStopAtSeconds()}s pass deadline (${Math.round((Date.now() - ctx.startTime) / 1000)}s elapsed) — continuing with first-pass findings only`)
+        } else {
+          ctx.breadthStatus = 'failed'
+          console.warn(`  Breadth review FAILED (${isContextLengthError(err) ? 'context length' : e.message}) — continuing with first-pass findings only`)
+        }
       }
       return State.SECOND_LOOK
     }
@@ -689,13 +766,15 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
 
       const model = config.anthropic.model
       const hi = !!config.review.highImpact
-      const system = secondLookSystemPrompt(ctx.prompt!.content, remaining, config.judge.shownAnchors, hi)
-      const briefing = secondLookBriefing(known)
+      const fp = fpSites(ctx)
+      const ids = fp ? firstPassIds(firstPass, known) : undefined
+      const system = secondLookSystemPrompt(ctx.prompt!.content, remaining, config.judge.shownAnchors, hi, fp)
+      const briefing = ids ? secondLookBriefing(known, ids.tags) : secondLookBriefing(known)
       // Estimate on the restricted inputs, not the full diff, so a large PR with few flagged files isn't needlessly skipped.
       // shownLength on the numbered payloads (diff + file contexts) so the guard counts the line-number gutter, as ESTIMATE_TOKENS does.
       const shownSL = (s: string) => shownLength(s, config.review.lineNumbers)
       const estimate = Math.ceil((system.length + shownSL(restrictedDiff) + briefing.length + contexts.reduce((n, c) => n + shownSL(c.content), 0)) / 4)
-      const limits = [config.anthropic.maxInputTokens, contextWindowFor(model) - config.anthropic.maxTokens].filter(n => n > 0)
+      const limits = [config.anthropic.maxInputTokens, contextWindowFor(model) - extraPassMaxTokens()].filter(n => n > 0)
       const budget = limits.length ? Math.min(...limits) : Infinity
       if (estimate > budget) {
         ctx.secondLookStatus = 'skipped_budget'
@@ -709,29 +788,46 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         console.log(`  Second-look skipped: ${Math.round(elapsedSeconds)}s elapsed, over half the ${config.breadth.benchmarkDeadlineSeconds}s benchmark deadline`)
         return next
       }
+      const limitMs = passTimeLeftMs(ctx)
+      if (limitMs !== undefined && limitMs <= 0) {
+        ctx.secondLookStatus = 'skipped_time'
+        console.log(`  Second-look skipped: no time left before the ${passStopAtSeconds()}s pass deadline`)
+        return next
+      }
 
       if (config.judge.shownAnchors) ctx.shownSecondLook = buildShownSource(restrictedDiff, contexts)
       console.log(`  Second-look: re-reading ${flagged.length} flagged file(s), excluding ${known.length} known finding(s)`)
-      const secondLookSchema: [Record<string, unknown>?] = hi ? [findingsOutputSchema({ alsoAffects: hiBench(ctx), scenario: true })] : []
+      const secondLookSchema: [Record<string, unknown>?] = hi || fp ? [findingsOutputSchema({ alsoAffects: hiBench(ctx), scenario: hi, firstPassSites: fp })] : []
       try {
-        const result = await runBreadth(
-          config.llmApiKey, model, config.anthropic.maxRetries, config.anthropic.maxTokens, config.review.effort,
-          ctx.prInfo!, restrictedDiff, contexts, system, briefing, config.review.lineNumbers, 'second-look', ...secondLookSchema,
-        )
+        const result = await withPassDeadline(limitMs, signal => {
+          const tail: [Record<string, unknown>?, AbortSignal?] = signal ? [secondLookSchema[0], signal] : secondLookSchema
+          return runBreadth(
+            config.llmApiKey, model, config.anthropic.maxRetries, extraPassMaxTokens(), config.review.effort,
+            ctx.prInfo!, restrictedDiff, contexts, system, briefing, config.review.lineNumbers, 'second-look', ...tail,
+          )
+        })
         ctx.secondLookFindings = result.findings
         ctx.secondLookPromptHash = result.promptHash
         ctx.secondLookUsage = { input_tokens: result.usage.input_tokens, output_tokens: result.usage.output_tokens, cost_usd: result.usage.cost_usd }
         addUsage(ctx, result.usage)
+        if (ids) addFirstPassSites(ctx, sanitizeFirstPassSites(result.firstPassSites, ids.index, 'second_look'), 'second_look', 'Second-look')
         ctx.secondLookStatus = 'succeeded'
         console.log(`  Second-look: ${flagged.length} flagged file(s) → ${result.findings.length} additional finding(s)`)
+        recordPassCall(ctx, 'second_look', extraPassMaxTokens(), limitMs, result.usage)
       } catch (err: unknown) {
         const e = err as Error & { usage?: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number; cost_usd?: number; reasoning_tokens?: number } }
         if (e.usage) {
           ctx.secondLookUsage = { input_tokens: e.usage.input_tokens, output_tokens: e.usage.output_tokens, cost_usd: e.usage.cost_usd }
           addUsage(ctx, e.usage)
         }
-        ctx.secondLookStatus = 'failed'
-        console.warn(`  Second-look FAILED (${isContextLengthError(err) ? 'context length' : e.message}) — continuing with first-pass and breadth findings only`)
+        recordPassCall(ctx, 'second_look', extraPassMaxTokens(), limitMs, e.usage, err)
+        if (err instanceof DeadlineAbortError) {
+          ctx.secondLookStatus = 'aborted_time'
+          console.warn(`  Second-look stopped at the ${passStopAtSeconds()}s pass deadline (${Math.round((Date.now() - ctx.startTime) / 1000)}s elapsed) — continuing with first-pass and breadth findings only`)
+        } else {
+          ctx.secondLookStatus = 'failed'
+          console.warn(`  Second-look FAILED (${isContextLengthError(err) ? 'context length' : e.message}) — continuing with first-pass and breadth findings only`)
+        }
       }
       return next
     }
@@ -750,7 +846,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
 
       const effort = config.lenses.model ? '' : config.review.effort
       const earlier = [...(ctx.reviewObject?.findings ?? []), ...(ctx.breadthFindings ?? []), ...(ctx.secondLookFindings ?? [])]
-      const limits = [config.anthropic.maxInputTokens, contextWindowFor(model) - config.anthropic.maxTokens].filter(n => n > 0)
+      const limits = [config.anthropic.maxInputTokens, contextWindowFor(model) - extraPassMaxTokens()].filter(n => n > 0)
       const budget = limits.length ? Math.min(...limits) : Infinity
       let halt: LensStatus | undefined
       for (const lens of lenses) {
@@ -777,29 +873,46 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
           console.log(`  Lens review stopped at ${lens.name}: ${Math.round(elapsedSeconds)}s elapsed, over half the ${config.breadth.benchmarkDeadlineSeconds}s benchmark deadline`)
           continue
         }
+        const limitMs = passTimeLeftMs(ctx)
+        if (limitMs !== undefined && limitMs <= 0) {
+          run.status = halt = 'skipped_time'
+          console.log(`  Lens review stopped at ${lens.name}: no time left before the ${passStopAtSeconds()}s pass deadline`)
+          continue
+        }
 
         if (config.judge.shownAnchors && !ctx.shownLens) ctx.shownLens = buildShownSource(ctx.filteredDiff!, ctx.fileContexts ?? [])
         console.log(`  Lens ${lens.name}: full-PR pass, excluding ${known.length} known finding(s)`)
         const extras = { alsoAffects: hiBench(ctx), scenario: !!config.review.highImpact && !!lens.scenarioTag }
         const lensSchema: [Record<string, unknown>?] = extras.alsoAffects || extras.scenario ? [findingsOutputSchema(extras)] : []
         try {
-          const result = await runLens(
-            config.llmApiKey, model, config.anthropic.maxRetries, config.anthropic.maxTokens, effort,
-            ctx.prInfo!, ctx.filteredDiff!, ctx.fileContexts ?? [], system, briefing, config.review.lineNumbers, `lens:${lens.name}`, ...lensSchema,
-          )
+          const result = await withPassDeadline(limitMs, signal => {
+            const tail: [Record<string, unknown>?, AbortSignal?] = signal ? [lensSchema[0], signal] : lensSchema
+            return runLens(
+              config.llmApiKey, model, config.anthropic.maxRetries, extraPassMaxTokens(), effort,
+              ctx.prInfo!, ctx.filteredDiff!, ctx.fileContexts ?? [], system, briefing, config.review.lineNumbers, `lens:${lens.name}`, ...tail,
+            )
+          })
           run.findings = result.findings
           run.promptHash = result.promptHash
           run.usage = { input_tokens: result.usage.input_tokens, output_tokens: result.usage.output_tokens, cost_usd: result.usage.cost_usd }
           addUsage(ctx, result.usage)
           run.status = 'succeeded'
           console.log(`  Lens ${lens.name}: ${result.findings.length} finding(s)`)
+          recordPassCall(ctx, `lens:${lens.name}`, extraPassMaxTokens(), limitMs, result.usage)
         } catch (err: unknown) {
           const e = err as Error & { usage?: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number; cost_usd?: number; reasoning_tokens?: number } }
           if (e.usage) {
             run.usage = { input_tokens: e.usage.input_tokens, output_tokens: e.usage.output_tokens, cost_usd: e.usage.cost_usd }
             addUsage(ctx, e.usage)
           }
-          console.warn(`  Lens ${lens.name} FAILED (${isContextLengthError(err) ? 'context length' : e.message}) — continuing without its findings`)
+          recordPassCall(ctx, `lens:${lens.name}`, extraPassMaxTokens(), limitMs, e.usage, err)
+          if (err instanceof DeadlineAbortError) {
+            run.status = 'aborted_time'
+            halt = 'skipped_time'
+            console.warn(`  Lens ${lens.name} stopped at the ${passStopAtSeconds()}s pass deadline (${Math.round((Date.now() - ctx.startTime) / 1000)}s elapsed) — continuing without its findings`)
+          } else {
+            console.warn(`  Lens ${lens.name} FAILED (${isContextLengthError(err) ? 'context length' : e.message}) — continuing without its findings`)
+          }
         }
       }
       return State.JUDGE_REVIEW
@@ -888,7 +1001,8 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       const suggestedFixes = !!config.judge.suggestedFixes
       const counterparts = !!ctx.outcomeSink && config.benchmarkCounterpartRows
       const alsoAffects = hiBench(ctx)
-      const judgeOptions: JudgeOptions | undefined = config.judge.quality || config.judge.shownAnchors || config.judge.proposals || suggestedFixes || counterparts || alsoAffects
+      const sites = ctx.firstPassSites?.size ? ctx.firstPassSites : undefined
+      const judgeOptions: JudgeOptions | undefined = config.judge.quality || config.judge.shownAnchors || config.judge.proposals || suggestedFixes || counterparts || alsoAffects || sites
         ? {
             quality: config.judge.quality,
             proposals: config.judge.proposals,
@@ -901,6 +1015,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
             ...(suggestedFixes ? { proposals: true, codeProposals: true } : {}),
             ...(counterparts ? { counterparts: true } : {}),
             ...(alsoAffects ? { alsoAffects: true } : {}),
+            ...(sites ? { firstPassSites: sites } : {}),
           }
         : undefined
       const judgeTail: [JudgeOptions?] = judgeOptions ? [judgeOptions] : []
@@ -940,8 +1055,10 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         ctx.judgeUsage = { input_tokens: result.usage.input_tokens, output_tokens: result.usage.output_tokens, cost_usd: result.usage.cost_usd }
         addUsage(ctx, result.usage)
         ctx.judgeStatus = 'succeeded'
+        recordPassCall(ctx, 'judge', config.anthropic.maxTokens, undefined, result.usage)
       } catch (err: unknown) {
         ctx.judgeStatus = 'failed'
+        recordPassCall(ctx, 'judge', config.anthropic.maxTokens, undefined, (err as { usage?: LLMUsage }).usage, err)
         // Benchmark keeps the unjudged reviewer findings; normal mode throws so CI retries, unless the reviewer was clean and the judge ran only for breadth — then the clean review posts as it would without breadth.
         if (!ctx.outcomeSink && !noFindings) throw err
         console.warn(`  Judge failed (${(err as Error).message}) — proceeding with unjudged reviewer findings`)
@@ -984,6 +1101,8 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         if (sunk && sunk.counterpartRows !== undefined) ctx.counterpartRows = sunk.counterpartRows
         if (sunk && sunk.alsoAffectsRows !== undefined) ctx.alsoAffectsRows = sunk.alsoAffectsRows
         if (sunk && sunk.alsoAffects) ctx.alsoAffectsLog = sunk.alsoAffects
+        if (sunk && sunk.firstPassSiteRows !== undefined) ctx.firstPassSiteRows = sunk.firstPassSiteRows
+        if (sunk && sunk.firstPassSites) ctx.firstPassSitesLog = sunk.firstPassSites
         ctx.action = 'REVIEW'
         return State.DONE
       }

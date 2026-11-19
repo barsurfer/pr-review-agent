@@ -64,4 +64,15 @@ describe('reviewbench/Dockerfile baked defaults', () => {
     expect([config.judge.model, config.review.effort, config.judge.effort]).toEqual(['claude-haiku-5-5', 'high', 'high'])
     expect(activeLenses(config.lenses).map(l => l.name)).toEqual(['reliability'])
   })
+
+  it('bakes a 128k extra-pass cap and the pass deadline under the names config.ts reads, with reviewer and judge kept at 64k', async () => {
+    expect(env).toMatchObject({ MAX_OUTPUT_TOKENS: '64000', EXTRA_PASS_MAX_OUTPUT_TOKENS: '128000', ENABLE_BENCHMARK_PASS_DEADLINE: 'true' })
+    expect(env).not.toHaveProperty('ENABLE_FIRST_PASS_SITES')
+    for (const [name, value] of Object.entries(env)) vi.stubEnv(name, value)
+    vi.stubEnv('ANTHROPIC_API_KEY', 'test-key')
+    vi.resetModules()
+    const { config } = await import('../config.js')
+
+    expect([config.anthropic.maxTokens, config.anthropic.extraPassMaxTokens, config.breadth.passDeadline, config.review.firstPassSites]).toEqual([64000, 128000, true, false])
+  })
 })

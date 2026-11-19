@@ -4,7 +4,7 @@ import { fileURLToPath } from 'url'
 import { createHash } from 'crypto'
 import { createProvider, type LLMUsage } from '../llm/provider.js'
 import { renderReview, ISSUE_TYPES, SCENARIOS, type ReviewObject, type ReviewFinding, type FindingScore } from './formatter.js'
-import type { KeptFinding } from './findings-output.js'
+import type { KeptFinding, FirstPassSite } from './findings-output.js'
 import {
   REASON_CATEGORIES, DEFAULT_JUDGE_POLICY, applyJudgeDecisions, renderCandidatesForJudge, summarizeDecisions,
   type JudgeOutput, type JudgePolicy, type JudgeOptions, type AppliedDecision, type JudgeAnomalies, type RenderJudged,
@@ -230,21 +230,24 @@ export const BREADTH_OUTPUT_SCHEMA = {
 
 const ALSO_AFFECTS_PROPERTY = { type: 'array', description: 'Other changed files in this diff where this same defect also occurs and that you are not reporting as a finding of their own: the same root cause causing the same failure at a sibling call site, a parallel handler or route, or the other side of a mismatched contract. One entry per place, at most 3. Omit it when the defect is in one file. Never list this finding\'s own file, a place mentioned only as evidence, cause, contrast, documentation or where the fix goes, or a different problem.', items: { type: 'object', properties: { file: { type: 'string', description: 'Path of the other changed file, exactly as it appears in the diff.' }, lines: { type: 'string', description: 'Digits only: the added or changed line or range in that file where the same defect occurs, e.g. "46" or "60-62".' }, where: { type: 'string', description: 'A few words naming the code at that line, e.g. "handleCreate dispatches CREATE_WORKSPACE without a flush".' } }, required: ['file', 'lines', 'where'], additionalProperties: false } }
 
+const FIRST_PASS_SITES_PROPERTY = { type: 'array', description: 'Other changed files where the defect of a first-pass finding also occurs; see OTHER SITES OF FIRST-PASS FINDINGS. Omit when there are none.', items: { type: 'object', properties: { id: { type: 'string', description: 'The bracketed id of a first-pass finding in the message, e.g. "c3".' }, ...ALSO_AFFECTS_PROPERTY.items.properties }, required: ['id', 'file', 'lines', 'where'], additionalProperties: false } }
+
 const SCENARIO_PROPERTY = { type: 'string', enum: [...SCENARIOS], description: 'Only for a finding found by tracing a scenario or contract named in SECOND LOOK item 4 or the IMPACT LENS: which one. Omit otherwise.' }
 
 const findingsVariants = new Map<string, Record<string, unknown>>()
 
 // No option returns BREADTH_OUTPUT_SCHEMA itself (tests dispatch on its identity); a variant is a clone because REVIEW_OUTPUT_SCHEMA shares the findings subtree.
-export function findingsOutputSchema(opts: { alsoAffects?: boolean; scenario?: boolean } = {}): Record<string, unknown> {
-  const alsoAffects = !!opts.alsoAffects, scenario = !!opts.scenario
-  if (!alsoAffects && !scenario) return BREADTH_OUTPUT_SCHEMA
-  const key = `${alsoAffects}:${scenario}`
+export function findingsOutputSchema(opts: { alsoAffects?: boolean; scenario?: boolean; firstPassSites?: boolean } = {}): Record<string, unknown> {
+  const alsoAffects = !!opts.alsoAffects, scenario = !!opts.scenario, firstPassSites = !!opts.firstPassSites
+  if (!alsoAffects && !scenario && !firstPassSites) return BREADTH_OUTPUT_SCHEMA
+  const key = `${alsoAffects}:${scenario}${firstPassSites ? ':sites' : ''}`
   const cached = findingsVariants.get(key)
   if (cached) return cached
-  const schema = structuredClone(BREADTH_OUTPUT_SCHEMA) as unknown as { properties: { findings: { items: { properties: Record<string, unknown> } } } }
+  const schema = structuredClone(BREADTH_OUTPUT_SCHEMA) as unknown as { properties: { findings: { items: { properties: Record<string, unknown> } } } & Record<string, unknown> }
   const props = schema.properties.findings.items.properties
   if (alsoAffects) props.also_affects = structuredClone(ALSO_AFFECTS_PROPERTY)
   if (scenario) props.scenario = structuredClone(SCENARIO_PROPERTY)
+  if (firstPassSites) schema.properties.first_pass_sites = structuredClone(FIRST_PASS_SITES_PROPERTY)
   findingsVariants.set(key, schema)
   return schema
 }
@@ -266,6 +269,32 @@ export function sanitizeFindingExtras(finding: ReviewFinding): ReviewFinding {
   return { ...rest, ...(also.length ? { also_affects: also } : {}), ...(scenario ? { scenario } : {}) }
 }
 
+export type SiteDropReason = 'not_array' | 'not_object' | 'unknown_id' | 'bad_file' | 'bad_lines' | 'bad_where' | 'over_keep'
+
+// Keyed by first-pass candidate index; an id the pass was not briefed with, or a malformed entry, is dropped rather than resent.
+export function sanitizeFirstPassSites(raw: unknown, ids: ReadonlyMap<string, number>, via: FirstPassSite['via']): { sites: Map<number, FirstPassSite[]>; dropped: Partial<Record<SiteDropReason, number>> } {
+  const text = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
+  const sites = new Map<number, FirstPassSite[]>()
+  const dropped: Partial<Record<SiteDropReason, number>> = {}
+  const drop = (reason: SiteDropReason) => { dropped[reason] = (dropped[reason] ?? 0) + 1 }
+  if (raw !== undefined && !Array.isArray(raw)) drop('not_array')
+  for (const e of Array.isArray(raw) ? raw : []) {
+    if (!e || typeof e !== 'object') { drop('not_object'); continue }
+    const { id, file, lines, where } = e as Record<string, unknown>
+    const key = text(id).replace(/^\[|\]$/g, '').toLowerCase()
+    const index = ids.get(key)
+    const site: FirstPassSite = { id: key, file: text(file), lines: text(lines), where: text(where).replace(/\s+/g, ' '), via }
+    if (index === undefined) { drop('unknown_id'); continue }
+    if (!site.file) { drop('bad_file'); continue }
+    if (!site.lines) { drop('bad_lines'); continue }
+    if (!site.where) { drop('bad_where'); continue }
+    const list = sites.get(index) ?? []
+    if (list.length >= ALSO_AFFECTS_KEEP) { drop('over_keep'); continue }
+    sites.set(index, [...list, site])
+  }
+  return { sites, dropped }
+}
+
 export async function runLens(
   apiKey: string,
   model: string,
@@ -280,16 +309,22 @@ export async function runLens(
   lineNumbers = false,
   label = 'lens',
   schema: Record<string, unknown> = BREADTH_OUTPUT_SCHEMA,
-): Promise<{ findings: ReviewFinding[]; usage: LLMUsage; promptHash: string }> {
+  signal?: AbortSignal,
+): Promise<{ findings: ReviewFinding[]; usage: LLMUsage; promptHash: string; firstPassSites?: unknown }> {
+  const sites = 'first_pass_sites' in ((schema as { properties?: object }).properties ?? {})
   const userMessage = `${buildUserMessage(prInfo, diff, fileContexts, [], [], '', lineNumbers)}\n\n${briefing}`
   console.log(`Sending to ${label} reviewer (${model}, maxRetries: ${maxRetries})...`)
-  const { object, usage } = await createProvider(apiKey).completeStructured<{ findings: ReviewFinding[] }>(
-    systemPrompt, userMessage, schema, { model, maxTokens, maxRetries, effort: effort || undefined },
+  // Sites are optional extras the sanitizer filters, so a malformed entry must not cost an OpenRouter resend of the whole pass.
+  const { object, usage } = await createProvider(apiKey).completeStructured<{ findings: ReviewFinding[]; first_pass_sites?: unknown }>(
+    systemPrompt, userMessage, schema, { model, maxTokens, maxRetries, effort: effort || undefined, ...(signal ? { signal } : {}), ...(sites ? { tolerateMissing: ['first_pass_sites'] } : {}) },
   )
   console.log(`${label[0].toUpperCase()}${label.slice(1)} received (${usage.input_tokens} in / ${usage.output_tokens} out tokens, ${object.findings?.length ?? 0} findings)`)
   // A strict:false provider can return a non-array findings; coerce so candidate assembly's .map never throws.
   const findings = Array.isArray(object.findings) ? object.findings : []
-  return { findings: schema === BREADTH_OUTPUT_SCHEMA ? findings : findings.map(sanitizeFindingExtras), usage, promptHash: createHash('sha256').update(systemPrompt).digest('hex').slice(0, 12) }
+  return {
+    findings: schema === BREADTH_OUTPUT_SCHEMA ? findings : findings.map(sanitizeFindingExtras), usage, promptHash: createHash('sha256').update(systemPrompt).digest('hex').slice(0, 12),
+    ...(sites ? { firstPassSites: object.first_pass_sites } : {}),
+  }
 }
 
 export async function runBreadth(
@@ -306,9 +341,10 @@ export async function runBreadth(
   lineNumbers = false,
   label = 'breadth',
   schema?: Record<string, unknown>,
-): Promise<{ findings: ReviewFinding[]; usage: LLMUsage; promptHash: string }> {
-  const schemaTail: [Record<string, unknown>?] = schema ? [schema] : []
-  return runLens(apiKey, model, maxRetries, maxTokens, effort, prInfo, diff, fileContexts, systemPrompt, briefing, lineNumbers, label, ...schemaTail)
+  signal?: AbortSignal,
+): Promise<{ findings: ReviewFinding[]; usage: LLMUsage; promptHash: string; firstPassSites?: unknown }> {
+  const tail: [Record<string, unknown>?, AbortSignal?] = signal ? [schema ?? BREADTH_OUTPUT_SCHEMA, signal] : schema ? [schema] : []
+  return runLens(apiKey, model, maxRetries, maxTokens, effort, prInfo, diff, fileContexts, systemPrompt, briefing, lineNumbers, label, ...tail)
 }
 
 function buildUserMessage(

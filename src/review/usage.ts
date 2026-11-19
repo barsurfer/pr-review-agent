@@ -12,13 +12,13 @@ import { baseModelId } from '../llm/model-id.js'
 import { parseVerdictScore, parseFindings, countDiffLines } from './parsers.js'
 import { countFindings, normalizeIssueType } from './formatter.js'
 import type { FindingScore, ReviewFinding, IssueType, Scenario, AlsoAffected } from './formatter.js'
-import { isAnchored, parseLineRange, normalizeFindingPath, type AlsoAffectsLog } from './findings-output.js'
+import { isAnchored, parseLineRange, normalizeFindingPath, type AlsoAffectsLog, type FirstPassSite, type FirstPassSiteLog } from './findings-output.js'
 import { candidateId, type AppliedDecision, type JudgeAnomalies } from './judge-decisions.js'
 import { MAX_UNTOUCHED_LISTED, type BreadthStatus, type SecondLookStatus, type LensStatus, type CandidateOrigin } from './breadth.js'
 import { activeLenses, type LensRecommendation } from './lenses.js'
 import { isCheckedCommitHash } from './checked-commit.js'
 import type { SuggestedFixStats } from './suggested-fix.js'
-import type { ReviewContext, LensRun, EventKind } from './types.js'
+import type { ReviewContext, LensRun, EventKind, PassCall } from './types.js'
 import { isAgentReply } from '../vcs/adapter.js'
 
 // 12 hex chars of sha256 — enough to tell prompt/code versions apart across runs without bloating the record.
@@ -114,8 +114,13 @@ export interface UsageRecord {
   counterpart_rows?: number
   also_affects_rows?: number
   also_affects?: AlsoAffectsLog[]
+  pass_calls?: PassCall[]
+  first_pass_sites_named?: FirstPassSite[] | null
+  first_pass_sites_dropped?: ReviewContext['firstPassSitesDropped'] | null
+  first_pass_site_rows?: number
+  first_pass_sites?: FirstPassSiteLog[]
   untouched_files: { count: number; paths: string[]; cut: number; deprioritized?: number } | null
-  recall_levers: { j_quality: boolean; sl_breadth: boolean; j_shown_anchor: boolean; b_priority: boolean; high_impact?: true }
+  recall_levers: { j_quality: boolean; sl_breadth: boolean; j_shown_anchor: boolean; b_priority: boolean; high_impact?: true; first_pass_sites?: true }
   touch_rate: number | null
   delta: { developer_replies: number; human_replies: number; agent_replies: number; resolved: number; still_open: number; new_findings: number } | null
   reply_authors?: string[]
@@ -274,6 +279,7 @@ export function buildUsageRecord(
 
   const hi = !!config.review.highImpact
   const withHi = { scenario: hi, alsoAffects: hi && !!ctx.outcomeSink }
+  const fpSites = !!config.review.firstPassSites
 
   const humanReplies = (ctx.replies ?? []).filter(r => !isAgentReply(r))
   // Id when the platform gave one, else the display name; first-seen order, distinct.
@@ -377,12 +383,17 @@ export function buildUsageRecord(
     ...(ctx.counterpartRows !== undefined ? { counterpart_rows: ctx.counterpartRows } : {}),
     ...(ctx.alsoAffectsRows !== undefined ? { also_affects_rows: ctx.alsoAffectsRows } : {}),
     ...(ctx.alsoAffectsLog ? { also_affects: ctx.alsoAffectsLog } : {}),
+    // Benchmark-only and present only with one of these settings on, so every other record keeps its earlier shape.
+    ...(ctx.outcomeSink && (config.breadth.passDeadline || fpSites) ? { pass_calls: ctx.passCalls ?? [] } : {}),
+    ...(ctx.outcomeSink && fpSites ? { first_pass_sites_named: ctx.firstPassSitesNamed ?? null, first_pass_sites_dropped: ctx.firstPassSitesDropped ?? null } : {}),
+    ...(ctx.firstPassSiteRows !== undefined ? { first_pass_site_rows: ctx.firstPassSiteRows } : {}),
+    ...(ctx.firstPassSitesLog ? { first_pass_sites: ctx.firstPassSitesLog } : {}),
     untouched_files: ctx.untouchedFiles
       ? ctx.breadthPlan
         ? { count: ctx.untouchedFiles.length, paths: ctx.breadthPlan.selected, cut: ctx.breadthPlan.omitted, deprioritized: ctx.breadthPlan.deprioritizedReleaseEntries }
         : { count: ctx.untouchedFiles.length, paths: ctx.untouchedFiles.slice(0, MAX_UNTOUCHED_LISTED), cut: Math.max(0, ctx.untouchedFiles.length - MAX_UNTOUCHED_LISTED) }
       : null,
-    recall_levers: { j_quality: !!config.judge.quality, sl_breadth: !!config.review.secondLookBreadthTargets, j_shown_anchor: !!config.judge.shownAnchors, b_priority: !!config.breadth.priorityTargets, ...(hi ? { high_impact: true as const } : {}) },
+    recall_levers: { j_quality: !!config.judge.quality, sl_breadth: !!config.review.secondLookBreadthTargets, j_shown_anchor: !!config.judge.shownAnchors, b_priority: !!config.breadth.priorityTargets, ...(hi ? { high_impact: true as const } : {}), ...(ctx.outcomeSink && fpSites ? { first_pass_sites: true as const } : {}) },
     touch_rate: ctx.reviewNumber > 1 && deltaStats ? (() => {
       const total = deltaStats.resolved + deltaStats.still_open
       return total > 0 ? Math.round((deltaStats.resolved / total) * 100) : null

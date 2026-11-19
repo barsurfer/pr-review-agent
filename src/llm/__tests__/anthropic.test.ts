@@ -60,3 +60,16 @@ describe('AnthropicProvider usage reasoning_tokens', () => {
     }
   })
 })
+
+describe('AnthropicProvider request options', () => {
+  it('without a signal the SDK gets exactly { maxRetries }; with one, the signal is added', async () => {
+    answer({ verdict: 'ok' })
+    await createProvider('k').completeStructured('s', 'u', { required: [] }, opts)
+    expect(stream.mock.calls[0][1]).toStrictEqual({ maxRetries: 2 })
+
+    const signal = new AbortController().signal
+    answer({ verdict: 'ok' })
+    await createProvider('k').completeStructured('s', 'u', { required: [] }, { ...opts, signal })
+    expect(stream.mock.calls[1][1]).toStrictEqual({ maxRetries: 2, signal })
+  })
+})

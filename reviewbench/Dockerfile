@@ -18,6 +18,7 @@ COPY reviewbench/entrypoint.mjs ./entrypoint.mjs
 # Defaults only: the RB_CONFIG_MODEL / EFFORT / JUDGE_MODEL / JUDGE_EFFORT labels override per run. 64k output covers xhigh/max effort thinking.
 # haiku-5-5 reviewer (1M context → big PRs review in one pass) and haiku-5-5 judge, both at high effort, so a run spends no label slot on them.
 # Bundling salvages PRs still over budget, capped at 3 bundles so one giant PR can't run away on cost.
+# Extra passes get 128k (breadth truncated at 64k on the largest PR) while reviewer and judge stay at 64k; the pass deadline stops them in time for the judge.
 # Effort is a build arg because no label can unset it (empty labels are ignored); an empty value builds a model-default image.
 ARG REVIEW_EFFORT=high
 ARG JUDGE_EFFORT=high
@@ -26,6 +27,8 @@ ENV CLAUDE_MODEL=claude-haiku-5-5 \
     REVIEW_EFFORT=$REVIEW_EFFORT \
     JUDGE_EFFORT=$JUDGE_EFFORT \
     MAX_OUTPUT_TOKENS=64000 \
+    EXTRA_PASS_MAX_OUTPUT_TOKENS=128000 \
+    ENABLE_BENCHMARK_PASS_DEADLINE=true \
     ENABLE_BUNDLED_REVIEW=true \
     MAX_BUNDLES=3
 

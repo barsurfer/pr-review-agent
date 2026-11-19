@@ -10,7 +10,8 @@ import { planBundles, splitDiffByFile, estimateTokens as tok } from './bundler.j
 import { parseReviewMarkdown, mergeReviews, type BundleReview } from './aggregate.js'
 import { countFindings, isNoChange } from './formatter.js'
 import { isContextLengthError, shownLength } from './parsers.js'
-import type { ReviewContext } from './types.js'
+import type { ReviewContext, PassCall } from './types.js'
+import { DeadlineAbortError, TruncatedResponseError, type LLMUsage } from '../llm/shared.js'
 
 // The chars/4 estimate under-counts code-heavy diffs; packing to 85% keeps real usage under the cap.
 const FIT_RATIO = 0.85
@@ -84,12 +85,15 @@ export async function runBundledReview(ctx: ReviewContext, maxInputTokens: numbe
     const result = await (async () => {
       for (;;) {
         try {
-          return await runReview(
+          const answer = await runReview(
             config.llmApiKey, config.anthropic.model, config.anthropic.maxRetries, config.anthropic.maxTokens, config.review.effort,
             prInfo, diff, bundleContexts, { ...ctx.prompt!, content }, ctx.previousReviews ?? [], ctx.replies ?? [], delta,
             config.review.lineNumbers,
           )
+          recordPassCall(ctx, 'review', config.anthropic.maxTokens, undefined, answer.usage)
+          return answer
         } catch (err: unknown) {
+          recordPassCall(ctx, 'review', config.anthropic.maxTokens, undefined, (err as { usage?: LLMUsage }).usage, err)
           if (!isContextLengthError(err)) throw err
           if (bundleContexts.length === 0) return null
           console.warn(`  Bundle ${i + 1} exceeded the model context — dropping file contexts, retrying diff-only`)
@@ -137,8 +141,10 @@ export async function runBundledReview(ctx: ReviewContext, maxInputTokens: numbe
         judged = true
         ctx.judgeStatus = 'succeeded'
         ctx.judgePromptHash = verdict.promptHash
+        recordPassCall(ctx, 'judge', config.anthropic.maxTokens, undefined, verdict.usage)
       } catch (err: unknown) {
         ctx.judgeStatus = 'failed'
+        recordPassCall(ctx, 'judge', config.anthropic.maxTokens, undefined, (err as { usage?: LLMUsage }).usage, err)
         // Benchmark: a judge failure falls back to the unjudged bundle findings; normal mode still throws so CI retries.
         if (!ctx.outcomeSink) throw err
         console.warn(`  Bundle ${i + 1} judge failed (${(err as Error).message}) — proceeding with unjudged reviewer findings`)
@@ -166,6 +172,13 @@ export async function runBundledReview(ctx: ReviewContext, maxInputTokens: numbe
   console.log(`\nMerged ${reviews.length} bundle review(s): ${merged.object.findings.length} finding(s) after dedupe`)
   ctx.bundleUncertain = unreviewed.length > 0 || incoherent
   return { ok: true }
+}
+
+export function recordPassCall(ctx: ReviewContext, stage: string, maxTokens: number, limitMs: number | undefined, usage?: Partial<LLMUsage>, err?: unknown): void {
+  const end: PassCall['end'] = err === undefined ? 'ok' : err instanceof DeadlineAbortError ? 'aborted_time' : err instanceof TruncatedResponseError ? 'truncated' : 'error'
+  // An aborted stream's usage is a start-of-message snapshot, so its output count would read as a real ~1-token answer.
+  const counted = end === 'aborted_time' ? undefined : usage
+  ;(ctx.passCalls ??= []).push({ stage, end, max_tokens: maxTokens, output_tokens: counted?.output_tokens ?? null, reasoning_tokens: counted?.reasoning_tokens ?? null, limit_ms: limitMs ?? null })
 }
 
 export function addUsage(ctx: ReviewContext, u: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number; cost_usd?: number; reasoning_tokens?: number }): void {

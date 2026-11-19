@@ -1,7 +1,7 @@
 // The judge only classifies; policy lives here so one judged run can be re-scored offline under any flag combination.
 
 import { renderReview, type ReviewFinding, type ReviewObject, type FindingScore } from './formatter.js'
-import { normalizeFindingPath, parseLineRange, titlesOverlap, normTitle, isAnchored, type KeptFinding } from './findings-output.js'
+import { normalizeFindingPath, parseLineRange, titlesOverlap, normTitle, isAnchored, type KeptFinding, type FirstPassSite } from './findings-output.js'
 import { addedLines, type AddedLine } from './parsers.js'
 import { coversRange, shownFile, type ShownAnchors, type ShownSource } from './shown-anchors.js'
 import type { AdditionalLocation } from './judge-quality.js'
@@ -95,6 +95,7 @@ export interface JudgeOptions {
   codeProposals?: boolean
   counterparts?: boolean
   alsoAffects?: boolean
+  firstPassSites?: ReadonlyMap<number, FirstPassSite[]>
 }
 
 export type RenderJudged = (suffixes: ReadonlyMap<number, string>, order?: readonly number[], fixFree?: ReadonlySet<number>) => string
@@ -410,6 +411,8 @@ export function applyJudgeDecisions(candidates: readonly ReviewFinding[], output
         ...(options?.counterparts ? { reviewerBody: candidate.body } : {}),
         // Only extra passes are asked for it and sanitized; a first-pass value is invented by the model.
         ...(options?.alsoAffects && i >= breadthFrom && Array.isArray(candidate.also_affects) && candidate.also_affects.length ? { alsoAffects: candidate.also_affects } : {}),
+        // Keyed by candidate index, not kept index, so a dropped earlier candidate cannot shift sites onto another finding.
+        ...(options?.firstPassSites?.get(i)?.length ? { sites: options.firstPassSites.get(i) } : {}),
       })
       rows.push({ candidate: i, expansion: false, validated: entry.r.reason_category === 'validated', evidenced: !!entry.r.evidence, rescueOf: entry.r.invalid_duplicate ? index.get(normalizeId(String(entry.r.duplicate_of ?? ''))) : undefined })
       for (const x of expansion?.accepted ?? []) {
