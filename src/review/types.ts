@@ -70,8 +70,9 @@ export interface StageUsage {
   attempts?: LLMUsage[]
 }
 
-export type UncachedReason = 'model' | 'effort' | 'unsupported_model' | 'unsupported_system_message' | 'no_judge' | 'rereview' | 'bundled' | 'no_shared_pass'
+export type UncachedReason = 'model' | 'effort' | 'unsupported_model' | 'no_judge' | 'rereview' | 'bundled' | 'no_shared_pass'
   | 'skipped_small' | 'skipped_few_untouched' | 'skipped_no_findings' | 'skipped_budget' | 'skipped_time'
+  | `rejected_400: ${string}` | 'off_after_400' | `skipped_after_plan: ${string}`
 
 export interface PromptCacheLog {
   ttl: '5m'

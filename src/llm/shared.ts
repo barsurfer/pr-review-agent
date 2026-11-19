@@ -1,3 +1,5 @@
+import { isContextLengthError } from '../review/parsers.js'
+
 export interface LLMUsage {
   input_tokens: number
   output_tokens: number
@@ -49,8 +51,8 @@ export class DeadlineAbortError extends Error {
   }
 }
 
-// OpenRouter's wording for a rejected mid-conversation system message is unverified, so on a systemAfter call any 400 counts as one.
-export const isSystemMessageRejection = (err: unknown): boolean => (err as { status?: number } | null)?.status === 400
+// OpenRouter's rejection wording is unverified, so any non-overflow 400 on a systemAfter call counts
+export const isSystemMessageRejection = (err: unknown): boolean => (err as { status?: number } | null)?.status === 400 && !isContextLengthError(err)
 
 // Required root keys the object is missing ([] from a schema-honoring provider). `deep` also flags
 // dropped array-item required keys (findings[].severity) a strict:false provider can omit while

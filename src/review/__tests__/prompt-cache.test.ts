@@ -33,7 +33,7 @@ vi.mock('../../llm/provider.js', () => ({ createProvider: vi.fn(() => ({ complet
 import { runBenchmark } from '../../benchmark.js'
 import { review } from '../index.js'
 import { config } from '../../config.js'
-import { REVIEW_OUTPUT_SCHEMA, SHARED_PASS_TOLERATE, sharedOutputSchema } from '../client.js'
+import { REVIEW_OUTPUT_SCHEMA, SHARED_PASS_TOLERATE, sharedOutputSchema, findingsOutputSchema } from '../client.js'
 import { FIRST_PASS_SITES_SECTION, PASS_OUTPUT_NOTE } from '../breadth.js'
 import { estimateCost } from '../usage.js'
 import type { ReviewObject, ReviewFinding } from '../formatter.js'
@@ -364,7 +364,8 @@ describe('prompt cache fallback and session_id', () => {
     same(later[0], off.call('second_look'))
     same(later[1], off.call('reliability'))
     expect(record.prompt_cache.shared_stages).toEqual([])
-    expect(record.prompt_cache.uncached).toEqual(['breadth', 'second_look', 'lens:reliability'].map(stage => ({ stage, reason: 'unsupported_system_message' })))
+    expect(record.prompt_cache.uncached).toEqual([{ stage: 'breadth', reason: 'rejected_400: Provider returned error' }, { stage: 'second_look', reason: 'off_after_400' }, { stage: 'lens:reliability', reason: 'off_after_400' }])
+    expect(warnSpy.mock.calls.map(c => String(c[0])).some(w => w.includes('(Provider returned error)'))).toBe(true)
     expect(record.pass_calls.map((c: any) => `${c.stage}:${c.end}`)).toEqual(['review:ok', 'breadth:error', 'breadth:ok', 'second_look:ok', 'lens:reliability:ok', 'judge:ok'])
     expect(record.breadth_status).toBe('succeeded')
   })
@@ -373,8 +374,31 @@ describe('prompt cache fallback and session_id', () => {
     const off = await production()
     const record = await rejecting('second_look')
     expect(record.prompt_cache.shared_stages).toEqual(['breadth'])
-    expect(record.prompt_cache.uncached).toEqual(['second_look', 'lens:reliability'].map(stage => ({ stage, reason: 'unsupported_system_message' })))
+    expect(record.prompt_cache.uncached).toEqual([{ stage: 'second_look', reason: 'rejected_400: Provider returned error' }, { stage: 'lens:reliability', reason: 'off_after_400' }])
     same(callsOf().find(c => c.stage === 'reliability'), off.call('reliability'))
+  })
+
+  it('a context-length 400 on a cached pass is no rejection: the pass fails as before and the cache stays on for later passes', async () => {
+    reset(on())
+    const base = completeStructured.getMockImplementation()!
+    completeStructured.mockImplementation(async (system: string, user: any, schema: any, opts: any) => {
+      if (opts?.systemAfter && passOf(opts.systemAfter) === 'breadth') throw Object.assign(new Error('prompt is too long: 1200000 tokens > 1000000 maximum'), { status: 400 })
+      return base(system, user, schema, opts)
+    })
+    const record = await review(makeAdapter(), '100', false, undefined, 'off', false, 'repo') as any
+
+    expect(callsOf().filter(c => c.stage === 'breadth')).toHaveLength(1)
+    expect(record.breadth_status).toBe('failed')
+    expect(record.prompt_cache.shared_stages).toEqual(['breadth', 'second_look', 'lens:reliability'])
+    expect(record.prompt_cache.uncached).toEqual([])
+    expect(callsOf().find(c => c.stage === 'second_look')!.opts.systemAfter).toBeDefined()
+  })
+
+  it('a planned shared pass that a findings-dependent gate skips is moved out of shared_stages', async () => {
+    const cached = await production(on(() => { cfg.breadth.minUntouched = 2 }))
+    expect(cached.record.breadth_status).toBe('skipped_few_untouched')
+    expect(cached.record.prompt_cache.shared_stages).toEqual(['second_look', 'lens:reliability'])
+    expect(cached.record.prompt_cache.uncached).toEqual([{ stage: 'breadth', reason: 'skipped_after_plan: skipped_few_untouched' }])
   })
 
   it('OpenRouter: one session_id per run on the reviewer and shared passes, never on the judge; absent with the flag off', async () => {
@@ -516,5 +540,24 @@ describe('prompt cache cost per attempt', () => {
     expect(record.breadth_cost_usd).toBe(0.0027)
     expect(record.pass_calls.filter((c: any) => c.stage === 'review' || c.stage === 'breadth').map((c: any) => c.cost_usd)).toEqual([0.0027, 0.0027])
     expect(record.cost_usd - record.breadth_cost_usd - record.judge_cost_usd).toBeCloseTo(0.0027, 10)
+  })
+})
+
+describe('prompt cache reviewer schema F wording and tolerance', () => {
+  it('F words scenario and first_pass_sites without pass sections the reviewer never sees; the flag-off pass schemas keep theirs', () => {
+    const F = sharedOutputSchema({ alsoAffects: true, scenario: true, firstPassSites: true }) as any
+    const text = JSON.stringify(F)
+    expect(text).not.toMatch(/SECOND LOOK|IMPACT LENS|OTHER SITES OF FIRST-PASS FINDINGS/)
+    const passSchema = findingsOutputSchema({ scenario: true, firstPassSites: true }) as any
+    expect(passSchema.properties.findings.items.properties.scenario.description).toContain('SECOND LOOK item 4')
+    expect(passSchema.properties.first_pass_sites.description).toContain('OTHER SITES OF FIRST-PASS FINDINGS')
+    expect(F.properties.first_pass_sites.items).toEqual(passSchema.properties.first_pass_sites.items)
+  })
+
+  it('the cached reviewer tolerates a malformed first_pass_sites entry only when F carries it', async () => {
+    const withSites = await bench({ ...BENCH, RB_CONFIG_FP_SITES: '1', RB_CONFIG_CACHE: '1' })
+    expect(withSites.call('review').opts.tolerateMissing).toEqual(['first_pass_sites'])
+    const plain = await bench({ ...BENCH, RB_CONFIG_CACHE: '1' })
+    expect('tolerateMissing' in plain.call('review').opts).toBe(false)
   })
 })

@@ -223,7 +223,7 @@ function planPromptCache(ctx: ReviewContext): PromptCacheLog {
     ...activeLenses(config.lenses).map(l => ({ stage: `lens:${l.name}`, model: config.lenses.model || model, effort: config.lenses.model ? '' : effort })),
   ]
   const supported = takesSystemAfter(model)
-  // Gates a pass checks later but whose outcome is already certain, so a write is never bought for a pass that will skip.
+  // Gates whose outcome is already certain before the reviewer call; findings-dependent gates run later and can still waste the write.
   const reviewable = fileCoverage(ctx.filteredDiff!, []).reviewable.length
   const limits = [config.anthropic.maxInputTokens, contextWindowFor(model) - extraPassMaxTokens(ctx)].filter(n => n > 0)
   const overBudget = limits.length > 0 && ctx.estimatedInputTokens > Math.min(...limits)
@@ -258,7 +258,8 @@ async function cachedOrUncached<T>(ctx: ReviewContext, stage: string, limitMs: n
     // The same model would reject every later pass too, so the rest of the run sends today's requests without another 400 each.
     const log = ctx.promptCache!
     const at = log.shared_stages.indexOf(stage)
-    log.uncached.push(...log.shared_stages.slice(at).map(s => ({ stage: s, reason: 'unsupported_system_message' as const })))
+    const message = String((err as Error).message ?? '').replace(/\s+/g, ' ').trim().slice(0, 120)
+    log.uncached.push({ stage, reason: `rejected_400: ${message}` }, ...log.shared_stages.slice(at + 1).map(s => ({ stage: s, reason: 'off_after_400' as const })))
     log.shared_stages = log.shared_stages.slice(0, at)
     ctx.cachePrefix = undefined
     console.warn(`  ${stage}: the cached request was rejected (${(err as Error).message}) — re-sending it uncached; the prompt cache is off for the rest of this run`)

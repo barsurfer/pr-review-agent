@@ -426,7 +426,7 @@ export function buildUsageRecord(
     ...(ctx.alsoAffectsLog ? { also_affects: ctx.alsoAffectsLog } : {}),
     // Benchmark-only and present only with one of these settings on, so every other record keeps its earlier shape.
     ...((ctx.outcomeSink && (config.breadth.passDeadline || fpSites)) || cache ? { pass_calls: ctx.passCalls ?? [] } : {}),
-    ...(cache ? { prompt_cache: ctx.promptCache ?? null } : {}),
+    ...(cache ? { prompt_cache: ctx.promptCache ? settledPromptCache(ctx, ctx.promptCache) : null } : {}),
     ...(ctx.outcomeSink && fpSites ? { first_pass_sites_named: ctx.firstPassSitesNamed ?? null, first_pass_sites_dropped: ctx.firstPassSitesDropped ?? null } : {}),
     ...(ctx.firstPassSiteRows !== undefined ? { first_pass_site_rows: ctx.firstPassSiteRows } : {}),
     ...(ctx.firstPassSitesLog ? { first_pass_sites: ctx.firstPassSitesLog } : {}),
@@ -457,6 +457,19 @@ export function buildUsageRecord(
     // Absent when CI passed no trigger, so those records serialize exactly as before.
     ...(ctx.trigger ? { trigger: { event: ctx.trigger.event || null, comment_author: ctx.trigger.commentAuthor || null, ...(ctx.trigger.kind ? { event_kind: ctx.trigger.kind } : {}) } } : {}),
     error,
+  }
+}
+
+// Findings-dependent gates run after the reviewer wrote the cache, so a planned pass that then skipped (or was never reached) is moved out of shared_stages.
+function settledPromptCache(ctx: ReviewContext, log: PromptCacheLog): PromptCacheLog {
+  const statusOf = (stage: string): string | undefined =>
+    stage === 'breadth' ? ctx.breadthStatus : stage === 'second_look' ? ctx.secondLookStatus : ctx.lensRuns?.find(r => `lens:${r.name}` === stage)?.status
+  const skipped = log.shared_stages.map(stage => ({ stage, status: statusOf(stage) ?? 'not_reached' })).filter(s => s.status === 'not_reached' || s.status.startsWith('skipped_'))
+  if (!skipped.length) return log
+  return {
+    ...log,
+    shared_stages: log.shared_stages.filter(stage => !skipped.some(s => s.stage === stage)),
+    uncached: [...log.uncached, ...skipped.map(s => ({ stage: s.stage, reason: `skipped_after_plan: ${s.status}` as const }))],
   }
 }
 

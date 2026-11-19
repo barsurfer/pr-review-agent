@@ -201,9 +201,12 @@ export async function runReview(
   const callOpts = { model, maxTokens, maxRetries, effort: effort || undefined }
   // A log-only field must never cost a review, so a model that omits it still yields the review.
   const opts = lensRecommendation ? { ...callOpts, tolerateMissing: ['lens_recommendations'] } : callOpts
+  // A malformed optional pass extra in F must not cost the reviewer an OpenRouter resend; also_affects and scenario sit below the deep check.
+  const sites = !!cache && 'first_pass_sites' in ((cache.schema as { properties?: object }).properties ?? {})
+  const cacheOpts = sites ? { ...opts, tolerateMissing: [...(lensRecommendation ? ['lens_recommendations'] : []), 'first_pass_sites'] } : opts
   const { object: raw, usage } = cache
     ? await createProvider(apiKey).completeStructured<ReviewObject & { lens_recommendations?: unknown; first_pass_sites?: unknown }>(
-        prompt.content, [{ text: userMessage, cache: true }], cache.schema, cache.sessionId ? { ...opts, sessionId: cache.sessionId } : opts,
+        prompt.content, [{ text: userMessage, cache: true }], cache.schema, cache.sessionId ? { ...cacheOpts, sessionId: cache.sessionId } : cacheOpts,
       )
     : await createProvider(apiKey).completeStructured<ReviewObject & { lens_recommendations?: unknown; first_pass_sites?: unknown }>(
         prompt.content, userMessage, reviewOutputSchema(lensRecommendation), opts,
@@ -297,6 +300,10 @@ export function sanitizeFindingExtras(finding: ReviewFinding): ReviewFinding {
 
 const sharedVariants = new Map<string, Record<string, unknown>>()
 
+// The reviewer also gets schema F but none of the pass sections the default descriptions cite, so F words them without those names.
+const SHARED_SCENARIO_DESCRIPTION = 'Only when your instructions name scenarios or contracts to trace and this finding came from tracing one: which one. Omit otherwise.'
+const SHARED_SITES_DESCRIPTION = 'Only when your instructions ask for other sites of first-pass findings: other changed files where such a finding\'s defect also occurs. Omit otherwise.'
+
 // Schema F: the reviewer's schema plus every extra a pass in this run may fill; no extra returns the reviewer's schema object itself.
 export function sharedOutputSchema(opts: { lensRecommendation?: boolean; alsoAffects?: boolean; scenario?: boolean; firstPassSites?: boolean }): Record<string, unknown> {
   const base = reviewOutputSchema(!!opts.lensRecommendation)
@@ -308,8 +315,8 @@ export function sharedOutputSchema(opts: { lensRecommendation?: boolean; alsoAff
   const schema = structuredClone(base) as { properties: Record<string, unknown> & { findings: { items: { properties: Record<string, unknown> } } } }
   const props = schema.properties.findings.items.properties
   if (alsoAffects) props.also_affects = structuredClone(ALSO_AFFECTS_PROPERTY)
-  if (scenario) props.scenario = structuredClone(SCENARIO_PROPERTY)
-  if (firstPassSites) schema.properties.first_pass_sites = structuredClone(FIRST_PASS_SITES_PROPERTY)
+  if (scenario) props.scenario = { ...structuredClone(SCENARIO_PROPERTY), description: SHARED_SCENARIO_DESCRIPTION }
+  if (firstPassSites) schema.properties.first_pass_sites = { ...structuredClone(FIRST_PASS_SITES_PROPERTY), description: SHARED_SITES_DESCRIPTION }
   sharedVariants.set(key, schema)
   return schema
 }
