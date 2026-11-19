@@ -36323,6 +36323,8 @@ var config = {
     // Output-token cap for reviewer + judge. The Claude 5 family thinks by default and that
     // counts against this budget, so too low a cap truncates (16k cut off Sonnet 5 mid-review).
     maxTokens: parseInt(optional("MAX_OUTPUT_TOKENS", "32000"), 10),
+    // Breadth, second-look and lens cap only, so a long extra pass can't also loosen the reviewer's or judge's bound; unset, 0 or invalid = MAX_OUTPUT_TOKENS.
+    extraPassMaxTokens: positiveOr(parseInt(optional("EXTRA_PASS_MAX_OUTPUT_TOKENS", "0"), 10), 0),
     // Replaces the reviewer's window and stands in for any other model the window table lacks (contextWindowFor); 0 = off.
     modelContextTokens: parseInt(optional("MODEL_CONTEXT_TOKENS", "0"), 10)
   },
@@ -36357,8 +36359,12 @@ var config = {
     minFiles: finiteOr(parseInt(optional("BREADTH_MIN_FILES", "5"), 10), 5),
     minUntouched: finiteOr(parseInt(optional("BREADTH_MIN_UNTOUCHED", "3"), 10), 3),
     benchmarkDeadlineSeconds: positiveOr(Number(optional("BENCHMARK_DEADLINE_SECONDS", "840")), 840),
+    // Time kept for the judge after the pass deadline: a full 64k answer at the ~250 tok/s benchmark judges measured end to end.
+    judgeReserveSeconds: 270,
     // Off by default: pick the listed untouched targets by subsystem diversity and substance instead of diff order.
-    priorityTargets: optional("ENABLE_BREADTH_PRIORITY_TARGETS", "false") === "true"
+    priorityTargets: optional("ENABLE_BREADTH_PRIORITY_TARGETS", "false") === "true",
+    // Off by default; acts only under --benchmark: aborts an extra-pass call in time for the judge to finish before the kill.
+    passDeadline: optional("ENABLE_BENCHMARK_PASS_DEADLINE", "false") === "true"
   },
   // Off by default (each lens is another reviewer-sized call); the list stays raw so a benchmark label can overwrite it after load.
   lenses: {
@@ -36402,6 +36408,8 @@ var config = {
     secondLookBreadthTargets: optional("ENABLE_SECOND_LOOK_BREADTH_TARGETS", "false") === "true",
     // Off by default: it lengthens the second-look prompt, and in benchmark mode asks the extra passes for other places with the same defect.
     highImpact: optional("ENABLE_HIGH_IMPACT", "false") === "true",
+    // Off by default; acts only under --benchmark: breadth and second-look name other sites of first-pass findings as extra rows.
+    firstPassSites: optional("ENABLE_FIRST_PASS_SITES", "false") === "true",
     // On by default: without numbered lines ~40% of findings carried no line; set false to send the raw diff/context (saves the per-line gutter tokens).
     lineNumbers: optional("ENABLE_LINE_NUMBERS", "true") !== "false",
     // On by default with a kill switch: false always reviews the full delta after a target merge.
@@ -43748,6 +43756,41 @@ function listedWindow(list, model) {
   return limits.length ? Math.min(...limits) : void 0;
 }
 
+// src/llm/shared.ts
+init_define_STACK_PROMPTS();
+var TruncatedResponseError = class extends Error {
+  constructor(message, usage) {
+    super(message);
+    this.usage = usage;
+    this.name = "TruncatedResponseError";
+  }
+  usage;
+};
+var DeadlineAbortError = class extends Error {
+  constructor(message, usage) {
+    super(message);
+    this.usage = usage;
+    this.name = "DeadlineAbortError";
+  }
+  usage;
+};
+function missingRequired(object, schema, deep = false, tolerate = []) {
+  const required2 = schema.required ?? [];
+  const obj = object ?? {};
+  const missing = required2.filter((k) => obj[k] === void 0 && !tolerate.includes(k));
+  if (!deep) return missing;
+  const props = schema.properties ?? {};
+  for (const [key, prop] of Object.entries(props)) {
+    const itemRequired = prop?.items?.required;
+    if (!itemRequired || tolerate.includes(key) || !Array.isArray(obj[key])) continue;
+    obj[key].forEach((el, i) => {
+      const elObj = el ?? {};
+      for (const rk of itemRequired) if (elObj[rk] === void 0) missing.push(`${key}[${i}].${rk}`);
+    });
+  }
+  return missing;
+}
+
 // src/prompt/loader.ts
 init_define_STACK_PROMPTS();
 var import_fs = require("fs");
@@ -44484,35 +44527,6 @@ init_define_STACK_PROMPTS();
 // src/llm/anthropic-provider.ts
 init_define_STACK_PROMPTS();
 init_sdk();
-
-// src/llm/shared.ts
-init_define_STACK_PROMPTS();
-var TruncatedResponseError = class extends Error {
-  constructor(message, usage) {
-    super(message);
-    this.usage = usage;
-    this.name = "TruncatedResponseError";
-  }
-  usage;
-};
-function missingRequired(object, schema, deep = false, tolerate = []) {
-  const required2 = schema.required ?? [];
-  const obj = object ?? {};
-  const missing = required2.filter((k) => obj[k] === void 0 && !tolerate.includes(k));
-  if (!deep) return missing;
-  const props = schema.properties ?? {};
-  for (const [key, prop] of Object.entries(props)) {
-    const itemRequired = prop?.items?.required;
-    if (!itemRequired || tolerate.includes(key) || !Array.isArray(obj[key])) continue;
-    obj[key].forEach((el, i) => {
-      const elObj = el ?? {};
-      for (const rk of itemRequired) if (elObj[rk] === void 0) missing.push(`${key}[${i}].${rk}`);
-    });
-  }
-  return missing;
-}
-
-// src/llm/anthropic-provider.ts
 var AnthropicProvider = class {
   client;
   constructor(apiKey) {
@@ -44540,7 +44554,16 @@ var AnthropicProvider = class {
   // effort (when set) rides output_config; models that don't support it (e.g. Haiku 4.5) 400, so
   // catch that and retry once without it rather than fail the review.
   streamFinal(params, opts2) {
-    const run = (p) => this.client.messages.stream(p, { maxRetries: opts2.maxRetries }).finalMessage();
+    const run = (p) => {
+      const params2 = p;
+      if (!opts2.signal) return this.client.messages.stream(params2, { maxRetries: opts2.maxRetries }).finalMessage();
+      const stream5 = this.client.messages.stream(params2, { maxRetries: opts2.maxRetries, signal: opts2.signal });
+      return stream5.finalMessage().catch((err) => {
+        if (!opts2.signal?.aborted) throw err;
+        const partial = stream5.currentMessage?.usage;
+        throw new DeadlineAbortError(`Model call aborted at the benchmark pass deadline (${opts2.model})`, partial ? mapUsage(partial) : void 0);
+      });
+    };
     if (!opts2.effort) return run(params);
     const withEffort = { ...params, output_config: { ...params.output_config ?? {}, effort: opts2.effort } };
     return run(withEffort).catch((err) => {
@@ -44640,16 +44663,18 @@ var OpenRouterProvider = class {
   async send(url2, headers, body, opts2) {
     let lastErr;
     for (let attempt = 0; attempt <= opts2.maxRetries; attempt++) {
+      if (opts2.signal?.aborted) throw deadlineAbort(opts2);
       try {
-        const resp = await axios_default.post(url2, body, { headers, timeout: OPENROUTER_TIMEOUT_MS });
+        const resp = await axios_default.post(url2, body, opts2.signal ? { headers, timeout: OPENROUTER_TIMEOUT_MS, signal: opts2.signal } : { headers, timeout: OPENROUTER_TIMEOUT_MS });
         const data = resp.data;
         if (data?.error) throw openRouterError(typeof data.error.code === "number" ? data.error.code : void 0, data.error.message ?? "OpenRouter returned an error", data.error.code);
         return data;
       } catch (err) {
         if (isOpenRouterError(err)) throw err;
+        if (opts2.signal?.aborted) throw deadlineAbort(opts2);
         lastErr = err;
         if (attempt < opts2.maxRetries && isRetryable2(err)) {
-          await delay2(retryDelayMs2(attempt, err));
+          await delay2(retryDelayMs2(attempt, err), opts2.signal);
           continue;
         }
         throw axiosToError(err);
@@ -44741,9 +44766,22 @@ function retryDelayMs2(attempt, err) {
   if (Number.isFinite(retryAfter) && retryAfter > 0) return retryAfter * 1e3;
   return Math.min(500 * 2 ** attempt, 8e3);
 }
-function delay2(ms) {
-  return new Promise((resolve4) => setTimeout(resolve4, ms));
+function delay2(ms, signal) {
+  if (!signal) return new Promise((resolve4) => setTimeout(resolve4, ms));
+  return new Promise((resolve4) => {
+    if (signal.aborted) return resolve4();
+    const onAbort = () => {
+      clearTimeout(timer);
+      resolve4();
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve4();
+    }, ms);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
 }
+var deadlineAbort = (opts2) => new DeadlineAbortError(`Model call aborted at the benchmark pass deadline (${opts2.model})`);
 
 // src/llm/provider.ts
 function createProvider(apiKey) {
@@ -45130,7 +45168,7 @@ function counterpartFindings(placed, changedFiles, diff) {
   for (const { file, line } of addedLines(diff)) addedFileLength.set(normalizeFindingPath(file), line);
   return placed.flatMap((k) => {
     if (!isAnchored(k) || k.reviewerBody === void 0) return [];
-    const { proposal: _ownFix, alsoAffects: _own, ...copy } = k;
+    const { proposal: _ownFix, alsoAffects: _own, sites: _sites, ...copy } = k;
     return counterpartMentions([k.title, k.reviewerBody], normalizeFindingPath(k.file, paths), changedFiles, addedFileLength).map((c) => ({ ...copy, ...c, anchorSource: "mention" }));
   });
 }
@@ -45142,51 +45180,78 @@ var ALSO_AFFECTS_WHERE_NOTE = true;
 var ALSO_AFFECTS_CAP = 3;
 var ALSO_AFFECTS_MAX_SPAN = 50;
 var ALSO_AFFECTS_LINES = /^\s*(\d+)(?:\s*-\s*(\d+))?\s*$/;
-function alsoAffectsRows(placed, copies, changedFiles, diff, producer, whereNote = ALSO_AFFECTS_WHERE_NOTE) {
-  const changedPaths = changedFiles.map((f) => f.path);
+function entryIndex(changedFiles, diff) {
   const added = /* @__PURE__ */ new Map();
   for (const { file, line } of addedLines(diff)) {
     const key = normalizeFindingPath(file);
     if (!added.has(key)) added.set(key, []);
     added.get(key).push(line);
   }
+  return { changedFiles, changedPaths: changedFiles.map((f) => f.path), added };
+}
+function placeEntry(parent, entry, where, ix, isDuplicate, accepted) {
+  if (!isAnchored(parent)) return "parent_unanchored";
+  const hit = resolveMention(String(entry.file ?? ""), ix.changedFiles);
+  if (!hit) return "unresolved_path";
+  if (hit.status === "deleted") return "deleted_file";
+  if (hit.path === normalizeFindingPath(parent.file, ix.changedPaths)) return "own_file";
+  const m = ALSO_AFFECTS_LINES.exec(String(entry.lines ?? ""));
+  const start = Number(m?.[1] ?? 0), end = m?.[2] === void 0 ? start : Number(m[2]);
+  if (!m || start < 1 || end < start || end - start + 1 > ALSO_AFFECTS_MAX_SPAN) return "bad_lines";
+  const fileAdded = ix.added.get(hit.path) ?? [];
+  if (hit.status === "added" && end > (fileAdded.at(-1) ?? 0)) return "bad_lines";
+  if (!fileAdded.some((l) => l >= start && l <= end)) return "not_changed_line";
+  if (!where) return "bad_where";
+  if (isDuplicate({ file: hit.path, start, end })) return "duplicate";
+  if (accepted >= ALSO_AFFECTS_CAP) return "over_cap";
+  return { file: hit.path, start, end };
+}
+var copyRowMessage = (parent, where, whereNote) => {
+  const note = whereNote ? ` Same defect here: ${where.replace(/[.;:,]+$/, "").slice(0, 120)}.` : "";
+  return parent.body ? `${parent.title}: ${parent.body}${note}` : note ? `${parent.title}:${note}` : parent.title;
+};
+function alsoAffectsRows(placed, copies, changedFiles, diff, producer, whereNote = ALSO_AFFECTS_WHERE_NOTE) {
+  const ix = entryIndex(changedFiles, diff);
   const taken = [];
   for (const k of [...placed, ...copies]) {
     if (!isAnchored(k)) continue;
     const r = parseLineRange(k.lines);
-    taken.push({ file: normalizeFindingPath(k.file, changedPaths), start: r.start, end: r.end, title: k.title });
+    taken.push({ file: normalizeFindingPath(k.file, ix.changedPaths), start: r.start, end: r.end, title: k.title });
   }
   const rows = [];
   const log = [];
   for (const parent of placed) {
     let accepted = 0;
+    const sameIssue2 = (title) => normTitle(title) === normTitle(parent.title) || titlesOverlap(title, parent.title);
+    const isDuplicate = (p) => taken.some((t) => t.file === p.file && t.start <= p.end && p.start <= t.end && sameIssue2(t.title));
     for (const entry of parent.alsoAffects ?? []) {
       const where = String(entry.where ?? "").replace(/\s+/g, " ").trim();
-      const place = (() => {
-        if (!isAnchored(parent)) return "parent_unanchored";
-        const hit = resolveMention(String(entry.file ?? ""), changedFiles);
-        if (!hit) return "unresolved_path";
-        if (hit.status === "deleted") return "deleted_file";
-        if (hit.path === normalizeFindingPath(parent.file, changedPaths)) return "own_file";
-        const m = ALSO_AFFECTS_LINES.exec(String(entry.lines ?? ""));
-        const start = Number(m?.[1] ?? 0), end = m?.[2] === void 0 ? start : Number(m[2]);
-        if (!m || start < 1 || end < start || end - start + 1 > ALSO_AFFECTS_MAX_SPAN) return "bad_lines";
-        const fileAdded = added.get(hit.path) ?? [];
-        if (hit.status === "added" && end > (fileAdded.at(-1) ?? 0)) return "bad_lines";
-        if (!fileAdded.some((l) => l >= start && l <= end)) return "not_changed_line";
-        if (!where) return "bad_where";
-        const sameIssue2 = (title) => normTitle(title) === normTitle(parent.title) || titlesOverlap(title, parent.title);
-        if (taken.some((t) => t.file === hit.path && t.start <= end && start <= t.end && sameIssue2(t.title))) return "duplicate";
-        if (accepted >= ALSO_AFFECTS_CAP) return "over_cap";
-        return { file: hit.path, start, end };
-      })();
+      const place = placeEntry(parent, entry, where, ix, isDuplicate, accepted);
       log.push({ parent: parent.title, file: String(entry.file ?? ""), lines: String(entry.lines ?? ""), where, status: typeof place === "string" ? place : "row" });
       if (typeof place === "string") continue;
       accepted++;
       taken.push({ ...place, title: parent.title });
-      const note = whereNote ? ` Same defect here: ${where.replace(/[.;:,]+$/, "").slice(0, 120)}.` : "";
-      const message = parent.body ? `${parent.title}: ${parent.body}${note}` : note ? `${parent.title}:${note}` : parent.title;
-      rows.push({ file: place.file, start_line: place.start, end_line: place.end, message, producer });
+      rows.push({ file: place.file, start_line: place.start, end_line: place.end, message: copyRowMessage(parent, where, whereNote), producer });
+    }
+  }
+  return { rows, log };
+}
+function firstPassSiteRows(placed, priorRows, changedFiles, diff, producer, whereNote = ALSO_AFFECTS_WHERE_NOTE) {
+  const ix = entryIndex(changedFiles, diff);
+  const taken = priorRows.map((r) => ({ file: normalizeFindingPath(r.file, ix.changedPaths), start: r.start_line, end: r.end_line }));
+  const isDuplicate = (p) => taken.some((t) => t.file === p.file && t.start <= p.end && p.start <= t.end);
+  const rows = [];
+  const log = [];
+  for (const parent of placed) {
+    let accepted = 0;
+    for (const site of parent.sites ?? []) {
+      const where = String(site.where ?? "").replace(/\s+/g, " ").trim();
+      const place = placeEntry(parent, site, where, ix, isDuplicate, accepted);
+      log.push({ id: site.id, via: site.via, parent: parent.title, file: String(site.file ?? ""), lines: String(site.lines ?? ""), where, status: typeof place === "string" ? place : "row" });
+      if (typeof place === "string") continue;
+      accepted++;
+      taken.push(place);
+      rows.push({ file: place.file, start_line: place.start, end_line: place.end, message: copyRowMessage(parent, where, whereNote), producer });
     }
   }
   return { rows, log };
@@ -45614,7 +45679,9 @@ function applyJudgeDecisions(candidates, output, policy = DEFAULT_JUDGE_POLICY, 
         ...entry.r.quality_action ? { quality_action: entry.r.quality_action } : {},
         ...options?.counterparts ? { reviewerBody: candidate.body } : {},
         // Only extra passes are asked for it and sanitized; a first-pass value is invented by the model.
-        ...options?.alsoAffects && i >= breadthFrom && Array.isArray(candidate.also_affects) && candidate.also_affects.length ? { alsoAffects: candidate.also_affects } : {}
+        ...options?.alsoAffects && i >= breadthFrom && Array.isArray(candidate.also_affects) && candidate.also_affects.length ? { alsoAffects: candidate.also_affects } : {},
+        // Keyed by candidate index, not kept index, so a dropped earlier candidate cannot shift sites onto another finding.
+        ...options?.firstPassSites?.get(i)?.length ? { sites: options.firstPassSites.get(i) } : {}
       });
       rows.push({ candidate: i, expansion: false, validated: entry.r.reason_category === "validated", evidenced: !!entry.r.evidence, rescueOf: entry.r.invalid_duplicate ? index.get(normalizeId(String(entry.r.duplicate_of ?? ""))) : void 0 });
       for (const x of expansion?.accepted ?? []) {
@@ -46169,14 +46236,16 @@ function allowShownContext(lens) {
   if (!lens.includes(SHOWN_LINE_CLAUSE)) throw new Error("Lens anchor clause not found");
   return lens.replace(SHOWN_LINE_CLAUSE, () => "a numeric line on an added or modified line, or on an unchanged line you were shown when it explains a defect this change introduces.");
 }
-function breadthSystemPrompt(reviewerPrompt, limit2, shownAnchors = false) {
+function breadthSystemPrompt(reviewerPrompt, limit2, shownAnchors = false, firstPassSites = false) {
   const limitSection = limit2 > 0 ? `
 
 ## FINDINGS LIMIT
 Report at most ${limit2} findings, prioritized by severity and impact. If more exist, include only the most important and omit the rest.` : "";
   return `${reviewerPrompt}${limitSection}
 
-${shownAnchors ? allowShownContext(BREADTH_LENS) : BREADTH_LENS}`;
+${shownAnchors ? allowShownContext(BREADTH_LENS) : BREADTH_LENS}${firstPassSites ? `
+
+${FIRST_PASS_SITES_SECTION}` : ""}`;
 }
 var DOC_SLOTS = 8;
 var DOC_EXT = /\.(md|markdown|rst|txt|adoc|asciidoc)$/i;
@@ -46227,9 +46296,9 @@ function prioritizeUntouched(untouched, filteredDiff, findings) {
   const selected = [...pickDiverse(other, otherSlots, rank), ...pickDiverse(docs, docSlots, rank)];
   return { selected, deprioritizedReleaseEntries: untouched.length - eligible.length, omitted: eligible.length - selected.length };
 }
-function breadthBriefing(firstPass, untouched, plan) {
+function breadthBriefing(firstPass, untouched, plan, ids) {
   const located = (f) => f.file ? `${f.file}${f.lines ? `:${f.lines}` : ""}` : "(no file)";
-  const findings = firstPass.length ? firstPass.map((f) => `- ${located(f)} \u2014 ${f.title}`).join("\n") : "None.";
+  const findings = firstPass.length ? firstPass.map((f) => `- ${idTag(f, ids)}${located(f)} \u2014 ${f.title}`).join("\n") : "None.";
   if (plan) {
     const more2 = plan.omitted > 0 ? `
 - \u2026and ${plan.omitted} more eligible file(s) not listed` : "";
@@ -46269,12 +46338,15 @@ A first review pass already ran; its findings are listed in the message. You are
 Do not repeat a first-pass finding (same root cause at the same place). Every finding needs a concrete failing scenario, a file, and a numeric line on an added or modified line. Return an empty list if you find nothing.`;
 var IMPACT_ITEM = `4. What breaks in a real scenario: follow the changed code in these files with a feature, flag or optional dependency it relies on switched off; with the same operation repeated before the previous one's deferred work has landed; on data or settings written before this change; and with a destructive or visible step taken before the check meant to gate it. Check each contract the change crosses: a field, key, method or parameter one side writes or calls that the other side names differently, does not expose, or types differently. Report it only when you can follow the failure end to end in what you were shown, and name the scenario in the body.`;
 var SECOND_LOOK_ANCHOR = "\nDo not repeat a first-pass finding";
+var idTag = (f, ids) => ids?.has(f) ? `[${ids.get(f)}] ` : "";
+var FIRST_PASS_SITES_SECTION = `## OTHER SITES OF FIRST-PASS FINDINGS
+First-pass findings in the message carry an id in brackets, e.g. [c3]. When the same root cause makes the same failure happen on an added or modified line in another file you were shown (a sibling call site, a parallel handler or route, the other side of a mismatched contract), list that place in first_pass_sites with the finding's id. Such a place is not a repeat. Never list the finding's own file, a place mentioned only as evidence, cause or where the fix goes, or a different problem. At most 3 places per id; omit the field when there are none.`;
 function withImpactItem(lens) {
   if (lens.split(SECOND_LOOK_ANCHOR).length !== 2) throw new Error("Second-look anchor not found");
   return lens.replace(SECOND_LOOK_ANCHOR, () => `
 ${IMPACT_ITEM}${SECOND_LOOK_ANCHOR}`);
 }
-function secondLookSystemPrompt(reviewerPrompt, limit2, shownAnchors = false, highImpact = false) {
+function secondLookSystemPrompt(reviewerPrompt, limit2, shownAnchors = false, highImpact = false, firstPassSites = false) {
   const limitSection = limit2 > 0 ? `
 
 ## FINDINGS LIMIT
@@ -46282,11 +46354,13 @@ Report at most ${limit2} findings, prioritized by severity and impact. If more e
   const overlay = highImpact ? withImpactItem(SECOND_LOOK_LENS) : SECOND_LOOK_LENS;
   return `${reviewerPrompt}${limitSection}
 
-${shownAnchors ? allowShownContext(overlay) : overlay}`;
+${shownAnchors ? allowShownContext(overlay) : overlay}${firstPassSites ? `
+
+${FIRST_PASS_SITES_SECTION}` : ""}`;
 }
-function secondLookBriefing(known) {
+function secondLookBriefing(known, ids) {
   const located = (f) => f.file ? `${f.file}${f.lines ? `:${f.lines}` : ""}` : "(no file)";
-  const findings = known.length ? known.map((f) => `- ${located(f)} \u2014 ${f.title}`).join("\n") : "None.";
+  const findings = known.length ? known.map((f) => `- ${idTag(f, ids)}${located(f)} \u2014 ${f.title}`).join("\n") : "None.";
   return `## Findings already reported (do NOT repeat \u2014 find additional distinct problems in these files):
 ${findings}`;
 }
@@ -46541,18 +46615,20 @@ var BREADTH_OUTPUT_SCHEMA = {
   additionalProperties: false
 };
 var ALSO_AFFECTS_PROPERTY = { type: "array", description: "Other changed files in this diff where this same defect also occurs and that you are not reporting as a finding of their own: the same root cause causing the same failure at a sibling call site, a parallel handler or route, or the other side of a mismatched contract. One entry per place, at most 3. Omit it when the defect is in one file. Never list this finding's own file, a place mentioned only as evidence, cause, contrast, documentation or where the fix goes, or a different problem.", items: { type: "object", properties: { file: { type: "string", description: "Path of the other changed file, exactly as it appears in the diff." }, lines: { type: "string", description: 'Digits only: the added or changed line or range in that file where the same defect occurs, e.g. "46" or "60-62".' }, where: { type: "string", description: 'A few words naming the code at that line, e.g. "handleCreate dispatches CREATE_WORKSPACE without a flush".' } }, required: ["file", "lines", "where"], additionalProperties: false } };
+var FIRST_PASS_SITES_PROPERTY = { type: "array", description: "Other changed files where the defect of a first-pass finding also occurs; see OTHER SITES OF FIRST-PASS FINDINGS. Omit when there are none.", items: { type: "object", properties: { id: { type: "string", description: 'The bracketed id of a first-pass finding in the message, e.g. "c3".' }, ...ALSO_AFFECTS_PROPERTY.items.properties }, required: ["id", "file", "lines", "where"], additionalProperties: false } };
 var SCENARIO_PROPERTY = { type: "string", enum: [...SCENARIOS], description: "Only for a finding found by tracing a scenario or contract named in SECOND LOOK item 4 or the IMPACT LENS: which one. Omit otherwise." };
 var findingsVariants = /* @__PURE__ */ new Map();
 function findingsOutputSchema(opts2 = {}) {
-  const alsoAffects = !!opts2.alsoAffects, scenario = !!opts2.scenario;
-  if (!alsoAffects && !scenario) return BREADTH_OUTPUT_SCHEMA;
-  const key = `${alsoAffects}:${scenario}`;
+  const alsoAffects = !!opts2.alsoAffects, scenario = !!opts2.scenario, firstPassSites = !!opts2.firstPassSites;
+  if (!alsoAffects && !scenario && !firstPassSites) return BREADTH_OUTPUT_SCHEMA;
+  const key = `${alsoAffects}:${scenario}${firstPassSites ? ":sites" : ""}`;
   const cached = findingsVariants.get(key);
   if (cached) return cached;
   const schema = structuredClone(BREADTH_OUTPUT_SCHEMA);
   const props = schema.properties.findings.items.properties;
   if (alsoAffects) props.also_affects = structuredClone(ALSO_AFFECTS_PROPERTY);
   if (scenario) props.scenario = structuredClone(SCENARIO_PROPERTY);
+  if (firstPassSites) schema.properties.first_pass_sites = structuredClone(FIRST_PASS_SITES_PROPERTY);
   findingsVariants.set(key, schema);
   return schema;
 }
@@ -46570,7 +46646,50 @@ function sanitizeFindingExtras(finding) {
   const scenario = SCENARIOS.find((s) => s === rawScenario);
   return { ...rest, ...also.length ? { also_affects: also } : {}, ...scenario ? { scenario } : {} };
 }
-async function runLens(apiKey, model, maxRetries, maxTokens, effort, prInfo, diff, fileContexts, systemPrompt, briefing, lineNumbers = false, label = "lens", schema = BREADTH_OUTPUT_SCHEMA) {
+function sanitizeFirstPassSites(raw, ids, via) {
+  const text = (v) => typeof v === "string" ? v.trim() : "";
+  const sites = /* @__PURE__ */ new Map();
+  const dropped = {};
+  const drop = (reason) => {
+    dropped[reason] = (dropped[reason] ?? 0) + 1;
+  };
+  if (raw !== void 0 && !Array.isArray(raw)) drop("not_array");
+  for (const e of Array.isArray(raw) ? raw : []) {
+    if (!e || typeof e !== "object") {
+      drop("not_object");
+      continue;
+    }
+    const { id, file, lines, where } = e;
+    const key = text(id).replace(/^\[|\]$/g, "").toLowerCase();
+    const index = ids.get(key);
+    const site = { id: key, file: text(file), lines: text(lines), where: text(where).replace(/\s+/g, " "), via };
+    if (index === void 0) {
+      drop("unknown_id");
+      continue;
+    }
+    if (!site.file) {
+      drop("bad_file");
+      continue;
+    }
+    if (!site.lines) {
+      drop("bad_lines");
+      continue;
+    }
+    if (!site.where) {
+      drop("bad_where");
+      continue;
+    }
+    const list = sites.get(index) ?? [];
+    if (list.length >= ALSO_AFFECTS_KEEP) {
+      drop("over_keep");
+      continue;
+    }
+    sites.set(index, [...list, site]);
+  }
+  return { sites, dropped };
+}
+async function runLens(apiKey, model, maxRetries, maxTokens, effort, prInfo, diff, fileContexts, systemPrompt, briefing, lineNumbers = false, label = "lens", schema = BREADTH_OUTPUT_SCHEMA, signal) {
+  const sites = "first_pass_sites" in (schema.properties ?? {});
   const userMessage = `${buildUserMessage(prInfo, diff, fileContexts, [], [], "", lineNumbers)}
 
 ${briefing}`;
@@ -46579,15 +46698,20 @@ ${briefing}`;
     systemPrompt,
     userMessage,
     schema,
-    { model, maxTokens, maxRetries, effort: effort || void 0 }
+    { model, maxTokens, maxRetries, effort: effort || void 0, ...signal ? { signal } : {}, ...sites ? { tolerateMissing: ["first_pass_sites"] } : {} }
   );
   console.log(`${label[0].toUpperCase()}${label.slice(1)} received (${usage.input_tokens} in / ${usage.output_tokens} out tokens, ${object.findings?.length ?? 0} findings)`);
   const findings = Array.isArray(object.findings) ? object.findings : [];
-  return { findings: schema === BREADTH_OUTPUT_SCHEMA ? findings : findings.map(sanitizeFindingExtras), usage, promptHash: (0, import_crypto2.createHash)("sha256").update(systemPrompt).digest("hex").slice(0, 12) };
+  return {
+    findings: schema === BREADTH_OUTPUT_SCHEMA ? findings : findings.map(sanitizeFindingExtras),
+    usage,
+    promptHash: (0, import_crypto2.createHash)("sha256").update(systemPrompt).digest("hex").slice(0, 12),
+    ...sites ? { firstPassSites: object.first_pass_sites } : {}
+  };
 }
-async function runBreadth(apiKey, model, maxRetries, maxTokens, effort, prInfo, diff, fileContexts, systemPrompt, briefing, lineNumbers = false, label = "breadth", schema) {
-  const schemaTail = schema ? [schema] : [];
-  return runLens(apiKey, model, maxRetries, maxTokens, effort, prInfo, diff, fileContexts, systemPrompt, briefing, lineNumbers, label, ...schemaTail);
+async function runBreadth(apiKey, model, maxRetries, maxTokens, effort, prInfo, diff, fileContexts, systemPrompt, briefing, lineNumbers = false, label = "breadth", schema, signal) {
+  const tail = signal ? [schema ?? BREADTH_OUTPUT_SCHEMA, signal] : schema ? [schema] : [];
+  return runLens(apiKey, model, maxRetries, maxTokens, effort, prInfo, diff, fileContexts, systemPrompt, briefing, lineNumbers, label, ...tail);
 }
 function buildUserMessage(prInfo, diff, fileContexts, previousReviews, developerReplies, changesSinceLastReview = "", lineNumbers = false) {
   const parts = [];
@@ -46907,7 +47031,7 @@ This PR is too large for one pass. You are reviewing bundle ${i + 1} of ${plan.b
     const result = await (async () => {
       for (; ; ) {
         try {
-          return await runReview(
+          const answer = await runReview(
             config.llmApiKey,
             config.anthropic.model,
             config.anthropic.maxRetries,
@@ -46922,7 +47046,10 @@ This PR is too large for one pass. You are reviewing bundle ${i + 1} of ${plan.b
             delta,
             config.review.lineNumbers
           );
+          recordPassCall(ctx, "review", config.anthropic.maxTokens, void 0, answer.usage);
+          return answer;
         } catch (err) {
+          recordPassCall(ctx, "review", config.anthropic.maxTokens, void 0, err.usage, err);
           if (!isContextLengthError(err)) throw err;
           if (bundleContexts.length === 0) return null;
           console.warn(`  Bundle ${i + 1} exceeded the model context \u2014 dropping file contexts, retrying diff-only`);
@@ -46976,8 +47103,10 @@ This PR is too large for one pass. You are reviewing bundle ${i + 1} of ${plan.b
         judged = true;
         ctx.judgeStatus = "succeeded";
         ctx.judgePromptHash = verdict.promptHash;
+        recordPassCall(ctx, "judge", config.anthropic.maxTokens, void 0, verdict.usage);
       } catch (err) {
         ctx.judgeStatus = "failed";
+        recordPassCall(ctx, "judge", config.anthropic.maxTokens, void 0, err.usage, err);
         if (!ctx.outcomeSink) throw err;
         console.warn(`  Bundle ${i + 1} judge failed (${err.message}) \u2014 proceeding with unjudged reviewer findings`);
       }
@@ -47002,6 +47131,11 @@ This PR is too large for one pass. You are reviewing bundle ${i + 1} of ${plan.b
 Merged ${reviews.length} bundle review(s): ${merged.object.findings.length} finding(s) after dedupe`);
   ctx.bundleUncertain = unreviewed.length > 0 || incoherent;
   return { ok: true };
+}
+function recordPassCall(ctx, stage, maxTokens, limitMs, usage, err) {
+  const end = err === void 0 ? "ok" : err instanceof DeadlineAbortError ? "aborted_time" : err instanceof TruncatedResponseError ? "truncated" : "error";
+  const counted = end === "aborted_time" ? void 0 : usage;
+  (ctx.passCalls ??= []).push({ stage, end, max_tokens: maxTokens, output_tokens: counted?.output_tokens ?? null, reasoning_tokens: counted?.reasoning_tokens ?? null, limit_ms: limitMs ?? null });
 }
 function addUsage(ctx, u) {
   ctx.usage.input_tokens += u.input_tokens;
@@ -47146,7 +47280,7 @@ function getAgentVersion() {
     const pkg = JSON.parse((0, import_fs4.readFileSync)(pkgPath, "utf-8"));
     return pkg.version;
   } catch {
-    if (true) return "0.0.57";
+    if (true) return "0.0.58";
     return "unknown";
   }
 }
@@ -47158,7 +47292,7 @@ function getBuildCommit() {
     const dirty = (0, import_child_process.execSync)("git status --porcelain", opts2).toString().trim() ? "-dirty" : "";
     return hash + dirty;
   } catch {
-    if (true) return "fb8a737";
+    if (true) return "75cbdf0";
     return "unknown";
   }
 }
@@ -47209,6 +47343,7 @@ function buildUsageRecord(ctx, durationMs, error) {
   const secondLookStatus = ctx.secondLookStatus ?? (ctx.bundleCount ? config.review.secondLook ? "skipped_bundled" : "disabled" : null);
   const hi = !!config.review.highImpact;
   const withHi = { scenario: hi, alsoAffects: hi && !!ctx.outcomeSink };
+  const fpSites2 = !!config.review.firstPassSites;
   const humanReplies = (ctx.replies ?? []).filter((r) => !isAgentReply(r));
   const replyAuthors = [...new Set(humanReplies.map((r) => r.authorId ?? r.author))];
   return {
@@ -47308,8 +47443,13 @@ function buildUsageRecord(ctx, durationMs, error) {
     ...ctx.counterpartRows !== void 0 ? { counterpart_rows: ctx.counterpartRows } : {},
     ...ctx.alsoAffectsRows !== void 0 ? { also_affects_rows: ctx.alsoAffectsRows } : {},
     ...ctx.alsoAffectsLog ? { also_affects: ctx.alsoAffectsLog } : {},
+    // Benchmark-only and present only with one of these settings on, so every other record keeps its earlier shape.
+    ...ctx.outcomeSink && (config.breadth.passDeadline || fpSites2) ? { pass_calls: ctx.passCalls ?? [] } : {},
+    ...ctx.outcomeSink && fpSites2 ? { first_pass_sites_named: ctx.firstPassSitesNamed ?? null, first_pass_sites_dropped: ctx.firstPassSitesDropped ?? null } : {},
+    ...ctx.firstPassSiteRows !== void 0 ? { first_pass_site_rows: ctx.firstPassSiteRows } : {},
+    ...ctx.firstPassSitesLog ? { first_pass_sites: ctx.firstPassSitesLog } : {},
     untouched_files: ctx.untouchedFiles ? ctx.breadthPlan ? { count: ctx.untouchedFiles.length, paths: ctx.breadthPlan.selected, cut: ctx.breadthPlan.omitted, deprioritized: ctx.breadthPlan.deprioritizedReleaseEntries } : { count: ctx.untouchedFiles.length, paths: ctx.untouchedFiles.slice(0, MAX_UNTOUCHED_LISTED), cut: Math.max(0, ctx.untouchedFiles.length - MAX_UNTOUCHED_LISTED) } : null,
-    recall_levers: { j_quality: !!config.judge.quality, sl_breadth: !!config.review.secondLookBreadthTargets, j_shown_anchor: !!config.judge.shownAnchors, b_priority: !!config.breadth.priorityTargets, ...hi ? { high_impact: true } : {} },
+    recall_levers: { j_quality: !!config.judge.quality, sl_breadth: !!config.review.secondLookBreadthTargets, j_shown_anchor: !!config.judge.shownAnchors, b_priority: !!config.breadth.priorityTargets, ...hi ? { high_impact: true } : {}, ...ctx.outcomeSink && fpSites2 ? { first_pass_sites: true } : {} },
     touch_rate: ctx.reviewNumber > 1 && deltaStats ? (() => {
       const total = deltaStats.resolved + deltaStats.still_open;
       return total > 0 ? Math.round(deltaStats.resolved / total * 100) : null;
@@ -47557,6 +47697,48 @@ function warnOnHashDisagreement(prId, body, footerHash) {
   if (legacy !== footerHash) console.warn(`  Footer commit ${footerHash} differs from legacy first match ${legacy} (PR ${prId})`);
 }
 var hiBench = (ctx) => !!config.review.highImpact && !!ctx.outcomeSink;
+var fpSites = (ctx) => !!config.review.firstPassSites && !!ctx.outcomeSink;
+function firstPassIds(firstPass, briefed) {
+  const tags = /* @__PURE__ */ new Map();
+  const index = /* @__PURE__ */ new Map();
+  firstPass.forEach((f, i) => {
+    if (!briefed.includes(f)) return;
+    tags.set(f, candidateId(i));
+    index.set(candidateId(i), i);
+  });
+  return { tags, index };
+}
+function addFirstPassSites(ctx, found, via, label) {
+  const all3 = ctx.firstPassSites ??= /* @__PURE__ */ new Map();
+  for (const [i, sites] of found.sites) all3.set(i, [...all3.get(i) ?? [], ...sites]);
+  const named = [...found.sites.values()].flat();
+  (ctx.firstPassSitesNamed ??= []).push(...named);
+  const byPass = ctx.firstPassSitesDropped ??= {};
+  const sum2 = byPass[via] ??= {};
+  for (const [reason, n] of Object.entries(found.dropped)) sum2[reason] = (sum2[reason] ?? 0) + n;
+  const reasons = Object.entries(found.dropped).map(([r, n]) => `${r} ${n}`).join(", ");
+  const dropped = Object.values(found.dropped).reduce((a, b) => a + b, 0);
+  console.log(`  ${label} sites: ${named.length} place(s) for ${found.sites.size} first-pass finding(s), dropped ${dropped}${reasons ? ` (${reasons})` : ""}`);
+}
+var extraPassMaxTokens = (ctx) => ctx.outcomeSink && config.anthropic.extraPassMaxTokens || config.anthropic.maxTokens;
+function spentUsage(err, usage) {
+  return usage && err instanceof DeadlineAbortError ? { ...usage, output_tokens: 0, reasoning_tokens: void 0 } : usage;
+}
+var passStopAtSeconds = () => config.breadth.benchmarkDeadlineSeconds - config.breadth.judgeReserveSeconds;
+function passTimeLeftMs(ctx) {
+  if (!config.breadth.passDeadline || !ctx.outcomeSink) return void 0;
+  return Math.floor(passStopAtSeconds() * 1e3 - (Date.now() - ctx.startTime));
+}
+async function withPassDeadline(limitMs, call) {
+  if (limitMs === void 0) return call();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), limitMs);
+  try {
+    return await call(controller.signal);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 function stageAfterSecondLook() {
   if (!config.lenses.enabled) return 16 /* JUDGE_REVIEW */;
   const { lenses, unknown } = parseLensList(config.lenses.list);
@@ -47906,8 +48088,11 @@ If this PR spans multiple independent themes that could each be a separate, inde
       const result = await (async () => {
         for (; ; ) {
           try {
-            return await call();
+            const answer = await call();
+            recordPassCall(ctx, "review", config.anthropic.maxTokens, void 0, answer.usage);
+            return answer;
           } catch (err) {
+            recordPassCall(ctx, "review", config.anthropic.maxTokens, void 0, err.usage, err);
             if (!isContextLengthError(err)) throw err;
             if (ctx.fileContexts.length === 0) return null;
             console.warn("  Prompt exceeded the model context \u2014 dropping file contexts, retrying diff-only");
@@ -47975,11 +48160,13 @@ If this PR spans multiple independent themes that could each be a separate, inde
       }
       const model = config.breadth.model || config.judge.model;
       const effort = config.breadth.effort || (config.breadth.model ? "" : config.judge.effort);
-      const system = breadthSystemPrompt(ctx.prompt.content, remaining, config.judge.shownAnchors);
+      const fp = fpSites(ctx);
+      const ids = fp ? firstPassIds(firstPass, firstPass) : void 0;
+      const system = breadthSystemPrompt(ctx.prompt.content, remaining, config.judge.shownAnchors, fp);
       ctx.breadthPlan = config.breadth.priorityTargets ? prioritizeUntouched(coverage.untouched, ctx.filteredDiff, firstPass) : void 0;
-      const briefing = breadthBriefing(firstPass, coverage.untouched, ctx.breadthPlan);
+      const briefing = ids ? breadthBriefing(firstPass, coverage.untouched, ctx.breadthPlan, ids.tags) : breadthBriefing(firstPass, coverage.untouched, ctx.breadthPlan);
       const estimate = ctx.estimatedInputTokens + Math.ceil((system.length - ctx.prompt.content.length + briefing.length) / 4);
-      const limits = [config.anthropic.maxInputTokens, contextWindowFor(model) - config.anthropic.maxTokens].filter((n) => n > 0);
+      const limits = [config.anthropic.maxInputTokens, contextWindowFor(model) - extraPassMaxTokens(ctx)].filter((n) => n > 0);
       const budget = limits.length ? Math.min(...limits) : Infinity;
       if (estimate > budget) {
         ctx.breadthStatus = "skipped_budget";
@@ -47992,39 +48179,57 @@ If this PR spans multiple independent themes that could each be a separate, inde
         console.log(`  Breadth review skipped: ${Math.round(elapsedSeconds)}s elapsed, over half the ${config.breadth.benchmarkDeadlineSeconds}s benchmark deadline`);
         return 14 /* SECOND_LOOK */;
       }
+      const limitMs = passTimeLeftMs(ctx);
+      if (limitMs !== void 0 && limitMs <= 0) {
+        ctx.breadthStatus = "skipped_time";
+        console.log(`  Breadth review skipped: no time left before the ${passStopAtSeconds()}s pass deadline`);
+        return 14 /* SECOND_LOOK */;
+      }
       ctx.breadthModel = model;
       if (config.judge.shownAnchors) ctx.shownBreadth = buildShownSource(ctx.filteredDiff, ctx.fileContexts ?? []);
       console.log(`  Breadth review: ${coverage.untouched.length} untouched of ${coverage.reviewable.length} reviewable file(s)`);
-      const breadthSchema = hiBench(ctx) ? ["breadth", findingsOutputSchema({ alsoAffects: true })] : [];
+      const breadthSchema = hiBench(ctx) || fp ? ["breadth", findingsOutputSchema({ alsoAffects: hiBench(ctx), firstPassSites: fp })] : [];
       try {
-        const result = await runBreadth(
-          config.llmApiKey,
-          model,
-          config.judge.maxRetries,
-          config.anthropic.maxTokens,
-          effort,
-          ctx.prInfo,
-          ctx.filteredDiff,
-          ctx.fileContexts ?? [],
-          system,
-          briefing,
-          config.review.lineNumbers,
-          ...breadthSchema
-        );
+        const result = await withPassDeadline(limitMs, (signal) => {
+          const tail = signal ? ["breadth", breadthSchema[1], signal] : breadthSchema;
+          return runBreadth(
+            config.llmApiKey,
+            model,
+            config.judge.maxRetries,
+            extraPassMaxTokens(ctx),
+            effort,
+            ctx.prInfo,
+            ctx.filteredDiff,
+            ctx.fileContexts ?? [],
+            system,
+            briefing,
+            config.review.lineNumbers,
+            ...tail
+          );
+        });
         ctx.breadthFindings = result.findings;
         ctx.breadthPromptHash = result.promptHash;
         ctx.breadthUsage = { input_tokens: result.usage.input_tokens, output_tokens: result.usage.output_tokens, cost_usd: result.usage.cost_usd };
         addUsage(ctx, result.usage);
+        if (ids) addFirstPassSites(ctx, sanitizeFirstPassSites(result.firstPassSites, ids.index, "breadth"), "breadth", "Breadth");
         ctx.breadthStatus = "succeeded";
         console.log(`  Breadth review: ${coverage.untouched.length} untouched file(s) \u2192 ${result.findings.length} finding(s)`);
+        recordPassCall(ctx, "breadth", extraPassMaxTokens(ctx), limitMs, result.usage);
       } catch (err) {
         const e = err;
-        if (e.usage) {
-          ctx.breadthUsage = { input_tokens: e.usage.input_tokens, output_tokens: e.usage.output_tokens, cost_usd: e.usage.cost_usd };
-          addUsage(ctx, e.usage);
+        const used = spentUsage(err, e.usage);
+        if (used) {
+          ctx.breadthUsage = { input_tokens: used.input_tokens, output_tokens: used.output_tokens, cost_usd: used.cost_usd };
+          addUsage(ctx, used);
         }
-        ctx.breadthStatus = "failed";
-        console.warn(`  Breadth review FAILED (${isContextLengthError(err) ? "context length" : e.message}) \u2014 continuing with first-pass findings only`);
+        recordPassCall(ctx, "breadth", extraPassMaxTokens(ctx), limitMs, e.usage, err);
+        if (err instanceof DeadlineAbortError) {
+          ctx.breadthStatus = "aborted_time";
+          console.warn(`  Breadth review stopped at the ${passStopAtSeconds()}s pass deadline (${Math.round((Date.now() - ctx.startTime) / 1e3)}s elapsed) \u2014 continuing with first-pass findings only`);
+        } else {
+          ctx.breadthStatus = "failed";
+          console.warn(`  Breadth review FAILED (${isContextLengthError(err) ? "context length" : e.message}) \u2014 continuing with first-pass findings only`);
+        }
       }
       return 14 /* SECOND_LOOK */;
     }
@@ -48061,11 +48266,13 @@ If this PR spans multiple independent themes that could each be a separate, inde
       const known = findingsInFiles([...firstPass, ...breadth], flagged);
       const model = config.anthropic.model;
       const hi = !!config.review.highImpact;
-      const system = secondLookSystemPrompt(ctx.prompt.content, remaining, config.judge.shownAnchors, hi);
-      const briefing = secondLookBriefing(known);
+      const fp = fpSites(ctx);
+      const ids = fp ? firstPassIds(firstPass, known) : void 0;
+      const system = secondLookSystemPrompt(ctx.prompt.content, remaining, config.judge.shownAnchors, hi, fp);
+      const briefing = ids ? secondLookBriefing(known, ids.tags) : secondLookBriefing(known);
       const shownSL = (s) => shownLength(s, config.review.lineNumbers);
       const estimate = Math.ceil((system.length + shownSL(restrictedDiff) + briefing.length + contexts.reduce((n, c) => n + shownSL(c.content), 0)) / 4);
-      const limits = [config.anthropic.maxInputTokens, contextWindowFor(model) - config.anthropic.maxTokens].filter((n) => n > 0);
+      const limits = [config.anthropic.maxInputTokens, contextWindowFor(model) - extraPassMaxTokens(ctx)].filter((n) => n > 0);
       const budget = limits.length ? Math.min(...limits) : Infinity;
       if (estimate > budget) {
         ctx.secondLookStatus = "skipped_budget";
@@ -48078,39 +48285,57 @@ If this PR spans multiple independent themes that could each be a separate, inde
         console.log(`  Second-look skipped: ${Math.round(elapsedSeconds)}s elapsed, over half the ${config.breadth.benchmarkDeadlineSeconds}s benchmark deadline`);
         return next;
       }
+      const limitMs = passTimeLeftMs(ctx);
+      if (limitMs !== void 0 && limitMs <= 0) {
+        ctx.secondLookStatus = "skipped_time";
+        console.log(`  Second-look skipped: no time left before the ${passStopAtSeconds()}s pass deadline`);
+        return next;
+      }
       if (config.judge.shownAnchors) ctx.shownSecondLook = buildShownSource(restrictedDiff, contexts);
       console.log(`  Second-look: re-reading ${flagged.length} flagged file(s), excluding ${known.length} known finding(s)`);
-      const secondLookSchema = hi ? [findingsOutputSchema({ alsoAffects: hiBench(ctx), scenario: true })] : [];
+      const secondLookSchema = hi || fp ? [findingsOutputSchema({ alsoAffects: hiBench(ctx), scenario: hi, firstPassSites: fp })] : [];
       try {
-        const result = await runBreadth(
-          config.llmApiKey,
-          model,
-          config.anthropic.maxRetries,
-          config.anthropic.maxTokens,
-          config.review.effort,
-          ctx.prInfo,
-          restrictedDiff,
-          contexts,
-          system,
-          briefing,
-          config.review.lineNumbers,
-          "second-look",
-          ...secondLookSchema
-        );
+        const result = await withPassDeadline(limitMs, (signal) => {
+          const tail = signal ? [secondLookSchema[0], signal] : secondLookSchema;
+          return runBreadth(
+            config.llmApiKey,
+            model,
+            config.anthropic.maxRetries,
+            extraPassMaxTokens(ctx),
+            config.review.effort,
+            ctx.prInfo,
+            restrictedDiff,
+            contexts,
+            system,
+            briefing,
+            config.review.lineNumbers,
+            "second-look",
+            ...tail
+          );
+        });
         ctx.secondLookFindings = result.findings;
         ctx.secondLookPromptHash = result.promptHash;
         ctx.secondLookUsage = { input_tokens: result.usage.input_tokens, output_tokens: result.usage.output_tokens, cost_usd: result.usage.cost_usd };
         addUsage(ctx, result.usage);
+        if (ids) addFirstPassSites(ctx, sanitizeFirstPassSites(result.firstPassSites, ids.index, "second_look"), "second_look", "Second-look");
         ctx.secondLookStatus = "succeeded";
         console.log(`  Second-look: ${flagged.length} flagged file(s) \u2192 ${result.findings.length} additional finding(s)`);
+        recordPassCall(ctx, "second_look", extraPassMaxTokens(ctx), limitMs, result.usage);
       } catch (err) {
         const e = err;
-        if (e.usage) {
-          ctx.secondLookUsage = { input_tokens: e.usage.input_tokens, output_tokens: e.usage.output_tokens, cost_usd: e.usage.cost_usd };
-          addUsage(ctx, e.usage);
+        const used = spentUsage(err, e.usage);
+        if (used) {
+          ctx.secondLookUsage = { input_tokens: used.input_tokens, output_tokens: used.output_tokens, cost_usd: used.cost_usd };
+          addUsage(ctx, used);
         }
-        ctx.secondLookStatus = "failed";
-        console.warn(`  Second-look FAILED (${isContextLengthError(err) ? "context length" : e.message}) \u2014 continuing with first-pass and breadth findings only`);
+        recordPassCall(ctx, "second_look", extraPassMaxTokens(ctx), limitMs, e.usage, err);
+        if (err instanceof DeadlineAbortError) {
+          ctx.secondLookStatus = "aborted_time";
+          console.warn(`  Second-look stopped at the ${passStopAtSeconds()}s pass deadline (${Math.round((Date.now() - ctx.startTime) / 1e3)}s elapsed) \u2014 continuing with first-pass and breadth findings only`);
+        } else {
+          ctx.secondLookStatus = "failed";
+          console.warn(`  Second-look FAILED (${isContextLengthError(err) ? "context length" : e.message}) \u2014 continuing with first-pass and breadth findings only`);
+        }
       }
       return next;
     }
@@ -48126,7 +48351,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
       }
       const effort = config.lenses.model ? "" : config.review.effort;
       const earlier = [...ctx.reviewObject?.findings ?? [], ...ctx.breadthFindings ?? [], ...ctx.secondLookFindings ?? []];
-      const limits = [config.anthropic.maxInputTokens, contextWindowFor(model) - config.anthropic.maxTokens].filter((n) => n > 0);
+      const limits = [config.anthropic.maxInputTokens, contextWindowFor(model) - extraPassMaxTokens(ctx)].filter((n) => n > 0);
       const budget = limits.length ? Math.min(...limits) : Infinity;
       let halt;
       for (const lens of lenses) {
@@ -48156,39 +48381,57 @@ If this PR spans multiple independent themes that could each be a separate, inde
           console.log(`  Lens review stopped at ${lens.name}: ${Math.round(elapsedSeconds)}s elapsed, over half the ${config.breadth.benchmarkDeadlineSeconds}s benchmark deadline`);
           continue;
         }
+        const limitMs = passTimeLeftMs(ctx);
+        if (limitMs !== void 0 && limitMs <= 0) {
+          run.status = halt = "skipped_time";
+          console.log(`  Lens review stopped at ${lens.name}: no time left before the ${passStopAtSeconds()}s pass deadline`);
+          continue;
+        }
         if (config.judge.shownAnchors && !ctx.shownLens) ctx.shownLens = buildShownSource(ctx.filteredDiff, ctx.fileContexts ?? []);
         console.log(`  Lens ${lens.name}: full-PR pass, excluding ${known.length} known finding(s)`);
         const extras = { alsoAffects: hiBench(ctx), scenario: !!config.review.highImpact && !!lens.scenarioTag };
         const lensSchema = extras.alsoAffects || extras.scenario ? [findingsOutputSchema(extras)] : [];
         try {
-          const result = await runLens(
-            config.llmApiKey,
-            model,
-            config.anthropic.maxRetries,
-            config.anthropic.maxTokens,
-            effort,
-            ctx.prInfo,
-            ctx.filteredDiff,
-            ctx.fileContexts ?? [],
-            system,
-            briefing,
-            config.review.lineNumbers,
-            `lens:${lens.name}`,
-            ...lensSchema
-          );
+          const result = await withPassDeadline(limitMs, (signal) => {
+            const tail = signal ? [lensSchema[0], signal] : lensSchema;
+            return runLens(
+              config.llmApiKey,
+              model,
+              config.anthropic.maxRetries,
+              extraPassMaxTokens(ctx),
+              effort,
+              ctx.prInfo,
+              ctx.filteredDiff,
+              ctx.fileContexts ?? [],
+              system,
+              briefing,
+              config.review.lineNumbers,
+              `lens:${lens.name}`,
+              ...tail
+            );
+          });
           run.findings = result.findings;
           run.promptHash = result.promptHash;
           run.usage = { input_tokens: result.usage.input_tokens, output_tokens: result.usage.output_tokens, cost_usd: result.usage.cost_usd };
           addUsage(ctx, result.usage);
           run.status = "succeeded";
           console.log(`  Lens ${lens.name}: ${result.findings.length} finding(s)`);
+          recordPassCall(ctx, `lens:${lens.name}`, extraPassMaxTokens(ctx), limitMs, result.usage);
         } catch (err) {
           const e = err;
-          if (e.usage) {
-            run.usage = { input_tokens: e.usage.input_tokens, output_tokens: e.usage.output_tokens, cost_usd: e.usage.cost_usd };
-            addUsage(ctx, e.usage);
+          const used = spentUsage(err, e.usage);
+          if (used) {
+            run.usage = { input_tokens: used.input_tokens, output_tokens: used.output_tokens, cost_usd: used.cost_usd };
+            addUsage(ctx, used);
           }
-          console.warn(`  Lens ${lens.name} FAILED (${isContextLengthError(err) ? "context length" : e.message}) \u2014 continuing without its findings`);
+          recordPassCall(ctx, `lens:${lens.name}`, extraPassMaxTokens(ctx), limitMs, e.usage, err);
+          if (err instanceof DeadlineAbortError) {
+            run.status = "aborted_time";
+            halt = "skipped_time";
+            console.warn(`  Lens ${lens.name} stopped at the ${passStopAtSeconds()}s pass deadline (${Math.round((Date.now() - ctx.startTime) / 1e3)}s elapsed) \u2014 continuing without its findings`);
+          } else {
+            console.warn(`  Lens ${lens.name} FAILED (${isContextLengthError(err) ? "context length" : e.message}) \u2014 continuing without its findings`);
+          }
         }
       }
       return 16 /* JUDGE_REVIEW */;
@@ -48261,7 +48504,8 @@ If this PR spans multiple independent themes that could each be a separate, inde
       const suggestedFixes = !!config.judge.suggestedFixes;
       const counterparts = !!ctx.outcomeSink && config.benchmarkCounterpartRows;
       const alsoAffects = hiBench(ctx);
-      const judgeOptions = config.judge.quality || config.judge.shownAnchors || config.judge.proposals || suggestedFixes || counterparts || alsoAffects ? {
+      const sites = ctx.firstPassSites?.size ? ctx.firstPassSites : void 0;
+      const judgeOptions = config.judge.quality || config.judge.shownAnchors || config.judge.proposals || suggestedFixes || counterparts || alsoAffects || sites ? {
         quality: config.judge.quality,
         proposals: config.judge.proposals,
         shownAnchors: config.judge.shownAnchors ? {
@@ -48273,7 +48517,8 @@ If this PR spans multiple independent themes that could each be a separate, inde
         } : void 0,
         ...suggestedFixes ? { proposals: true, codeProposals: true } : {},
         ...counterparts ? { counterparts: true } : {},
-        ...alsoAffects ? { alsoAffects: true } : {}
+        ...alsoAffects ? { alsoAffects: true } : {},
+        ...sites ? { firstPassSites: sites } : {}
       } : void 0;
       const judgeTail = judgeOptions ? [judgeOptions] : [];
       try {
@@ -48312,8 +48557,10 @@ If this PR spans multiple independent themes that could each be a separate, inde
         ctx.judgeUsage = { input_tokens: result.usage.input_tokens, output_tokens: result.usage.output_tokens, cost_usd: result.usage.cost_usd };
         addUsage(ctx, result.usage);
         ctx.judgeStatus = "succeeded";
+        recordPassCall(ctx, "judge", config.anthropic.maxTokens, void 0, result.usage);
       } catch (err) {
         ctx.judgeStatus = "failed";
+        recordPassCall(ctx, "judge", config.anthropic.maxTokens, void 0, err.usage, err);
         if (!ctx.outcomeSink && !noFindings) throw err;
         console.warn(`  Judge failed (${err.message}) \u2014 proceeding with unjudged reviewer findings`);
       }
@@ -48355,6 +48602,8 @@ If this PR spans multiple independent themes that could each be a separate, inde
         if (sunk && sunk.counterpartRows !== void 0) ctx.counterpartRows = sunk.counterpartRows;
         if (sunk && sunk.alsoAffectsRows !== void 0) ctx.alsoAffectsRows = sunk.alsoAffectsRows;
         if (sunk && sunk.alsoAffects) ctx.alsoAffectsLog = sunk.alsoAffects;
+        if (sunk && sunk.firstPassSiteRows !== void 0) ctx.firstPassSiteRows = sunk.firstPassSiteRows;
+        if (sunk && sunk.firstPassSites) ctx.firstPassSitesLog = sunk.firstPassSites;
         ctx.action = "REVIEW";
         return 20 /* DONE */;
       }
@@ -48668,6 +48917,9 @@ var CONFIG_LABELS = {
   HI: flag((on) => {
     config.review.highImpact = on;
   }),
+  FP_SITES: flag((on) => {
+    config.review.firstPassSites = on;
+  }),
   DX: flag((on) => {
     if (on) config.diffExcludePatterns = [...DX_PATTERNS];
   }),
@@ -48698,7 +48950,7 @@ function applyBenchmarkConfig(env) {
   if (!env.MAX_CHANGED_LINES) config.thresholds.maxChangedLines = 0;
   config.review.splitCheck = false;
   applyConfigLabels(env);
-  console.log(`Benchmark settings: model=${config.anthropic.model} effort=${config.review.effort || "default"} judge_model=${config.judge.model || "off"} judge_effort=${config.judge.effort || "default"} nits=${bit(config.review.enableNitpicks)} j_minor=${bit(config.judge.policy.keepMinor)} j_unver=${bit(config.judge.policy.keepUnverified)} j_ctx=${bit(config.judge.fileContext)} lnum=${bit(config.review.lineNumbers)} breadth=${bit(config.breadth.enabled)} b_files=${config.breadth.minFiles} b_untch=${config.breadth.minUntouched} second_look=${bit(config.review.secondLook)} j_quality=${bit(config.judge.quality)} sl_breadth=${bit(config.review.secondLookBreadthTargets)} j_shown_anchor=${bit(config.judge.shownAnchors)} b_priority=${bit(config.breadth.priorityTargets)} sfx=${bit(config.judge.suggestedFixes)} j_proposal=${bit(config.judge.proposals)}${activeLenses(config.lenses).length ? ` lenses=${config.lenses.list}` : ""}${config.lenses.recommend ? " lens_rec=1" : ""}${config.judge.policy.keepTestGaps ? " j_tgap=1" : ""}${config.benchmarkCounterpartRows ? " xrows=1" : ""}${config.review.highImpact ? " hi=1" : ""}${config.diffExcludePatterns.join(",") === DX_PATTERNS.join(",") ? " dx=1" : ""}`);
+  console.log(`Benchmark settings: model=${config.anthropic.model} effort=${config.review.effort || "default"} judge_model=${config.judge.model || "off"} judge_effort=${config.judge.effort || "default"} nits=${bit(config.review.enableNitpicks)} j_minor=${bit(config.judge.policy.keepMinor)} j_unver=${bit(config.judge.policy.keepUnverified)} j_ctx=${bit(config.judge.fileContext)} lnum=${bit(config.review.lineNumbers)} breadth=${bit(config.breadth.enabled)} b_files=${config.breadth.minFiles} b_untch=${config.breadth.minUntouched} second_look=${bit(config.review.secondLook)} j_quality=${bit(config.judge.quality)} sl_breadth=${bit(config.review.secondLookBreadthTargets)} j_shown_anchor=${bit(config.judge.shownAnchors)} b_priority=${bit(config.breadth.priorityTargets)} sfx=${bit(config.judge.suggestedFixes)} j_proposal=${bit(config.judge.proposals)}${activeLenses(config.lenses).length ? ` lenses=${config.lenses.list}` : ""}${config.lenses.recommend ? " lens_rec=1" : ""}${config.judge.policy.keepTestGaps ? " j_tgap=1" : ""}${config.benchmarkCounterpartRows ? " xrows=1" : ""}${config.review.highImpact ? " hi=1" : ""}${config.review.firstPassSites ? " fp_sites=1" : ""}${config.anthropic.extraPassMaxTokens ? ` xp_max=${config.anthropic.extraPassMaxTokens}` : ""}${config.breadth.passDeadline ? " pass_deadline=1" : ""}${config.diffExcludePatterns.join(",") === DX_PATTERNS.join(",") ? " dx=1" : ""}`);
   if (config.judge.proposals && !config.judge.model) console.warn("  J_PROPOSAL=1 but the judge is off - no proposals will be produced.");
   if (config.review.enableNitpicks && !config.judge.policy.keepMinor) {
     console.warn("  NITS=1 but J_MINOR=0 \u2014 nitpicks are logged for offline scoring only; set J_MINOR=1 to post them.");
@@ -48744,13 +48996,27 @@ async function runBenchmark(env = process.env) {
             console.warn(`  Also-affects rows skipped, other rows kept: ${err.message}`);
           }
         }
+        let sites;
+        if (config.review.firstPassSites) {
+          try {
+            sites = firstPassSiteRows(placed, findings, changedFiles, diff, rb.agent);
+            findings = [...findings, ...sites.rows];
+            const tally = /* @__PURE__ */ new Map();
+            for (const e of sites.log) tally.set(e.status, (tally.get(e.status) ?? 0) + 1);
+            console.log(`First-pass site rows: ${sites.rows.length} of ${sites.log.length} entries (${[...tally].map(([s, n]) => `${s} ${n}`).join(", ") || "none"})`);
+          } catch (err) {
+            console.warn(`  First-pass site rows skipped, other rows kept: ${err.message}`);
+          }
+        }
+        const siteResult = config.review.firstPassSites ? { firstPassSiteRows: sites?.rows.length ?? 0, ...sites ? { firstPassSites: sites.log } : {} } : {};
         const fileLevel = placed.filter((k) => k.anchorSource === "file");
         console.log(`Benchmark findings: reviewer ${outcome.review.findings.length}, breadth ${outcome.breadthFindings?.length ?? 0}, second-look ${outcome.secondLookFindings?.length ?? 0}${outcome.lensFindings ? `, lens ${outcome.lensFindings.length}` : ""}, judge kept ${outcome.judgedFindings.length}, line-anchored ${findings.length} (${fileLevel.length} placed on the file's first changed line)`);
         if (fileLevel.length > 0) console.log(`  File-level findings: ${fileLevel.map((k) => `${k.file}:${k.lines} ${k.title}`).join(" | ")}`);
         const unanchored = placed.filter((k) => !isAnchored(k));
         if (unanchored.length > 0) console.warn(`  Parse check: ${unanchored.length} kept finding(s) with no usable file:line, dropped from findings.json: ${unanchored.map((k) => k.title).join(" | ")}`);
-        if (config.review.highImpact) return { ...extra ? { counterpartRows: extra.added } : {}, alsoAffectsRows: also?.rows.length ?? 0, ...also ? { alsoAffects: also.log } : {} };
-        if (extra) return { counterpartRows: extra.added };
+        if (config.review.highImpact) return { ...extra ? { counterpartRows: extra.added } : {}, alsoAffectsRows: also?.rows.length ?? 0, ...also ? { alsoAffects: also.log } : {}, ...siteResult };
+        if (extra) return { counterpartRows: extra.added, ...siteResult };
+        if (config.review.firstPassSites) return siteResult;
       } else if (outcome.judged) {
         const { findings: judged, stats: s } = mergeJudgedFindingsWithStats(outcome.reviewText, outcome.review.findings, outcome.judgeScores, rb.agent, changedPaths);
         findings = judged;
