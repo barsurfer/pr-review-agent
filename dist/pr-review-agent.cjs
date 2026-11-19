@@ -36244,6 +36244,8 @@ var windowByPrefix = (model) => MODEL_CONTEXT_WINDOWS.find(([prefix]) => model.s
 function tableContextWindow(model) {
   return windowByPrefix(model) ?? windowByPrefix(baseModelId(model));
 }
+var SYSTEM_AFTER_MODELS = /^claude-(opus-5|opus-5-5|opus-4-8|fable-.+|mythos-.+|sonnet-5-5|haiku-5-5)$/;
+var takesSystemAfter = (model) => SYSTEM_AFTER_MODELS.test(baseModelId(model));
 
 // src/config.ts
 function required(name) {
@@ -36381,7 +36383,9 @@ var config = {
     // Answering a dev question needs less than reviewer-grade depth; route replies to a cheaper model. Empty = reviewer model.
     model: optional("REPLY_MODEL", ""),
     // Off by default (Bitbucket only): skip replying to a dev comment @-directed solely at someone else.
-    skipDirectedElsewhere: optional("SKIP_DIRECTED_REPLIES", "false") === "true"
+    skipDirectedElsewhere: optional("SKIP_DIRECTED_REPLIES", "false") === "true",
+    // Off by default: a new review resets the reply budget, and a question that meets the limit gets a one-time note.
+    limitPerReview: optional("ENABLE_REPLY_LIMIT_PER_REVIEW", "false") === "true"
   },
   trigger: {
     event: optional("TRIGGER_EVENT", "").trim(),
@@ -36410,6 +36414,8 @@ var config = {
     highImpact: optional("ENABLE_HIGH_IMPACT", "false") === "true",
     // Off by default; acts only under --benchmark: breadth and second-look name other sites of first-pass findings as extra rows.
     firstPassSites: optional("ENABLE_FIRST_PASS_SITES", "false") === "true",
+    // Off by default: a first review's eligible extra passes read the reviewer's prompt and PR context from a 5-minute prompt cache.
+    promptCache: optional("ENABLE_PROMPT_CACHE", "false") === "true",
     // On by default: without numbered lines ~40% of findings carried no line; set false to send the raw diff/context (saves the per-line gutter tokens).
     lineNumbers: optional("ENABLE_LINE_NUMBERS", "true") !== "false",
     // On by default with a kill switch: false always reviews the full delta after a target merge.
@@ -43709,6 +43715,7 @@ var GitHubAdapter = class {
 
 // src/review/index.ts
 init_define_STACK_PROMPTS();
+var import_crypto4 = require("crypto");
 
 // src/llm/context-window.ts
 init_define_STACK_PROMPTS();
@@ -43758,6 +43765,149 @@ function listedWindow(list, model) {
 
 // src/llm/shared.ts
 init_define_STACK_PROMPTS();
+
+// src/review/parsers.ts
+init_define_STACK_PROMPTS();
+function isContextLengthError(err) {
+  const e = err;
+  return e?.status === 400 && /prompt is too long|exceed context limit|context (window|length)/i.test(e?.message ?? "");
+}
+function patternToRegex(pattern) {
+  if (!pattern.includes("*")) return new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "$");
+  const escaped = pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\\\*/g, ".*");
+  return new RegExp(escaped + "$");
+}
+function isPathExcluded(path4, excludePatterns) {
+  return excludePatterns.some((p) => patternToRegex(p).test(path4));
+}
+function filterDiff(diff, excludePatterns) {
+  const regexes = excludePatterns.map(patternToRegex);
+  const sections2 = diff.split(/(?=^diff --git )/m);
+  const kept = sections2.filter((section) => {
+    const match = section.match(/^diff --git a\/(.+?) b\//);
+    if (!match) return true;
+    return !regexes.some((r) => r.test(match[1]));
+  });
+  return { filtered: kept.join(""), removedCount: sections2.length - kept.length };
+}
+function parseChangedFiles(diff) {
+  const files = [];
+  for (const section of diff.split(/(?=^diff --git )/m)) {
+    const header2 = section.match(/^diff --git a\/(.+?) b\/(.+)$/m);
+    if (!header2) continue;
+    const meta = section.split(/^@@/m)[0];
+    const renamedTo = meta.match(/^rename to (.+)$/m)?.[1];
+    const newPath = meta.match(/^\+\+\+ b\/(.+)$/m)?.[1];
+    const oldPath = meta.match(/^--- a\/(.+)$/m)?.[1];
+    const status = /^new file mode /m.test(meta) ? "added" : /^deleted file mode /m.test(meta) ? "deleted" : renamedTo ? "renamed" : "modified";
+    const path4 = (renamedTo ?? newPath ?? oldPath ?? header2[2]).replace(/\t.*$/, "");
+    files.push({ path: path4, status });
+  }
+  return files;
+}
+function countDiffLines(diff) {
+  let added = 0, removed = 0, inHunk = false;
+  for (const line of diff.split("\n")) {
+    if (line.startsWith("diff --git")) inHunk = false;
+    else if (line.startsWith("@@")) inHunk = true;
+    else if (inHunk && line.startsWith("+")) added++;
+    else if (inHunk && line.startsWith("-")) removed++;
+  }
+  return { added, removed };
+}
+function countChangedLines(diff) {
+  const { added, removed } = countDiffLines(diff);
+  return added + removed;
+}
+var GUTTER = 5;
+function shownLength(s, numbered) {
+  return s.length + (numbered && s ? (GUTTER + 1) * s.split("\n").length : 0);
+}
+function numberDiffLines(diff) {
+  let newLine = 0;
+  let inHunk = false;
+  const lines = diff.split("\n");
+  return lines.map((raw, i) => {
+    if (raw.startsWith("diff --git")) {
+      inHunk = false;
+      return raw;
+    }
+    const hunk = raw.match(/^@@ -\d+(?:,\d+)? \+(\d+)/);
+    if (hunk) {
+      newLine = parseInt(hunk[1], 10);
+      inHunk = true;
+      return raw;
+    }
+    if (!inHunk || raw.startsWith("\\") || raw === "" && i === lines.length - 1) return raw;
+    if (raw.startsWith("-")) return `${"".padStart(GUTTER)} ${raw}`;
+    return `${String(newLine++).padStart(GUTTER)} ${raw}`;
+  }).join("\n");
+}
+function numberFileLines(content) {
+  const lines = content.split("\n");
+  if (lines.at(-1) === "") lines.pop();
+  return lines.map((l, i) => `${String(i + 1).padStart(GUTTER)} ${l}`).join("\n");
+}
+function parseVerdictScore(text) {
+  const match = text.match(/#{1,4}\s*(?:Merge Confidence|Verdict):\s*(\d+)%/);
+  return match ? parseInt(match[1], 10) : null;
+}
+function parseFindings(text) {
+  const findingsMatch = text.match(/#{1,4}\s*Findings\b([\s\S]*?)(?=#{1,4}\s|$)/i);
+  const section = findingsMatch?.[1] ?? "";
+  return {
+    high: (section.match(/\*\*HIGH\b/gi) ?? []).length,
+    medium: (section.match(/\*\*MEDIUM\b/gi) ?? []).length,
+    low: (section.match(/\*\*LOW\b/gi) ?? []).length
+  };
+}
+function addedLines(diff) {
+  const out = [];
+  let file = "";
+  let newLine = 0;
+  for (const raw of diff.split("\n")) {
+    if (raw.startsWith("diff --git")) {
+      file = "";
+      continue;
+    }
+    if (raw.startsWith("+++ b/")) {
+      file = raw.slice(6).trim();
+      continue;
+    }
+    if (raw.startsWith("--- ")) continue;
+    const hunk = raw.match(/^@@ -\d+(?:,\d+)? \+(\d+)/);
+    if (hunk) {
+      newLine = parseInt(hunk[1], 10);
+      continue;
+    }
+    if (raw.startsWith("-")) continue;
+    if (raw.startsWith("+")) {
+      if (file) out.push({ file, line: newLine, text: raw.slice(1) });
+      newLine++;
+      continue;
+    }
+    if (raw.startsWith("\\")) continue;
+    newLine++;
+  }
+  return out;
+}
+var DOC_FILE = /[.](md|mdx|txt|rst)$/i;
+var OWN_SECTION = /TODOs Introduced/i;
+function scanTodos(diff) {
+  const marker = /\b(TODO|FIXME|HACK)\b:?\s*(.*)/i;
+  const todos = [];
+  for (const { file, line, text } of addedLines(diff)) {
+    if (DOC_FILE.test(file) || OWN_SECTION.test(text)) continue;
+    const m = text.match(marker);
+    if (!m) continue;
+    const body = m[2].trim();
+    todos.push({ file, line, text: (body ? `${m[1].toUpperCase()}: ${body}` : m[1].toUpperCase()).slice(0, 140) });
+  }
+  return todos;
+}
+
+// src/llm/shared.ts
+var hasCachePart = (user) => Array.isArray(user) && user.some((p) => p.cache);
 var TruncatedResponseError = class extends Error {
   constructor(message, usage) {
     super(message);
@@ -43774,6 +43924,7 @@ var DeadlineAbortError = class extends Error {
   }
   usage;
 };
+var isSystemMessageRejection = (err) => err?.status === 400 && !isContextLengthError(err);
 function missingRequired(object, schema, deep = false, tolerate = []) {
   const required2 = schema.required ?? [];
   const obj = object ?? {};
@@ -44537,7 +44688,7 @@ var AnthropicProvider = class {
     return { text: textOf(response, opts2.maxTokens), usage: mapUsage(response.usage) };
   }
   async completeStructured(system, user, schema, opts2) {
-    const response = await this.streamFinal({ model: opts2.model, max_tokens: opts2.maxTokens, system, output_config: { format: { type: "json_schema", schema } }, messages: [{ role: "user", content: user }] }, opts2);
+    const response = await this.streamFinal({ model: opts2.model, max_tokens: opts2.maxTokens, system, output_config: { format: { type: "json_schema", schema } }, messages: anthropicMessages(user, opts2.systemAfter) }, opts2);
     const text = textOf(response, opts2.maxTokens);
     let object;
     try {
@@ -44567,7 +44718,7 @@ var AnthropicProvider = class {
     if (!opts2.effort) return run(params);
     const withEffort = { ...params, output_config: { ...params.output_config ?? {}, effort: opts2.effort } };
     return run(withEffort).catch((err) => {
-      if (err instanceof Anthropic.BadRequestError) {
+      if (err instanceof Anthropic.BadRequestError && !(opts2.systemAfter && isSystemMessageRejection(err))) {
         console.warn(`  effort "${opts2.effort}" not accepted by ${opts2.model} \u2014 retrying without it`);
         return run(params);
       }
@@ -44575,6 +44726,10 @@ var AnthropicProvider = class {
     });
   }
 };
+function anthropicMessages(user, systemAfter) {
+  const content = typeof user === "string" ? user : user.map((p) => ({ type: "text", text: p.text, ...p.cache ? { cache_control: { type: "ephemeral" } } : {} }));
+  return [{ role: "user", content }, ...systemAfter ? [{ role: "system", content: systemAfter }] : []];
+}
 function textOf(response, maxTokens) {
   if (response.stop_reason === "max_tokens") {
     throw new TruncatedResponseError(`Model response truncated at ${maxTokens} output tokens \u2014 refusing to post a cut-off response`, mapUsage(response.usage));
@@ -44615,32 +44770,33 @@ var OpenRouterProvider = class {
   apiKey;
   async complete(system, user, opts2) {
     const data = await this.request({ model: opts2.model, max_tokens: opts2.maxTokens, messages: openRouterMessages(system, user) }, opts2);
-    const choice = firstChoice(data, opts2.maxTokens);
-    return { text: contentOf(choice), usage: mapOpenRouterUsage(data.usage) };
+    const choice = firstChoice(data, opts2.maxTokens, cacheAware());
+    return { text: contentOf(choice), usage: mapOpenRouterUsage(data.usage, cacheAware()) };
   }
   async completeStructured(system, user, schema, opts2) {
     const response_format = { type: "json_schema", json_schema: { name: "result", schema, strict: false } };
-    const payload = { model: opts2.model, max_tokens: opts2.maxTokens, response_format, messages: openRouterMessages(system, user) };
-    const first = await this.structuredAttempt(payload, schema, opts2);
+    const payload = { model: opts2.model, max_tokens: opts2.maxTokens, response_format, messages: openRouterMessages(system, user, opts2.systemAfter) };
+    const cached = cacheAware() || hasCachePart(user);
+    const first = await this.structuredAttempt(payload, schema, opts2, cached);
     if (!first.missing.length) return { object: first.object, usage: first.usage };
     console.warn(`  Structured output from ${opts2.model} missing ${first.missing.join(", ")} \u2014 retrying once`);
-    const second = await this.structuredAttempt(payload, schema, opts2).catch((err) => {
+    const second = await this.structuredAttempt(payload, schema, opts2, cached).catch((err) => {
       throw withPriorUsage(err, first.usage);
     });
     const usage = sumUsage(first.usage, second.usage);
     if (second.missing.length) throw Object.assign(new Error(`Structured output missing required field(s): ${second.missing.join(", ")}`), { usage });
     return { object: second.object, usage };
   }
-  async structuredAttempt(payload, schema, opts2) {
+  async structuredAttempt(payload, schema, opts2, cached) {
     const data = await this.request(payload, opts2);
-    const text = contentOf(firstChoice(data, opts2.maxTokens));
+    const text = contentOf(firstChoice(data, opts2.maxTokens, cached));
     let object;
     try {
       object = JSON.parse(text);
     } catch {
       throw new Error("Model returned invalid JSON despite structured output");
     }
-    return { object, usage: mapOpenRouterUsage(data.usage), missing: missingRequired(object, schema, true, opts2.tolerateMissing) };
+    return { object, usage: mapOpenRouterUsage(data.usage, cached), missing: missingRequired(object, schema, true, opts2.tolerateMissing) };
   }
   async request(payload, opts2) {
     const url2 = `${config.openrouter.baseUrl.replace(/\/+$/, "")}/chat/completions`;
@@ -44650,7 +44806,7 @@ var OpenRouterProvider = class {
       ...config.openrouter.referer ? { "HTTP-Referer": config.openrouter.referer } : {},
       ...config.openrouter.title ? { "X-OpenRouter-Title": config.openrouter.title } : {}
     };
-    const body = { ...payload, usage: { include: true }, ...config.repoSlug ? { user: config.repoSlug } : {} };
+    const body = { ...payload, usage: { include: true }, ...config.repoSlug ? { user: config.repoSlug } : {}, ...opts2.sessionId ? { session_id: opts2.sessionId } : {} };
     if (!opts2.effort) return this.send(url2, headers, body, opts2);
     return this.send(url2, headers, { ...body, reasoning: { effort: opts2.effort } }, opts2).catch((err) => {
       if (isReasoningRejection(err)) {
@@ -44684,14 +44840,15 @@ var OpenRouterProvider = class {
   }
 };
 var OPENROUTER_TIMEOUT_MS = 6e5;
-function openRouterMessages(system, user) {
-  return [{ role: "system", content: system }, { role: "user", content: user }];
+function openRouterMessages(system, user, systemAfter) {
+  const content = typeof user === "string" ? user : user.map((p) => ({ type: "text", text: p.text, ...p.cache ? { cache_control: { type: "ephemeral" } } : {} }));
+  return [{ role: "system", content: system }, { role: "user", content }, ...systemAfter ? [{ role: "system", content: systemAfter }] : []];
 }
-function firstChoice(data, maxTokens) {
+function firstChoice(data, maxTokens, cached = false) {
   const choice = data.choices?.[0];
   if (!choice) throw new Error("OpenRouter returned no choices");
   if (choice.finish_reason === "length") {
-    throw new TruncatedResponseError(`Model response truncated at ${maxTokens} output tokens \u2014 refusing to post a cut-off response`, mapOpenRouterUsage(data.usage));
+    throw new TruncatedResponseError(`Model response truncated at ${maxTokens} output tokens \u2014 refusing to post a cut-off response`, mapOpenRouterUsage(data.usage, cached));
   }
   return choice;
 }
@@ -44700,15 +44857,28 @@ function contentOf(choice) {
   if (typeof content !== "string") throw new Error("OpenRouter returned no text content (refusal or non-text finish)");
   return content;
 }
-function mapOpenRouterUsage(u) {
+function mapOpenRouterUsage(u, cached = false) {
   const cost = typeof u?.cost === "number" && u.cost > 0 ? u.cost : u?.cost_details?.upstream_inference_cost;
   const reasoning = u?.completion_tokens_details?.reasoning_tokens;
+  if (cached) return cachedUsage(u, cost, reasoning);
   return {
     input_tokens: u?.prompt_tokens ?? 0,
     // Already includes completion_tokens_details.reasoning_tokens (billed as output), as Anthropic's output_tokens includes thinking.
     output_tokens: u?.completion_tokens ?? 0,
     cache_read_input_tokens: u?.prompt_tokens_details?.cached_tokens ?? 0,
     cache_creation_input_tokens: 0,
+    ...typeof cost === "number" ? { cost_usd: cost } : {},
+    ...typeof reasoning === "number" && reasoning > 0 ? { reasoning_tokens: reasoning } : {}
+  };
+}
+function cachedUsage(u, cost, reasoning) {
+  const read = u?.prompt_tokens_details?.cached_tokens ?? 0;
+  const write = u?.prompt_tokens_details?.cache_write_tokens ?? 0;
+  return {
+    input_tokens: Math.max(0, (u?.prompt_tokens ?? 0) - read - write),
+    output_tokens: u?.completion_tokens ?? 0,
+    cache_read_input_tokens: read,
+    cache_creation_input_tokens: write,
     ...typeof cost === "number" ? { cost_usd: cost } : {},
     ...typeof reasoning === "number" && reasoning > 0 ? { reasoning_tokens: reasoning } : {}
   };
@@ -44722,9 +44892,11 @@ function sumUsage(a, b) {
     cache_read_input_tokens: (a.cache_read_input_tokens ?? 0) + (b.cache_read_input_tokens ?? 0),
     cache_creation_input_tokens: (a.cache_creation_input_tokens ?? 0) + (b.cache_creation_input_tokens ?? 0),
     ...cost === void 0 ? {} : { cost_usd: cost },
-    ...reasoning > 0 ? { reasoning_tokens: reasoning } : {}
+    ...reasoning > 0 ? { reasoning_tokens: reasoning } : {},
+    ...cacheAware() ? { attempts: [...a.attempts ?? [a], ...b.attempts ?? [b]] } : {}
   };
 }
+var cacheAware = () => !!config.review?.promptCache;
 function withPriorUsage(err, prior) {
   if (!err || typeof err !== "object") return err;
   const own2 = err.usage;
@@ -44802,148 +44974,6 @@ init_define_STACK_PROMPTS();
 init_define_STACK_PROMPTS();
 var import_fs2 = require("fs");
 var import_path70 = require("path");
-
-// src/review/parsers.ts
-init_define_STACK_PROMPTS();
-function isContextLengthError(err) {
-  const e = err;
-  return e?.status === 400 && /prompt is too long|exceed context limit|context (window|length)/i.test(e?.message ?? "");
-}
-function patternToRegex(pattern) {
-  if (!pattern.includes("*")) return new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "$");
-  const escaped = pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\\\*/g, ".*");
-  return new RegExp(escaped + "$");
-}
-function isPathExcluded(path4, excludePatterns) {
-  return excludePatterns.some((p) => patternToRegex(p).test(path4));
-}
-function filterDiff(diff, excludePatterns) {
-  const regexes = excludePatterns.map(patternToRegex);
-  const sections2 = diff.split(/(?=^diff --git )/m);
-  const kept = sections2.filter((section) => {
-    const match = section.match(/^diff --git a\/(.+?) b\//);
-    if (!match) return true;
-    return !regexes.some((r) => r.test(match[1]));
-  });
-  return { filtered: kept.join(""), removedCount: sections2.length - kept.length };
-}
-function parseChangedFiles(diff) {
-  const files = [];
-  for (const section of diff.split(/(?=^diff --git )/m)) {
-    const header2 = section.match(/^diff --git a\/(.+?) b\/(.+)$/m);
-    if (!header2) continue;
-    const meta = section.split(/^@@/m)[0];
-    const renamedTo = meta.match(/^rename to (.+)$/m)?.[1];
-    const newPath = meta.match(/^\+\+\+ b\/(.+)$/m)?.[1];
-    const oldPath = meta.match(/^--- a\/(.+)$/m)?.[1];
-    const status = /^new file mode /m.test(meta) ? "added" : /^deleted file mode /m.test(meta) ? "deleted" : renamedTo ? "renamed" : "modified";
-    const path4 = (renamedTo ?? newPath ?? oldPath ?? header2[2]).replace(/\t.*$/, "");
-    files.push({ path: path4, status });
-  }
-  return files;
-}
-function countDiffLines(diff) {
-  let added = 0, removed = 0, inHunk = false;
-  for (const line of diff.split("\n")) {
-    if (line.startsWith("diff --git")) inHunk = false;
-    else if (line.startsWith("@@")) inHunk = true;
-    else if (inHunk && line.startsWith("+")) added++;
-    else if (inHunk && line.startsWith("-")) removed++;
-  }
-  return { added, removed };
-}
-function countChangedLines(diff) {
-  const { added, removed } = countDiffLines(diff);
-  return added + removed;
-}
-var GUTTER = 5;
-function shownLength(s, numbered) {
-  return s.length + (numbered && s ? (GUTTER + 1) * s.split("\n").length : 0);
-}
-function numberDiffLines(diff) {
-  let newLine = 0;
-  let inHunk = false;
-  const lines = diff.split("\n");
-  return lines.map((raw, i) => {
-    if (raw.startsWith("diff --git")) {
-      inHunk = false;
-      return raw;
-    }
-    const hunk = raw.match(/^@@ -\d+(?:,\d+)? \+(\d+)/);
-    if (hunk) {
-      newLine = parseInt(hunk[1], 10);
-      inHunk = true;
-      return raw;
-    }
-    if (!inHunk || raw.startsWith("\\") || raw === "" && i === lines.length - 1) return raw;
-    if (raw.startsWith("-")) return `${"".padStart(GUTTER)} ${raw}`;
-    return `${String(newLine++).padStart(GUTTER)} ${raw}`;
-  }).join("\n");
-}
-function numberFileLines(content) {
-  const lines = content.split("\n");
-  if (lines.at(-1) === "") lines.pop();
-  return lines.map((l, i) => `${String(i + 1).padStart(GUTTER)} ${l}`).join("\n");
-}
-function parseVerdictScore(text) {
-  const match = text.match(/#{1,4}\s*(?:Merge Confidence|Verdict):\s*(\d+)%/);
-  return match ? parseInt(match[1], 10) : null;
-}
-function parseFindings(text) {
-  const findingsMatch = text.match(/#{1,4}\s*Findings\b([\s\S]*?)(?=#{1,4}\s|$)/i);
-  const section = findingsMatch?.[1] ?? "";
-  return {
-    high: (section.match(/\*\*HIGH\b/gi) ?? []).length,
-    medium: (section.match(/\*\*MEDIUM\b/gi) ?? []).length,
-    low: (section.match(/\*\*LOW\b/gi) ?? []).length
-  };
-}
-function addedLines(diff) {
-  const out = [];
-  let file = "";
-  let newLine = 0;
-  for (const raw of diff.split("\n")) {
-    if (raw.startsWith("diff --git")) {
-      file = "";
-      continue;
-    }
-    if (raw.startsWith("+++ b/")) {
-      file = raw.slice(6).trim();
-      continue;
-    }
-    if (raw.startsWith("--- ")) continue;
-    const hunk = raw.match(/^@@ -\d+(?:,\d+)? \+(\d+)/);
-    if (hunk) {
-      newLine = parseInt(hunk[1], 10);
-      continue;
-    }
-    if (raw.startsWith("-")) continue;
-    if (raw.startsWith("+")) {
-      if (file) out.push({ file, line: newLine, text: raw.slice(1) });
-      newLine++;
-      continue;
-    }
-    if (raw.startsWith("\\")) continue;
-    newLine++;
-  }
-  return out;
-}
-var DOC_FILE = /[.](md|mdx|txt|rst)$/i;
-var OWN_SECTION = /TODOs Introduced/i;
-function scanTodos(diff) {
-  const marker = /\b(TODO|FIXME|HACK)\b:?\s*(.*)/i;
-  const todos = [];
-  for (const { file, line, text } of addedLines(diff)) {
-    if (DOC_FILE.test(file) || OWN_SECTION.test(text)) continue;
-    const m = text.match(marker);
-    if (!m) continue;
-    const body = m[2].trim();
-    todos.push({ file, line, text: (body ? `${m[1].toUpperCase()}: ${body}` : m[1].toUpperCase()).slice(0, 140) });
-  }
-  return todos;
-}
-
-// src/review/findings-output.ts
 function parseLineRange(lines) {
   const nums = String(lines ?? "").match(/\d+/g)?.map(Number).filter((n) => n > 0) ?? [];
   if (nums.length === 0) return null;
@@ -46236,6 +46266,11 @@ function allowShownContext(lens) {
   if (!lens.includes(SHOWN_LINE_CLAUSE)) throw new Error("Lens anchor clause not found");
   return lens.replace(SHOWN_LINE_CLAUSE, () => "a numeric line on an added or modified line, or on an unchanged line you were shown when it explains a defect this change introduces.");
 }
+function breadthLensText(shownAnchors, firstPassSites) {
+  return `${shownAnchors ? allowShownContext(BREADTH_LENS) : BREADTH_LENS}${firstPassSites ? `
+
+${FIRST_PASS_SITES_SECTION}` : ""}`;
+}
 function breadthSystemPrompt(reviewerPrompt, limit2, shownAnchors = false, firstPassSites = false) {
   const limitSection = limit2 > 0 ? `
 
@@ -46243,9 +46278,20 @@ function breadthSystemPrompt(reviewerPrompt, limit2, shownAnchors = false, first
 Report at most ${limit2} findings, prioritized by severity and impact. If more exist, include only the most important and omit the rest.` : "";
   return `${reviewerPrompt}${limitSection}
 
-${shownAnchors ? allowShownContext(BREADTH_LENS) : BREADTH_LENS}${firstPassSites ? `
+${breadthLensText(shownAnchors, firstPassSites)}`;
+}
+var PASS_OUTPUT_NOTE = "OUTPUT: put your findings in findings; set summary to one line and leave behavioral_diff, production_risk and unresolved_questions empty.";
+function passOverlay(lensText, limit2) {
+  const limitSection = limit2 > 0 ? `## FINDINGS LIMIT
+This replaces the findings limit above: report at most ${limit2} findings in this pass, prioritized by severity and impact. If more exist, include only the most important and omit the rest.
 
-${FIRST_PASS_SITES_SECTION}` : ""}`;
+` : "";
+  return `${limitSection}${lensText}
+
+${PASS_OUTPUT_NOTE}`;
+}
+function breadthOverlay(limit2, shownAnchors = false, firstPassSites = false) {
+  return passOverlay(breadthLensText(shownAnchors, firstPassSites), limit2);
 }
 var DOC_SLOTS = 8;
 var DOC_EXT = /\.(md|markdown|rst|txt|adoc|asciidoc)$/i;
@@ -46346,23 +46392,35 @@ function withImpactItem(lens) {
   return lens.replace(SECOND_LOOK_ANCHOR, () => `
 ${IMPACT_ITEM}${SECOND_LOOK_ANCHOR}`);
 }
+function secondLookLensText(shownAnchors, highImpact, firstPassSites) {
+  const overlay = highImpact ? withImpactItem(SECOND_LOOK_LENS) : SECOND_LOOK_LENS;
+  return `${shownAnchors ? allowShownContext(overlay) : overlay}${firstPassSites ? `
+
+${FIRST_PASS_SITES_SECTION}` : ""}`;
+}
 function secondLookSystemPrompt(reviewerPrompt, limit2, shownAnchors = false, highImpact = false, firstPassSites = false) {
   const limitSection = limit2 > 0 ? `
 
 ## FINDINGS LIMIT
 Report at most ${limit2} findings, prioritized by severity and impact. If more exist, include only the most important and omit the rest.` : "";
-  const overlay = highImpact ? withImpactItem(SECOND_LOOK_LENS) : SECOND_LOOK_LENS;
   return `${reviewerPrompt}${limitSection}
 
-${shownAnchors ? allowShownContext(overlay) : overlay}${firstPassSites ? `
-
-${FIRST_PASS_SITES_SECTION}` : ""}`;
+${secondLookLensText(shownAnchors, highImpact, firstPassSites)}`;
+}
+function secondLookOverlay(limit2, shownAnchors = false, highImpact = false, firstPassSites = false) {
+  return passOverlay(secondLookLensText(shownAnchors, highImpact, firstPassSites), limit2);
 }
 function secondLookBriefing(known, ids) {
   const located = (f) => f.file ? `${f.file}${f.lines ? `:${f.lines}` : ""}` : "(no file)";
   const findings = known.length ? known.map((f) => `- ${idTag(f, ids)}${located(f)} \u2014 ${f.title}`).join("\n") : "None.";
   return `## Findings already reported (do NOT repeat \u2014 find additional distinct problems in these files):
 ${findings}`;
+}
+function secondLookFilesBriefing(flagged, briefing) {
+  return `## Files to re-read (this pass covers only these):
+${flagged.map((p) => `- ${p}`).join("\n")}
+
+${briefing}`;
 }
 
 // src/review/lenses.ts
@@ -46442,6 +46500,9 @@ Report at most ${limit2} findings, prioritized by severity and impact. If more e
   return `${reviewerPrompt}${limitSection}
 
 ${shownAnchors ? allowShownContext(lens.overlay) : lens.overlay}`;
+}
+function lensOverlay(lens, limit2, shownAnchors = false) {
+  return passOverlay(shownAnchors ? allowShownContext(lens.overlay) : lens.overlay, limit2);
 }
 function lensBriefing(known) {
   const located = (f) => f.file ? `${f.file}${f.lines ? `:${f.lines}` : ""}` : "(no file)";
@@ -46580,23 +46641,40 @@ function reviewOutputSchema(lensRecommendation) {
   lensRecommendationSchema = schema;
   return schema;
 }
-async function runReview(apiKey, model, maxRetries, maxTokens, effort, prInfo, diff, fileContexts, prompt, previousReviews, developerReplies = [], changesSinceLastReview = "", lineNumbers = false, lensRecommendation = false) {
+async function runReview(apiKey, model, maxRetries, maxTokens, effort, prInfo, diff, fileContexts, prompt, previousReviews, developerReplies = [], changesSinceLastReview = "", lineNumbers = false, lensRecommendation = false, cache) {
   const userMessage = buildUserMessage(prInfo, diff, fileContexts, previousReviews, developerReplies, changesSinceLastReview, lineNumbers);
   console.log(`Sending request to the model (${model}, maxRetries: ${maxRetries})...`);
   const callOpts = { model, maxTokens, maxRetries, effort: effort || void 0 };
-  const { object: raw, usage } = await createProvider(apiKey).completeStructured(
+  const opts2 = lensRecommendation ? { ...callOpts, tolerateMissing: ["lens_recommendations"] } : callOpts;
+  const sites = !!cache && "first_pass_sites" in (cache.schema.properties ?? {});
+  const cacheOpts = sites ? { ...opts2, tolerateMissing: [...lensRecommendation ? ["lens_recommendations"] : [], "first_pass_sites"] } : opts2;
+  const { object: raw, usage } = cache ? await createProvider(apiKey).completeStructured(
+    prompt.content,
+    [{ text: userMessage, cache: true }],
+    cache.schema,
+    cache.sessionId ? { ...cacheOpts, sessionId: cache.sessionId } : cacheOpts
+  ) : await createProvider(apiKey).completeStructured(
     prompt.content,
     userMessage,
     reviewOutputSchema(lensRecommendation),
-    // A log-only field must never cost a review, so a model that omits it still yields the review.
-    lensRecommendation ? { ...callOpts, tolerateMissing: ["lens_recommendations"] } : callOpts
+    opts2
   );
   if (!Array.isArray(raw.findings)) throw Object.assign(new Error("Structured output missing required field(s): findings"), { usage });
   const { lens_recommendations: recommended, ...stripped } = raw;
-  const object = coerceTextLists(lensRecommendation ? stripped : raw);
+  const reviewed = cache ? stripPassExtras(stripped) : lensRecommendation ? stripped : raw;
+  const object = coerceTextLists(reviewed);
   const text = renderReview(object);
   console.log(`Review received (${usage.input_tokens} in / ${usage.output_tokens} out tokens, ${object.no_change ? "NO_CHANGE" : `${object.findings.length} findings`})`);
-  return lensRecommendation ? { text, usage, review: object, lensRecommendations: sanitizeLensRecommendations(recommended) } : { text, usage, review: object };
+  const result = lensRecommendation ? { text, usage, review: object, lensRecommendations: sanitizeLensRecommendations(recommended) } : { text, usage, review: object };
+  return cache ? { ...result, cacheBlock: userMessage } : result;
+}
+function stripPassExtras(review2) {
+  const { first_pass_sites: _sites, ...rest } = review2;
+  return { ...rest, findings: rest.findings.map((f) => {
+    if (!f || typeof f !== "object") return f;
+    const { also_affects: _also, scenario: _scenario, ...kept } = f;
+    return kept;
+  }) };
 }
 var REQUIRED_TEXT_LISTS = ["behavioral_diff", "production_risk", "unresolved_questions"];
 function coerceTextLists(review2) {
@@ -46646,6 +46724,25 @@ function sanitizeFindingExtras(finding) {
   const scenario = SCENARIOS.find((s) => s === rawScenario);
   return { ...rest, ...also.length ? { also_affects: also } : {}, ...scenario ? { scenario } : {} };
 }
+var sharedVariants = /* @__PURE__ */ new Map();
+var SHARED_SCENARIO_DESCRIPTION = "Only when your instructions name scenarios or contracts to trace and this finding came from tracing one: which one. Omit otherwise.";
+var SHARED_SITES_DESCRIPTION = "Only when your instructions ask for other sites of first-pass findings: other changed files where such a finding's defect also occurs. Omit otherwise.";
+function sharedOutputSchema(opts2) {
+  const base = reviewOutputSchema(!!opts2.lensRecommendation);
+  const alsoAffects = !!opts2.alsoAffects, scenario = !!opts2.scenario, firstPassSites = !!opts2.firstPassSites;
+  if (!alsoAffects && !scenario && !firstPassSites) return base;
+  const key = `${!!opts2.lensRecommendation}:${alsoAffects}:${scenario}:${firstPassSites}`;
+  const cached = sharedVariants.get(key);
+  if (cached) return cached;
+  const schema = structuredClone(base);
+  const props = schema.properties.findings.items.properties;
+  if (alsoAffects) props.also_affects = structuredClone(ALSO_AFFECTS_PROPERTY);
+  if (scenario) props.scenario = { ...structuredClone(SCENARIO_PROPERTY), description: SHARED_SCENARIO_DESCRIPTION };
+  if (firstPassSites) schema.properties.first_pass_sites = { ...structuredClone(FIRST_PASS_SITES_PROPERTY), description: SHARED_SITES_DESCRIPTION };
+  sharedVariants.set(key, schema);
+  return schema;
+}
+var SHARED_PASS_TOLERATE = ["summary", "behavioral_diff", "production_risk", "unresolved_questions", "can_be_split", "lens_recommendations", "first_pass_sites"];
 function sanitizeFirstPassSites(raw, ids, via) {
   const text = (v) => typeof v === "string" ? v.trim() : "";
   const sites = /* @__PURE__ */ new Map();
@@ -46706,6 +46803,27 @@ ${briefing}`;
     findings: schema === BREADTH_OUTPUT_SCHEMA ? findings : findings.map(sanitizeFindingExtras),
     usage,
     promptHash: (0, import_crypto2.createHash)("sha256").update(systemPrompt).digest("hex").slice(0, 12),
+    ...sites ? { firstPassSites: object.first_pass_sites } : {}
+  };
+}
+async function runSharedPass(apiKey, model, maxRetries, maxTokens, effort, prefix, briefing, overlay, label, signal) {
+  const sites = "first_pass_sites" in (prefix.schema.properties ?? {});
+  const user = [{ text: prefix.block, cache: true }, { text: briefing }];
+  console.log(`Sending to ${label} reviewer (${model}, maxRetries: ${maxRetries}, cached prefix)...`);
+  const { object, usage } = await createProvider(apiKey).completeStructured(
+    prefix.system,
+    user,
+    prefix.schema,
+    { model, maxTokens, maxRetries, effort: effort || void 0, ...signal ? { signal } : {}, tolerateMissing: SHARED_PASS_TOLERATE, systemAfter: overlay, ...prefix.sessionId ? { sessionId: prefix.sessionId } : {} }
+  );
+  console.log(`${label[0].toUpperCase()}${label.slice(1)} received (${usage.input_tokens} in / ${usage.cache_read_input_tokens ?? 0} cache read / ${usage.cache_creation_input_tokens ?? 0} cache write / ${usage.output_tokens} out tokens, ${object.findings?.length ?? 0} findings)`);
+  const findings = Array.isArray(object.findings) ? object.findings : [];
+  return {
+    findings: findings.map(sanitizeFindingExtras),
+    usage,
+    promptHash: (0, import_crypto2.createHash)("sha256").update(`${prefix.system}
+
+${overlay}`).digest("hex").slice(0, 12),
     ...sites ? { firstPassSites: object.first_pass_sites } : {}
   };
 }
@@ -46966,6 +47084,347 @@ ${bullets2(questions)}`
   };
 }
 
+// src/review/usage.ts
+init_define_STACK_PROMPTS();
+var import_fs4 = require("fs");
+var import_child_process = require("child_process");
+var import_crypto3 = require("crypto");
+var import_path72 = require("path");
+var import_url4 = require("url");
+
+// src/review/checked-commit.ts
+init_define_STACK_PROMPTS();
+
+// src/review/cli-value.ts
+init_define_STACK_PROMPTS();
+function cliOrEnv(cli, env) {
+  return cli?.trim() || env;
+}
+
+// src/review/checked-commit.ts
+var HASH = /^[0-9a-f]{12,64}$/;
+function isCheckedCommitHash(value) {
+  return HASH.test(value.toLowerCase());
+}
+function resolveCheckedCommit(cli, env) {
+  const value = cliOrEnv(cli, env).toLowerCase();
+  if (!value) return void 0;
+  if (isCheckedCommitHash(value)) return value;
+  console.warn(`Warning: ignoring the checked commit "${value.slice(0, 64)}" (--checked-commit/LAST_CHECKED_COMMIT) - expected 12 to 64 hex characters`);
+  return void 0;
+}
+function headMatches(checked, sourceCommit) {
+  const head = sourceCommit.toLowerCase();
+  const [short, long] = checked.length <= head.length ? [checked, head] : [head, checked];
+  return short.length >= 12 && long.startsWith(short);
+}
+
+// src/review/usage.ts
+var import_meta3 = {};
+function hash12(s) {
+  return (0, import_crypto3.createHash)("sha256").update(s).digest("hex").slice(0, 12);
+}
+function candidateRows(list, withType, withHi = { scenario: false, alsoAffects: false }) {
+  return list.map((f, i) => ({
+    id: candidateId(i),
+    origin: f.origin,
+    severity: f.severity,
+    ...withType ? { type: f.type ? normalizeIssueType(f.type) : null } : {},
+    title: f.title,
+    file: f.file ?? null,
+    lines: f.lines ?? null,
+    body: f.body,
+    // The first-pass reviewer is never asked for these, so a value on its candidate is unsanitized model output.
+    ...withHi.scenario ? { scenario: f.origin !== "review" ? f.scenario ?? null : null } : {},
+    ...withHi.alsoAffects ? { also_affects: f.origin !== "review" && Array.isArray(f.also_affects) ? f.also_affects : [] } : {}
+  }));
+}
+function firstSentence(body) {
+  const s = body.trim();
+  return (s.match(/^.*?[.!?](?=\s|$)/)?.[0] ?? s).trim();
+}
+var MODEL_PRICING = {
+  "claude-fable-5-1": { input: 10, output: 50 },
+  "claude-fable-5": { input: 10, output: 50 },
+  "claude-mythos-5-1": { input: 10, output: 50 },
+  "claude-mythos-5": { input: 10, output: 50 },
+  "claude-opus-5-5": { input: 4, output: 20 },
+  "claude-opus-5": { input: 5, output: 25 },
+  "claude-opus-4-8": { input: 5, output: 25 },
+  "claude-opus-4-7": { input: 5, output: 25 },
+  "claude-opus-4-6": { input: 5, output: 25 },
+  "claude-opus-4-5": { input: 5, output: 25 },
+  "claude-sonnet-5-5": { input: 2, output: 10 },
+  "claude-sonnet-5": { input: 2, output: 10 },
+  "claude-sonnet-4-6": { input: 3, output: 15 },
+  "claude-sonnet-4-5": { input: 3, output: 15 },
+  "claude-haiku-4-5": { input: 1, output: 5 }
+};
+function haiku55Pricing(inputTokens) {
+  return inputTokens > 1e5 ? { input: 0.5, output: 2.5 } : { input: 0.1, output: 0.5 };
+}
+function cacheReadRate(base) {
+  if (/^claude-(fable|mythos)-(5-[1-9]|[6-9])/.test(base)) return 0.025;
+  if (base === "claude-sonnet-5-5" || base === "claude-opus-5-5") return 0.05;
+  return 0.1;
+}
+function estimateCost(tokens2, model) {
+  return Math.round(unroundedCost(tokens2, model) * 1e4) / 1e4;
+}
+function estimateAttemptsCost(attempts, model) {
+  const cost = attempts.reduce((sum2, a) => sum2 + unroundedCost({ input: a.input_tokens, output: a.output_tokens, cache_read: a.cache_read_input_tokens ?? 0, cache_write: a.cache_creation_input_tokens ?? 0 }, model), 0);
+  return Math.round(cost * 1e4) / 1e4;
+}
+function unroundedCost(tokens2, model) {
+  const base = baseModelId(model);
+  const read = tokens2.cache_read ?? 0;
+  const write = tokens2.cache_write ?? 0;
+  let p = base === "claude-haiku-5-5" ? haiku55Pricing(tokens2.input + read + write) : MODEL_PRICING[model] ?? MODEL_PRICING[base];
+  if (!p) {
+    console.warn(`No pricing entry for model "${model}" \u2014 estimating with claude-sonnet-4-6 rates`);
+    p = MODEL_PRICING["claude-sonnet-4-6"];
+  }
+  return read || write ? tokens2.input / 1e6 * p.input + write / 1e6 * p.input * 1.25 + read / 1e6 * p.input * cacheReadRate(base) + tokens2.output / 1e6 * p.output : tokens2.input / 1e6 * p.input + tokens2.output / 1e6 * p.output;
+}
+function getAgentVersion() {
+  try {
+    const pkgPath = (0, import_url4.fileURLToPath)(new URL("../../package.json", import_meta3.url));
+    const pkg = JSON.parse((0, import_fs4.readFileSync)(pkgPath, "utf-8"));
+    return pkg.version;
+  } catch {
+    if (true) return "0.0.59";
+    return "unknown";
+  }
+}
+function getBuildCommit() {
+  try {
+    const cwd = (0, import_path72.dirname)(process.argv[1] ?? ".");
+    const opts2 = { cwd, stdio: ["ignore", "pipe", "ignore"] };
+    const hash = (0, import_child_process.execSync)("git rev-parse --short HEAD", opts2).toString().trim();
+    const dirty = (0, import_child_process.execSync)("git status --porcelain", opts2).toString().trim() ? "-dirty" : "";
+    return hash + dirty;
+  } catch {
+    if (true) return "cdf3fe6";
+    return "unknown";
+  }
+}
+function getJenkinsMeta() {
+  const job = process.env.JOB_NAME ?? "";
+  const build = process.env.BUILD_NUMBER ?? "";
+  const url2 = process.env.BUILD_URL ?? "";
+  if (!job && !build && !url2) return null;
+  return { job, build, url: url2 };
+}
+function getJobUrl() {
+  return getJenkinsMeta()?.url || void 0;
+}
+function buildUsageRecord(ctx, durationMs, error) {
+  const commitShort = ctx.prInfo?.sourceCommit?.slice(0, 12) ?? "unknown";
+  const reviewText = ctx.reviewText ?? "";
+  const verdictScore = reviewText ? parseVerdictScore(reviewText) : null;
+  const findings = reviewText ? parseFindings(reviewText) : null;
+  const reviewFindings = ctx.reviewObject && Array.isArray(ctx.reviewObject.findings) ? countFindings(ctx.reviewObject) : null;
+  const deltaStats = ctx.reviewObject?.delta_stats ?? null;
+  const judgeScores = ctx.judgeScores ?? null;
+  const judgeModel = config.judge.model || null;
+  const cache = !!config.review.promptCache;
+  const tok = (u) => ({ input: u.input_tokens, output: u.output_tokens, ...cache ? { cache_read: u.cache_read_input_tokens ?? 0, cache_write: u.cache_creation_input_tokens ?? 0 } : {} });
+  const priced = (u, tokens2, model) => u.attempts ? estimateAttemptsCost(u.attempts, model) : estimateCost(tokens2, model);
+  const judgeTokensRaw = ctx.judgeUsage ?? null;
+  const judgeTokens = judgeTokensRaw ? tok(judgeTokensRaw) : null;
+  const judgeCost = ctx.judgeUsage?.cost_usd ?? (judgeTokensRaw && judgeTokens && judgeModel ? priced(judgeTokensRaw, judgeTokens, judgeModel) : null);
+  const breadthTokens = ctx.breadthUsage ? tok(ctx.breadthUsage) : null;
+  const breadthCost = ctx.breadthUsage?.cost_usd ?? (ctx.breadthUsage && breadthTokens && ctx.breadthModel ? priced(ctx.breadthUsage, breadthTokens, ctx.breadthModel) : null);
+  const secondLookTokens = ctx.secondLookUsage ? tok(ctx.secondLookUsage) : null;
+  const secondLookCost = ctx.secondLookUsage?.cost_usd ?? (ctx.secondLookUsage && secondLookTokens ? priced(ctx.secondLookUsage, secondLookTokens, config.anthropic.model) : null);
+  const lenses = activeLenses(config.lenses);
+  const lensSource = ctx.lensRuns ?? (ctx.bundleCount && lenses.length ? lenses.map((l) => ({ name: l.name, status: "skipped_bundled", model: config.lenses.model || config.anthropic.model, findings: [] })) : void 0);
+  const lensRuns = lensSource?.map((r) => {
+    const tokens2 = r.usage ? tok(r.usage) : null;
+    return { name: r.name, status: r.status, model: r.model, prompt_hash: r.promptHash ?? null, tokens: tokens2, cost_usd: r.usage?.cost_usd ?? (r.usage && tokens2 ? priced(r.usage, tokens2, r.model) : null), findings: r.findings.length };
+  }) ?? null;
+  const lensUsage = (ctx.lensRuns ?? []).reduce((sum2, r) => ({
+    input: sum2.input + (r.usage?.input_tokens ?? 0),
+    output: sum2.output + (r.usage?.output_tokens ?? 0),
+    cost: sum2.cost + (r.usage?.cost_usd ?? 0),
+    cache_read: sum2.cache_read + (r.usage?.cache_read_input_tokens ?? 0),
+    cache_write: sum2.cache_write + (r.usage?.cache_creation_input_tokens ?? 0)
+  }), { input: 0, output: 0, cost: 0, cache_read: 0, cache_write: 0 });
+  const lensCost = (lensRuns ?? []).reduce((sum2, r) => sum2 + (r.cost_usd ?? 0), 0);
+  const recordModel = ctx.action === "REPLY" && config.reply.model ? config.reply.model : config.anthropic.model;
+  const reviewerTokens = {
+    input: ctx.usage.input_tokens - (judgeTokens?.input ?? 0) - (breadthTokens?.input ?? 0) - (secondLookTokens?.input ?? 0) - lensUsage.input,
+    output: ctx.usage.output_tokens - (judgeTokens?.output ?? 0) - (breadthTokens?.output ?? 0) - (secondLookTokens?.output ?? 0) - lensUsage.output,
+    ...cache ? {
+      cache_read: ctx.usage.cache_read - (judgeTokens?.cache_read ?? 0) - (breadthTokens?.cache_read ?? 0) - (secondLookTokens?.cache_read ?? 0) - lensUsage.cache_read,
+      cache_write: ctx.usage.cache_write - (judgeTokens?.cache_write ?? 0) - (breadthTokens?.cache_write ?? 0) - (secondLookTokens?.cache_write ?? 0) - lensUsage.cache_write
+    } : {}
+  };
+  const reviewCall = cache ? ctx.reviewUsage : void 0;
+  const reviewerCost = ctx.usage.cost_usd !== void 0 ? ctx.usage.cost_usd - (ctx.judgeUsage?.cost_usd ?? 0) - (ctx.breadthUsage?.cost_usd ?? 0) - (ctx.secondLookUsage?.cost_usd ?? 0) - lensUsage.cost : reviewCall?.attempts ? estimateAttemptsCost(reviewCall.attempts, recordModel) + estimateCost({
+    input: reviewerTokens.input - reviewCall.input_tokens,
+    output: reviewerTokens.output - reviewCall.output_tokens,
+    cache_read: (reviewerTokens.cache_read ?? 0) - (reviewCall.cache_read_input_tokens ?? 0),
+    cache_write: (reviewerTokens.cache_write ?? 0) - (reviewCall.cache_creation_input_tokens ?? 0)
+  }, recordModel) : estimateCost(reviewerTokens, recordModel);
+  const breadthStatus = ctx.breadthStatus ?? (ctx.bundleCount ? config.breadth.enabled ? "skipped_bundled" : "disabled" : null);
+  const secondLookStatus = ctx.secondLookStatus ?? (ctx.bundleCount ? config.review.secondLook ? "skipped_bundled" : "disabled" : null);
+  const hi = !!config.review.highImpact;
+  const withHi = { scenario: hi, alsoAffects: hi && !!ctx.outcomeSink };
+  const fpSites2 = !!config.review.firstPassSites;
+  const humanReplies = (ctx.replies ?? []).filter((r) => !isAgentReply(r));
+  const replyAuthors = [...new Set(humanReplies.map((r) => r.authorId ?? r.author))];
+  return {
+    run_id: `${config.vcsProvider}-${ctx.repoSlug}-${ctx.prId}-${commitShort}`,
+    timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+    agent_version: getAgentVersion(),
+    vcs: config.vcsProvider,
+    workspace: config.vcsProvider === "azure" ? config.azure.org : config.vcsProvider === "github" ? config.github.owner : config.bitbucket.workspace,
+    repo_slug: ctx.repoSlug,
+    pr_id: ctx.prId,
+    pr_author: ctx.prInfo?.author ?? "unknown",
+    source_commit: ctx.prInfo?.sourceCommit ?? "unknown",
+    source_branch: ctx.prInfo?.sourceBranch ?? "unknown",
+    target_branch: ctx.prInfo?.targetBranch ?? "unknown",
+    changed_files: ctx.changedFiles?.length ?? 0,
+    changed_lines: ctx.lineCount ?? 0,
+    diff_size: ctx.diff !== void 0 ? (() => {
+      const raw = countDiffLines(ctx.diff);
+      const reviewable = countDiffLines(ctx.filteredDiff ?? "");
+      const files = { added: 0, modified: 0, deleted: 0, renamed: 0 };
+      for (const f of ctx.changedFiles ?? []) files[f.status]++;
+      return {
+        files,
+        lines_added: raw.added,
+        lines_removed: raw.removed,
+        reviewable_files: ctx.reviewableFileCount ?? 0,
+        reviewable_lines_added: reviewable.added,
+        reviewable_lines_removed: reviewable.removed
+      };
+    })() : null,
+    context_files_fetched: ctx.fileContexts?.length ?? 0,
+    degraded: ctx.degraded ?? false,
+    review_number: ctx.reviewNumber,
+    action: ctx.action,
+    skip_reason: ctx.skipReason ?? null,
+    model: recordModel,
+    effort: config.review.effort || null,
+    tokens: {
+      input: ctx.usage.input_tokens,
+      output: ctx.usage.output_tokens,
+      cache_read: ctx.usage.cache_read,
+      cache_write: ctx.usage.cache_write,
+      estimated_input: ctx.estimatedInputTokens,
+      ...ctx.usage.reasoning ? { reasoning: ctx.usage.reasoning } : {}
+    },
+    cost_usd: reviewerCost + (judgeCost ?? 0) + (breadthCost ?? 0) + (secondLookCost ?? 0) + lensCost,
+    judge_model: judgeModel,
+    judge_effort: config.judge.effort || null,
+    judge_tokens: judgeTokens,
+    judge_cost_usd: judgeCost,
+    duration_ms: durationMs,
+    dry_run: ctx.dryRun,
+    force: ctx.force,
+    prompt_source: ctx.prompt?.source ?? "none",
+    ...ctx.prompt?.lookupFailed ? { prompt_lookup: "failed" } : {},
+    agent_commit: getBuildCommit(),
+    prompt_hash: ctx.prompt ? hash12(ctx.prompt.content) : null,
+    judge_prompt_hash: ctx.judgePromptHash ?? null,
+    judge_status: ctx.judgeStatus ?? null,
+    verdict_score: verdictScore,
+    computed_score: findings ? Math.max(0, 100 - findings.high * 12 - findings.medium * 4) : null,
+    review_findings: reviewFindings,
+    findings,
+    finding_scores: judgeScores,
+    min_finding_score: judgeScores?.length ? Math.min(...judgeScores.map((s) => s.score)) : null,
+    anchored_findings: ctx.judgedFindings ? ctx.judgedFindings.filter(isAnchored).map((k) => {
+      const r = parseLineRange(k.lines);
+      const file = normalizeFindingPath(k.file, ctx.changedFiles?.map((f) => f.path) ?? []);
+      return {
+        anchor: r.start === r.end ? `${file}:${r.start}` : `${file}:${r.start}-${r.end}`,
+        severity: k.severity,
+        type: normalizeIssueType(k.type),
+        description: firstSentence(k.body),
+        ...k.proposal ? { proposal: k.proposal } : {},
+        ...k.quality_action ? { quality_action: k.quality_action } : {}
+      };
+    }) : null,
+    review_candidates: ctx.judgeDecisions && ctx.reviewObject ? candidateRows(ctx.judgeCandidates ?? ctx.reviewObject.findings.map((f) => ({ ...f, origin: "review" })), !!ctx.outcomeSink, withHi) : null,
+    // Only when the judge threw and the run failed, so findings that were never judged or posted stay diagnosable.
+    ...error && ctx.judgeStatus === "failed" && ctx.judgeCandidates ? { unjudged_candidates: candidateRows(ctx.judgeCandidates, !!ctx.outcomeSink, withHi) } : {},
+    judge_decisions: ctx.judgeDecisions ?? null,
+    judge_anomalies: ctx.judgeAnomalies ?? null,
+    judge_policy: judgeModel && judgeTokens ? { keep_minor: config.judge.policy.keepMinor, keep_unverified: config.judge.policy.keepUnverified, file_context: config.judge.fileContext, ...config.judge.policy.keepTestGaps ? { keep_test_gaps: true } : {} } : null,
+    breadth_status: breadthStatus,
+    breadth_model: ctx.breadthModel ?? null,
+    breadth_prompt_hash: ctx.breadthPromptHash ?? null,
+    breadth_tokens: breadthTokens,
+    breadth_cost_usd: breadthCost,
+    second_look_status: secondLookStatus,
+    second_look_prompt_hash: ctx.secondLookPromptHash ?? null,
+    second_look_tokens: secondLookTokens,
+    second_look_cost_usd: secondLookCost,
+    // Absent, not null, when lenses are off, so a lens-off record serializes byte-identical to one from before lenses existed.
+    ...lenses.length ? { lens_runs: lensRuns } : {},
+    ...config.lenses.recommend ? { lens_recommendations: ctx.lensRecommendations ?? null } : {},
+    ...config.judge.suggestedFixes ? { suggested_fixes: ctx.suggestedFixes ?? null } : {},
+    ...ctx.counterpartRows !== void 0 ? { counterpart_rows: ctx.counterpartRows } : {},
+    ...ctx.alsoAffectsRows !== void 0 ? { also_affects_rows: ctx.alsoAffectsRows } : {},
+    ...ctx.alsoAffectsLog ? { also_affects: ctx.alsoAffectsLog } : {},
+    // Benchmark-only and present only with one of these settings on, so every other record keeps its earlier shape.
+    ...ctx.outcomeSink && (config.breadth.passDeadline || fpSites2) || cache ? { pass_calls: ctx.passCalls ?? [] } : {},
+    ...cache ? { prompt_cache: ctx.promptCache ? settledPromptCache(ctx, ctx.promptCache) : null } : {},
+    ...ctx.outcomeSink && fpSites2 ? { first_pass_sites_named: ctx.firstPassSitesNamed ?? null, first_pass_sites_dropped: ctx.firstPassSitesDropped ?? null } : {},
+    ...ctx.firstPassSiteRows !== void 0 ? { first_pass_site_rows: ctx.firstPassSiteRows } : {},
+    ...ctx.firstPassSitesLog ? { first_pass_sites: ctx.firstPassSitesLog } : {},
+    untouched_files: ctx.untouchedFiles ? ctx.breadthPlan ? { count: ctx.untouchedFiles.length, paths: ctx.breadthPlan.selected, cut: ctx.breadthPlan.omitted, deprioritized: ctx.breadthPlan.deprioritizedReleaseEntries } : { count: ctx.untouchedFiles.length, paths: ctx.untouchedFiles.slice(0, MAX_UNTOUCHED_LISTED), cut: Math.max(0, ctx.untouchedFiles.length - MAX_UNTOUCHED_LISTED) } : null,
+    recall_levers: { j_quality: !!config.judge.quality, sl_breadth: !!config.review.secondLookBreadthTargets, j_shown_anchor: !!config.judge.shownAnchors, b_priority: !!config.breadth.priorityTargets, ...hi ? { high_impact: true } : {}, ...ctx.outcomeSink && fpSites2 ? { first_pass_sites: true } : {} },
+    touch_rate: ctx.reviewNumber > 1 && deltaStats ? (() => {
+      const total = deltaStats.resolved + deltaStats.still_open;
+      return total > 0 ? Math.round(deltaStats.resolved / total * 100) : null;
+    })() : null,
+    delta: ctx.reviewNumber > 1 && ctx.reviewObject ? {
+      developer_replies: ctx.replies?.length ?? 0,
+      human_replies: humanReplies.length,
+      agent_replies: (ctx.replies?.length ?? 0) - humanReplies.length,
+      resolved: deltaStats?.resolved ?? 0,
+      still_open: deltaStats?.still_open ?? 0,
+      new_findings: deltaStats?.new_findings ?? 0
+    } : null,
+    // Absent when no human replied, so records without discussion keep their current shape.
+    ...replyAuthors.length ? { reply_authors: replyAuthors } : {},
+    // Present only when the head was really checked and the run did not fail afterwards; CI stores exactly this value, so it must pass the LAST_CHECKED_COMMIT rule too, whatever head the adapter reported.
+    ...ctx.headChecked && !error && isCheckedCommitHash(ctx.prInfo.sourceCommit) ? { checked_commit: ctx.prInfo.sourceCommit } : {},
+    ...ctx.dedupHit ? { dedup_source: ctx.dedupHit } : {},
+    ...ctx.replyLimitNote ? { reply_limit_note: true } : {},
+    jenkins: getJenkinsMeta(),
+    // Absent when CI passed no trigger, so those records serialize exactly as before.
+    ...ctx.trigger ? { trigger: { event: ctx.trigger.event || null, comment_author: ctx.trigger.commentAuthor || null, ...ctx.trigger.kind ? { event_kind: ctx.trigger.kind } : {} } } : {},
+    error
+  };
+}
+function settledPromptCache(ctx, log) {
+  const statusOf = (stage) => stage === "breadth" ? ctx.breadthStatus : stage === "second_look" ? ctx.secondLookStatus : ctx.lensRuns?.find((r) => `lens:${r.name}` === stage)?.status;
+  const skipped = log.shared_stages.map((stage) => ({ stage, status: statusOf(stage) ?? "not_reached" })).filter((s) => s.status === "not_reached" || s.status.startsWith("skipped_"));
+  if (!skipped.length) return log;
+  return {
+    ...log,
+    shared_stages: log.shared_stages.filter((stage) => !skipped.some((s) => s.stage === stage)),
+    uncached: [...log.uncached, ...skipped.map((s) => ({ stage: s.stage, reason: `skipped_after_plan: ${s.status}` }))]
+  };
+}
+function logUsageRecord(record) {
+  const line = JSON.stringify(record) + "\n";
+  (0, import_fs4.appendFileSync)("results.jsonl", line);
+  console.log("Usage appended to results.jsonl");
+  if (!config.usageRecordFile) return;
+  try {
+    (0, import_fs4.writeFileSync)(config.usageRecordFile, line);
+  } catch (err) {
+    console.warn(`Warning: could not write USAGE_RECORD_FILE "${config.usageRecordFile}": ${err.message}`);
+  }
+}
+
 // src/review/bundled.ts
 var FIT_RATIO = 0.85;
 var MIN_DIFF_SHARE = 0.1;
@@ -47135,7 +47594,28 @@ Merged ${reviews.length} bundle review(s): ${merged.object.findings.length} find
 function recordPassCall(ctx, stage, maxTokens, limitMs, usage, err) {
   const end = err === void 0 ? "ok" : err instanceof DeadlineAbortError ? "aborted_time" : err instanceof TruncatedResponseError ? "truncated" : "error";
   const counted = end === "aborted_time" ? void 0 : usage;
-  (ctx.passCalls ??= []).push({ stage, end, max_tokens: maxTokens, output_tokens: counted?.output_tokens ?? null, reasoning_tokens: counted?.reasoning_tokens ?? null, limit_ms: limitMs ?? null });
+  (ctx.passCalls ??= []).push({
+    stage,
+    end,
+    max_tokens: maxTokens,
+    output_tokens: counted?.output_tokens ?? null,
+    reasoning_tokens: counted?.reasoning_tokens ?? null,
+    limit_ms: limitMs ?? null,
+    ...config.review.promptCache ? cacheCallFields(ctx, stage, counted) : {}
+  });
+}
+function passModel(ctx, stage) {
+  if (stage === "judge") return config.judge.model;
+  if (stage === "breadth") return ctx.breadthModel || config.breadth.model || config.judge.model;
+  if (stage.startsWith("lens:")) return config.lenses.model || config.anthropic.model;
+  return config.anthropic.model;
+}
+function cacheCallFields(ctx, stage, u) {
+  if (u?.input_tokens === void 0) return { input_tokens: null, cache_read_tokens: null, cache_write_tokens: null, cost_usd: null };
+  const read = u.cache_read_input_tokens ?? 0;
+  const write = u.cache_creation_input_tokens ?? 0;
+  const cost = u.cost_usd ?? (u.attempts ? estimateAttemptsCost(u.attempts, passModel(ctx, stage)) : estimateCost({ input: u.input_tokens, output: u.output_tokens ?? 0, cache_read: read, cache_write: write }, passModel(ctx, stage)));
+  return { input_tokens: u.input_tokens, cache_read_tokens: read, cache_write_tokens: write, cost_usd: cost };
 }
 function addUsage(ctx, u) {
   ctx.usage.input_tokens += u.input_tokens;
@@ -47183,306 +47663,6 @@ function orderPosted(plain, findings, render) {
   const text = render(order);
   if (text !== head + order.map((i) => chunks[i]).join("\n\n") + plain.slice(at + block.length)) return { text: plain };
   return { text, order };
-}
-
-// src/review/usage.ts
-init_define_STACK_PROMPTS();
-var import_fs4 = require("fs");
-var import_child_process = require("child_process");
-var import_crypto3 = require("crypto");
-var import_path72 = require("path");
-var import_url4 = require("url");
-
-// src/review/checked-commit.ts
-init_define_STACK_PROMPTS();
-
-// src/review/cli-value.ts
-init_define_STACK_PROMPTS();
-function cliOrEnv(cli, env) {
-  return cli?.trim() || env;
-}
-
-// src/review/checked-commit.ts
-var HASH = /^[0-9a-f]{12,64}$/;
-function isCheckedCommitHash(value) {
-  return HASH.test(value.toLowerCase());
-}
-function resolveCheckedCommit(cli, env) {
-  const value = cliOrEnv(cli, env).toLowerCase();
-  if (!value) return void 0;
-  if (isCheckedCommitHash(value)) return value;
-  console.warn(`Warning: ignoring the checked commit "${value.slice(0, 64)}" (--checked-commit/LAST_CHECKED_COMMIT) - expected 12 to 64 hex characters`);
-  return void 0;
-}
-function headMatches(checked, sourceCommit) {
-  const head = sourceCommit.toLowerCase();
-  const [short, long] = checked.length <= head.length ? [checked, head] : [head, checked];
-  return short.length >= 12 && long.startsWith(short);
-}
-
-// src/review/usage.ts
-var import_meta3 = {};
-function hash12(s) {
-  return (0, import_crypto3.createHash)("sha256").update(s).digest("hex").slice(0, 12);
-}
-function candidateRows(list, withType, withHi = { scenario: false, alsoAffects: false }) {
-  return list.map((f, i) => ({
-    id: candidateId(i),
-    origin: f.origin,
-    severity: f.severity,
-    ...withType ? { type: f.type ? normalizeIssueType(f.type) : null } : {},
-    title: f.title,
-    file: f.file ?? null,
-    lines: f.lines ?? null,
-    body: f.body,
-    // The first-pass reviewer is never asked for these, so a value on its candidate is unsanitized model output.
-    ...withHi.scenario ? { scenario: f.origin !== "review" ? f.scenario ?? null : null } : {},
-    ...withHi.alsoAffects ? { also_affects: f.origin !== "review" && Array.isArray(f.also_affects) ? f.also_affects : [] } : {}
-  }));
-}
-function firstSentence(body) {
-  const s = body.trim();
-  return (s.match(/^.*?[.!?](?=\s|$)/)?.[0] ?? s).trim();
-}
-var MODEL_PRICING = {
-  "claude-fable-5-1": { input: 10, output: 50 },
-  "claude-fable-5": { input: 10, output: 50 },
-  "claude-mythos-5-1": { input: 10, output: 50 },
-  "claude-mythos-5": { input: 10, output: 50 },
-  "claude-opus-5-5": { input: 4, output: 20 },
-  "claude-opus-5": { input: 5, output: 25 },
-  "claude-opus-4-8": { input: 5, output: 25 },
-  "claude-opus-4-7": { input: 5, output: 25 },
-  "claude-opus-4-6": { input: 5, output: 25 },
-  "claude-opus-4-5": { input: 5, output: 25 },
-  "claude-sonnet-5-5": { input: 2, output: 10 },
-  "claude-sonnet-5": { input: 2, output: 10 },
-  "claude-sonnet-4-6": { input: 3, output: 15 },
-  "claude-sonnet-4-5": { input: 3, output: 15 },
-  "claude-haiku-4-5": { input: 1, output: 5 }
-};
-function haiku55Pricing(inputTokens) {
-  return inputTokens > 1e5 ? { input: 0.5, output: 2.5 } : { input: 0.1, output: 0.5 };
-}
-function estimateCost(tokens2, model) {
-  const base = baseModelId(model);
-  let p = base === "claude-haiku-5-5" ? haiku55Pricing(tokens2.input) : MODEL_PRICING[model] ?? MODEL_PRICING[base];
-  if (!p) {
-    console.warn(`No pricing entry for model "${model}" \u2014 estimating with claude-sonnet-4-6 rates`);
-    p = MODEL_PRICING["claude-sonnet-4-6"];
-  }
-  const cost = tokens2.input / 1e6 * p.input + tokens2.output / 1e6 * p.output;
-  return Math.round(cost * 1e4) / 1e4;
-}
-function getAgentVersion() {
-  try {
-    const pkgPath = (0, import_url4.fileURLToPath)(new URL("../../package.json", import_meta3.url));
-    const pkg = JSON.parse((0, import_fs4.readFileSync)(pkgPath, "utf-8"));
-    return pkg.version;
-  } catch {
-    if (true) return "0.0.58";
-    return "unknown";
-  }
-}
-function getBuildCommit() {
-  try {
-    const cwd = (0, import_path72.dirname)(process.argv[1] ?? ".");
-    const opts2 = { cwd, stdio: ["ignore", "pipe", "ignore"] };
-    const hash = (0, import_child_process.execSync)("git rev-parse --short HEAD", opts2).toString().trim();
-    const dirty = (0, import_child_process.execSync)("git status --porcelain", opts2).toString().trim() ? "-dirty" : "";
-    return hash + dirty;
-  } catch {
-    if (true) return "75cbdf0";
-    return "unknown";
-  }
-}
-function getJenkinsMeta() {
-  const job = process.env.JOB_NAME ?? "";
-  const build = process.env.BUILD_NUMBER ?? "";
-  const url2 = process.env.BUILD_URL ?? "";
-  if (!job && !build && !url2) return null;
-  return { job, build, url: url2 };
-}
-function getJobUrl() {
-  return getJenkinsMeta()?.url || void 0;
-}
-function buildUsageRecord(ctx, durationMs, error) {
-  const commitShort = ctx.prInfo?.sourceCommit?.slice(0, 12) ?? "unknown";
-  const reviewText = ctx.reviewText ?? "";
-  const verdictScore = reviewText ? parseVerdictScore(reviewText) : null;
-  const findings = reviewText ? parseFindings(reviewText) : null;
-  const reviewFindings = ctx.reviewObject && Array.isArray(ctx.reviewObject.findings) ? countFindings(ctx.reviewObject) : null;
-  const deltaStats = ctx.reviewObject?.delta_stats ?? null;
-  const judgeScores = ctx.judgeScores ?? null;
-  const judgeModel = config.judge.model || null;
-  const judgeTokensRaw = ctx.judgeUsage ?? null;
-  const judgeTokens = judgeTokensRaw ? { input: judgeTokensRaw.input_tokens, output: judgeTokensRaw.output_tokens } : null;
-  const judgeCost = ctx.judgeUsage?.cost_usd ?? (judgeTokens && judgeModel ? estimateCost(judgeTokens, judgeModel) : null);
-  const breadthTokens = ctx.breadthUsage ? { input: ctx.breadthUsage.input_tokens, output: ctx.breadthUsage.output_tokens } : null;
-  const breadthCost = ctx.breadthUsage?.cost_usd ?? (breadthTokens && ctx.breadthModel ? estimateCost(breadthTokens, ctx.breadthModel) : null);
-  const secondLookTokens = ctx.secondLookUsage ? { input: ctx.secondLookUsage.input_tokens, output: ctx.secondLookUsage.output_tokens } : null;
-  const secondLookCost = ctx.secondLookUsage?.cost_usd ?? (secondLookTokens ? estimateCost(secondLookTokens, config.anthropic.model) : null);
-  const lenses = activeLenses(config.lenses);
-  const lensSource = ctx.lensRuns ?? (ctx.bundleCount && lenses.length ? lenses.map((l) => ({ name: l.name, status: "skipped_bundled", model: config.lenses.model || config.anthropic.model, findings: [] })) : void 0);
-  const lensRuns = lensSource?.map((r) => {
-    const tokens2 = r.usage ? { input: r.usage.input_tokens, output: r.usage.output_tokens } : null;
-    return { name: r.name, status: r.status, model: r.model, prompt_hash: r.promptHash ?? null, tokens: tokens2, cost_usd: r.usage?.cost_usd ?? (tokens2 ? estimateCost(tokens2, r.model) : null), findings: r.findings.length };
-  }) ?? null;
-  const lensUsage = (ctx.lensRuns ?? []).reduce((sum2, r) => ({
-    input: sum2.input + (r.usage?.input_tokens ?? 0),
-    output: sum2.output + (r.usage?.output_tokens ?? 0),
-    cost: sum2.cost + (r.usage?.cost_usd ?? 0)
-  }), { input: 0, output: 0, cost: 0 });
-  const lensCost = (lensRuns ?? []).reduce((sum2, r) => sum2 + (r.cost_usd ?? 0), 0);
-  const recordModel = ctx.action === "REPLY" && config.reply.model ? config.reply.model : config.anthropic.model;
-  const reviewerCost = ctx.usage.cost_usd !== void 0 ? ctx.usage.cost_usd - (ctx.judgeUsage?.cost_usd ?? 0) - (ctx.breadthUsage?.cost_usd ?? 0) - (ctx.secondLookUsage?.cost_usd ?? 0) - lensUsage.cost : estimateCost({
-    input: ctx.usage.input_tokens - (judgeTokens?.input ?? 0) - (breadthTokens?.input ?? 0) - (secondLookTokens?.input ?? 0) - lensUsage.input,
-    output: ctx.usage.output_tokens - (judgeTokens?.output ?? 0) - (breadthTokens?.output ?? 0) - (secondLookTokens?.output ?? 0) - lensUsage.output
-  }, recordModel);
-  const breadthStatus = ctx.breadthStatus ?? (ctx.bundleCount ? config.breadth.enabled ? "skipped_bundled" : "disabled" : null);
-  const secondLookStatus = ctx.secondLookStatus ?? (ctx.bundleCount ? config.review.secondLook ? "skipped_bundled" : "disabled" : null);
-  const hi = !!config.review.highImpact;
-  const withHi = { scenario: hi, alsoAffects: hi && !!ctx.outcomeSink };
-  const fpSites2 = !!config.review.firstPassSites;
-  const humanReplies = (ctx.replies ?? []).filter((r) => !isAgentReply(r));
-  const replyAuthors = [...new Set(humanReplies.map((r) => r.authorId ?? r.author))];
-  return {
-    run_id: `${config.vcsProvider}-${ctx.repoSlug}-${ctx.prId}-${commitShort}`,
-    timestamp: (/* @__PURE__ */ new Date()).toISOString(),
-    agent_version: getAgentVersion(),
-    vcs: config.vcsProvider,
-    workspace: config.vcsProvider === "azure" ? config.azure.org : config.vcsProvider === "github" ? config.github.owner : config.bitbucket.workspace,
-    repo_slug: ctx.repoSlug,
-    pr_id: ctx.prId,
-    pr_author: ctx.prInfo?.author ?? "unknown",
-    source_commit: ctx.prInfo?.sourceCommit ?? "unknown",
-    source_branch: ctx.prInfo?.sourceBranch ?? "unknown",
-    target_branch: ctx.prInfo?.targetBranch ?? "unknown",
-    changed_files: ctx.changedFiles?.length ?? 0,
-    changed_lines: ctx.lineCount ?? 0,
-    diff_size: ctx.diff !== void 0 ? (() => {
-      const raw = countDiffLines(ctx.diff);
-      const reviewable = countDiffLines(ctx.filteredDiff ?? "");
-      const files = { added: 0, modified: 0, deleted: 0, renamed: 0 };
-      for (const f of ctx.changedFiles ?? []) files[f.status]++;
-      return {
-        files,
-        lines_added: raw.added,
-        lines_removed: raw.removed,
-        reviewable_files: ctx.reviewableFileCount ?? 0,
-        reviewable_lines_added: reviewable.added,
-        reviewable_lines_removed: reviewable.removed
-      };
-    })() : null,
-    context_files_fetched: ctx.fileContexts?.length ?? 0,
-    degraded: ctx.degraded ?? false,
-    review_number: ctx.reviewNumber,
-    action: ctx.action,
-    skip_reason: ctx.skipReason ?? null,
-    model: recordModel,
-    effort: config.review.effort || null,
-    tokens: {
-      input: ctx.usage.input_tokens,
-      output: ctx.usage.output_tokens,
-      cache_read: ctx.usage.cache_read,
-      cache_write: ctx.usage.cache_write,
-      estimated_input: ctx.estimatedInputTokens,
-      ...ctx.usage.reasoning ? { reasoning: ctx.usage.reasoning } : {}
-    },
-    cost_usd: reviewerCost + (judgeCost ?? 0) + (breadthCost ?? 0) + (secondLookCost ?? 0) + lensCost,
-    judge_model: judgeModel,
-    judge_effort: config.judge.effort || null,
-    judge_tokens: judgeTokens,
-    judge_cost_usd: judgeCost,
-    duration_ms: durationMs,
-    dry_run: ctx.dryRun,
-    force: ctx.force,
-    prompt_source: ctx.prompt?.source ?? "none",
-    ...ctx.prompt?.lookupFailed ? { prompt_lookup: "failed" } : {},
-    agent_commit: getBuildCommit(),
-    prompt_hash: ctx.prompt ? hash12(ctx.prompt.content) : null,
-    judge_prompt_hash: ctx.judgePromptHash ?? null,
-    judge_status: ctx.judgeStatus ?? null,
-    verdict_score: verdictScore,
-    computed_score: findings ? Math.max(0, 100 - findings.high * 12 - findings.medium * 4) : null,
-    review_findings: reviewFindings,
-    findings,
-    finding_scores: judgeScores,
-    min_finding_score: judgeScores?.length ? Math.min(...judgeScores.map((s) => s.score)) : null,
-    anchored_findings: ctx.judgedFindings ? ctx.judgedFindings.filter(isAnchored).map((k) => {
-      const r = parseLineRange(k.lines);
-      const file = normalizeFindingPath(k.file, ctx.changedFiles?.map((f) => f.path) ?? []);
-      return {
-        anchor: r.start === r.end ? `${file}:${r.start}` : `${file}:${r.start}-${r.end}`,
-        severity: k.severity,
-        type: normalizeIssueType(k.type),
-        description: firstSentence(k.body),
-        ...k.proposal ? { proposal: k.proposal } : {},
-        ...k.quality_action ? { quality_action: k.quality_action } : {}
-      };
-    }) : null,
-    review_candidates: ctx.judgeDecisions && ctx.reviewObject ? candidateRows(ctx.judgeCandidates ?? ctx.reviewObject.findings.map((f) => ({ ...f, origin: "review" })), !!ctx.outcomeSink, withHi) : null,
-    // Only when the judge threw and the run failed, so findings that were never judged or posted stay diagnosable.
-    ...error && ctx.judgeStatus === "failed" && ctx.judgeCandidates ? { unjudged_candidates: candidateRows(ctx.judgeCandidates, !!ctx.outcomeSink, withHi) } : {},
-    judge_decisions: ctx.judgeDecisions ?? null,
-    judge_anomalies: ctx.judgeAnomalies ?? null,
-    judge_policy: judgeModel && judgeTokens ? { keep_minor: config.judge.policy.keepMinor, keep_unverified: config.judge.policy.keepUnverified, file_context: config.judge.fileContext, ...config.judge.policy.keepTestGaps ? { keep_test_gaps: true } : {} } : null,
-    breadth_status: breadthStatus,
-    breadth_model: ctx.breadthModel ?? null,
-    breadth_prompt_hash: ctx.breadthPromptHash ?? null,
-    breadth_tokens: breadthTokens,
-    breadth_cost_usd: breadthCost,
-    second_look_status: secondLookStatus,
-    second_look_prompt_hash: ctx.secondLookPromptHash ?? null,
-    second_look_tokens: secondLookTokens,
-    second_look_cost_usd: secondLookCost,
-    // Absent, not null, when lenses are off, so a lens-off record serializes byte-identical to one from before lenses existed.
-    ...lenses.length ? { lens_runs: lensRuns } : {},
-    ...config.lenses.recommend ? { lens_recommendations: ctx.lensRecommendations ?? null } : {},
-    ...config.judge.suggestedFixes ? { suggested_fixes: ctx.suggestedFixes ?? null } : {},
-    ...ctx.counterpartRows !== void 0 ? { counterpart_rows: ctx.counterpartRows } : {},
-    ...ctx.alsoAffectsRows !== void 0 ? { also_affects_rows: ctx.alsoAffectsRows } : {},
-    ...ctx.alsoAffectsLog ? { also_affects: ctx.alsoAffectsLog } : {},
-    // Benchmark-only and present only with one of these settings on, so every other record keeps its earlier shape.
-    ...ctx.outcomeSink && (config.breadth.passDeadline || fpSites2) ? { pass_calls: ctx.passCalls ?? [] } : {},
-    ...ctx.outcomeSink && fpSites2 ? { first_pass_sites_named: ctx.firstPassSitesNamed ?? null, first_pass_sites_dropped: ctx.firstPassSitesDropped ?? null } : {},
-    ...ctx.firstPassSiteRows !== void 0 ? { first_pass_site_rows: ctx.firstPassSiteRows } : {},
-    ...ctx.firstPassSitesLog ? { first_pass_sites: ctx.firstPassSitesLog } : {},
-    untouched_files: ctx.untouchedFiles ? ctx.breadthPlan ? { count: ctx.untouchedFiles.length, paths: ctx.breadthPlan.selected, cut: ctx.breadthPlan.omitted, deprioritized: ctx.breadthPlan.deprioritizedReleaseEntries } : { count: ctx.untouchedFiles.length, paths: ctx.untouchedFiles.slice(0, MAX_UNTOUCHED_LISTED), cut: Math.max(0, ctx.untouchedFiles.length - MAX_UNTOUCHED_LISTED) } : null,
-    recall_levers: { j_quality: !!config.judge.quality, sl_breadth: !!config.review.secondLookBreadthTargets, j_shown_anchor: !!config.judge.shownAnchors, b_priority: !!config.breadth.priorityTargets, ...hi ? { high_impact: true } : {}, ...ctx.outcomeSink && fpSites2 ? { first_pass_sites: true } : {} },
-    touch_rate: ctx.reviewNumber > 1 && deltaStats ? (() => {
-      const total = deltaStats.resolved + deltaStats.still_open;
-      return total > 0 ? Math.round(deltaStats.resolved / total * 100) : null;
-    })() : null,
-    delta: ctx.reviewNumber > 1 && ctx.reviewObject ? {
-      developer_replies: ctx.replies?.length ?? 0,
-      human_replies: humanReplies.length,
-      agent_replies: (ctx.replies?.length ?? 0) - humanReplies.length,
-      resolved: deltaStats?.resolved ?? 0,
-      still_open: deltaStats?.still_open ?? 0,
-      new_findings: deltaStats?.new_findings ?? 0
-    } : null,
-    // Absent when no human replied, so records without discussion keep their current shape.
-    ...replyAuthors.length ? { reply_authors: replyAuthors } : {},
-    // Present only when the head was really checked and the run did not fail afterwards; CI stores exactly this value, so it must pass the LAST_CHECKED_COMMIT rule too, whatever head the adapter reported.
-    ...ctx.headChecked && !error && isCheckedCommitHash(ctx.prInfo.sourceCommit) ? { checked_commit: ctx.prInfo.sourceCommit } : {},
-    ...ctx.dedupHit ? { dedup_source: ctx.dedupHit } : {},
-    jenkins: getJenkinsMeta(),
-    // Absent when CI passed no trigger, so those records serialize exactly as before.
-    ...ctx.trigger ? { trigger: { event: ctx.trigger.event || null, comment_author: ctx.trigger.commentAuthor || null, ...ctx.trigger.kind ? { event_kind: ctx.trigger.kind } : {} } } : {},
-    error
-  };
-}
-function logUsageRecord(record) {
-  const line = JSON.stringify(record) + "\n";
-  (0, import_fs4.appendFileSync)("results.jsonl", line);
-  console.log("Usage appended to results.jsonl");
-  if (!config.usageRecordFile) return;
-  try {
-    (0, import_fs4.writeFileSync)(config.usageRecordFile, line);
-  } catch (err) {
-    console.warn(`Warning: could not write USAGE_RECORD_FILE "${config.usageRecordFile}": ${err.message}`);
-  }
 }
 
 // src/review/trigger.ts
@@ -47623,6 +47803,7 @@ function questionsForAgent(replies) {
   if (questions.length < replies.length) console.log(`  Skipped ${replies.length - questions.length} nested reply(s) to a human that don't @-mention the agent`);
   return questions;
 }
+var agentRepliesAfter = (replies, after) => replies.filter((r) => hasReplyFooter(r.body) && r.createdOn > after).length;
 var forced = (ctx) => ctx.force === "clean" || ctx.force === "re-review";
 var promptLabel = (p) => p.lookupFailed ? `${p.source} (lookup failed)` : p.source;
 function markHeadChecked(ctx) {
@@ -47739,11 +47920,71 @@ async function withPassDeadline(limitMs, call) {
     clearTimeout(timer);
   }
 }
+var stageUsage = (u) => ({
+  input_tokens: u.input_tokens,
+  output_tokens: u.output_tokens,
+  cost_usd: u.cost_usd,
+  cache_read_input_tokens: u.cache_read_input_tokens ?? 0,
+  cache_creation_input_tokens: u.cache_creation_input_tokens ?? 0,
+  ...u.attempts ? { attempts: u.attempts } : {}
+});
+function planPromptCache(ctx) {
+  const log = { ttl: "5m", reviewer_marked: false, shared_stages: [], uncached: [] };
+  const skip = ctx.reviewNumber > 1 ? "rereview" : !config.judge.model ? "no_judge" : void 0;
+  if (skip) {
+    log.uncached.push({ stage: "review", reason: skip });
+    return log;
+  }
+  const model = config.anthropic.model;
+  const effort = config.review.effort;
+  const passes = [
+    ...config.breadth.enabled ? [{ stage: "breadth", model: config.breadth.model || config.judge.model, effort: config.breadth.effort || (config.breadth.model ? "" : config.judge.effort) }] : [],
+    ...config.review.secondLook ? [{ stage: "second_look", model, effort }] : [],
+    ...activeLenses(config.lenses).map((l) => ({ stage: `lens:${l.name}`, model: config.lenses.model || model, effort: config.lenses.model ? "" : effort }))
+  ];
+  const supported = takesSystemAfter(model);
+  const reviewable = fileCoverage(ctx.filteredDiff, []).reviewable.length;
+  const limits = [config.anthropic.maxInputTokens, contextWindowFor(model) - extraPassMaxTokens(ctx)].filter((n) => n > 0);
+  const overBudget = limits.length > 0 && ctx.estimatedInputTokens > Math.min(...limits);
+  const late = !!ctx.outcomeSink && (Date.now() - ctx.startTime) / 1e3 > config.breadth.benchmarkDeadlineSeconds / 2 || (passTimeLeftMs(ctx) ?? 1) <= 0;
+  const gate = (stage) => stage === "breadth" && reviewable < config.breadth.minFiles ? "skipped_small" : stage === "breadth" && reviewable < config.breadth.minUntouched ? "skipped_few_untouched" : stage === "second_look" && reviewable === 0 ? "skipped_no_findings" : overBudget ? "skipped_budget" : late ? "skipped_time" : void 0;
+  for (const p of passes) {
+    const reason = !supported ? "unsupported_model" : p.model !== model ? "model" : p.effort !== effort ? "effort" : gate(p.stage);
+    if (reason) log.uncached.push({ stage: p.stage, reason });
+    else log.shared_stages.push(p.stage);
+  }
+  const reviewSkip = !supported ? "unsupported_model" : log.shared_stages.length === 0 ? "no_shared_pass" : void 0;
+  if (reviewSkip) {
+    log.uncached.unshift({ stage: "review", reason: reviewSkip });
+    return log;
+  }
+  log.reviewer_marked = true;
+  if (config.llmProvider === "openrouter") log.session_id = (0, import_crypto4.createHash)("sha256").update(`${ctx.repoSlug}:${ctx.prId}:${ctx.startTime}`).digest("hex").slice(0, 32);
+  return log;
+}
+var sharedPrefix = (ctx, stage) => ctx.cachePrefix && ctx.promptCache?.shared_stages.includes(stage) ? ctx.cachePrefix : void 0;
+async function cachedOrUncached(ctx, stage, limitMs, cached, uncached) {
+  try {
+    return await cached();
+  } catch (err) {
+    if (!isSystemMessageRejection(err)) throw err;
+    recordPassCall(ctx, stage, extraPassMaxTokens(ctx), limitMs, void 0, err);
+    const log = ctx.promptCache;
+    const at = log.shared_stages.indexOf(stage);
+    const message = String(err.message ?? "").replace(/\s+/g, " ").trim().slice(0, 120);
+    log.uncached.push({ stage, reason: `rejected_400: ${message}` }, ...log.shared_stages.slice(at + 1).map((s) => ({ stage: s, reason: "off_after_400" })));
+    log.shared_stages = log.shared_stages.slice(0, at);
+    ctx.cachePrefix = void 0;
+    console.warn(`  ${stage}: the cached request was rejected (${err.message}) \u2014 re-sending it uncached; the prompt cache is off for the rest of this run`);
+    return uncached();
+  }
+}
+var cachedEstimate = (prefix, overlay, briefing) => Math.ceil((prefix.system.length + prefix.block.length + overlay.length + briefing.length) / 4);
 function stageAfterSecondLook() {
-  if (!config.lenses.enabled) return 16 /* JUDGE_REVIEW */;
+  if (!config.lenses.enabled) return 17 /* JUDGE_REVIEW */;
   const { lenses, unknown } = parseLensList(config.lenses.list);
   if (unknown.length) console.warn(`  Ignoring unknown lens name(s): ${unknown.join(", ")}`);
-  return lenses.length ? 15 /* LENS_REVIEW */ : 16 /* JUDGE_REVIEW */;
+  return lenses.length ? 16 /* LENS_REVIEW */ : 17 /* JUDGE_REVIEW */;
 }
 async function transition(state, ctx) {
   switch (state) {
@@ -47760,7 +48001,7 @@ async function transition(state, ctx) {
       }
       ctx.action = "SKIP";
       ctx.skipReason = `${event || "comment event"} by "${commentAuthor}" matches IGNORE_COMMENT_AUTHORS`;
-      return 19 /* SKIP */;
+      return 20 /* SKIP */;
     }
     case 1 /* FETCH_PR_INFO */: {
       console.log("Fetching PR info...");
@@ -47775,7 +48016,7 @@ async function transition(state, ctx) {
       if (config.skipSourceBranches.length > 0 && matchesPattern(src, config.skipSourceBranches)) {
         ctx.action = "SKIP";
         ctx.skipReason = `source branch "${src}" matches SKIP_SOURCE_BRANCHES`;
-        return 19 /* SKIP */;
+        return 20 /* SKIP */;
       }
       if (config.skipTargetBranches.length > 0 && matchesPattern(tgt, config.skipTargetBranches)) {
         if (config.onlyTargetBranches.length > 0 && matchesPattern(tgt, config.onlyTargetBranches)) {
@@ -47783,12 +48024,12 @@ async function transition(state, ctx) {
         }
         ctx.action = "SKIP";
         ctx.skipReason = `target branch "${tgt}" matches SKIP_TARGET_BRANCHES`;
-        return 19 /* SKIP */;
+        return 20 /* SKIP */;
       }
       if (config.onlyTargetBranches.length > 0 && !matchesPattern(tgt, config.onlyTargetBranches)) {
         ctx.action = "SKIP";
         ctx.skipReason = `target branch "${tgt}" is not in ONLY_TARGET_BRANCHES (${config.onlyTargetBranches.join(",")})`;
-        return 19 /* SKIP */;
+        return 20 /* SKIP */;
       }
       return 3 /* FETCH_DIFF */;
     }
@@ -47800,7 +48041,7 @@ async function transition(state, ctx) {
         if (err instanceof PrTooLargeError) {
           ctx.action = "SKIP";
           ctx.skipReason = err.message;
-          return 19 /* SKIP */;
+          return 20 /* SKIP */;
         }
         throw err;
       }
@@ -47819,7 +48060,7 @@ async function transition(state, ctx) {
       if (ctx.reviewableLineCount === 0) {
         ctx.action = "SKIP";
         ctx.skipReason = "no reviewable changes after exclusions";
-        return 19 /* SKIP */;
+        return 20 /* SKIP */;
       }
       return 4 /* CHECK_THRESHOLDS */;
     }
@@ -47830,23 +48071,23 @@ async function transition(state, ctx) {
       if (minChangedFiles > 0 && fileCount < minChangedFiles) {
         ctx.action = "SKIP";
         ctx.skipReason = `PR has ${fileCount} reviewable file(s), minimum is ${minChangedFiles}`;
-        return 19 /* SKIP */;
+        return 20 /* SKIP */;
       }
       const bundling = config.review.bundledReview;
       if (!bundling && maxChangedFiles > 0 && fileCount > maxChangedFiles) {
         ctx.action = "SKIP";
         ctx.skipReason = `PR has ${fileCount} reviewable file(s), maximum is ${maxChangedFiles}`;
-        return 19 /* SKIP */;
+        return 20 /* SKIP */;
       }
       if (minChangedLines > 0 && lineCount < minChangedLines) {
         ctx.action = "SKIP";
         ctx.skipReason = `PR has ${lineCount} reviewable line(s), minimum is ${minChangedLines}`;
-        return 19 /* SKIP */;
+        return 20 /* SKIP */;
       }
       if (!bundling && maxChangedLines > 0 && lineCount > maxChangedLines) {
         ctx.action = "SKIP";
         ctx.skipReason = `PR has ${lineCount} reviewable line(s), maximum is ${maxChangedLines}`;
-        return 19 /* SKIP */;
+        return 20 /* SKIP */;
       }
       return 5 /* CHECK_PREVIOUS_REVIEWS */;
     }
@@ -47855,7 +48096,7 @@ async function transition(state, ctx) {
         console.log("Skipping previous review check (--force clean)");
         ctx.previousReviews = [];
         ctx.reviewNumber = 1;
-        return 8 /* LOAD_PROMPT */;
+        return 9 /* LOAD_PROMPT */;
       }
       console.log("Checking for previous reviews...");
       ctx.previousReviews = await ctx.adapter.getPreviousReviewComments(ctx.prId);
@@ -47921,7 +48162,7 @@ async function transition(state, ctx) {
         console.log("  No previous reviews \u2014 first review for this PR");
       }
       ctx.reviewNumber = (ctx.previousReviews?.length ?? 0) + 1;
-      return 8 /* LOAD_PROMPT */;
+      return 9 /* LOAD_PROMPT */;
     }
     case 6 /* CHECK_REPLIES */: {
       const reviewIds = ctx.previousReviews.map((r) => r.id);
@@ -47933,20 +48174,52 @@ async function transition(state, ctx) {
       }
       ctx.replies = await dropRepliesDirectedElsewhere(ctx, questionsForAgent(ctx.replies));
       if (ctx.replies.length > 0) {
-        if (config.reply.maxComments > 0 && agentReplyCount >= config.reply.maxComments) {
-          console.log(`  Found ${ctx.replies.length} unanswered reply(s), but agent already posted ${agentReplyCount}/${config.reply.maxComments} replies \u2014 skipping`);
-          ctx.action = "DEDUP_SKIP";
-          ctx.skipReason = `reply limit reached (${agentReplyCount}/${config.reply.maxComments})`;
-          return 19 /* SKIP */;
+        let used = agentReplyCount;
+        let perReview = false;
+        if (config.reply.limitPerReview && config.reply.maxComments > 0) {
+          try {
+            const { replies: discussion } = await ctx.adapter.getRepliesToReviewComments(ctx.prId, reviewIds, true);
+            used = agentRepliesAfter(discussion, latestReviewDate);
+            perReview = true;
+          } catch (err) {
+            console.warn(`  Per-review reply count unavailable (${errorText(err)}) - using the PR-wide count, no limit note`);
+          }
         }
-        console.log(`  Found ${ctx.replies.length} unanswered reply(s) \u2014 responding... (${agentReplyCount}/${config.reply.maxComments || "\u221E"} replies used)`);
+        if (config.reply.maxComments > 0 && used >= config.reply.maxComments) {
+          console.log(`  Found ${ctx.replies.length} unanswered reply(s), but agent already posted ${used}/${config.reply.maxComments} replies \u2014 skipping`);
+          if (ctx.action !== "NO_CHANGE") {
+            ctx.action = "DEDUP_SKIP";
+            ctx.skipReason = `reply limit reached (${used}/${config.reply.maxComments})`;
+          }
+          return perReview && used === config.reply.maxComments ? 8 /* POST_REPLY_LIMIT_NOTE */ : 20 /* SKIP */;
+        }
+        console.log(`  Found ${ctx.replies.length} unanswered reply(s) \u2014 responding... (${used}/${config.reply.maxComments || "\u221E"} replies used)`);
         return 7 /* RESPOND_TO_REPLIES */;
       }
       if (ctx.action !== "NO_CHANGE") {
         ctx.action = "DEDUP_SKIP";
         ctx.skipReason = ctx.dedupHit === "checked_commit" ? "head already checked by an earlier run and no unanswered questions" : ctx.dedupHit === "target_merge" ? "target branch merged in; PR diff unchanged since the last review and no unanswered questions" : "no new commits and no unanswered questions";
       }
-      return 19 /* SKIP */;
+      return 20 /* SKIP */;
+    }
+    case 8 /* POST_REPLY_LIMIT_NOTE */: {
+      const replyModel = config.reply.model || config.anthropic.model;
+      const note = `Reply limit of ${config.reply.maxComments} reached for this review. New questions will be answered under the next review.` + buildReplyFooter(config.agentIdentity, replyModel, getJobUrl());
+      ctx.replyLimitNote = true;
+      if (ctx.dryRun) {
+        console.log("\n=== DRY RUN \u2014 Reply limit note (not posted) ===\n");
+        console.log(note);
+        console.log("\n=== End of note ===\n");
+        return 20 /* SKIP */;
+      }
+      try {
+        await ctx.adapter.postReply(ctx.prId, ctx.replies[ctx.replies.length - 1].parentId, note);
+        console.log("  Reply limit note posted.");
+      } catch (err) {
+        ctx.replyLimitNote = void 0;
+        console.warn(`  Reply limit note not posted (${errorText(err)})`);
+      }
+      return 20 /* SKIP */;
     }
     case 7 /* RESPOND_TO_REPLIES */: {
       const lastReview = ctx.previousReviews[ctx.previousReviews.length - 1];
@@ -47972,15 +48245,15 @@ async function transition(state, ctx) {
       }
       ctx.action = "REPLY";
       ctx.skipReason = void 0;
-      return 20 /* DONE */;
+      return 21 /* DONE */;
     }
-    case 8 /* LOAD_PROMPT */: {
+    case 9 /* LOAD_PROMPT */: {
       console.log("Loading prompt...");
       ctx.prompt = await loadPrompt(ctx.adapter, ctx.prInfo, ctx.promptPath, ctx.changedFiles, ctx.diff);
       console.log(`  Prompt source: ${promptLabel(ctx.prompt)}`);
-      return 9 /* FETCH_CONTEXT */;
+      return 10 /* FETCH_CONTEXT */;
     }
-    case 9 /* FETCH_CONTEXT */: {
+    case 10 /* FETCH_CONTEXT */: {
       console.log("Fetching file context...");
       ctx.fileContexts = await fetchContext(
         ctx.adapter,
@@ -47991,9 +48264,9 @@ async function transition(state, ctx) {
         config.context.maxFileLines
       );
       console.log(`  Fetched full content for ${ctx.fileContexts.length} file(s)`);
-      return 10 /* ESTIMATE_TOKENS */;
+      return 11 /* ESTIMATE_TOKENS */;
     }
-    case 10 /* ESTIMATE_TOKENS */: {
+    case 11 /* ESTIMATE_TOKENS */: {
       const tok = (chars) => Math.ceil(chars / 4);
       const shown = (s2) => shownLength(s2, config.review.lineNumbers);
       const sizes = () => {
@@ -48043,16 +48316,16 @@ async function transition(state, ctx) {
       if (max > 0 && s.total > max && config.review.bundledReview) {
         console.log("  Still over budget \u2014 switching to bundled review");
         ctx.inputBudget = max;
-        return 17 /* BUNDLED_REVIEW */;
+        return 18 /* BUNDLED_REVIEW */;
       }
       if (max > 0 && s.total > max) {
         ctx.action = "SKIP";
         ctx.skipReason = `Estimated input ~${s.total.toLocaleString()} tokens exceeds the input budget (${max.toLocaleString()}; min of MAX_INPUT_TOKENS and model context) even without file context \u2014 ${fmt(s)}`;
-        return 19 /* SKIP */;
+        return 20 /* SKIP */;
       }
-      return 11 /* CALL_MODEL */;
+      return 12 /* CALL_MODEL */;
     }
-    case 11 /* CALL_MODEL */: {
+    case 12 /* CALL_MODEL */: {
       let content = ctx.prompt.content;
       if (config.review.maxFindings > 0) {
         content += `
@@ -48069,6 +48342,9 @@ If this PR spans multiple independent themes that could each be a separate, inde
       const reviewPrompt = { ...ctx.prompt, content };
       const recommend = config.lenses.recommend && ctx.reviewNumber === 1;
       const recommendTail = recommend ? [true] : [];
+      if (config.review.promptCache) ctx.promptCache = planPromptCache(ctx);
+      const cache = ctx.promptCache?.reviewer_marked ? { schema: sharedOutputSchema({ lensRecommendation: recommend, alsoAffects: hiBench(ctx), scenario: !!config.review.highImpact, firstPassSites: fpSites(ctx) }), ...ctx.promptCache.session_id ? { sessionId: ctx.promptCache.session_id } : {} } : void 0;
+      const reviewTail = cache ? [recommend, cache] : recommendTail;
       const call = () => runReview(
         config.llmApiKey,
         config.anthropic.model,
@@ -48083,7 +48359,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
         ctx.replies ?? [],
         ctx.deltaDiff ?? "",
         config.review.lineNumbers,
-        ...recommendTail
+        ...reviewTail
       );
       const result = await (async () => {
         for (; ; ) {
@@ -48104,19 +48380,21 @@ If this PR spans multiple independent themes that could each be a separate, inde
       if (!result) {
         ctx.action = "SKIP";
         ctx.skipReason = "Diff exceeds the model context window";
-        return 19 /* SKIP */;
+        return 20 /* SKIP */;
       }
       ctx.reviewText = result.text;
       ctx.reviewObject = result.review;
+      if (cache && result.cacheBlock !== void 0) ctx.cachePrefix = { system: content, schema: cache.schema, block: result.cacheBlock, ...cache.sessionId ? { sessionId: cache.sessionId } : {} };
+      if (config.review.promptCache) ctx.reviewUsage = stageUsage(result.usage);
       if (recommend) {
         const recs = result.lensRecommendations ?? null;
         ctx.lensRecommendations = recs;
         console.log(`  Lens recommendations: ${recs ? recs.map((r) => `${r.lens} (${r.reason})`).join(", ") || "none" : "unavailable"}`);
       }
       addUsage(ctx, result.usage);
-      return 12 /* CHECK_NO_CHANGE */;
+      return 13 /* CHECK_NO_CHANGE */;
     }
-    case 12 /* CHECK_NO_CHANGE */: {
+    case 13 /* CHECK_NO_CHANGE */: {
       if (isNoChange(ctx.reviewText)) {
         if ((ctx.previousReviews?.length ?? 0) === 0) {
           throw new Error("Reviewer returned NO_CHANGE on a first review \u2014 refusing to silently skip");
@@ -48127,36 +48405,36 @@ If this PR spans multiple independent themes that could each be a separate, inde
         if (ctx.reviewObject ? ctx.reviewObject.no_change === true && ctx.reviewObject.findings?.length === 0 : ctx.reviewText === "NO_CHANGE") markHeadChecked(ctx);
         return 6 /* CHECK_REPLIES */;
       }
-      return 13 /* BREADTH_REVIEW */;
+      return 14 /* BREADTH_REVIEW */;
     }
-    case 13 /* BREADTH_REVIEW */: {
+    case 14 /* BREADTH_REVIEW */: {
       if (!config.breadth.enabled) {
         ctx.breadthStatus = "disabled";
-        return 14 /* SECOND_LOOK */;
+        return 15 /* SECOND_LOOK */;
       }
       if (!config.judge.model) {
         ctx.breadthStatus = "skipped_no_judge";
-        return 14 /* SECOND_LOOK */;
+        return 15 /* SECOND_LOOK */;
       }
       if (ctx.reviewNumber > 1) {
         ctx.breadthStatus = "skipped_rereview";
-        return 14 /* SECOND_LOOK */;
+        return 15 /* SECOND_LOOK */;
       }
       const firstPass = ctx.reviewObject?.findings ?? [];
       const coverage = fileCoverage(ctx.filteredDiff, firstPass);
       ctx.untouchedFiles = coverage.untouched;
       if (coverage.reviewable.length < config.breadth.minFiles) {
         ctx.breadthStatus = "skipped_small";
-        return 14 /* SECOND_LOOK */;
+        return 15 /* SECOND_LOOK */;
       }
       if (coverage.untouched.length < config.breadth.minUntouched) {
         ctx.breadthStatus = "skipped_few_untouched";
-        return 14 /* SECOND_LOOK */;
+        return 15 /* SECOND_LOOK */;
       }
       const remaining = config.review.maxFindings > 0 ? config.review.maxFindings - firstPass.length : 0;
       if (config.review.maxFindings > 0 && remaining <= 0) {
         ctx.breadthStatus = "skipped_limit";
-        return 14 /* SECOND_LOOK */;
+        return 15 /* SECOND_LOOK */;
       }
       const model = config.breadth.model || config.judge.model;
       const effort = config.breadth.effort || (config.breadth.model ? "" : config.judge.effort);
@@ -48165,25 +48443,27 @@ If this PR spans multiple independent themes that could each be a separate, inde
       const system = breadthSystemPrompt(ctx.prompt.content, remaining, config.judge.shownAnchors, fp);
       ctx.breadthPlan = config.breadth.priorityTargets ? prioritizeUntouched(coverage.untouched, ctx.filteredDiff, firstPass) : void 0;
       const briefing = ids ? breadthBriefing(firstPass, coverage.untouched, ctx.breadthPlan, ids.tags) : breadthBriefing(firstPass, coverage.untouched, ctx.breadthPlan);
-      const estimate = ctx.estimatedInputTokens + Math.ceil((system.length - ctx.prompt.content.length + briefing.length) / 4);
+      const prefix = sharedPrefix(ctx, "breadth");
+      const overlay = prefix ? breadthOverlay(remaining, config.judge.shownAnchors, fp) : "";
+      const estimate = prefix ? cachedEstimate(prefix, overlay, briefing) : ctx.estimatedInputTokens + Math.ceil((system.length - ctx.prompt.content.length + briefing.length) / 4);
       const limits = [config.anthropic.maxInputTokens, contextWindowFor(model) - extraPassMaxTokens(ctx)].filter((n) => n > 0);
       const budget = limits.length ? Math.min(...limits) : Infinity;
       if (estimate > budget) {
         ctx.breadthStatus = "skipped_budget";
         console.log(`  Breadth review skipped: ~${estimate.toLocaleString()} tokens exceeds the ${model} budget (${budget.toLocaleString()})`);
-        return 14 /* SECOND_LOOK */;
+        return 15 /* SECOND_LOOK */;
       }
       const elapsedSeconds = (Date.now() - ctx.startTime) / 1e3;
       if (ctx.outcomeSink && elapsedSeconds > config.breadth.benchmarkDeadlineSeconds / 2) {
         ctx.breadthStatus = "skipped_time";
         console.log(`  Breadth review skipped: ${Math.round(elapsedSeconds)}s elapsed, over half the ${config.breadth.benchmarkDeadlineSeconds}s benchmark deadline`);
-        return 14 /* SECOND_LOOK */;
+        return 15 /* SECOND_LOOK */;
       }
       const limitMs = passTimeLeftMs(ctx);
       if (limitMs !== void 0 && limitMs <= 0) {
         ctx.breadthStatus = "skipped_time";
         console.log(`  Breadth review skipped: no time left before the ${passStopAtSeconds()}s pass deadline`);
-        return 14 /* SECOND_LOOK */;
+        return 15 /* SECOND_LOOK */;
       }
       ctx.breadthModel = model;
       if (config.judge.shownAnchors) ctx.shownBreadth = buildShownSource(ctx.filteredDiff, ctx.fileContexts ?? []);
@@ -48192,7 +48472,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
       try {
         const result = await withPassDeadline(limitMs, (signal) => {
           const tail = signal ? ["breadth", breadthSchema[1], signal] : breadthSchema;
-          return runBreadth(
+          const uncached = () => runBreadth(
             config.llmApiKey,
             model,
             config.judge.maxRetries,
@@ -48206,10 +48486,11 @@ If this PR spans multiple independent themes that could each be a separate, inde
             config.review.lineNumbers,
             ...tail
           );
+          return prefix ? cachedOrUncached(ctx, "breadth", limitMs, () => runSharedPass(config.llmApiKey, model, config.judge.maxRetries, extraPassMaxTokens(ctx), effort, prefix, briefing, overlay, "breadth", signal), uncached) : uncached();
         });
         ctx.breadthFindings = result.findings;
         ctx.breadthPromptHash = result.promptHash;
-        ctx.breadthUsage = { input_tokens: result.usage.input_tokens, output_tokens: result.usage.output_tokens, cost_usd: result.usage.cost_usd };
+        ctx.breadthUsage = stageUsage(result.usage);
         addUsage(ctx, result.usage);
         if (ids) addFirstPassSites(ctx, sanitizeFirstPassSites(result.firstPassSites, ids.index, "breadth"), "breadth", "Breadth");
         ctx.breadthStatus = "succeeded";
@@ -48219,7 +48500,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
         const e = err;
         const used = spentUsage(err, e.usage);
         if (used) {
-          ctx.breadthUsage = { input_tokens: used.input_tokens, output_tokens: used.output_tokens, cost_usd: used.cost_usd };
+          ctx.breadthUsage = stageUsage(used);
           addUsage(ctx, used);
         }
         recordPassCall(ctx, "breadth", extraPassMaxTokens(ctx), limitMs, e.usage, err);
@@ -48231,9 +48512,9 @@ If this PR spans multiple independent themes that could each be a separate, inde
           console.warn(`  Breadth review FAILED (${isContextLengthError(err) ? "context length" : e.message}) \u2014 continuing with first-pass findings only`);
         }
       }
-      return 14 /* SECOND_LOOK */;
+      return 15 /* SECOND_LOOK */;
     }
-    case 14 /* SECOND_LOOK */: {
+    case 15 /* SECOND_LOOK */: {
       const next = stageAfterSecondLook();
       if (!config.review.secondLook) {
         ctx.secondLookStatus = "disabled";
@@ -48270,8 +48551,11 @@ If this PR spans multiple independent themes that could each be a separate, inde
       const ids = fp ? firstPassIds(firstPass, known) : void 0;
       const system = secondLookSystemPrompt(ctx.prompt.content, remaining, config.judge.shownAnchors, hi, fp);
       const briefing = ids ? secondLookBriefing(known, ids.tags) : secondLookBriefing(known);
+      const prefix = sharedPrefix(ctx, "second_look");
+      const overlay = prefix ? secondLookOverlay(remaining, config.judge.shownAnchors, hi, fp) : "";
+      const sharedBriefing = prefix ? secondLookFilesBriefing(flagged, briefing) : "";
       const shownSL = (s) => shownLength(s, config.review.lineNumbers);
-      const estimate = Math.ceil((system.length + shownSL(restrictedDiff) + briefing.length + contexts.reduce((n, c) => n + shownSL(c.content), 0)) / 4);
+      const estimate = prefix ? cachedEstimate(prefix, overlay, sharedBriefing) : Math.ceil((system.length + shownSL(restrictedDiff) + briefing.length + contexts.reduce((n, c) => n + shownSL(c.content), 0)) / 4);
       const limits = [config.anthropic.maxInputTokens, contextWindowFor(model) - extraPassMaxTokens(ctx)].filter((n) => n > 0);
       const budget = limits.length ? Math.min(...limits) : Infinity;
       if (estimate > budget) {
@@ -48291,13 +48575,13 @@ If this PR spans multiple independent themes that could each be a separate, inde
         console.log(`  Second-look skipped: no time left before the ${passStopAtSeconds()}s pass deadline`);
         return next;
       }
-      if (config.judge.shownAnchors) ctx.shownSecondLook = buildShownSource(restrictedDiff, contexts);
+      if (config.judge.shownAnchors) ctx.shownSecondLook = prefix ? buildShownSource(ctx.filteredDiff, ctx.fileContexts ?? []) : buildShownSource(restrictedDiff, contexts);
       console.log(`  Second-look: re-reading ${flagged.length} flagged file(s), excluding ${known.length} known finding(s)`);
       const secondLookSchema = hi || fp ? [findingsOutputSchema({ alsoAffects: hiBench(ctx), scenario: hi, firstPassSites: fp })] : [];
       try {
         const result = await withPassDeadline(limitMs, (signal) => {
           const tail = signal ? [secondLookSchema[0], signal] : secondLookSchema;
-          return runBreadth(
+          const uncached = () => runBreadth(
             config.llmApiKey,
             model,
             config.anthropic.maxRetries,
@@ -48312,10 +48596,14 @@ If this PR spans multiple independent themes that could each be a separate, inde
             "second-look",
             ...tail
           );
+          return prefix ? cachedOrUncached(ctx, "second_look", limitMs, () => runSharedPass(config.llmApiKey, model, config.anthropic.maxRetries, extraPassMaxTokens(ctx), config.review.effort, prefix, sharedBriefing, overlay, "second-look", signal), () => {
+            if (config.judge.shownAnchors) ctx.shownSecondLook = buildShownSource(restrictedDiff, contexts);
+            return uncached();
+          }) : uncached();
         });
         ctx.secondLookFindings = result.findings;
         ctx.secondLookPromptHash = result.promptHash;
-        ctx.secondLookUsage = { input_tokens: result.usage.input_tokens, output_tokens: result.usage.output_tokens, cost_usd: result.usage.cost_usd };
+        ctx.secondLookUsage = stageUsage(result.usage);
         addUsage(ctx, result.usage);
         if (ids) addFirstPassSites(ctx, sanitizeFirstPassSites(result.firstPassSites, ids.index, "second_look"), "second_look", "Second-look");
         ctx.secondLookStatus = "succeeded";
@@ -48325,7 +48613,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
         const e = err;
         const used = spentUsage(err, e.usage);
         if (used) {
-          ctx.secondLookUsage = { input_tokens: used.input_tokens, output_tokens: used.output_tokens, cost_usd: used.cost_usd };
+          ctx.secondLookUsage = stageUsage(used);
           addUsage(ctx, used);
         }
         recordPassCall(ctx, "second_look", extraPassMaxTokens(ctx), limitMs, e.usage, err);
@@ -48339,7 +48627,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
       }
       return next;
     }
-    case 15 /* LENS_REVIEW */: {
+    case 16 /* LENS_REVIEW */: {
       const lenses = activeLenses(config.lenses);
       const model = config.lenses.model || config.anthropic.model;
       const runs = [];
@@ -48347,7 +48635,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
       const stageSkip = !config.judge.model ? "skipped_no_judge" : ctx.reviewNumber > 1 ? "skipped_rereview" : void 0;
       if (stageSkip) {
         for (const lens of lenses) runs.push({ name: lens.name, status: stageSkip, model, findings: [] });
-        return 16 /* JUDGE_REVIEW */;
+        return 17 /* JUDGE_REVIEW */;
       }
       const effort = config.lenses.model ? "" : config.review.effort;
       const earlier = [...ctx.reviewObject?.findings ?? [], ...ctx.breadthFindings ?? [], ...ctx.secondLookFindings ?? []];
@@ -48369,7 +48657,9 @@ If this PR spans multiple independent themes that could each be a separate, inde
         }
         const system = lensSystemPrompt(ctx.prompt.content, lens, remaining, config.judge.shownAnchors);
         const briefing = lensBriefing(known);
-        const estimate = ctx.estimatedInputTokens + Math.ceil((system.length - ctx.prompt.content.length + briefing.length) / 4);
+        const prefix = sharedPrefix(ctx, `lens:${lens.name}`);
+        const overlay = prefix ? lensOverlay(lens, remaining, config.judge.shownAnchors) : "";
+        const estimate = prefix ? cachedEstimate(prefix, overlay, briefing) : ctx.estimatedInputTokens + Math.ceil((system.length - ctx.prompt.content.length + briefing.length) / 4);
         if (estimate > budget) {
           run.status = "skipped_budget";
           console.log(`  Lens ${lens.name} skipped: ~${estimate.toLocaleString()} tokens exceeds the ${model} budget (${budget.toLocaleString()})`);
@@ -48394,7 +48684,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
         try {
           const result = await withPassDeadline(limitMs, (signal) => {
             const tail = signal ? [lensSchema[0], signal] : lensSchema;
-            return runLens(
+            const uncached = () => runLens(
               config.llmApiKey,
               model,
               config.anthropic.maxRetries,
@@ -48409,10 +48699,11 @@ If this PR spans multiple independent themes that could each be a separate, inde
               `lens:${lens.name}`,
               ...tail
             );
+            return prefix ? cachedOrUncached(ctx, `lens:${lens.name}`, limitMs, () => runSharedPass(config.llmApiKey, model, config.anthropic.maxRetries, extraPassMaxTokens(ctx), effort, prefix, briefing, overlay, `lens:${lens.name}`, signal), uncached) : uncached();
           });
           run.findings = result.findings;
           run.promptHash = result.promptHash;
-          run.usage = { input_tokens: result.usage.input_tokens, output_tokens: result.usage.output_tokens, cost_usd: result.usage.cost_usd };
+          run.usage = stageUsage(result.usage);
           addUsage(ctx, result.usage);
           run.status = "succeeded";
           console.log(`  Lens ${lens.name}: ${result.findings.length} finding(s)`);
@@ -48421,7 +48712,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
           const e = err;
           const used = spentUsage(err, e.usage);
           if (used) {
-            run.usage = { input_tokens: used.input_tokens, output_tokens: used.output_tokens, cost_usd: used.cost_usd };
+            run.usage = stageUsage(used);
             addUsage(ctx, used);
           }
           recordPassCall(ctx, `lens:${lens.name}`, extraPassMaxTokens(ctx), limitMs, e.usage, err);
@@ -48434,9 +48725,9 @@ If this PR spans multiple independent themes that could each be a separate, inde
           }
         }
       }
-      return 16 /* JUDGE_REVIEW */;
+      return 17 /* JUDGE_REVIEW */;
     }
-    case 16 /* JUDGE_REVIEW */: {
+    case 17 /* JUDGE_REVIEW */: {
       const reviewFindings = ctx.reviewObject ? countFindings(ctx.reviewObject) : { high: 0, medium: 0, low: 0 };
       console.log(`  Reviewer findings: ${reviewFindings.high}H / ${reviewFindings.medium}M / ${reviewFindings.low}L`);
       const noFindings = reviewFindings.high === 0 && reviewFindings.medium === 0 && reviewFindings.low === 0;
@@ -48449,15 +48740,11 @@ If this PR spans multiple independent themes that could each be a separate, inde
         const stillOpen = (ctx.reviewObject?.delta_stats?.still_open ?? 0) > 0;
         const cleanPrior = !priorHadFindings && !stillOpen;
         const mergeQuiet = async () => !cleanPrior && ctx.mergeNarrowed === true && ctx.reviewObject?.delta_stats?.resolved === 0 && await headIsMergeOnReviewed(ctx);
-        if (unanswered.length > 0) {
-          const agentReplies = replies.filter((r) => hasReplyFooter(r.body)).length;
-          if (config.reply.maxComments > 0 && agentReplies >= config.reply.maxComments) {
-            console.log(`  Unanswered dev reply, but reply limit reached (${agentReplies}/${config.reply.maxComments}) \u2014 skipping`);
-            ctx.action = "DEDUP_SKIP";
-            ctx.skipReason = `reply limit reached (${agentReplies}/${config.reply.maxComments})`;
-            markHeadChecked(ctx);
-            return 19 /* SKIP */;
-          }
+        const agentReplies = config.reply.limitPerReview && lastReview ? agentRepliesAfter(replies, lastReview.createdOn) : replies.filter((r) => hasReplyFooter(r.body)).length;
+        const limitReached = config.reply.maxComments > 0 && agentReplies >= config.reply.maxComments;
+        if (unanswered.length > 0 && limitReached) {
+          console.log(`  Unanswered dev reply, but reply limit reached (${agentReplies}/${config.reply.maxComments}) \u2014 finishing the re-review without answering`);
+        } else if (unanswered.length > 0) {
           ctx.replies = unanswered;
           console.log("  Re-review found nothing new, but a developer reply is unanswered \u2014 answering it in-thread");
           if (cleanPrior || await mergeQuiet()) markHeadChecked(ctx);
@@ -48468,20 +48755,20 @@ If this PR spans multiple independent themes that could each be a separate, inde
           ctx.action = "NO_NEW_FINDINGS";
           ctx.skipReason = "Re-review found no new findings (prior review already clean)";
           markHeadChecked(ctx);
-          return 19 /* SKIP */;
+          return 20 /* SKIP */;
         }
         if (await mergeQuiet()) {
           console.log("  Re-review after a target merge: no new findings \u2014 not posting a confirmation");
           ctx.action = "NO_NEW_FINDINGS";
           ctx.skipReason = "Re-review after a target-branch merge found no new findings";
           markHeadChecked(ctx);
-          return 19 /* SKIP */;
+          return 20 /* SKIP */;
         }
         console.log(`  Re-review with no new findings \u2014 posting (${stillOpen ? "findings still open" : "prior review had findings"})`);
       }
       if (!config.judge.model) {
         ctx.judgeStatus = "disabled";
-        return 18 /* POST_REVIEW */;
+        return 19 /* POST_REVIEW */;
       }
       const breadth = ctx.breadthFindings ?? [];
       const secondLook = ctx.secondLookFindings ?? [];
@@ -48489,7 +48776,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
       if (noFindings && breadth.length === 0 && secondLook.length === 0 && lens.length === 0) {
         ctx.judgeStatus = "skipped_no_findings";
         console.log("  Skipping judge \u2014 no findings to validate");
-        return 18 /* POST_REVIEW */;
+        return 19 /* POST_REVIEW */;
       }
       const firstPass = ctx.reviewObject?.findings ?? [];
       ctx.judgeCandidates = [
@@ -48554,7 +48841,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
         if (result.scores?.length) {
           console.log(`  Judge finding scores: ${result.scores.map((s) => `${s.severity} ${s.score}/10`).join(", ")}`);
         }
-        ctx.judgeUsage = { input_tokens: result.usage.input_tokens, output_tokens: result.usage.output_tokens, cost_usd: result.usage.cost_usd };
+        ctx.judgeUsage = stageUsage(result.usage);
         addUsage(ctx, result.usage);
         ctx.judgeStatus = "succeeded";
         recordPassCall(ctx, "judge", config.anthropic.maxTokens, void 0, result.usage);
@@ -48564,16 +48851,17 @@ If this PR spans multiple independent themes that could each be a separate, inde
         if (!ctx.outcomeSink && !noFindings) throw err;
         console.warn(`  Judge failed (${err.message}) \u2014 proceeding with unjudged reviewer findings`);
       }
-      return 18 /* POST_REVIEW */;
+      return 19 /* POST_REVIEW */;
     }
-    case 17 /* BUNDLED_REVIEW */: {
+    case 18 /* BUNDLED_REVIEW */: {
+      if (config.review.promptCache) ctx.promptCache = { ttl: "5m", reviewer_marked: false, shared_stages: [], uncached: [{ stage: "review", reason: "bundled" }] };
       const outcome = await runBundledReview(ctx, ctx.inputBudget);
       if (!outcome.ok) {
         ctx.action = "SKIP";
         ctx.skipReason = `Bundled review not possible: ${outcome.reason}`;
-        return 19 /* SKIP */;
+        return 20 /* SKIP */;
       }
-      if (isNoChange(ctx.reviewText)) return 12 /* CHECK_NO_CHANGE */;
+      if (isNoChange(ctx.reviewText)) return 13 /* CHECK_NO_CHANGE */;
       const merged = ctx.reviewObject;
       if (merged.findings.length === 0 && ctx.reviewNumber > 1 && ctx.force !== "re-review") {
         const lastReview = supersedeBoundary(ctx.previousReviews ?? []);
@@ -48582,12 +48870,12 @@ If this PR spans multiple independent themes that could each be a separate, inde
           ctx.action = "NO_NEW_FINDINGS";
           ctx.skipReason = "Re-review found no new findings (prior review already clean)";
           markHeadChecked(ctx);
-          return 19 /* SKIP */;
+          return 20 /* SKIP */;
         }
       }
-      return 18 /* POST_REVIEW */;
+      return 19 /* POST_REVIEW */;
     }
-    case 18 /* POST_REVIEW */: {
+    case 19 /* POST_REVIEW */: {
       if (ctx.outcomeSink) {
         const sunk = await ctx.outcomeSink({
           review: ctx.reviewObject,
@@ -48605,7 +48893,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
         if (sunk && sunk.firstPassSiteRows !== void 0) ctx.firstPassSiteRows = sunk.firstPassSiteRows;
         if (sunk && sunk.firstPassSites) ctx.firstPassSitesLog = sunk.firstPassSites;
         ctx.action = "REVIEW";
-        return 20 /* DONE */;
+        return 21 /* DONE */;
       }
       const judgeNotes = ctx.reviewText.match(/<!--\s*JUDGE_NOTES:([\s\S]*?)-->/);
       if (judgeNotes) {
@@ -48631,7 +48919,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
         console.log("  Review text empty or NO_CHANGE after cleanup \u2014 skipping post");
         ctx.action = "NO_CHANGE";
         ctx.skipReason = "Review text empty or NO_CHANGE after cleanup";
-        return 19 /* SKIP */;
+        return 20 /* SKIP */;
       }
       const judged = ctx.judgeUsage !== void 0;
       const tailOk = judged ? parseVerdictScore(cleaned) !== null : /^#{1,4}\s*Unresolved Questions\b/im.test(cleaned);
@@ -48677,7 +48965,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
             ctx.skipReason = "Another agent run already reviewed this commit (race condition avoided)";
             ctx.suggestedFixes = void 0;
             markHeadChecked(ctx);
-            return 19 /* SKIP */;
+            return 20 /* SKIP */;
           }
         }
         console.log("Posting review comment...");
@@ -48686,15 +48974,15 @@ If this PR spans multiple independent themes that could each be a separate, inde
         console.log("Done. Review posted to PR.\n");
       }
       ctx.action = ctx.reviewNumber > 1 ? "RE_REVIEW" : "REVIEW";
-      return 20 /* DONE */;
+      return 21 /* DONE */;
     }
-    case 19 /* SKIP */: {
+    case 20 /* SKIP */: {
       console.log(`
 Skipping: ${ctx.skipReason}`);
-      return 20 /* DONE */;
+      return 21 /* DONE */;
     }
     default:
-      return 20 /* DONE */;
+      return 21 /* DONE */;
   }
 }
 async function review(adapter2, prId, dryRun = false, promptPath, force = "off", logUsage = false, repoSlug = "", outcomeSink, trigger, checkedCommit) {
@@ -48721,7 +49009,7 @@ Starting review for PR #${prId}`);
   let error = null;
   try {
     let state = 0 /* CHECK_TRIGGER */;
-    while (state !== 20 /* DONE */) {
+    while (state !== 21 /* DONE */) {
       state = await transition(state, ctx);
     }
   } catch (err) {
@@ -48920,6 +49208,9 @@ var CONFIG_LABELS = {
   FP_SITES: flag((on) => {
     config.review.firstPassSites = on;
   }),
+  CACHE: flag((on) => {
+    config.review.promptCache = on;
+  }),
   DX: flag((on) => {
     if (on) config.diffExcludePatterns = [...DX_PATTERNS];
   }),
@@ -48950,7 +49241,7 @@ function applyBenchmarkConfig(env) {
   if (!env.MAX_CHANGED_LINES) config.thresholds.maxChangedLines = 0;
   config.review.splitCheck = false;
   applyConfigLabels(env);
-  console.log(`Benchmark settings: model=${config.anthropic.model} effort=${config.review.effort || "default"} judge_model=${config.judge.model || "off"} judge_effort=${config.judge.effort || "default"} nits=${bit(config.review.enableNitpicks)} j_minor=${bit(config.judge.policy.keepMinor)} j_unver=${bit(config.judge.policy.keepUnverified)} j_ctx=${bit(config.judge.fileContext)} lnum=${bit(config.review.lineNumbers)} breadth=${bit(config.breadth.enabled)} b_files=${config.breadth.minFiles} b_untch=${config.breadth.minUntouched} second_look=${bit(config.review.secondLook)} j_quality=${bit(config.judge.quality)} sl_breadth=${bit(config.review.secondLookBreadthTargets)} j_shown_anchor=${bit(config.judge.shownAnchors)} b_priority=${bit(config.breadth.priorityTargets)} sfx=${bit(config.judge.suggestedFixes)} j_proposal=${bit(config.judge.proposals)}${activeLenses(config.lenses).length ? ` lenses=${config.lenses.list}` : ""}${config.lenses.recommend ? " lens_rec=1" : ""}${config.judge.policy.keepTestGaps ? " j_tgap=1" : ""}${config.benchmarkCounterpartRows ? " xrows=1" : ""}${config.review.highImpact ? " hi=1" : ""}${config.review.firstPassSites ? " fp_sites=1" : ""}${config.anthropic.extraPassMaxTokens ? ` xp_max=${config.anthropic.extraPassMaxTokens}` : ""}${config.breadth.passDeadline ? " pass_deadline=1" : ""}${config.diffExcludePatterns.join(",") === DX_PATTERNS.join(",") ? " dx=1" : ""}`);
+  console.log(`Benchmark settings: model=${config.anthropic.model} effort=${config.review.effort || "default"} judge_model=${config.judge.model || "off"} judge_effort=${config.judge.effort || "default"} nits=${bit(config.review.enableNitpicks)} j_minor=${bit(config.judge.policy.keepMinor)} j_unver=${bit(config.judge.policy.keepUnverified)} j_ctx=${bit(config.judge.fileContext)} lnum=${bit(config.review.lineNumbers)} breadth=${bit(config.breadth.enabled)} b_files=${config.breadth.minFiles} b_untch=${config.breadth.minUntouched} second_look=${bit(config.review.secondLook)} j_quality=${bit(config.judge.quality)} sl_breadth=${bit(config.review.secondLookBreadthTargets)} j_shown_anchor=${bit(config.judge.shownAnchors)} b_priority=${bit(config.breadth.priorityTargets)} sfx=${bit(config.judge.suggestedFixes)} j_proposal=${bit(config.judge.proposals)}${activeLenses(config.lenses).length ? ` lenses=${config.lenses.list}` : ""}${config.lenses.recommend ? " lens_rec=1" : ""}${config.judge.policy.keepTestGaps ? " j_tgap=1" : ""}${config.benchmarkCounterpartRows ? " xrows=1" : ""}${config.review.highImpact ? " hi=1" : ""}${config.review.firstPassSites ? " fp_sites=1" : ""}${config.anthropic.extraPassMaxTokens ? ` xp_max=${config.anthropic.extraPassMaxTokens}` : ""}${config.breadth.passDeadline ? " pass_deadline=1" : ""}${config.diffExcludePatterns.join(",") === DX_PATTERNS.join(",") ? " dx=1" : ""}${config.review.promptCache ? " cache=1" : ""}`);
   if (config.judge.proposals && !config.judge.model) console.warn("  J_PROPOSAL=1 but the judge is off - no proposals will be produced.");
   if (config.review.enableNitpicks && !config.judge.policy.keepMinor) {
     console.warn("  NITS=1 but J_MINOR=0 \u2014 nitpicks are logged for offline scoring only; set J_MINOR=1 to post them.");
@@ -49058,7 +49349,7 @@ if (major < 22) {
   process.exit(1);
 }
 var program2 = new Command();
-program2.name("pr-review-agent").description("Automated PR code review powered by Claude").option("--pr-id <id>", "Pull request ID").option("--workspace <workspace>", "Workspace / org / owner of the selected VCS provider (overrides BITBUCKET_WORKSPACE, AZURE_ORG or GITHUB_OWNER)").option("--project <name>", "Azure DevOps project (overrides AZURE_PROJECT; ignored by other providers)").option("--repo-slug <slug>", "Repository slug").option("--vcs <provider>", "VCS provider: bitbucket | azure (WIP) | github (overrides VCS_PROVIDER); gitlab is not implemented and exits 1").option("--vcs-base-url <url>", "API base URL of the selected VCS provider (overrides BITBUCKET_BASE_URL, AZURE_BASE_URL or GITHUB_BASE_URL)").option("--dry-run", "Print the review to stdout without posting to the PR").option("--force [mode]", 'Force review: "clean" (no prior context) or "re-review" (keep context, bypass dedup)').option("--log-usage [bool]", "Log usage data to results.jsonl (default: true)", (v) => v !== "false", true).option("--usage-record-file <path>", "Also write the usage record of this run alone to this file, overwritten each run; results.jsonl is still appended, and --log-usage false writes neither (overrides USAGE_RECORD_FILE)").option("--prompt <path>", "Path to a local prompt file (overrides repo .agent-review-instructions.md)").option("--validate-prompt", "Validate prompt and exit (local via --prompt, or repo via --pr-id)").option("--model <id>", "Claude model ID (overrides CLAUDE_MODEL)").option("--judge-model <id>", "Judge model ID (overrides JUDGING_MODEL)").option("--reply-model <id>", "Model ID for developer replies (overrides REPLY_MODEL; empty = reviewer model)").option("--min-changed-files <n>", "Skip review if fewer files changed (overrides MIN_CHANGED_FILES)").option("--max-changed-files <n>", "Skip review if more files changed (overrides MAX_CHANGED_FILES)").option("--min-changed-lines <n>", "Skip review if fewer lines changed (overrides MIN_CHANGED_LINES)").option("--max-changed-lines <n>", "Skip review if more lines changed (overrides MAX_CHANGED_LINES)").option("--skip-source-branches <list>", "Comma list of source-branch globs to skip (overrides SKIP_SOURCE_BRANCHES); an empty value (--skip-source-branches=) disables the check").option("--skip-target-branches <list>", "Comma list of target-branch globs to skip (overrides SKIP_TARGET_BRANCHES); an empty value (--skip-target-branches=) disables the check").option("--only-target-branches <list>", "Comma list of target-branch globs to review, skipping all others (overrides ONLY_TARGET_BRANCHES); an empty value (--only-target-branches=) disables the check").option("--max-input-tokens <n>", "Max estimated input tokens before degrade/skip (overrides MAX_INPUT_TOKENS)").option("--max-output-tokens <n>", "Max output tokens for reviewer + judge (overrides MAX_OUTPUT_TOKENS)").option("--effort <level>", "Reviewer thinking effort: low|medium|high|xhigh|max (overrides REVIEW_EFFORT; ignored by models without effort)").option("--judge-effort <level>", "Judge thinking effort (overrides JUDGE_EFFORT)").option("--skip-directed-replies", "Skip replying to dev comments @-directed at someone else (Bitbucket only; overrides SKIP_DIRECTED_REPLIES)").option("--second-look", "Second reviewer pass over already-flagged files to lift recall (overrides ENABLE_SECOND_LOOK; requires a judge)").option("--lenses <list>", "Concern-specific reviewer passes, e.g. reliability+security (overrides ENABLE_LENSES/LENSES; requires a judge)").option("--lens-recommendation", "Log which lenses the first-pass reviewer recommends for this PR; never gates a lens (overrides ENABLE_LENS_RECOMMENDATION)").option("--proposals", "Add a concise fix proposal to each kept finding in results.jsonl anchored_findings (overrides ENABLE_JUDGE_PROPOSALS; requires a judge)").option("--suggested-fixes", "Post a fix block (instruction, plus code for local edits) under each kept finding that has one; implies proposals (overrides ENABLE_SUGGESTED_FIXES; requires a judge)").option("--keep-test-gaps", "Keep a candidate the judge files as low_value when it names a test gap and has a placeable line, as LOW (overrides ENABLE_JUDGE_KEEP_TEST_GAPS; requires a judge)").option("--event <name>", "What started this run, e.g. pullrequest:comment_created (overrides TRIGGER_EVENT); logged, and enables IGNORE_COMMENT_AUTHORS on comment events").option("--comment-author <id>", "Account id of the event actor, e.g. the Bitbucket actor uuid (overrides TRIGGER_COMMENT_AUTHOR)").option("--event-kind <kind>", "comment | other: whether the --event is a comment event, whatever its name (overrides TRIGGER_EVENT_KIND)").option("--checked-commit <hash>", "Head an earlier run reported as checked_commit for this PR; a run on that same head skips the re-review (overrides LAST_CHECKED_COMMIT)").option("--benchmark", "ReviewBench mode: read the PR from RB_* env + mounted files, write findings JSON to RB_OUT instead of posting; always exits 0").parse(process.argv);
+program2.name("pr-review-agent").description("Automated PR code review powered by Claude").option("--pr-id <id>", "Pull request ID").option("--workspace <workspace>", "Workspace / org / owner of the selected VCS provider (overrides BITBUCKET_WORKSPACE, AZURE_ORG or GITHUB_OWNER)").option("--project <name>", "Azure DevOps project (overrides AZURE_PROJECT; ignored by other providers)").option("--repo-slug <slug>", "Repository slug").option("--vcs <provider>", "VCS provider: bitbucket | azure (WIP) | github (overrides VCS_PROVIDER); gitlab is not implemented and exits 1").option("--vcs-base-url <url>", "API base URL of the selected VCS provider (overrides BITBUCKET_BASE_URL, AZURE_BASE_URL or GITHUB_BASE_URL)").option("--dry-run", "Print the review to stdout without posting to the PR").option("--force [mode]", 'Force review: "clean" (no prior context) or "re-review" (keep context, bypass dedup)').option("--log-usage [bool]", "Log usage data to results.jsonl (default: true)", (v) => v !== "false", true).option("--usage-record-file <path>", "Also write the usage record of this run alone to this file, overwritten each run; results.jsonl is still appended, and --log-usage false writes neither (overrides USAGE_RECORD_FILE)").option("--prompt <path>", "Path to a local prompt file (overrides repo .agent-review-instructions.md)").option("--validate-prompt", "Validate prompt and exit (local via --prompt, or repo via --pr-id)").option("--model <id>", "Claude model ID (overrides CLAUDE_MODEL)").option("--judge-model <id>", "Judge model ID (overrides JUDGING_MODEL)").option("--reply-model <id>", "Model ID for developer replies (overrides REPLY_MODEL; empty = reviewer model)").option("--min-changed-files <n>", "Skip review if fewer files changed (overrides MIN_CHANGED_FILES)").option("--max-changed-files <n>", "Skip review if more files changed (overrides MAX_CHANGED_FILES)").option("--min-changed-lines <n>", "Skip review if fewer lines changed (overrides MIN_CHANGED_LINES)").option("--max-changed-lines <n>", "Skip review if more lines changed (overrides MAX_CHANGED_LINES)").option("--skip-source-branches <list>", "Comma list of source-branch globs to skip (overrides SKIP_SOURCE_BRANCHES); an empty value (--skip-source-branches=) disables the check").option("--skip-target-branches <list>", "Comma list of target-branch globs to skip (overrides SKIP_TARGET_BRANCHES); an empty value (--skip-target-branches=) disables the check").option("--only-target-branches <list>", "Comma list of target-branch globs to review, skipping all others (overrides ONLY_TARGET_BRANCHES); an empty value (--only-target-branches=) disables the check").option("--max-input-tokens <n>", "Max estimated input tokens before degrade/skip (overrides MAX_INPUT_TOKENS)").option("--max-output-tokens <n>", "Max output tokens for reviewer + judge (overrides MAX_OUTPUT_TOKENS)").option("--effort <level>", "Reviewer thinking effort: low|medium|high|xhigh|max (overrides REVIEW_EFFORT; ignored by models without effort)").option("--judge-effort <level>", "Judge thinking effort (overrides JUDGE_EFFORT)").option("--skip-directed-replies", "Skip replying to dev comments @-directed at someone else (Bitbucket only; overrides SKIP_DIRECTED_REPLIES)").option("--reply-limit-per-review", "Count the reply limit per review and post a one-time limit note (overrides ENABLE_REPLY_LIMIT_PER_REVIEW)").option("--second-look", "Second reviewer pass over already-flagged files to lift recall (overrides ENABLE_SECOND_LOOK; requires a judge)").option("--lenses <list>", "Concern-specific reviewer passes, e.g. reliability+security (overrides ENABLE_LENSES/LENSES; requires a judge)").option("--lens-recommendation", "Log which lenses the first-pass reviewer recommends for this PR; never gates a lens (overrides ENABLE_LENS_RECOMMENDATION)").option("--proposals", "Add a concise fix proposal to each kept finding in results.jsonl anchored_findings (overrides ENABLE_JUDGE_PROPOSALS; requires a judge)").option("--suggested-fixes", "Post a fix block (instruction, plus code for local edits) under each kept finding that has one; implies proposals (overrides ENABLE_SUGGESTED_FIXES; requires a judge)").option("--keep-test-gaps", "Keep a candidate the judge files as low_value when it names a test gap and has a placeable line, as LOW (overrides ENABLE_JUDGE_KEEP_TEST_GAPS; requires a judge)").option("--event <name>", "What started this run, e.g. pullrequest:comment_created (overrides TRIGGER_EVENT); logged, and enables IGNORE_COMMENT_AUTHORS on comment events").option("--comment-author <id>", "Account id of the event actor, e.g. the Bitbucket actor uuid (overrides TRIGGER_COMMENT_AUTHOR)").option("--event-kind <kind>", "comment | other: whether the --event is a comment event, whatever its name (overrides TRIGGER_EVENT_KIND)").option("--checked-commit <hash>", "Head an earlier run reported as checked_commit for this PR; a run on that same head skips the re-review (overrides LAST_CHECKED_COMMIT)").option("--benchmark", "ReviewBench mode: read the PR from RB_* env + mounted files, write findings JSON to RB_OUT instead of posting; always exits 0").parse(process.argv);
 var opts = program2.opts();
 async function main() {
   if (opts.proposals) config.judge.proposals = true;
@@ -49162,6 +49453,7 @@ Filled prompt length: ${result.content.length} chars (~${Math.ceil(result.conten
   if (opts.effort) config.review.effort = opts.effort;
   if (opts.judgeEffort) config.judge.effort = opts.judgeEffort;
   if (opts.skipDirectedReplies) config.reply.skipDirectedElsewhere = true;
+  if (opts.replyLimitPerReview) config.reply.limitPerReview = true;
   if (opts.secondLook) config.review.secondLook = true;
   if (opts.lenses) {
     config.lenses.enabled = true;
