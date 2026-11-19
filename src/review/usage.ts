@@ -128,6 +128,7 @@ export interface UsageRecord {
   reply_authors?: string[]
   checked_commit?: string
   dedup_source?: 'checked_commit' | 'target_merge'
+  reply_limit_note?: true
   jenkins: { job: string; build: string; url: string } | null
   trigger?: { event: string | null; comment_author: string | null; event_kind?: EventKind }
   error: { type: string; message: string; status: number | null } | null
@@ -453,6 +454,7 @@ export function buildUsageRecord(
     // Present only when the head was really checked and the run did not fail afterwards; CI stores exactly this value, so it must pass the LAST_CHECKED_COMMIT rule too, whatever head the adapter reported.
     ...(ctx.headChecked && !error && isCheckedCommitHash(ctx.prInfo!.sourceCommit) ? { checked_commit: ctx.prInfo!.sourceCommit } : {}),
     ...(ctx.dedupHit ? { dedup_source: ctx.dedupHit } : {}),
+    ...(ctx.replyLimitNote ? { reply_limit_note: true as const } : {}),
     jenkins: getJenkinsMeta(),
     // Absent when CI passed no trigger, so those records serialize exactly as before.
     ...(ctx.trigger ? { trigger: { event: ctx.trigger.event || null, comment_author: ctx.trigger.commentAuthor || null, ...(ctx.trigger.kind ? { event_kind: ctx.trigger.kind } : {}) } } : {}),

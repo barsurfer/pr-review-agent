@@ -94,4 +94,18 @@ Opt-in (`SKIP_DIRECTED_REPLIES` / `--skip-directed-replies`, default off, Bitbuc
 
 ## Reply Limit
 
-See [review/skip-logic.md#5-reply-limit](skip-logic.md#5-reply-limit).
+See [review/skip-logic.md#5-reply-limit](skip-logic.md#5-reply-limit) for what each limit check ends with.
+
+### Reply limit note
+
+Opt-in (`ENABLE_REPLY_LIMIT_PER_REVIEW` / `--reply-limit-per-review`, default off). With the flag on:
+
+- **Per-review count.** The count behind `MAX_REPLY_COMMENTS` is the number of agent replies newer than the supersede-boundary review, at both limit checks (`CHECK_REPLIES` and the 0-finding gate). A posted review therefore resets the budget; with the flag off the count is every agent reply on the PR. `CHECK_REPLIES` takes the count from one extra `getRepliesToReviewComments(..., true)` call; the `reply limit reached (n/N)` text shows this per-review `n`.
+- **One-time note.** In `CHECK_REPLIES`, an unanswered question for the agent and a count exactly at the limit route to the `POST_REPLY_LIMIT_NOTE` state, which posts one threaded reply (same target as `RESPOND_TO_REPLIES`: `replies[last].parentId`) reading `Reply limit of N reached for this review. New questions will be answered under the next review.` plus the normal reply footer, with no model call. The footer model is `REPLY_MODEL`, else the reviewer model. Because it carries the reply footer it counts as reply N+1, so the adapter treats the question as answered and a count above the limit posts nothing. A failed post warns and the run continues; `--dry-run` prints the note instead. The usage record gets `reply_limit_note: true` only when the note was posted (or would be, in dry-run). Actions stay as in the base limit: `DEDUP_SKIP`, or the upstream `NO_CHANGE` when a review ran.
+- **The gate posts no note.** At the limit the 0-finding gate finishes the re-review as described in skip-logic.md §5.
+
+**Known limits**
+- Flag off: a re-review posted after the limit (gate with prior findings) supersedes an open question, which then stays unanswered, as it did before.
+- A question that arrives while a re-review with findings is posted, or a `NO_CHANGE` re-review at the limit, is not answered by that run; with the flag on it is answered under the next review (or noted once).
+- Two concurrent runs can each post the note.
+- If the extra comments read for the per-review count fails, the run warns, uses the PR-wide count for that run and posts no note; it never fails the run.

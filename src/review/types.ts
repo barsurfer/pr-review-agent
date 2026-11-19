@@ -25,6 +25,7 @@ export enum State {
   CHECK_PREVIOUS_REVIEWS,
   CHECK_REPLIES,
   RESPOND_TO_REPLIES,
+  POST_REPLY_LIMIT_NOTE,
   LOAD_PROMPT,
   FETCH_CONTEXT,
   ESTIMATE_TOKENS,
@@ -201,6 +202,7 @@ export interface ReviewContext {
   dedupHit?: 'checked_commit' | 'target_merge'
   mergeNarrowed?: boolean
   deltaBase?: string
+  replyLimitNote?: boolean
   headChecked?: boolean
   deltaFetchFailed?: boolean
   bundleUncertain?: boolean

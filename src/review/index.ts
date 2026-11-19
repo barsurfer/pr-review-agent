@@ -61,6 +61,8 @@ function questionsForAgent(replies: CommentReply[]): CommentReply[] {
   return questions
 }
 
+const agentRepliesAfter = (replies: CommentReply[], after: string): number => replies.filter(r => hasReplyFooter(r.body) && r.createdOn > after).length
+
 // The CLI maps an empty --force to 'off', but review() is also called directly, so '' or an unknown mode must not count as forced.
 const forced = (ctx: ReviewContext): boolean => ctx.force === 'clean' || ctx.force === 're-review'
 
@@ -508,13 +510,28 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       ctx.replies = await dropRepliesDirectedElsewhere(ctx, questionsForAgent(ctx.replies))
 
       if (ctx.replies.length > 0) {
-        if (config.reply.maxComments > 0 && agentReplyCount >= config.reply.maxComments) {
-          console.log(`  Found ${ctx.replies.length} unanswered reply(s), but agent already posted ${agentReplyCount}/${config.reply.maxComments} replies — skipping`)
-          ctx.action = 'DEDUP_SKIP'
-          ctx.skipReason = `reply limit reached (${agentReplyCount}/${config.reply.maxComments})`
-          return State.SKIP
+        let used = agentReplyCount
+        let perReview = false
+        if (config.reply.limitPerReview && config.reply.maxComments > 0) {
+          // A failed count must not turn a finished run into an error; the PR-wide count is the stricter stand-in.
+          try {
+            const { replies: discussion } = await ctx.adapter.getRepliesToReviewComments(ctx.prId, reviewIds, true)
+            used = agentRepliesAfter(discussion, latestReviewDate)
+            perReview = true
+          } catch (err: unknown) {
+            console.warn(`  Per-review reply count unavailable (${errorText(err)}) - using the PR-wide count, no limit note`)
+          }
         }
-        console.log(`  Found ${ctx.replies.length} unanswered reply(s) — responding... (${agentReplyCount}/${config.reply.maxComments || '∞'} replies used)`)
+        if (config.reply.maxComments > 0 && used >= config.reply.maxComments) {
+          console.log(`  Found ${ctx.replies.length} unanswered reply(s), but agent already posted ${used}/${config.reply.maxComments} replies — skipping`)
+          // A review that ran upstream keeps its NO_CHANGE label; relabelling it a dedup hid a paid run.
+          if (ctx.action !== 'NO_CHANGE') {
+            ctx.action = 'DEDUP_SKIP'
+            ctx.skipReason = `reply limit reached (${used}/${config.reply.maxComments})`
+          }
+          return perReview && used === config.reply.maxComments ? State.POST_REPLY_LIMIT_NOTE : State.SKIP
+        }
+        console.log(`  Found ${ctx.replies.length} unanswered reply(s) — responding... (${used}/${config.reply.maxComments || '∞'} replies used)`)
         return State.RESPOND_TO_REPLIES
       }
 
@@ -525,6 +542,26 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         ctx.skipReason = ctx.dedupHit === 'checked_commit' ? 'head already checked by an earlier run and no unanswered questions'
           : ctx.dedupHit === 'target_merge' ? 'target branch merged in; PR diff unchanged since the last review and no unanswered questions'
           : 'no new commits and no unanswered questions'
+      }
+      return State.SKIP
+    }
+
+    case State.POST_REPLY_LIMIT_NOTE: {
+      const replyModel = config.reply.model || config.anthropic.model
+      const note = `Reply limit of ${config.reply.maxComments} reached for this review. New questions will be answered under the next review.` + buildReplyFooter(config.agentIdentity, replyModel, getJobUrl())
+      ctx.replyLimitNote = true
+      if (ctx.dryRun) {
+        console.log('\n=== DRY RUN — Reply limit note (not posted) ===\n')
+        console.log(note)
+        console.log('\n=== End of note ===\n')
+        return State.SKIP
+      }
+      try {
+        await ctx.adapter.postReply(ctx.prId, ctx.replies![ctx.replies!.length - 1].parentId, note)
+        console.log('  Reply limit note posted.')
+      } catch (err: unknown) {
+        ctx.replyLimitNote = undefined
+        console.warn(`  Reply limit note not posted (${errorText(err)})`)
       }
       return State.SKIP
     }
@@ -1042,15 +1079,12 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         const cleanPrior = !priorHadFindings && !stillOpen
         // A fix made while resolving the conflict still owes its confirmation, so only an explicit resolved count of 0 may stay quiet.
         const mergeQuiet = async () => !cleanPrior && ctx.mergeNarrowed === true && ctx.reviewObject?.delta_stats?.resolved === 0 && await headIsMergeOnReviewed(ctx)
-        if (unanswered.length > 0) {
-          const agentReplies = replies.filter(r => hasReplyFooter(r.body)).length
-          if (config.reply.maxComments > 0 && agentReplies >= config.reply.maxComments) {
-            console.log(`  Unanswered dev reply, but reply limit reached (${agentReplies}/${config.reply.maxComments}) — skipping`)
-            ctx.action = 'DEDUP_SKIP'
-            ctx.skipReason = `reply limit reached (${agentReplies}/${config.reply.maxComments})`
-            markHeadChecked(ctx)
-            return State.SKIP
-          }
+        const agentReplies = config.reply.limitPerReview && lastReview ? agentRepliesAfter(replies, lastReview.createdOn) : replies.filter(r => hasReplyFooter(r.body)).length
+        const limitReached = config.reply.maxComments > 0 && agentReplies >= config.reply.maxComments
+        if (unanswered.length > 0 && limitReached) {
+          // The re-review already ran and was paid for, so it finishes below instead of being discarded.
+          console.log(`  Unanswered dev reply, but reply limit reached (${agentReplies}/${config.reply.maxComments}) — finishing the re-review without answering`)
+        } else if (unanswered.length > 0) {
           ctx.replies = unanswered
           console.log('  Re-review found nothing new, but a developer reply is unanswered — answering it in-thread')
           // A non-quiet re-review still owes the confirmation post on the next event, so only a quiet one counts as checked.

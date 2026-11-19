@@ -845,7 +845,7 @@ describe('reply-priority gate — reply limit', () => {
   ]
 
   it.each([
-    { maxComments: 3, agentReplies: 3, expected: 'DEDUP_SKIP' },
+    { maxComments: 3, agentReplies: 3, expected: 'NO_NEW_FINDINGS' },
     { maxComments: 3, agentReplies: 2, expected: 'REPLY' },
     { maxComments: 0, agentReplies: 5, expected: 'REPLY' },
   ])('MAX_REPLY_COMMENTS=$maxComments with $agentReplies agent replies → $expected', async ({ maxComments, agentReplies, expected }) => {
@@ -857,8 +857,8 @@ describe('reply-priority gate — reply limit', () => {
 
     expect(record!.action).toBe(expected)
     expect(adapter.postComment).not.toHaveBeenCalled()
-    if (expected === 'DEDUP_SKIP') {
-      expect(record!.skip_reason).toBe(`reply limit reached (${agentReplies}/${maxComments})`)
+    if (expected === 'NO_NEW_FINDINGS') {
+      expect(record!.skip_reason).toBe('Re-review found no new findings (prior review already clean)')
       expect(mockRunCommentResponse).not.toHaveBeenCalled()
       expect(adapter.postReply).not.toHaveBeenCalled()
     } else {
@@ -1043,8 +1043,8 @@ describe('Claude returns NO_CHANGE on a re-review → skip', () => {
 
     const record = await review(adapter, '100', false)
 
-    expect(record!.action).toBe('DEDUP_SKIP')
-    expect(record!.skip_reason).toMatch(/reply limit/i)
+    expect(record!.action).toBe('NO_CHANGE')
+    expect(record!.skip_reason).toBe('No changes since last review')
     expect(mockRunCommentResponse).not.toHaveBeenCalled()
     expect(adapter.postReply).not.toHaveBeenCalled()
   })
@@ -3320,7 +3320,8 @@ describe('checked commit from CI', () => {
       const limited = await runWith(reReviewAdapter(CLEAN_PRIOR, [], {
         getRepliesToReviewComments: vi.fn().mockResolvedValue({ replies: [devReply('2026-03-09T12:00:00Z')], agentReplyCount: 3 }),
       }), undefined)
-      expect(limited.record.skip_reason).toBe('reply limit reached (3/3)')
+      expect(limited.record.action).toBe('NO_CHANGE')
+      expect(limited.record.skip_reason).toBe('No changes since last review')
       expect(limited.record.checked_commit).toBe(COMMIT_A)
     })
 
@@ -3337,8 +3338,8 @@ describe('checked commit from CI', () => {
       quietZero()
       const { record } = await runWith(reReviewAdapter(CLEAN_PRIOR, [agentReply('2026-03-09T11:00:00Z'), devReply('2026-03-09T12:00:00Z')]), undefined)
 
-      expect(record.action).toBe('DEDUP_SKIP')
-      expect(record.skip_reason).toBe('reply limit reached (1/1)')
+      expect(record.action).toBe('NO_NEW_FINDINGS')
+      expect(record.skip_reason).toBe('Re-review found no new findings (prior review already clean)')
       expect(mockRunCommentResponse).not.toHaveBeenCalled()
       expect(record.checked_commit).toBe(COMMIT_A)
     })

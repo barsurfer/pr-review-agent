@@ -27,7 +27,8 @@ FETCH_PR_INFO
                  └─ CHECK_PREVIOUS_REVIEWS
                       ├─ [same commit] → CHECK_REPLIES
                       │    ├─ [unanswered replies] → RESPOND_TO_REPLIES → DONE
-                      │    └─ [none] → SKIP → DONE
+                      │    ├─ [unanswered replies, limit reached, ENABLE_REPLY_LIMIT_PER_REVIEW, count == limit] → POST_REPLY_LIMIT_NOTE → SKIP → DONE
+                      │    └─ [none, or limit reached] → SKIP → DONE
                       ├─ [head = checked commit from CI (LAST_CHECKED_COMMIT), not forced] → CHECK_REPLIES
                       │    ├─ [unanswered replies] → RESPOND_TO_REPLIES → DONE
                       │    └─ [none] → SKIP → DONE
@@ -44,7 +45,8 @@ FETCH_PR_INFO
                                      └─ SECOND_LOOK (passthrough unless ENABLE_SECOND_LOOK + flagged files)
                                           ├─ [ENABLE_LENSES + ≥1 known name in LENSES] → LENS_REVIEW → JUDGE_REVIEW
                                           └─ JUDGE_REVIEW
-                                               ├─ [0-finding re-review + unanswered dev reply] → RESPOND_TO_REPLIES → DONE (reply priority)
+                                               ├─ [0-finding re-review + unanswered dev reply, below the reply limit] → RESPOND_TO_REPLIES → DONE (reply priority)
+                                               ├─ [0-finding re-review + unanswered dev reply, reply limit reached] → continues as if no reply were open (logs the limit)
                                                ├─ [0-finding re-review, prior clean, or narrowed target merge on a pure merge] → SKIP (NO_NEW_FINDINGS) → DONE
                                                ├─ [JUDGING_MODEL set] → validate reviewer + breadth + second-look + lens candidates → POST_REVIEW → DONE
                                                └─ [no judge] → POST_REVIEW → DONE
@@ -54,14 +56,14 @@ Both inbound edges to `RESPOND_TO_REPLIES` (`CHECK_REPLIES` and this `JUDGE_REVI
 
 **Bundled path (`ENABLE_BUNDLED_REVIEW=true`, default off):** after `FETCH_CONTEXT`, `ESTIMATE_TOKENS` drops file contexts if over `MAX_INPUT_TOKENS`; if the diff alone is still over budget it routes to `BUNDLED_REVIEW` instead of SKIP, then `POST_REVIEW`. In-budget PRs never enter it. It bypasses `BREADTH_REVIEW`, `SECOND_LOOK` and `LENS_REVIEW`; the usage record infers their statuses (each active lens → `skipped_bundled`).
 
-**21 states. 11 possible outcomes:**
+**22 states. 11 possible outcomes:**
 1. Skip — ignored comment author (`IGNORE_COMMENT_AUTHORS`, before any VCS call)
 2. Skip — branch exclusion (incl. a target not in `ONLY_TARGET_BRANCHES`)
 3. Skip — no reviewable changes after exclusions
 4. Skip — threshold (too few/many reviewable files or lines)
 5. Skip — same commit (or the head CI reported as checked), no replies
 6. Skip — delta diff empty, or a target merge left the PR diff unchanged (`dedup_source: target_merge`), no replies
-7. Skip — reply limit reached
+7. Skip — reply limit reached at `CHECK_REPLIES` (`DEDUP_SKIP`, or the upstream `NO_CHANGE` when a review ran); the 0-finding gate no longer ends here, it finishes the re-review (outcome 9 or 11)
 8. Skip — NO_CHANGE re-review (falls through to CHECK_REPLIES first; skips only when no reply is pending)
 9. Skip — re-review produced no new findings and the prior review was clean, or a narrowed re-review after a target merge found nothing (`NO_NEW_FINDINGS`)
 10. Reply — developer question answered (including after a NO_CHANGE re-review)
@@ -98,6 +100,7 @@ Both inbound edges to `RESPOND_TO_REPLIES` (`CHECK_REPLIES` and this `JUDGE_REVI
 | `BUNDLED_REVIEW` | Big-PR map-reduce (`bundled.ts`): `planBundles` groups per-file diffs by directory into bundles of ≤85% of the input budget (min of `MAX_INPUT_TOKENS` and model context) minus fixed overhead (prompt, history); per bundle runs the normal `runReview` + `runJudge` sequentially with that bundle's diff/delta/file contexts; `aggregate.ts` parses each result's markdown, dedupes findings (same file + overlapping lines + similar title), merges sections, Merge Confidence = min across bundles. Files bigger than a whole bundle are listed under Unresolved Questions as unreviewed. Skips if bundles > `MAX_BUNDLES` (default 8) or fixed overhead leaves no room. While enabled, `MAX_CHANGED_FILES/LINES` don't skip. Not handled: unanswered-reply routing on 0-finding re-reviews |
 | `POST_REVIEW` | Applies safety guards (empty/NO_CHANGE guard, pre-post dedup), then posts comment via VCS API. After cleanup and the cut guard the posted findings are ordered HIGH → MEDIUM → LOW (see [Posted severity order](#posted-severity-order)); `ctx.reviewText` keeps production order. With `ENABLE_SUGGESTED_FIXES` and a judged review, splices a `**Suggested fix:**` code block under each kept finding with a usable proposal after cleanup and the cut guard (`composeSuggestedFixes` over the `ctx.renderJudged` closure from `JUDGE_REVIEW`), and posts such a finding with the judge's fix-free text (`body_without_fix`) when it passes its checks, so `ctx.reviewText` never holds a block or a fix-free text; all blocks are dropped on `cleanup` / `unbalanced` / `fence` / `size`, and every finding then keeps its normal text (see [prompt/judge.md](../prompt/judge.md#suggested-fixes-in-the-posted-review-enable_suggested_fixes)). With an outcome sink (`--benchmark`), it passes the structured review + judge result to the sink instead and skips cleanup, guards, blocks and posting |
 | `RESPOND_TO_REPLIES` | Bundles unanswered developer questions; calls Claude with reply prompt; posts threaded reply |
+| `POST_REPLY_LIMIT_NOTE` | Only with `ENABLE_REPLY_LIMIT_PER_REVIEW`, reached from `CHECK_REPLIES` when an open question meets a per-review count exactly at the limit. Posts the one-time limit note as a threaded reply (no model call; dry-run prints it; a failed post warns), sets `ctx.replyLimitNote` for the record, then `SKIP`. Action and reason stay those `CHECK_REPLIES` set. See [replies.md](replies.md#reply-limit-note) |
 
 ---
 
@@ -124,7 +127,7 @@ Always on, no flag. Findings are ordered only in the comment body that is posted
 
 The comment is left exactly as cleaned when: the findings are already in order (the same string is returned, so ordered reviews are byte-identical to before); the rendered findings block is not found in the cleaned text (cleanup edited a finding); the text before the findings or any finding has a fence that is not closed by the identical fence line, holds another fence-shaped line, or opens with more than a bare language tag (CommonMark and Python-Markdown could then pair fences across findings); or the re-render is not the cleaned text with only the findings block permuted (cleanup edited any other section). Nothing else changes: `ctx.reviewText`, the usage record and its arrays, `findings`/`verdict_score`, console lines, model inputs, the `--benchmark` outcome (the sink returns before cleanup) and previously posted reviews keep production order. The next run reads the posted body only through `extractCommitHash` (last footer line), `hasReviewFooter`/`hasReplyFooter`, `markdownHasFindings` (any finding line) and the suggested-fix strip (position-independent), none of which depends on finding order.
 
-**Checked-commit mark:** the states that end a run on a genuinely checked head (posted review, pre-post race, footer or checked-commit match, zero-reviewable delta, target-merge skip, coherent structured `NO_CHANGE`, `NO_NEW_FINDINGS` incl. the target-merge one, a quiet reply, the JUDGE-gate reply limit) set `ctx.headChecked`, which emits `checked_commit` in the record. Dry-run, benchmark, forced runs, a failed delta fetch and an uncertain bundle never mark, and an error after the mark drops it. Full table in [skip-logic.md §8](skip-logic.md).
+**Checked-commit mark:** the states that end a run on a genuinely checked head (posted review, pre-post race, footer or checked-commit match, zero-reviewable delta, target-merge skip, coherent structured `NO_CHANGE`, `NO_NEW_FINDINGS` incl. the target-merge one, a quiet reply) set `ctx.headChecked`, which emits `checked_commit` in the record. Dry-run, benchmark, forced runs, a failed delta fetch and an uncertain bundle never mark, and an error after the mark drops it. Full table in [skip-logic.md §8](skip-logic.md).
 
 ---
 

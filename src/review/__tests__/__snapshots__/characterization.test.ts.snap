@@ -1597,7 +1597,7 @@ Starting review for PR #100",
     "log:   Reviewer: NO_CHANGE",
     "log:   Found 1 unanswered reply(s), but agent already posted 3/3 replies — skipping",
     "log: 
-Skipping: reply limit reached (3/3)",
+Skipping: No changes since last review",
   ],
   "model": [
     [
@@ -1667,7 +1667,7 @@ None.
     ],
   ],
   "record": {
-    "action": "DEDUP_SKIP",
+    "action": "NO_CHANGE",
     "anchored_findings": null,
     "breadth_cost_usd": null,
     "breadth_model": null,
@@ -1744,7 +1744,7 @@ None.
     "second_look_prompt_hash": null,
     "second_look_status": null,
     "second_look_tokens": null,
-    "skip_reason": "reply limit reached (3/3)",
+    "skip_reason": "No changes since last review",
     "source_branch": "feature/test",
     "source_commit": "aaa111222333ffffffffffffffffffffffffffff",
     "target_branch": "develop",
@@ -1979,9 +1979,10 @@ Starting review for PR #100",
     "log:   Fetched full content for 0 file(s)",
     "log:   Estimated input: ~134 tokens  [prompt 5 | diff 32 | delta 32 | files 0 (0) | prev_reviews 47 (1) | replies 21 (2)]",
     "log:   Reviewer findings: 0H / 0M / 0L",
-    "log:   Unanswered dev reply, but reply limit reached (1/1) — skipping",
+    "log:   Unanswered dev reply, but reply limit reached (1/1) — finishing the re-review without answering",
+    "log:   Re-review: no findings, prior clean, nothing open, no discussion — nothing to post, skipping",
     "log: 
-Skipping: reply limit reached (1/1)",
+Skipping: Re-review found no new findings (prior review already clean)",
   ],
   "model": [
     [
@@ -2061,7 +2062,7 @@ None.
     ],
   ],
   "record": {
-    "action": "DEDUP_SKIP",
+    "action": "NO_NEW_FINDINGS",
     "anchored_findings": null,
     "breadth_cost_usd": null,
     "breadth_model": null,
@@ -2138,7 +2139,7 @@ None.
     "second_look_prompt_hash": null,
     "second_look_status": "disabled",
     "second_look_tokens": null,
-    "skip_reason": "reply limit reached (1/1)",
+    "skip_reason": "Re-review found no new findings (prior review already clean)",
     "source_branch": "feature/test",
     "source_commit": "aaa111222333ffffffffffffffffffffffffffff",
     "target_branch": "develop",

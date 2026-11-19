@@ -50,6 +50,7 @@ program
   .option('--effort <level>', 'Reviewer thinking effort: low|medium|high|xhigh|max (overrides REVIEW_EFFORT; ignored by models without effort)')
   .option('--judge-effort <level>', 'Judge thinking effort (overrides JUDGE_EFFORT)')
   .option('--skip-directed-replies', 'Skip replying to dev comments @-directed at someone else (Bitbucket only; overrides SKIP_DIRECTED_REPLIES)')
+  .option('--reply-limit-per-review', 'Count the reply limit per review and post a one-time limit note (overrides ENABLE_REPLY_LIMIT_PER_REVIEW)')
   .option('--second-look', 'Second reviewer pass over already-flagged files to lift recall (overrides ENABLE_SECOND_LOOK; requires a judge)')
   .option('--lenses <list>', 'Concern-specific reviewer passes, e.g. reliability+security (overrides ENABLE_LENSES/LENSES; requires a judge)')
   .option('--lens-recommendation', 'Log which lenses the first-pass reviewer recommends for this PR; never gates a lens (overrides ENABLE_LENS_RECOMMENDATION)')
@@ -91,6 +92,7 @@ const opts = program.opts<{
   effort?: string
   judgeEffort?: string
   skipDirectedReplies?: boolean
+  replyLimitPerReview?: boolean
   secondLook?: boolean
   lenses?: string
   lensRecommendation?: boolean
@@ -237,6 +239,7 @@ async function main(): Promise<void> {
   if (opts.effort) config.review.effort = opts.effort
   if (opts.judgeEffort) config.judge.effort = opts.judgeEffort
   if (opts.skipDirectedReplies) config.reply.skipDirectedElsewhere = true
+  if (opts.replyLimitPerReview) config.reply.limitPerReview = true
   if (opts.secondLook) config.review.secondLook = true
   if (opts.lenses) { config.lenses.enabled = true; config.lenses.list = opts.lenses }
   if (opts.lensRecommendation) config.lenses.recommend = true

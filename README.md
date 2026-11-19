@@ -369,6 +369,7 @@ bundle build on every push to `main` and every PR — the gate that keeps `main`
 | `--effort <level>` | No | Reviewer thinking effort `low`\|`medium`\|`high`\|`xhigh`\|`max` (overrides `REVIEW_EFFORT`) |
 | `--judge-effort <level>` | No | Judge thinking effort (overrides `JUDGE_EFFORT`) |
 | `--skip-directed-replies` | No | Skip replying to dev comments @-directed at someone else (Bitbucket only; overrides `SKIP_DIRECTED_REPLIES`) |
+| `--reply-limit-per-review` | No | Count the reply limit per review and post a one-time limit note (overrides `ENABLE_REPLY_LIMIT_PER_REVIEW`) |
 | `--second-look` | No | Second reviewer pass over already-flagged files to lift recall (overrides `ENABLE_SECOND_LOOK`; requires a judge) |
 | `--lenses <list>` | No | Concern-specific reviewer passes, e.g. `reliability+security` — any of `reliability`, `security`, `testing`, `performance`, `architecture`, `impact`, or the aliases `rel`, `sec`, `test`, `perf`, `arch`, `imp` (overrides `ENABLE_LENSES`/`LENSES`; requires a judge; each lens is one more reviewer-sized call) |
 | `--lens-recommendation` | No | Log which lenses the first-pass reviewer recommends for the PR to `results.jsonl` `lens_recommendations`; log-only, never enables or skips a lens (overrides `ENABLE_LENS_RECOMMENDATION`) |
@@ -428,6 +429,7 @@ All credentials and settings are provided via environment variables.
 | `MAX_OUTPUT_TOKENS` | `32000` | Max output tokens per reviewer/judge call (raise for big PRs at high effort) |
 | `MODEL_CONTEXT_TOKENS` | `0` (derive) | Context-window size for budgeting: replaces the reviewer's window and fills in for any other model the agent doesn't map (a mapped judge still caps) |
 | `MAX_REPLY_COMMENTS` | `5` | Max agent replies per PR (0 = unlimited) |
+| `ENABLE_REPLY_LIMIT_PER_REVIEW` | `false` | Count that limit per review instead of per PR, with a one-time limit note |
 | `SKIP_SOURCE_BRANCHES` / `SKIP_TARGET_BRANCHES` | `main,master,release/*,hotfix/*` / `main,master` | Branch-exclusion globs; per repo via `--skip-source-branches=` / `--skip-target-branches=` |
 | `ONLY_TARGET_BRANCHES` | — (off) | When set, skip PRs whose target matches none of these globs (e.g. stacked PRs until retargeted); the skip lists win on overlap. Main-only repo: `SKIP_TARGET_BRANCHES=` + `ONLY_TARGET_BRANCHES=main` + `SKIP_SOURCE_BRANCHES=main,master`. See [skip-logic.md](docs/context/review/skip-logic.md) |
 | `IGNORE_COMMENT_AUTHORS` | — (off) | Actor ids whose **comment** events skip the run before any VCS call (needs `--event`/`--comment-author`); pushes are never skipped. An ignored event never catches up a push a skip-if-locked CI lock dropped, so list an actor only when CI queues push events (Bitbucket `pullrequest:updated`). See [skip-logic.md](docs/context/review/skip-logic.md) |

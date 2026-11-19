@@ -141,7 +141,7 @@ FETCH_PR_INFO → CHECK_BRANCHES
                                                     └─ [no judge] → POST_REVIEW → DONE
 ```
 
-**21 states**, **11 possible outcomes**: skip (ignored comment author), skip (branch exclusion), skip (no reviewable changes),
+**22 states**, **11 possible outcomes**: skip (ignored comment author), skip (branch exclusion), skip (no reviewable changes),
 skip (threshold), skip (same commit, no replies), skip (delta diff empty, no replies),
 skip (reply limit reached), skip (no new findings), reply to developer, skip (NO_CHANGE), or post review. The optional `JUDGE_REVIEW` state sends the review output and diff to a
 separate judge model (`JUDGING_MODEL`) that validates each finding against the actual code
