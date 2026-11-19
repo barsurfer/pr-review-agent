@@ -192,6 +192,8 @@ export const config = {
     highImpact: optional('ENABLE_HIGH_IMPACT', 'false') === 'true',
     // Off by default; acts only under --benchmark: breadth and second-look name other sites of first-pass findings as extra rows.
     firstPassSites: optional('ENABLE_FIRST_PASS_SITES', 'false') === 'true',
+    // Off by default: a first review's eligible extra passes read the reviewer's prompt and PR context from a 5-minute prompt cache.
+    promptCache: optional('ENABLE_PROMPT_CACHE', 'false') === 'true',
     // On by default: without numbered lines ~40% of findings carried no line; set false to send the raw diff/context (saves the per-line gutter tokens).
     lineNumbers: optional('ENABLE_LINE_NUMBERS', 'true') !== 'false',
     // On by default with a kill switch: false always reviews the full delta after a target merge.

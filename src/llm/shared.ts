@@ -1,3 +1,5 @@
+import { isContextLengthError } from '../review/parsers.js'
+
 export interface LLMUsage {
   input_tokens: number
   output_tokens: number
@@ -8,7 +10,11 @@ export interface LLMUsage {
   cost_usd?: number
   // Subset of output_tokens spent on reasoning, set only when the provider reports a positive count.
   reasoning_tokens?: number
+  // Each attempt of a resent call (prompt cache only), so cost estimates apply Haiku 5.5's prompt-size tier per request, not to the sum.
+  attempts?: LLMUsage[]
 }
+
+export type UserPart = { text: string; cache?: true }
 
 export interface LLMOptions {
   model: string
@@ -17,12 +23,16 @@ export interface LLMOptions {
   effort?: string   // Anthropic output_config.effort / OpenRouter reasoning.effort (low|medium|high|xhigh|max); unset = model default
   tolerateMissing?: string[]
   signal?: AbortSignal
+  systemAfter?: string
+  sessionId?: string
 }
 
 export interface LLMProvider {
   complete(system: string, user: string, opts: LLMOptions): Promise<{ text: string; usage: LLMUsage }>
-  completeStructured<T>(system: string, user: string, schema: Record<string, unknown>, opts: LLMOptions): Promise<{ object: T; usage: LLMUsage }>
+  completeStructured<T>(system: string, user: string | UserPart[], schema: Record<string, unknown>, opts: LLMOptions): Promise<{ object: T; usage: LLMUsage }>
 }
+
+export const hasCachePart = (user: string | UserPart[]): boolean => Array.isArray(user) && user.some(p => p.cache)
 
 // Carries the usage of a truncated response so the caller can still record real token counts
 // (and the stop reason) instead of logging a zeroed, near-empty error record.
@@ -40,6 +50,9 @@ export class DeadlineAbortError extends Error {
     this.name = 'DeadlineAbortError'
   }
 }
+
+// OpenRouter's rejection wording is unverified, so any non-overflow 400 on a systemAfter call counts
+export const isSystemMessageRejection = (err: unknown): boolean => (err as { status?: number } | null)?.status === 400 && !isContextLengthError(err)
 
 // Required root keys the object is missing ([] from a schema-honoring provider). `deep` also flags
 // dropped array-item required keys (findings[].severity) a strict:false provider can omit while

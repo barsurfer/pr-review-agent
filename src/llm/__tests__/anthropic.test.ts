@@ -12,7 +12,7 @@ vi.mock('@anthropic-ai/sdk', () => {
   return { default: Anthropic }
 })
 
-import { createProvider } from '../provider.js'
+import { createProvider, isSystemMessageRejection } from '../provider.js'
 
 const opts = { model: 'claude-sonnet-5', maxTokens: 1000, maxRetries: 2 }
 const withUsage = (usage: unknown) => stream.mockReturnValue({
@@ -71,5 +71,50 @@ describe('AnthropicProvider request options', () => {
     answer({ verdict: 'ok' })
     await createProvider('k').completeStructured('s', 'u', { required: [] }, { ...opts, signal })
     expect(stream.mock.calls[1][1]).toStrictEqual({ maxRetries: 2, signal })
+  })
+})
+
+describe('AnthropicProvider prompt-cache request shape', () => {
+  const schema = { required: [] } as Record<string, unknown>
+
+  it('a string user with no new options sends exactly the previous params', async () => {
+    answer({})
+    await createProvider('k').completeStructured('s', 'u', schema, opts)
+    expect(stream.mock.calls[0][0]).toStrictEqual({ model: 'claude-sonnet-5', max_tokens: 1000, system: 's', output_config: { format: { type: 'json_schema', schema } }, messages: [{ role: 'user', content: 'u' }] })
+  })
+
+  it('parts become text blocks with cache_control on the cached one, systemAfter a trailing system message, and sessionId is never sent', async () => {
+    answer({})
+    await createProvider('k').completeStructured('s', [{ text: 'U', cache: true }, { text: 'B' }], schema, { ...opts, systemAfter: 'O', sessionId: 'sess' })
+    expect(stream.mock.calls[0][0]).toStrictEqual({
+      model: 'claude-sonnet-5', max_tokens: 1000, system: 's', output_config: { format: { type: 'json_schema', schema } },
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'U', cache_control: { type: 'ephemeral' } }, { type: 'text', text: 'B' }] }, { role: 'system', content: 'O' }],
+    })
+    expect(JSON.stringify(stream.mock.calls[0])).not.toContain('sess')
+  })
+
+  it('maps cache reads and writes, input_tokens staying the uncached rest', async () => {
+    stream.mockReturnValue({ finalMessage: async () => ({ stop_reason: 'end_turn', content: [{ type: 'text', text: '{}' }], usage: { input_tokens: 1000, output_tokens: 5, cache_read_input_tokens: 99000, cache_creation_input_tokens: 0 } }) })
+    const { usage } = await createProvider('k').completeStructured('s', [{ text: 'U', cache: true }], schema, opts)
+    expect(usage).toEqual({ input_tokens: 1000, output_tokens: 5, cache_read_input_tokens: 99000, cache_creation_input_tokens: 0 })
+  })
+
+  it('a rejected trailing system message is not retried without effort; it surfaces once for the caller to re-send uncached', async () => {
+    const { default: Anthropic } = await import('@anthropic-ai/sdk')
+    const rejection = Object.assign(new (Anthropic as any).BadRequestError("400 role 'system' is not supported"), { status: 400 })
+    stream.mockReturnValue({ finalMessage: async () => { throw rejection } })
+    const err = await createProvider('k').completeStructured('s', [{ text: 'U', cache: true }], schema, { ...opts, effort: 'high', systemAfter: 'O' }).catch(e => e)
+    expect(err).toBe(rejection)
+    expect(isSystemMessageRejection(err)).toBe(true)
+    expect(stream).toHaveBeenCalledTimes(1)
+  })
+
+  it('without systemAfter the same 400 still takes the effort retry, as before', async () => {
+    const { default: Anthropic } = await import('@anthropic-ai/sdk')
+    const rejection = Object.assign(new (Anthropic as any).BadRequestError("400 role 'system' is not supported"), { status: 400 })
+    stream.mockReturnValueOnce({ finalMessage: async () => { throw rejection } })
+    answer({})
+    await createProvider('k').completeStructured('s', 'u', schema, { ...opts, effort: 'high' })
+    expect(stream).toHaveBeenCalledTimes(2)
   })
 })
