@@ -66,7 +66,7 @@ function respond(opts: { hang?: string[]; onReview?: () => void } = {}) {
     }
     const pass = passOf(system)
     if (opts.hang?.includes(pass)) {
-      return new Promise((_, reject) => callOpts.signal?.addEventListener('abort', () => reject(new DeadlineAbortError('aborted', { input_tokens: 9, output_tokens: 0 }))))
+      return new Promise((_, reject) => callOpts.signal?.addEventListener('abort', () => reject(new DeadlineAbortError('aborted', { input_tokens: 9, output_tokens: 3, reasoning_tokens: 2 }))))
     }
     return Promise.resolve({ object: { findings: [{ severity: 'LOW', title: `${pass} finding`, file: 'src/pool.ts', lines: '2', body: 'b' }] }, usage })
   })
@@ -137,6 +137,7 @@ describe('pass deadline (benchmark only)', () => {
     expect(record.judge_status).toBe('succeeded')
     expect(record.pass_calls!.find((c: { stage: string }) => c.stage === 'breadth')).toEqual({ stage: 'breadth', end: 'aborted_time', max_tokens: 64000, output_tokens: null, reasoning_tokens: null, limit_ms: 570_000 })
     expect(record.breadth_tokens).toEqual({ input: 9, output: 0 })
+    expect(record.tokens).toMatchObject({ input: 100 + 9 + 100, output: 50 + 50, reasoning: 30 + 30 })
     expect(warnSpy.mock.calls.map((c: unknown[]) => String(c[0]))).toContain('  Breadth review stopped at the 570s pass deadline (570s elapsed) — continuing with first-pass findings only')
     expect(calledPasses()).toEqual(['review', 'breadth', 'judge'])
   })
@@ -250,6 +251,13 @@ describe('EXTRA_PASS_MAX_OUTPUT_TOKENS', () => {
   it('unset, every call keeps MAX_OUTPUT_TOKENS', async () => {
     respond()
     await run()
+    expect(completeStructured.mock.calls.map(c => c[3].maxTokens)).toEqual([64000, 64000, 64000, 64000, 64000, 64000])
+  })
+
+  it('outside --benchmark it is ignored: every call keeps MAX_OUTPUT_TOKENS', async () => {
+    cfg.anthropic.extraPassMaxTokens = 128000
+    respond()
+    await run(false)
     expect(completeStructured.mock.calls.map(c => c[3].maxTokens)).toEqual([64000, 64000, 64000, 64000, 64000, 64000])
   })
 })

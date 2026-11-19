@@ -100,8 +100,8 @@ export const config = {
     // Output-token cap for reviewer + judge. The Claude 5 family thinks by default and that
     // counts against this budget, so too low a cap truncates (16k cut off Sonnet 5 mid-review).
     maxTokens: parseInt(optional('MAX_OUTPUT_TOKENS', '32000'), 10),
-    // Breadth, second-look and lens cap only, so a long extra pass can't also loosen the reviewer's or judge's bound; 0 = MAX_OUTPUT_TOKENS.
-    extraPassMaxTokens: finiteOr(parseInt(optional('EXTRA_PASS_MAX_OUTPUT_TOKENS', '0'), 10), 0),
+    // Breadth, second-look and lens cap only, so a long extra pass can't also loosen the reviewer's or judge's bound; unset, 0 or invalid = MAX_OUTPUT_TOKENS.
+    extraPassMaxTokens: positiveOr(parseInt(optional('EXTRA_PASS_MAX_OUTPUT_TOKENS', '0'), 10), 0),
     // Replaces the reviewer's window and stands in for any other model the window table lacks (contextWindowFor); 0 = off.
     modelContextTokens: parseInt(optional('MODEL_CONTEXT_TOKENS', '0'), 10),
   },

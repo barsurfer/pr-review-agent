@@ -174,7 +174,13 @@ function addFirstPassSites(ctx: ReviewContext, found: ReturnType<typeof sanitize
   console.log(`  ${label} sites: ${named.length} place(s) for ${found.sites.size} first-pass finding(s), dropped ${dropped}${reasons ? ` (${reasons})` : ''}`)
 }
 
-const extraPassMaxTokens = (): number => config.anthropic.extraPassMaxTokens || config.anthropic.maxTokens
+// Benchmark-only: outside it OpenRouter extra passes are non-streaming with an unretried 600 s timeout, so a large cap could hang a review.
+const extraPassMaxTokens = (ctx: ReviewContext): number => (ctx.outcomeSink && config.anthropic.extraPassMaxTokens) || config.anthropic.maxTokens
+
+// An aborted stream's output count is a start-of-message snapshot, so only its input tokens count as spend; pass_calls shows null for the same reason.
+function spentUsage<U extends { output_tokens: number; reasoning_tokens?: number }>(err: unknown, usage: U | undefined): U | undefined {
+  return usage && err instanceof DeadlineAbortError ? { ...usage, output_tokens: 0, reasoning_tokens: undefined } : usage
+}
 
 const passStopAtSeconds = (): number => config.breadth.benchmarkDeadlineSeconds - config.breadth.judgeReserveSeconds
 
@@ -682,7 +688,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       const briefing = ids ? breadthBriefing(firstPass, coverage.untouched, ctx.breadthPlan, ids.tags) : breadthBriefing(firstPass, coverage.untouched, ctx.breadthPlan)
       const estimate = ctx.estimatedInputTokens + Math.ceil((system.length - ctx.prompt!.content.length + briefing.length) / 4)
       // A 0 limit means "disabled", as in ESTIMATE_TOKENS; without this filter MAX_INPUT_TOKENS=0 would skip every breadth pass.
-      const limits = [config.anthropic.maxInputTokens, contextWindowFor(model) - extraPassMaxTokens()].filter(n => n > 0)
+      const limits = [config.anthropic.maxInputTokens, contextWindowFor(model) - extraPassMaxTokens(ctx)].filter(n => n > 0)
       const budget = limits.length ? Math.min(...limits) : Infinity
       if (estimate > budget) {
         ctx.breadthStatus = 'skipped_budget'
@@ -711,7 +717,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         const result = await withPassDeadline(limitMs, signal => {
           const tail: [string?, Record<string, unknown>?, AbortSignal?] = signal ? ['breadth', breadthSchema[1], signal] : breadthSchema
           return runBreadth(
-            config.llmApiKey, model, config.judge.maxRetries, extraPassMaxTokens(), effort,
+            config.llmApiKey, model, config.judge.maxRetries, extraPassMaxTokens(ctx), effort,
             ctx.prInfo!, ctx.filteredDiff!, ctx.fileContexts ?? [], system, briefing, config.review.lineNumbers, ...tail,
           )
         })
@@ -723,15 +729,16 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         ctx.breadthStatus = 'succeeded'
         console.log(`  Breadth review: ${coverage.untouched.length} untouched file(s) → ${result.findings.length} finding(s)`)
         // Last in the try, so a throw above is recorded once by the catch, never twice.
-        recordPassCall(ctx, 'breadth', extraPassMaxTokens(), limitMs, result.usage)
+        recordPassCall(ctx, 'breadth', extraPassMaxTokens(ctx), limitMs, result.usage)
       } catch (err: unknown) {
         // A truncated response carries its usage; count it so the record shows what the failed call cost.
         const e = err as Error & { usage?: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number; cost_usd?: number; reasoning_tokens?: number } }
-        if (e.usage) {
-          ctx.breadthUsage = { input_tokens: e.usage.input_tokens, output_tokens: e.usage.output_tokens, cost_usd: e.usage.cost_usd }
-          addUsage(ctx, e.usage)
+        const used = spentUsage(err, e.usage)
+        if (used) {
+          ctx.breadthUsage = { input_tokens: used.input_tokens, output_tokens: used.output_tokens, cost_usd: used.cost_usd }
+          addUsage(ctx, used)
         }
-        recordPassCall(ctx, 'breadth', extraPassMaxTokens(), limitMs, e.usage, err)
+        recordPassCall(ctx, 'breadth', extraPassMaxTokens(ctx), limitMs, e.usage, err)
         if (err instanceof DeadlineAbortError) {
           ctx.breadthStatus = 'aborted_time'
           console.warn(`  Breadth review stopped at the ${passStopAtSeconds()}s pass deadline (${Math.round((Date.now() - ctx.startTime) / 1000)}s elapsed) — continuing with first-pass findings only`)
@@ -774,7 +781,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       // shownLength on the numbered payloads (diff + file contexts) so the guard counts the line-number gutter, as ESTIMATE_TOKENS does.
       const shownSL = (s: string) => shownLength(s, config.review.lineNumbers)
       const estimate = Math.ceil((system.length + shownSL(restrictedDiff) + briefing.length + contexts.reduce((n, c) => n + shownSL(c.content), 0)) / 4)
-      const limits = [config.anthropic.maxInputTokens, contextWindowFor(model) - extraPassMaxTokens()].filter(n => n > 0)
+      const limits = [config.anthropic.maxInputTokens, contextWindowFor(model) - extraPassMaxTokens(ctx)].filter(n => n > 0)
       const budget = limits.length ? Math.min(...limits) : Infinity
       if (estimate > budget) {
         ctx.secondLookStatus = 'skipped_budget'
@@ -802,7 +809,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         const result = await withPassDeadline(limitMs, signal => {
           const tail: [Record<string, unknown>?, AbortSignal?] = signal ? [secondLookSchema[0], signal] : secondLookSchema
           return runBreadth(
-            config.llmApiKey, model, config.anthropic.maxRetries, extraPassMaxTokens(), config.review.effort,
+            config.llmApiKey, model, config.anthropic.maxRetries, extraPassMaxTokens(ctx), config.review.effort,
             ctx.prInfo!, restrictedDiff, contexts, system, briefing, config.review.lineNumbers, 'second-look', ...tail,
           )
         })
@@ -813,14 +820,15 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         if (ids) addFirstPassSites(ctx, sanitizeFirstPassSites(result.firstPassSites, ids.index, 'second_look'), 'second_look', 'Second-look')
         ctx.secondLookStatus = 'succeeded'
         console.log(`  Second-look: ${flagged.length} flagged file(s) → ${result.findings.length} additional finding(s)`)
-        recordPassCall(ctx, 'second_look', extraPassMaxTokens(), limitMs, result.usage)
+        recordPassCall(ctx, 'second_look', extraPassMaxTokens(ctx), limitMs, result.usage)
       } catch (err: unknown) {
         const e = err as Error & { usage?: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number; cost_usd?: number; reasoning_tokens?: number } }
-        if (e.usage) {
-          ctx.secondLookUsage = { input_tokens: e.usage.input_tokens, output_tokens: e.usage.output_tokens, cost_usd: e.usage.cost_usd }
-          addUsage(ctx, e.usage)
+        const used = spentUsage(err, e.usage)
+        if (used) {
+          ctx.secondLookUsage = { input_tokens: used.input_tokens, output_tokens: used.output_tokens, cost_usd: used.cost_usd }
+          addUsage(ctx, used)
         }
-        recordPassCall(ctx, 'second_look', extraPassMaxTokens(), limitMs, e.usage, err)
+        recordPassCall(ctx, 'second_look', extraPassMaxTokens(ctx), limitMs, e.usage, err)
         if (err instanceof DeadlineAbortError) {
           ctx.secondLookStatus = 'aborted_time'
           console.warn(`  Second-look stopped at the ${passStopAtSeconds()}s pass deadline (${Math.round((Date.now() - ctx.startTime) / 1000)}s elapsed) — continuing with first-pass and breadth findings only`)
@@ -846,7 +854,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
 
       const effort = config.lenses.model ? '' : config.review.effort
       const earlier = [...(ctx.reviewObject?.findings ?? []), ...(ctx.breadthFindings ?? []), ...(ctx.secondLookFindings ?? [])]
-      const limits = [config.anthropic.maxInputTokens, contextWindowFor(model) - extraPassMaxTokens()].filter(n => n > 0)
+      const limits = [config.anthropic.maxInputTokens, contextWindowFor(model) - extraPassMaxTokens(ctx)].filter(n => n > 0)
       const budget = limits.length ? Math.min(...limits) : Infinity
       let halt: LensStatus | undefined
       for (const lens of lenses) {
@@ -888,7 +896,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
           const result = await withPassDeadline(limitMs, signal => {
             const tail: [Record<string, unknown>?, AbortSignal?] = signal ? [lensSchema[0], signal] : lensSchema
             return runLens(
-              config.llmApiKey, model, config.anthropic.maxRetries, extraPassMaxTokens(), effort,
+              config.llmApiKey, model, config.anthropic.maxRetries, extraPassMaxTokens(ctx), effort,
               ctx.prInfo!, ctx.filteredDiff!, ctx.fileContexts ?? [], system, briefing, config.review.lineNumbers, `lens:${lens.name}`, ...tail,
             )
           })
@@ -898,14 +906,15 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
           addUsage(ctx, result.usage)
           run.status = 'succeeded'
           console.log(`  Lens ${lens.name}: ${result.findings.length} finding(s)`)
-          recordPassCall(ctx, `lens:${lens.name}`, extraPassMaxTokens(), limitMs, result.usage)
+          recordPassCall(ctx, `lens:${lens.name}`, extraPassMaxTokens(ctx), limitMs, result.usage)
         } catch (err: unknown) {
           const e = err as Error & { usage?: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number; cost_usd?: number; reasoning_tokens?: number } }
-          if (e.usage) {
-            run.usage = { input_tokens: e.usage.input_tokens, output_tokens: e.usage.output_tokens, cost_usd: e.usage.cost_usd }
-            addUsage(ctx, e.usage)
+          const used = spentUsage(err, e.usage)
+          if (used) {
+            run.usage = { input_tokens: used.input_tokens, output_tokens: used.output_tokens, cost_usd: used.cost_usd }
+            addUsage(ctx, used)
           }
-          recordPassCall(ctx, `lens:${lens.name}`, extraPassMaxTokens(), limitMs, e.usage, err)
+          recordPassCall(ctx, `lens:${lens.name}`, extraPassMaxTokens(ctx), limitMs, e.usage, err)
           if (err instanceof DeadlineAbortError) {
             run.status = 'aborted_time'
             halt = 'skipped_time'
