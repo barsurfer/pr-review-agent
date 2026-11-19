@@ -72,11 +72,30 @@ export function allowShownContext(lens: string): string {
   return lens.replace(SHOWN_LINE_CLAUSE, () => 'a numeric line on an added or modified line, or on an unchanged line you were shown when it explains a defect this change introduces.')
 }
 
+function breadthLensText(shownAnchors: boolean, firstPassSites: boolean): string {
+  return `${shownAnchors ? allowShownContext(BREADTH_LENS) : BREADTH_LENS}${firstPassSites ? `\n\n${FIRST_PASS_SITES_SECTION}` : ''}`
+}
+
 export function breadthSystemPrompt(reviewerPrompt: string, limit: number, shownAnchors = false, firstPassSites = false): string {
   const limitSection = limit > 0
     ? `\n\n## FINDINGS LIMIT\nReport at most ${limit} findings, prioritized by severity and impact. If more exist, include only the most important and omit the rest.`
     : ''
-  return `${reviewerPrompt}${limitSection}\n\n${shownAnchors ? allowShownContext(BREADTH_LENS) : BREADTH_LENS}${firstPassSites ? `\n\n${FIRST_PASS_SITES_SECTION}` : ''}`
+  return `${reviewerPrompt}${limitSection}\n\n${breadthLensText(shownAnchors, firstPassSites)}`
+}
+
+// Names the fields so it can't contradict FIRST_PASS_SITES_SECTION; "set X to exactly" wording made Haiku return empty answers
+export const PASS_OUTPUT_NOTE = 'OUTPUT: put your findings in findings; set summary to one line and leave behavioral_diff, production_risk and unresolved_questions empty.'
+
+// The cached system prompt is the reviewer's, so a pass cap must say it overrides the reviewer cap shown there.
+export function passOverlay(lensText: string, limit: number): string {
+  const limitSection = limit > 0
+    ? `## FINDINGS LIMIT\nThis replaces the findings limit above: report at most ${limit} findings in this pass, prioritized by severity and impact. If more exist, include only the most important and omit the rest.\n\n`
+    : ''
+  return `${limitSection}${lensText}\n\n${PASS_OUTPUT_NOTE}`
+}
+
+export function breadthOverlay(limit: number, shownAnchors = false, firstPassSites = false): string {
+  return passOverlay(breadthLensText(shownAnchors, firstPassSites), limit)
 }
 
 export interface BreadthPlan {
@@ -194,12 +213,20 @@ export function withImpactItem(lens: string): string {
   return lens.replace(SECOND_LOOK_ANCHOR, () => `\n${IMPACT_ITEM}${SECOND_LOOK_ANCHOR}`)
 }
 
+function secondLookLensText(shownAnchors: boolean, highImpact: boolean, firstPassSites: boolean): string {
+  const overlay = highImpact ? withImpactItem(SECOND_LOOK_LENS) : SECOND_LOOK_LENS
+  return `${shownAnchors ? allowShownContext(overlay) : overlay}${firstPassSites ? `\n\n${FIRST_PASS_SITES_SECTION}` : ''}`
+}
+
 export function secondLookSystemPrompt(reviewerPrompt: string, limit: number, shownAnchors = false, highImpact = false, firstPassSites = false): string {
   const limitSection = limit > 0
     ? `\n\n## FINDINGS LIMIT\nReport at most ${limit} findings, prioritized by severity and impact. If more exist, include only the most important and omit the rest.`
     : ''
-  const overlay = highImpact ? withImpactItem(SECOND_LOOK_LENS) : SECOND_LOOK_LENS
-  return `${reviewerPrompt}${limitSection}\n\n${shownAnchors ? allowShownContext(overlay) : overlay}${firstPassSites ? `\n\n${FIRST_PASS_SITES_SECTION}` : ''}`
+  return `${reviewerPrompt}${limitSection}\n\n${secondLookLensText(shownAnchors, highImpact, firstPassSites)}`
+}
+
+export function secondLookOverlay(limit: number, shownAnchors = false, highImpact = false, firstPassSites = false): string {
+  return passOverlay(secondLookLensText(shownAnchors, highImpact, firstPassSites), limit)
 }
 
 // Known findings (review + breadth) in the target files — titles + anchors only, so the pass avoids repeats.
@@ -207,4 +234,9 @@ export function secondLookBriefing(known: readonly ReviewFinding[], ids?: Readon
   const located = (f: ReviewFinding) => (f.file ? `${f.file}${f.lines ? `:${f.lines}` : ''}` : '(no file)')
   const findings = known.length ? known.map(f => `- ${idTag(f, ids)}${located(f)} — ${f.title}`).join('\n') : 'None.'
   return `## Findings already reported (do NOT repeat — find additional distinct problems in these files):\n${findings}`
+}
+
+// The cached second look sees the whole PR, so its briefing has to name the files it covers.
+export function secondLookFilesBriefing(flagged: readonly string[], briefing: string): string {
+  return `## Files to re-read (this pass covers only these):\n${flagged.map(p => `- ${p}`).join('\n')}\n\n${briefing}`
 }

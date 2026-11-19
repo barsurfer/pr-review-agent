@@ -1,7 +1,7 @@
 import axios from 'axios'
 import { config } from '../config.js'
-import { TruncatedResponseError, DeadlineAbortError, missingRequired } from './shared.js'
-import type { LLMProvider, LLMUsage, LLMOptions } from './shared.js'
+import { TruncatedResponseError, DeadlineAbortError, missingRequired, hasCachePart } from './shared.js'
+import type { LLMProvider, LLMUsage, LLMOptions, UserPart } from './shared.js'
 
 // OpenRouter's OpenAI-compatible gateway. Non-streaming: OpenAI semantics don't force streaming
 // above a token threshold (unlike the Anthropic SDK), so a plain POST suffices.
@@ -10,35 +10,36 @@ export class OpenRouterProvider implements LLMProvider {
 
   async complete(system: string, user: string, opts: LLMOptions): Promise<{ text: string; usage: LLMUsage }> {
     const data = await this.request({ model: opts.model, max_tokens: opts.maxTokens, messages: openRouterMessages(system, user) }, opts)
-    const choice = firstChoice(data, opts.maxTokens)
-    return { text: contentOf(choice), usage: mapOpenRouterUsage(data.usage) }
+    const choice = firstChoice(data, opts.maxTokens, cacheAware())
+    return { text: contentOf(choice), usage: mapOpenRouterUsage(data.usage, cacheAware()) }
   }
 
-  async completeStructured<T>(system: string, user: string, schema: Record<string, unknown>, opts: LLMOptions): Promise<{ object: T; usage: LLMUsage }> {
+  async completeStructured<T>(system: string, user: string | UserPart[], schema: Record<string, unknown>, opts: LLMOptions): Promise<{ object: T; usage: LLMUsage }> {
     // strict:false — our REVIEW/JUDGE schemas don't meet OpenAI strict's all-keys-required rule;
     // JSON.parse + missingRequired below is the fidelity guard instead. Gate models on supported_parameters.
     const response_format = { type: 'json_schema', json_schema: { name: 'result', schema, strict: false } }
-    const payload = { model: opts.model, max_tokens: opts.maxTokens, response_format, messages: openRouterMessages(system, user) }
-    const first = await this.structuredAttempt<T>(payload, schema, opts)
+    const payload = { model: opts.model, max_tokens: opts.maxTokens, response_format, messages: openRouterMessages(system, user, opts.systemAfter) }
+    const cached = cacheAware() || hasCachePart(user)
+    const first = await this.structuredAttempt<T>(payload, schema, opts, cached)
     if (!first.missing.length) return { object: first.object, usage: first.usage }
     // A strict:false model can drop a nested required field on one sample and not the next; one resend costs less than failing the run.
     console.warn(`  Structured output from ${opts.model} missing ${first.missing.join(', ')} — retrying once`)
-    const second = await this.structuredAttempt<T>(payload, schema, opts).catch((err: unknown) => { throw withPriorUsage(err, first.usage) })
+    const second = await this.structuredAttempt<T>(payload, schema, opts, cached).catch((err: unknown) => { throw withPriorUsage(err, first.usage) })
     const usage = sumUsage(first.usage, second.usage)
     if (second.missing.length) throw Object.assign(new Error(`Structured output missing required field(s): ${second.missing.join(', ')}`), { usage })
     return { object: second.object, usage }
   }
 
-  private async structuredAttempt<T>(payload: Record<string, unknown>, schema: Record<string, unknown>, opts: LLMOptions): Promise<{ object: T; usage: LLMUsage; missing: string[] }> {
+  private async structuredAttempt<T>(payload: Record<string, unknown>, schema: Record<string, unknown>, opts: LLMOptions, cached: boolean): Promise<{ object: T; usage: LLMUsage; missing: string[] }> {
     const data = await this.request(payload, opts)
-    const text = contentOf(firstChoice(data, opts.maxTokens))
+    const text = contentOf(firstChoice(data, opts.maxTokens, cached))
     let object: T
     try {
       object = JSON.parse(text) as T
     } catch {
       throw new Error('Model returned invalid JSON despite structured output')
     }
-    return { object, usage: mapOpenRouterUsage(data.usage), missing: missingRequired(object, schema, true, opts.tolerateMissing) }
+    return { object, usage: mapOpenRouterUsage(data.usage, cached), missing: missingRequired(object, schema, true, opts.tolerateMissing) }
   }
 
   private async request(payload: Record<string, unknown>, opts: LLMOptions): Promise<OpenRouterResponse> {
@@ -51,7 +52,8 @@ export class OpenRouterProvider implements LLMProvider {
     }
     // usage.include returns the real USD cost so the record logs it instead of a wrong-model estimate;
     // user tags the request with the reviewed repo for OpenRouter-side segmentation.
-    const body = { ...payload, usage: { include: true }, ...(config.repoSlug ? { user: config.repoSlug } : {}) }
+    // session_id keeps one run's calls on the provider holding its cache entry, without pinning provider.order (which drops failover).
+    const body = { ...payload, usage: { include: true }, ...(config.repoSlug ? { user: config.repoSlug } : {}), ...(opts.sessionId ? { session_id: opts.sessionId } : {}) }
     if (!opts.effort) return this.send(url, headers, body, opts)
     // OpenRouter maps reasoning.effort to Claude 4.6+ output_config.effort; like the Anthropic provider, a rejected value is retried without it.
     return this.send(url, headers, { ...body, reasoning: { effort: opts.effort } }, opts).catch((err: unknown) => {
@@ -91,21 +93,22 @@ export class OpenRouterProvider implements LLMProvider {
 
 interface OpenRouterResponse {
   choices?: Array<{ message?: { content?: string | null }; finish_reason?: string }>
-  usage?: { prompt_tokens?: number; completion_tokens?: number; completion_tokens_details?: { reasoning_tokens?: number }; cost?: number; cost_details?: { upstream_inference_cost?: number }; prompt_tokens_details?: { cached_tokens?: number } }
+  usage?: { prompt_tokens?: number; completion_tokens?: number; completion_tokens_details?: { reasoning_tokens?: number }; cost?: number; cost_details?: { upstream_inference_cost?: number }; prompt_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number } }
   error?: { message?: string; code?: number | string }
 }
 
 const OPENROUTER_TIMEOUT_MS = 600_000
 
-function openRouterMessages(system: string, user: string): Array<{ role: string; content: string }> {
-  return [{ role: 'system', content: system }, { role: 'user', content: user }]
+function openRouterMessages(system: string, user: string | UserPart[], systemAfter?: string): Array<{ role: string; content: unknown }> {
+  const content = typeof user === 'string' ? user : user.map(p => ({ type: 'text', text: p.text, ...(p.cache ? { cache_control: { type: 'ephemeral' } } : {}) }))
+  return [{ role: 'system', content: system }, { role: 'user', content }, ...(systemAfter ? [{ role: 'system', content: systemAfter }] : [])]
 }
 
-function firstChoice(data: OpenRouterResponse, maxTokens: number): NonNullable<OpenRouterResponse['choices']>[number] {
+function firstChoice(data: OpenRouterResponse, maxTokens: number, cached = false): NonNullable<OpenRouterResponse['choices']>[number] {
   const choice = data.choices?.[0]
   if (!choice) throw new Error('OpenRouter returned no choices')
   if (choice.finish_reason === 'length') {
-    throw new TruncatedResponseError(`Model response truncated at ${maxTokens} output tokens — refusing to post a cut-off response`, mapOpenRouterUsage(data.usage))
+    throw new TruncatedResponseError(`Model response truncated at ${maxTokens} output tokens — refusing to post a cut-off response`, mapOpenRouterUsage(data.usage, cached))
   }
   return choice
 }
@@ -116,17 +119,32 @@ function contentOf(choice: NonNullable<OpenRouterResponse['choices']>[number]): 
   return content
 }
 
-function mapOpenRouterUsage(u: OpenRouterResponse['usage']): LLMUsage {
+function mapOpenRouterUsage(u: OpenRouterResponse['usage'], cached = false): LLMUsage {
   // A BYOK key reports cost: 0 (no OpenRouter credits spent); the real upstream spend is in
   // cost_details.upstream_inference_cost. Prefer the gateway's own charge when it's non-zero.
   const cost = typeof u?.cost === 'number' && u.cost > 0 ? u.cost : u?.cost_details?.upstream_inference_cost
   const reasoning = u?.completion_tokens_details?.reasoning_tokens
+  if (cached) return cachedUsage(u, cost, reasoning)
   return {
     input_tokens: u?.prompt_tokens ?? 0,
     // Already includes completion_tokens_details.reasoning_tokens (billed as output), as Anthropic's output_tokens includes thinking.
     output_tokens: u?.completion_tokens ?? 0,
     cache_read_input_tokens: u?.prompt_tokens_details?.cached_tokens ?? 0,
     cache_creation_input_tokens: 0,
+    ...(typeof cost === 'number' ? { cost_usd: cost } : {}),
+    ...(typeof reasoning === 'number' && reasoning > 0 ? { reasoning_tokens: reasoning } : {}),
+  }
+}
+
+// prompt_tokens counts cache reads and writes too, so input_tokens keeps only the uncached rest, as Anthropic's does.
+function cachedUsage(u: OpenRouterResponse['usage'], cost: number | undefined, reasoning: number | undefined): LLMUsage {
+  const read = u?.prompt_tokens_details?.cached_tokens ?? 0
+  const write = u?.prompt_tokens_details?.cache_write_tokens ?? 0
+  return {
+    input_tokens: Math.max(0, (u?.prompt_tokens ?? 0) - read - write),
+    output_tokens: u?.completion_tokens ?? 0,
+    cache_read_input_tokens: read,
+    cache_creation_input_tokens: write,
     ...(typeof cost === 'number' ? { cost_usd: cost } : {}),
     ...(typeof reasoning === 'number' && reasoning > 0 ? { reasoning_tokens: reasoning } : {}),
   }
@@ -142,8 +160,12 @@ function sumUsage(a: LLMUsage, b: LLMUsage): LLMUsage {
     cache_creation_input_tokens: (a.cache_creation_input_tokens ?? 0) + (b.cache_creation_input_tokens ?? 0),
     ...(cost === undefined ? {} : { cost_usd: cost }),
     ...(reasoning > 0 ? { reasoning_tokens: reasoning } : {}),
+    ...(cacheAware() ? { attempts: [...(a.attempts ?? [a]), ...(b.attempts ?? [b])] } : {}),
   }
 }
+
+// OpenRouter caches some upstreams on its own (an OpenAI judge too), so under the flag every prompt_tokens may include unmarked cache reads.
+const cacheAware = (): boolean => !!config.review?.promptCache
 
 // The first attempt was paid for, so a resend that fails another way still reports it.
 function withPriorUsage(err: unknown, prior: LLMUsage): unknown {

@@ -2,17 +2,19 @@
 // Review orchestration — state machine only
 // ---------------------------------------------------------------------------
 
+import { createHash } from 'crypto'
 import { config } from '../config.js'
 import { contextWindowFor } from '../llm/context-window.js'
-import { DeadlineAbortError, type LLMUsage } from '../llm/shared.js'
+import { takesSystemAfter } from '../llm/model-id.js'
+import { DeadlineAbortError, isSystemMessageRejection, type LLMUsage } from '../llm/shared.js'
 import { loadPrompt, type LoadedPrompt } from '../prompt/loader.js'
 import { describeHttpError } from '../vcs/http-retry.js'
 import { fetchContext } from '../context/fetcher.js'
-import { runReview, runCommentResponse, runJudge, runBreadth, runLens, findingsOutputSchema, sanitizeFirstPassSites, type SiteDropReason } from './client.js'
+import { runReview, runCommentResponse, runJudge, runBreadth, runLens, runSharedPass, findingsOutputSchema, sharedOutputSchema, sanitizeFirstPassSites, type SiteDropReason, type SharedPrefix } from './client.js'
 import { buildShownSource } from './shown-anchors.js'
 import { candidateId, type JudgeOptions } from './judge-decisions.js'
-import { fileCoverage, prioritizeUntouched, breadthSystemPrompt, breadthBriefing, flaggedFiles, findingsInFiles, secondLookSystemPrompt, secondLookBriefing, type LensStatus } from './breadth.js'
-import { activeLenses, parseLensList, lensSystemPrompt, lensBriefing } from './lenses.js'
+import { fileCoverage, prioritizeUntouched, breadthSystemPrompt, breadthBriefing, breadthOverlay, flaggedFiles, findingsInFiles, secondLookSystemPrompt, secondLookBriefing, secondLookOverlay, secondLookFilesBriefing, type LensStatus } from './breadth.js'
+import { activeLenses, parseLensList, lensSystemPrompt, lensBriefing, lensOverlay } from './lenses.js'
 import { splitDiffByFile } from './bundler.js'
 import { normalizeFindingPath, type FirstPassSite } from './findings-output.js'
 import { filterDiff, countChangedLines, parseVerdictScore, isPathExcluded, scanTodos, isContextLengthError, shownLength } from './parsers.js'
@@ -33,7 +35,7 @@ function supersedeBoundary<T extends { resolved?: boolean }>(reviews: T[]): T | 
   return pool[pool.length - 1]
 }
 
-import type { ReviewContext, OutcomeSink, LensRun, TriggerInfo } from './types.js'
+import type { ReviewContext, OutcomeSink, LensRun, TriggerInfo, PromptCacheLog, UncachedReason, StageUsage } from './types.js'
 import { PrTooLargeError } from '../vcs/adapter.js'
 import type { VCSAdapter, CommentReply } from '../vcs/adapter.js'
 
@@ -202,6 +204,72 @@ async function withPassDeadline<T>(limitMs: number | undefined, call: (signal?: 
   }
 }
 
+const stageUsage = (u: LLMUsage): StageUsage => ({
+  input_tokens: u.input_tokens, output_tokens: u.output_tokens, cost_usd: u.cost_usd,
+  cache_read_input_tokens: u.cache_read_input_tokens ?? 0, cache_creation_input_tokens: u.cache_creation_input_tokens ?? 0,
+  ...(u.attempts ? { attempts: u.attempts } : {}),
+})
+
+// A pass shares the cache only with the reviewer's exact model and effort strings: an effort change invalidates the cached messages.
+function planPromptCache(ctx: ReviewContext): PromptCacheLog {
+  const log: PromptCacheLog = { ttl: '5m', reviewer_marked: false, shared_stages: [], uncached: [] }
+  const skip: UncachedReason | undefined = ctx.reviewNumber > 1 ? 'rereview' : !config.judge.model ? 'no_judge' : undefined
+  if (skip) { log.uncached.push({ stage: 'review', reason: skip }); return log }
+  const model = config.anthropic.model
+  const effort = config.review.effort
+  const passes = [
+    ...(config.breadth.enabled ? [{ stage: 'breadth', model: config.breadth.model || config.judge.model, effort: config.breadth.effort || (config.breadth.model ? '' : config.judge.effort) }] : []),
+    ...(config.review.secondLook ? [{ stage: 'second_look', model, effort }] : []),
+    ...activeLenses(config.lenses).map(l => ({ stage: `lens:${l.name}`, model: config.lenses.model || model, effort: config.lenses.model ? '' : effort })),
+  ]
+  const supported = takesSystemAfter(model)
+  // Gates whose outcome is already certain before the reviewer call; findings-dependent gates run later and can still waste the write.
+  const reviewable = fileCoverage(ctx.filteredDiff!, []).reviewable.length
+  const limits = [config.anthropic.maxInputTokens, contextWindowFor(model) - extraPassMaxTokens(ctx)].filter(n => n > 0)
+  const overBudget = limits.length > 0 && ctx.estimatedInputTokens > Math.min(...limits)
+  const late = (!!ctx.outcomeSink && (Date.now() - ctx.startTime) / 1000 > config.breadth.benchmarkDeadlineSeconds / 2) || (passTimeLeftMs(ctx) ?? 1) <= 0
+  const gate = (stage: string): UncachedReason | undefined =>
+    stage === 'breadth' && reviewable < config.breadth.minFiles ? 'skipped_small'
+      : stage === 'breadth' && reviewable < config.breadth.minUntouched ? 'skipped_few_untouched'
+        : stage === 'second_look' && reviewable === 0 ? 'skipped_no_findings'
+          : overBudget ? 'skipped_budget' : late ? 'skipped_time' : undefined
+  for (const p of passes) {
+    const reason: UncachedReason | undefined = !supported ? 'unsupported_model' : p.model !== model ? 'model' : p.effort !== effort ? 'effort' : gate(p.stage)
+    if (reason) log.uncached.push({ stage: p.stage, reason })
+    else log.shared_stages.push(p.stage)
+  }
+  const reviewSkip: UncachedReason | undefined = !supported ? 'unsupported_model' : log.shared_stages.length === 0 ? 'no_shared_pass' : undefined
+  if (reviewSkip) { log.uncached.unshift({ stage: 'review', reason: reviewSkip }); return log }
+  log.reviewer_marked = true
+  if (config.llmProvider === 'openrouter') log.session_id = createHash('sha256').update(`${ctx.repoSlug}:${ctx.prId}:${ctx.startTime}`).digest('hex').slice(0, 32)
+  return log
+}
+
+const sharedPrefix = (ctx: ReviewContext, stage: string): SharedPrefix | undefined =>
+  ctx.cachePrefix && ctx.promptCache?.shared_stages.includes(stage) ? ctx.cachePrefix : undefined
+
+// The probes rejected the overlay-as-user-text layout, so a rejected system message falls back to today's uncached request, never to that.
+async function cachedOrUncached<T>(ctx: ReviewContext, stage: string, limitMs: number | undefined, cached: () => Promise<T>, uncached: () => Promise<T>): Promise<T> {
+  try {
+    return await cached()
+  } catch (err: unknown) {
+    if (!isSystemMessageRejection(err)) throw err
+    recordPassCall(ctx, stage, extraPassMaxTokens(ctx), limitMs, undefined, err)
+    // The same model would reject every later pass too, so the rest of the run sends today's requests without another 400 each.
+    const log = ctx.promptCache!
+    const at = log.shared_stages.indexOf(stage)
+    const message = String((err as Error).message ?? '').replace(/\s+/g, ' ').trim().slice(0, 120)
+    log.uncached.push({ stage, reason: `rejected_400: ${message}` }, ...log.shared_stages.slice(at + 1).map(s => ({ stage: s, reason: 'off_after_400' as const })))
+    log.shared_stages = log.shared_stages.slice(0, at)
+    ctx.cachePrefix = undefined
+    console.warn(`  ${stage}: the cached request was rejected (${(err as Error).message}) — re-sending it uncached; the prompt cache is off for the rest of this run`)
+    return uncached()
+  }
+}
+
+// From the stored prefix, not estimatedInputTokens, which still counts file contexts a diff-only retry dropped.
+const cachedEstimate = (prefix: SharedPrefix, overlay: string, briefing: string): number =>
+  Math.ceil((prefix.system.length + prefix.block.length + overlay.length + briefing.length) / 4)
 
 // The stage is entered only with at least one known lens, so a lens-off run never reaches it.
 function stageAfterSecondLook(): State {
@@ -593,6 +661,11 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       const reviewPrompt = { ...ctx.prompt!, content }
       const recommend = config.lenses.recommend && ctx.reviewNumber === 1
       const recommendTail: [boolean?] = recommend ? [true] : []
+      if (config.review.promptCache) ctx.promptCache = planPromptCache(ctx)
+      const cache = ctx.promptCache?.reviewer_marked
+        ? { schema: sharedOutputSchema({ lensRecommendation: recommend, alsoAffects: hiBench(ctx), scenario: !!config.review.highImpact, firstPassSites: fpSites(ctx) }), ...(ctx.promptCache.session_id ? { sessionId: ctx.promptCache.session_id } : {}) }
+        : undefined
+      const reviewTail: [boolean?, { schema: Record<string, unknown>; sessionId?: string }?] = cache ? [recommend, cache] : recommendTail
 
       const call = () => runReview(
         config.llmApiKey,
@@ -608,7 +681,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         ctx.replies ?? [],
         ctx.deltaDiff ?? '',
         config.review.lineNumbers,
-        ...recommendTail,
+        ...reviewTail,
       )
       // Backstop for an under-counted estimate: on a context-length rejection, drop file contexts
       // and retry diff-only; if the diff alone won't fit, skip rather than let the API error.
@@ -636,6 +709,9 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       }
       ctx.reviewText = result.text
       ctx.reviewObject = result.review
+      // The successful attempt's user message, so a diff-only retry carries through to the passes.
+      if (cache && result.cacheBlock !== undefined) ctx.cachePrefix = { system: content, schema: cache.schema, block: result.cacheBlock, ...(cache.sessionId ? { sessionId: cache.sessionId } : {}) }
+      if (config.review.promptCache) ctx.reviewUsage = stageUsage(result.usage)
       if (recommend) {
         const recs = result.lensRecommendations ?? null
         ctx.lensRecommendations = recs
@@ -686,7 +762,9 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       const system = breadthSystemPrompt(ctx.prompt!.content, remaining, config.judge.shownAnchors, fp)
       ctx.breadthPlan = config.breadth.priorityTargets ? prioritizeUntouched(coverage.untouched, ctx.filteredDiff!, firstPass) : undefined
       const briefing = ids ? breadthBriefing(firstPass, coverage.untouched, ctx.breadthPlan, ids.tags) : breadthBriefing(firstPass, coverage.untouched, ctx.breadthPlan)
-      const estimate = ctx.estimatedInputTokens + Math.ceil((system.length - ctx.prompt!.content.length + briefing.length) / 4)
+      const prefix = sharedPrefix(ctx, 'breadth')
+      const overlay = prefix ? breadthOverlay(remaining, config.judge.shownAnchors, fp) : ''
+      const estimate = prefix ? cachedEstimate(prefix, overlay, briefing) : ctx.estimatedInputTokens + Math.ceil((system.length - ctx.prompt!.content.length + briefing.length) / 4)
       // A 0 limit means "disabled", as in ESTIMATE_TOKENS; without this filter MAX_INPUT_TOKENS=0 would skip every breadth pass.
       const limits = [config.anthropic.maxInputTokens, contextWindowFor(model) - extraPassMaxTokens(ctx)].filter(n => n > 0)
       const budget = limits.length ? Math.min(...limits) : Infinity
@@ -716,14 +794,17 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       try {
         const result = await withPassDeadline(limitMs, signal => {
           const tail: [string?, Record<string, unknown>?, AbortSignal?] = signal ? ['breadth', breadthSchema[1], signal] : breadthSchema
-          return runBreadth(
+          const uncached = () => runBreadth(
             config.llmApiKey, model, config.judge.maxRetries, extraPassMaxTokens(ctx), effort,
             ctx.prInfo!, ctx.filteredDiff!, ctx.fileContexts ?? [], system, briefing, config.review.lineNumbers, ...tail,
           )
+          return prefix
+            ? cachedOrUncached(ctx, 'breadth', limitMs, () => runSharedPass(config.llmApiKey, model, config.judge.maxRetries, extraPassMaxTokens(ctx), effort, prefix, briefing, overlay, 'breadth', signal), uncached)
+            : uncached()
         })
         ctx.breadthFindings = result.findings
         ctx.breadthPromptHash = result.promptHash
-        ctx.breadthUsage = { input_tokens: result.usage.input_tokens, output_tokens: result.usage.output_tokens, cost_usd: result.usage.cost_usd }
+        ctx.breadthUsage = stageUsage(result.usage)
         addUsage(ctx, result.usage)
         if (ids) addFirstPassSites(ctx, sanitizeFirstPassSites(result.firstPassSites, ids.index, 'breadth'), 'breadth', 'Breadth')
         ctx.breadthStatus = 'succeeded'
@@ -735,7 +816,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         const e = err as Error & { usage?: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number; cost_usd?: number; reasoning_tokens?: number } }
         const used = spentUsage(err, e.usage)
         if (used) {
-          ctx.breadthUsage = { input_tokens: used.input_tokens, output_tokens: used.output_tokens, cost_usd: used.cost_usd }
+          ctx.breadthUsage = stageUsage(used)
           addUsage(ctx, used)
         }
         recordPassCall(ctx, 'breadth', extraPassMaxTokens(ctx), limitMs, e.usage, err)
@@ -777,10 +858,13 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       const ids = fp ? firstPassIds(firstPass, known) : undefined
       const system = secondLookSystemPrompt(ctx.prompt!.content, remaining, config.judge.shownAnchors, hi, fp)
       const briefing = ids ? secondLookBriefing(known, ids.tags) : secondLookBriefing(known)
+      const prefix = sharedPrefix(ctx, 'second_look')
+      const overlay = prefix ? secondLookOverlay(remaining, config.judge.shownAnchors, hi, fp) : ''
+      const sharedBriefing = prefix ? secondLookFilesBriefing(flagged, briefing) : ''
       // Estimate on the restricted inputs, not the full diff, so a large PR with few flagged files isn't needlessly skipped.
       // shownLength on the numbered payloads (diff + file contexts) so the guard counts the line-number gutter, as ESTIMATE_TOKENS does.
       const shownSL = (s: string) => shownLength(s, config.review.lineNumbers)
-      const estimate = Math.ceil((system.length + shownSL(restrictedDiff) + briefing.length + contexts.reduce((n, c) => n + shownSL(c.content), 0)) / 4)
+      const estimate = prefix ? cachedEstimate(prefix, overlay, sharedBriefing) : Math.ceil((system.length + shownSL(restrictedDiff) + briefing.length + contexts.reduce((n, c) => n + shownSL(c.content), 0)) / 4)
       const limits = [config.anthropic.maxInputTokens, contextWindowFor(model) - extraPassMaxTokens(ctx)].filter(n => n > 0)
       const budget = limits.length ? Math.min(...limits) : Infinity
       if (estimate > budget) {
@@ -802,20 +886,26 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         return next
       }
 
-      if (config.judge.shownAnchors) ctx.shownSecondLook = buildShownSource(restrictedDiff, contexts)
+      if (config.judge.shownAnchors) ctx.shownSecondLook = prefix ? buildShownSource(ctx.filteredDiff!, ctx.fileContexts ?? []) : buildShownSource(restrictedDiff, contexts)
       console.log(`  Second-look: re-reading ${flagged.length} flagged file(s), excluding ${known.length} known finding(s)`)
       const secondLookSchema: [Record<string, unknown>?] = hi || fp ? [findingsOutputSchema({ alsoAffects: hiBench(ctx), scenario: hi, firstPassSites: fp })] : []
       try {
         const result = await withPassDeadline(limitMs, signal => {
           const tail: [Record<string, unknown>?, AbortSignal?] = signal ? [secondLookSchema[0], signal] : secondLookSchema
-          return runBreadth(
+          const uncached = () => runBreadth(
             config.llmApiKey, model, config.anthropic.maxRetries, extraPassMaxTokens(ctx), config.review.effort,
             ctx.prInfo!, restrictedDiff, contexts, system, briefing, config.review.lineNumbers, 'second-look', ...tail,
           )
+          return prefix
+            ? cachedOrUncached(ctx, 'second_look', limitMs, () => runSharedPass(config.llmApiKey, model, config.anthropic.maxRetries, extraPassMaxTokens(ctx), config.review.effort, prefix, sharedBriefing, overlay, 'second-look', signal), () => {
+                if (config.judge.shownAnchors) ctx.shownSecondLook = buildShownSource(restrictedDiff, contexts)
+                return uncached()
+              })
+            : uncached()
         })
         ctx.secondLookFindings = result.findings
         ctx.secondLookPromptHash = result.promptHash
-        ctx.secondLookUsage = { input_tokens: result.usage.input_tokens, output_tokens: result.usage.output_tokens, cost_usd: result.usage.cost_usd }
+        ctx.secondLookUsage = stageUsage(result.usage)
         addUsage(ctx, result.usage)
         if (ids) addFirstPassSites(ctx, sanitizeFirstPassSites(result.firstPassSites, ids.index, 'second_look'), 'second_look', 'Second-look')
         ctx.secondLookStatus = 'succeeded'
@@ -825,7 +915,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         const e = err as Error & { usage?: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number; cost_usd?: number; reasoning_tokens?: number } }
         const used = spentUsage(err, e.usage)
         if (used) {
-          ctx.secondLookUsage = { input_tokens: used.input_tokens, output_tokens: used.output_tokens, cost_usd: used.cost_usd }
+          ctx.secondLookUsage = stageUsage(used)
           addUsage(ctx, used)
         }
         recordPassCall(ctx, 'second_look', extraPassMaxTokens(ctx), limitMs, e.usage, err)
@@ -868,7 +958,9 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
 
         const system = lensSystemPrompt(ctx.prompt!.content, lens, remaining, config.judge.shownAnchors)
         const briefing = lensBriefing(known)
-        const estimate = ctx.estimatedInputTokens + Math.ceil((system.length - ctx.prompt!.content.length + briefing.length) / 4)
+        const prefix = sharedPrefix(ctx, `lens:${lens.name}`)
+        const overlay = prefix ? lensOverlay(lens, remaining, config.judge.shownAnchors) : ''
+        const estimate = prefix ? cachedEstimate(prefix, overlay, briefing) : ctx.estimatedInputTokens + Math.ceil((system.length - ctx.prompt!.content.length + briefing.length) / 4)
         if (estimate > budget) {
           run.status = 'skipped_budget'
           console.log(`  Lens ${lens.name} skipped: ~${estimate.toLocaleString()} tokens exceeds the ${model} budget (${budget.toLocaleString()})`)
@@ -895,14 +987,17 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         try {
           const result = await withPassDeadline(limitMs, signal => {
             const tail: [Record<string, unknown>?, AbortSignal?] = signal ? [lensSchema[0], signal] : lensSchema
-            return runLens(
+            const uncached = () => runLens(
               config.llmApiKey, model, config.anthropic.maxRetries, extraPassMaxTokens(ctx), effort,
               ctx.prInfo!, ctx.filteredDiff!, ctx.fileContexts ?? [], system, briefing, config.review.lineNumbers, `lens:${lens.name}`, ...tail,
             )
+            return prefix
+              ? cachedOrUncached(ctx, `lens:${lens.name}`, limitMs, () => runSharedPass(config.llmApiKey, model, config.anthropic.maxRetries, extraPassMaxTokens(ctx), effort, prefix, briefing, overlay, `lens:${lens.name}`, signal), uncached)
+              : uncached()
           })
           run.findings = result.findings
           run.promptHash = result.promptHash
-          run.usage = { input_tokens: result.usage.input_tokens, output_tokens: result.usage.output_tokens, cost_usd: result.usage.cost_usd }
+          run.usage = stageUsage(result.usage)
           addUsage(ctx, result.usage)
           run.status = 'succeeded'
           console.log(`  Lens ${lens.name}: ${result.findings.length} finding(s)`)
@@ -911,7 +1006,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
           const e = err as Error & { usage?: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number; cost_usd?: number; reasoning_tokens?: number } }
           const used = spentUsage(err, e.usage)
           if (used) {
-            run.usage = { input_tokens: used.input_tokens, output_tokens: used.output_tokens, cost_usd: used.cost_usd }
+            run.usage = stageUsage(used)
             addUsage(ctx, used)
           }
           recordPassCall(ctx, `lens:${lens.name}`, extraPassMaxTokens(ctx), limitMs, e.usage, err)
@@ -1061,7 +1156,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         if (result.scores?.length) {
           console.log(`  Judge finding scores: ${result.scores.map(s => `${s.severity} ${s.score}/10`).join(', ')}`)
         }
-        ctx.judgeUsage = { input_tokens: result.usage.input_tokens, output_tokens: result.usage.output_tokens, cost_usd: result.usage.cost_usd }
+        ctx.judgeUsage = stageUsage(result.usage)
         addUsage(ctx, result.usage)
         ctx.judgeStatus = 'succeeded'
         recordPassCall(ctx, 'judge', config.anthropic.maxTokens, undefined, result.usage)
@@ -1077,6 +1172,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
     }
 
     case State.BUNDLED_REVIEW: {
+      if (config.review.promptCache) ctx.promptCache = { ttl: '5m', reviewer_marked: false, shared_stages: [], uncached: [{ stage: 'review', reason: 'bundled' }] }
       const outcome = await runBundledReview(ctx, ctx.inputBudget!)
       if (!outcome.ok) {
         ctx.action = 'SKIP'

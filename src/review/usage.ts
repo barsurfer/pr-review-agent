@@ -9,6 +9,7 @@ import { dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { config } from '../config.js'
 import { baseModelId } from '../llm/model-id.js'
+import type { LLMUsage } from '../llm/shared.js'
 import { parseVerdictScore, parseFindings, countDiffLines } from './parsers.js'
 import { countFindings, normalizeIssueType } from './formatter.js'
 import type { FindingScore, ReviewFinding, IssueType, Scenario, AlsoAffected } from './formatter.js'
@@ -18,7 +19,7 @@ import { MAX_UNTOUCHED_LISTED, type BreadthStatus, type SecondLookStatus, type L
 import { activeLenses, type LensRecommendation } from './lenses.js'
 import { isCheckedCommitHash } from './checked-commit.js'
 import type { SuggestedFixStats } from './suggested-fix.js'
-import type { ReviewContext, LensRun, EventKind, PassCall } from './types.js'
+import type { ReviewContext, LensRun, EventKind, PassCall, PromptCacheLog, StageUsage } from './types.js'
 import { isAgentReply } from '../vcs/adapter.js'
 
 // 12 hex chars of sha256 — enough to tell prompt/code versions apart across runs without bloating the record.
@@ -74,7 +75,7 @@ export interface UsageRecord {
   cost_usd: number
   judge_model: string | null
   judge_effort: string | null
-  judge_tokens: { input: number; output: number } | null
+  judge_tokens: StageTokens | null
   judge_cost_usd: number | null
   duration_ms: number
   dry_run: boolean
@@ -102,19 +103,20 @@ export interface UsageRecord {
   breadth_status: BreadthStatus | null
   breadth_model: string | null
   breadth_prompt_hash: string | null
-  breadth_tokens: { input: number; output: number } | null
+  breadth_tokens: StageTokens | null
   breadth_cost_usd: number | null
   second_look_status: SecondLookStatus | null
   second_look_prompt_hash: string | null
-  second_look_tokens: { input: number; output: number } | null
+  second_look_tokens: StageTokens | null
   second_look_cost_usd: number | null
-  lens_runs?: Array<{ name: string; status: LensStatus; model: string; prompt_hash: string | null; tokens: { input: number; output: number } | null; cost_usd: number | null; findings: number }> | null
+  lens_runs?: Array<{ name: string; status: LensStatus; model: string; prompt_hash: string | null; tokens: StageTokens | null; cost_usd: number | null; findings: number }> | null
   lens_recommendations?: LensRecommendation[] | null
   suggested_fixes?: SuggestedFixStats | null
   counterpart_rows?: number
   also_affects_rows?: number
   also_affects?: AlsoAffectsLog[]
   pass_calls?: PassCall[]
+  prompt_cache?: PromptCacheLog | null
   first_pass_sites_named?: FirstPassSite[] | null
   first_pass_sites_dropped?: ReviewContext['firstPassSitesDropped'] | null
   first_pass_site_rows?: number
@@ -130,6 +132,9 @@ export interface UsageRecord {
   trigger?: { event: string | null; comment_author: string | null; event_kind?: EventKind }
   error: { type: string; message: string; status: number | null } | null
 }
+
+// Cache fields appear only under ENABLE_PROMPT_CACHE, so every other record keeps its earlier shape.
+export interface StageTokens { input: number; output: number; cache_read?: number; cache_write?: number }
 
 // ---------------------------------------------------------------------------
 // Cost estimation
@@ -159,15 +164,36 @@ function haiku55Pricing(inputTokens: number): { input: number; output: number } 
   return inputTokens > 100_000 ? { input: 0.5, output: 2.5 } : { input: 0.1, output: 0.5 }
 }
 
-export function estimateCost(tokens: { input: number; output: number }, model: string): number {
+// A cache read bills at this fraction of the input rate; a 5-minute cache write at 1.25x.
+function cacheReadRate(base: string): number {
+  if (/^claude-(fable|mythos)-(5-[1-9]|[6-9])/.test(base)) return 0.025
+  if (base === 'claude-sonnet-5-5' || base === 'claude-opus-5-5') return 0.05
+  return 0.1
+}
+
+export function estimateCost(tokens: StageTokens, model: string): number {
+  return Math.round(unroundedCost(tokens, model) * 10000) / 10000 // 4 decimal places
+}
+
+// Haiku 5.5's tier is per request, so a resent call is priced attempt by attempt and only the sum is rounded.
+export function estimateAttemptsCost(attempts: readonly LLMUsage[], model: string): number {
+  const cost = attempts.reduce((sum, a) => sum + unroundedCost({ input: a.input_tokens, output: a.output_tokens, cache_read: a.cache_read_input_tokens ?? 0, cache_write: a.cache_creation_input_tokens ?? 0 }, model), 0)
+  return Math.round(cost * 10000) / 10000
+}
+
+function unroundedCost(tokens: StageTokens, model: string): number {
   const base = baseModelId(model)
-  let p = base === 'claude-haiku-5-5' ? haiku55Pricing(tokens.input) : (MODEL_PRICING[model] ?? MODEL_PRICING[base])
+  const read = tokens.cache_read ?? 0
+  const write = tokens.cache_write ?? 0
+  // Haiku 5.5's tier counts the whole prompt, cached tokens included.
+  let p = base === 'claude-haiku-5-5' ? haiku55Pricing(tokens.input + read + write) : (MODEL_PRICING[model] ?? MODEL_PRICING[base])
   if (!p) {
     console.warn(`No pricing entry for model "${model}" — estimating with claude-sonnet-4-6 rates`)
     p = MODEL_PRICING['claude-sonnet-4-6']
   }
-  const cost = (tokens.input / 1_000_000) * p.input + (tokens.output / 1_000_000) * p.output
-  return Math.round(cost * 10000) / 10000 // 4 decimal places
+  return read || write
+    ? (tokens.input / 1_000_000) * p.input + (write / 1_000_000) * p.input * 1.25 + (read / 1_000_000) * p.input * cacheReadRate(base) + (tokens.output / 1_000_000) * p.output
+    : (tokens.input / 1_000_000) * p.input + (tokens.output / 1_000_000) * p.output
 }
 
 // ---------------------------------------------------------------------------
@@ -241,38 +267,53 @@ export function buildUsageRecord(
   const deltaStats = ctx.reviewObject?.delta_stats ?? null
   const judgeScores = ctx.judgeScores ?? null
   const judgeModel = config.judge.model || null
+  const cache = !!config.review.promptCache
+  const tok = (u: StageUsage): StageTokens => ({ input: u.input_tokens, output: u.output_tokens, ...(cache ? { cache_read: u.cache_read_input_tokens ?? 0, cache_write: u.cache_creation_input_tokens ?? 0 } : {}) })
+  const priced = (u: StageUsage, tokens: StageTokens, model: string): number => (u.attempts ? estimateAttemptsCost(u.attempts, model) : estimateCost(tokens, model))
   const judgeTokensRaw = ctx.judgeUsage ?? null
-  const judgeTokens = judgeTokensRaw ? { input: judgeTokensRaw.input_tokens, output: judgeTokensRaw.output_tokens } : null
-  const judgeCost = ctx.judgeUsage?.cost_usd ?? (judgeTokens && judgeModel ? estimateCost(judgeTokens, judgeModel) : null)
-  const breadthTokens = ctx.breadthUsage ? { input: ctx.breadthUsage.input_tokens, output: ctx.breadthUsage.output_tokens } : null
-  const breadthCost = ctx.breadthUsage?.cost_usd ?? (breadthTokens && ctx.breadthModel ? estimateCost(breadthTokens, ctx.breadthModel) : null)
+  const judgeTokens = judgeTokensRaw ? tok(judgeTokensRaw) : null
+  const judgeCost = ctx.judgeUsage?.cost_usd ?? (judgeTokensRaw && judgeTokens && judgeModel ? priced(judgeTokensRaw, judgeTokens, judgeModel) : null)
+  const breadthTokens = ctx.breadthUsage ? tok(ctx.breadthUsage) : null
+  const breadthCost = ctx.breadthUsage?.cost_usd ?? (ctx.breadthUsage && breadthTokens && ctx.breadthModel ? priced(ctx.breadthUsage, breadthTokens, ctx.breadthModel) : null)
   // Second-look runs on the reviewer model, so its missing-actual cost is estimated at that model.
-  const secondLookTokens = ctx.secondLookUsage ? { input: ctx.secondLookUsage.input_tokens, output: ctx.secondLookUsage.output_tokens } : null
-  const secondLookCost = ctx.secondLookUsage?.cost_usd ?? (secondLookTokens ? estimateCost(secondLookTokens, config.anthropic.model) : null)
+  const secondLookTokens = ctx.secondLookUsage ? tok(ctx.secondLookUsage) : null
+  const secondLookCost = ctx.secondLookUsage?.cost_usd ?? (ctx.secondLookUsage && secondLookTokens ? priced(ctx.secondLookUsage, secondLookTokens, config.anthropic.model) : null)
   const lenses = activeLenses(config.lenses)
   // The bundled path never enters LENS_REVIEW, so its runs are inferred here, as breadth/second-look statuses are.
   const lensSource: LensRun[] | undefined = ctx.lensRuns ?? (ctx.bundleCount && lenses.length
     ? lenses.map(l => ({ name: l.name, status: 'skipped_bundled' as const, model: config.lenses.model || config.anthropic.model, findings: [] }))
     : undefined)
   const lensRuns = lensSource?.map(r => {
-    const tokens = r.usage ? { input: r.usage.input_tokens, output: r.usage.output_tokens } : null
-    return { name: r.name, status: r.status, model: r.model, prompt_hash: r.promptHash ?? null, tokens, cost_usd: r.usage?.cost_usd ?? (tokens ? estimateCost(tokens, r.model) : null), findings: r.findings.length }
+    const tokens = r.usage ? tok(r.usage) : null
+    return { name: r.name, status: r.status, model: r.model, prompt_hash: r.promptHash ?? null, tokens, cost_usd: r.usage?.cost_usd ?? (r.usage && tokens ? priced(r.usage, tokens, r.model) : null), findings: r.findings.length }
   }) ?? null
   const lensUsage = (ctx.lensRuns ?? []).reduce((sum, r) => ({
     input: sum.input + (r.usage?.input_tokens ?? 0), output: sum.output + (r.usage?.output_tokens ?? 0), cost: sum.cost + (r.usage?.cost_usd ?? 0),
-  }), { input: 0, output: 0, cost: 0 })
+    cache_read: sum.cache_read + (r.usage?.cache_read_input_tokens ?? 0), cache_write: sum.cache_write + (r.usage?.cache_creation_input_tokens ?? 0),
+  }), { input: 0, output: 0, cost: 0, cache_read: 0, cache_write: 0 })
   const lensCost = (lensRuns ?? []).reduce((sum, r) => sum + (r.cost_usd ?? 0), 0)
   // A reply-only run uses the reply model (REPLY_MODEL), so log + cost it at that model, not the reviewer's.
   const recordModel = ctx.action === 'REPLY' && config.reply.model ? config.reply.model : config.anthropic.model
   // Reviewer-only cost: subtract the per-stage actuals from the all-calls actual aggregate when present,
   // else estimate from the reviewer's own tokens. Summing the stages keeps the total consistent
   // with the per-stage columns even when only some calls reported an actual cost (mixed-vendor runs).
-  const reviewerCost = ctx.usage.cost_usd !== undefined
-    ? ctx.usage.cost_usd - (ctx.judgeUsage?.cost_usd ?? 0) - (ctx.breadthUsage?.cost_usd ?? 0) - (ctx.secondLookUsage?.cost_usd ?? 0) - lensUsage.cost
-    : estimateCost({
+  const reviewerTokens: StageTokens = {
         input: ctx.usage.input_tokens - (judgeTokens?.input ?? 0) - (breadthTokens?.input ?? 0) - (secondLookTokens?.input ?? 0) - lensUsage.input,
         output: ctx.usage.output_tokens - (judgeTokens?.output ?? 0) - (breadthTokens?.output ?? 0) - (secondLookTokens?.output ?? 0) - lensUsage.output,
-      }, recordModel)
+        ...(cache ? {
+          cache_read: ctx.usage.cache_read - (judgeTokens?.cache_read ?? 0) - (breadthTokens?.cache_read ?? 0) - (secondLookTokens?.cache_read ?? 0) - lensUsage.cache_read,
+          cache_write: ctx.usage.cache_write - (judgeTokens?.cache_write ?? 0) - (breadthTokens?.cache_write ?? 0) - (secondLookTokens?.cache_write ?? 0) - lensUsage.cache_write,
+        } : {}),
+      }
+  const reviewCall = cache ? ctx.reviewUsage : undefined
+  const reviewerCost = ctx.usage.cost_usd !== undefined
+    ? ctx.usage.cost_usd - (ctx.judgeUsage?.cost_usd ?? 0) - (ctx.breadthUsage?.cost_usd ?? 0) - (ctx.secondLookUsage?.cost_usd ?? 0) - lensUsage.cost
+    : reviewCall?.attempts
+      ? estimateAttemptsCost(reviewCall.attempts, recordModel) + estimateCost({
+          input: reviewerTokens.input - reviewCall.input_tokens, output: reviewerTokens.output - reviewCall.output_tokens,
+          cache_read: (reviewerTokens.cache_read ?? 0) - (reviewCall.cache_read_input_tokens ?? 0), cache_write: (reviewerTokens.cache_write ?? 0) - (reviewCall.cache_creation_input_tokens ?? 0),
+        }, recordModel)
+      : estimateCost(reviewerTokens, recordModel)
   // The bundled path never enters BREADTH_REVIEW, so its status is inferred here.
   const breadthStatus = ctx.breadthStatus ?? (ctx.bundleCount ? (config.breadth.enabled ? 'skipped_bundled' : 'disabled') : null)
   const secondLookStatus = ctx.secondLookStatus ?? (ctx.bundleCount ? (config.review.secondLook ? 'skipped_bundled' : 'disabled') : null)
@@ -384,7 +425,8 @@ export function buildUsageRecord(
     ...(ctx.alsoAffectsRows !== undefined ? { also_affects_rows: ctx.alsoAffectsRows } : {}),
     ...(ctx.alsoAffectsLog ? { also_affects: ctx.alsoAffectsLog } : {}),
     // Benchmark-only and present only with one of these settings on, so every other record keeps its earlier shape.
-    ...(ctx.outcomeSink && (config.breadth.passDeadline || fpSites) ? { pass_calls: ctx.passCalls ?? [] } : {}),
+    ...((ctx.outcomeSink && (config.breadth.passDeadline || fpSites)) || cache ? { pass_calls: ctx.passCalls ?? [] } : {}),
+    ...(cache ? { prompt_cache: ctx.promptCache ? settledPromptCache(ctx, ctx.promptCache) : null } : {}),
     ...(ctx.outcomeSink && fpSites ? { first_pass_sites_named: ctx.firstPassSitesNamed ?? null, first_pass_sites_dropped: ctx.firstPassSitesDropped ?? null } : {}),
     ...(ctx.firstPassSiteRows !== undefined ? { first_pass_site_rows: ctx.firstPassSiteRows } : {}),
     ...(ctx.firstPassSitesLog ? { first_pass_sites: ctx.firstPassSitesLog } : {}),
@@ -415,6 +457,19 @@ export function buildUsageRecord(
     // Absent when CI passed no trigger, so those records serialize exactly as before.
     ...(ctx.trigger ? { trigger: { event: ctx.trigger.event || null, comment_author: ctx.trigger.commentAuthor || null, ...(ctx.trigger.kind ? { event_kind: ctx.trigger.kind } : {}) } } : {}),
     error,
+  }
+}
+
+// Findings-dependent gates run after the reviewer wrote the cache, so a planned pass that then skipped (or was never reached) is moved out of shared_stages.
+function settledPromptCache(ctx: ReviewContext, log: PromptCacheLog): PromptCacheLog {
+  const statusOf = (stage: string): string | undefined =>
+    stage === 'breadth' ? ctx.breadthStatus : stage === 'second_look' ? ctx.secondLookStatus : ctx.lensRuns?.find(r => `lens:${r.name}` === stage)?.status
+  const skipped = log.shared_stages.map(stage => ({ stage, status: statusOf(stage) ?? 'not_reached' })).filter(s => s.status === 'not_reached' || s.status.startsWith('skipped_'))
+  if (!skipped.length) return log
+  return {
+    ...log,
+    shared_stages: log.shared_stages.filter(stage => !skipped.some(s => s.stage === stage)),
+    uncached: [...log.uncached, ...skipped.map(s => ({ stage: s.stage, reason: `skipped_after_plan: ${s.status}` as const }))],
   }
 }
 

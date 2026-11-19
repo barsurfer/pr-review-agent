@@ -16,7 +16,7 @@ vi.mock('../config.js', () => ({
     lenses: { enabled: true, list: 'rel', model: '', recommend: false },
     agentIdentity: 'test-bot',
     reply: { maxComments: 5 },
-    review: { maxFindings: 0, splitCheck: true, todoScan: true, effort: 'high', enableNitpicks: true, secondLook: true, lineNumbers: true },
+    review: { maxFindings: 0, splitCheck: true, todoScan: true, effort: 'high', enableNitpicks: true, secondLook: true, lineNumbers: true, promptCache: false },
     context: { maxFiles: 20, maxFileLines: 500 },
     skipSourceBranches: [], skipTargetBranches: [], onlyTargetBranches: [],
     trigger: { event: '', commentAuthor: '', ignoreCommentAuthors: [] },
@@ -166,11 +166,13 @@ describe('v0.0.57 identity (every new setting off)', () => {
 
   it('the new keys at their real config.ts defaults (env unset) match every fixture too', async () => {
     const saved = { ...process.env }
-    for (const k of ['EXTRA_PASS_MAX_OUTPUT_TOKENS', 'ENABLE_BENCHMARK_PASS_DEADLINE', 'ENABLE_FIRST_PASS_SITES']) delete process.env[k]
+    for (const k of ['EXTRA_PASS_MAX_OUTPUT_TOKENS', 'ENABLE_BENCHMARK_PASS_DEADLINE', 'ENABLE_FIRST_PASS_SITES', 'ENABLE_PROMPT_CACHE']) delete process.env[k]
     process.env.ANTHROPIC_API_KEY ||= 'test-key'
     const { config: real } = await vi.importActual<typeof import('../config.js')>('../config.js')
-    process.env = saved
-    expect([real.anthropic.extraPassMaxTokens, real.breadth.passDeadline, real.review.firstPassSites, real.breadth.judgeReserveSeconds]).toEqual([0, false, false, 270])
+    // Restored in place: replacing process.env leaves vitest's stubEnv restoring a stale object, which leaks stubs into later files in the worker.
+    for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k]
+    Object.assign(process.env, saved)
+    expect([real.anthropic.extraPassMaxTokens, real.breadth.passDeadline, real.review.firstPassSites, real.breadth.judgeReserveSeconds, real.review.promptCache]).toEqual([0, false, false, 270, false])
 
     for (const [name, run] of SCENARIOS) {
       for (const k of Object.keys(cfg)) delete cfg[k]
@@ -179,6 +181,7 @@ describe('v0.0.57 identity (every new setting off)', () => {
       cfg.breadth.passDeadline = real.breadth.passDeadline
       cfg.breadth.judgeReserveSeconds = real.breadth.judgeReserveSeconds
       cfg.review.firstPassSites = real.review.firstPassSites
+      cfg.review.promptCache = real.review.promptCache
       completeStructured.mockReset()
       respond()
       logSpy.mockClear()

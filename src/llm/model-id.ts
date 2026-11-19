@@ -25,3 +25,8 @@ const windowByPrefix = (model: string) => MODEL_CONTEXT_WINDOWS.find(([prefix]) 
 export function tableContextWindow(model: string): number | undefined {
   return windowByPrefix(model) ?? windowByPrefix(baseModelId(model))
 }
+
+// Models probed to accept a mid-conversation system message, the only layout the prompt cache uses for an extra pass.
+const SYSTEM_AFTER_MODELS = /^claude-(opus-5|opus-5-5|opus-4-8|fable-.+|mythos-.+|sonnet-5-5|haiku-5-5)$/
+
+export const takesSystemAfter = (model: string): boolean => SYSTEM_AFTER_MODELS.test(baseModelId(model))

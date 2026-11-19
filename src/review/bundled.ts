@@ -12,6 +12,7 @@ import { countFindings, isNoChange } from './formatter.js'
 import { isContextLengthError, shownLength } from './parsers.js'
 import type { ReviewContext, PassCall } from './types.js'
 import { DeadlineAbortError, TruncatedResponseError, type LLMUsage } from '../llm/shared.js'
+import { estimateCost, estimateAttemptsCost } from './usage.js'
 
 // The chars/4 estimate under-counts code-heavy diffs; packing to 85% keeps real usage under the cap.
 const FIT_RATIO = 0.85
@@ -178,7 +179,25 @@ export function recordPassCall(ctx: ReviewContext, stage: string, maxTokens: num
   const end: PassCall['end'] = err === undefined ? 'ok' : err instanceof DeadlineAbortError ? 'aborted_time' : err instanceof TruncatedResponseError ? 'truncated' : 'error'
   // An aborted stream's usage is a start-of-message snapshot, so its output count would read as a real ~1-token answer.
   const counted = end === 'aborted_time' ? undefined : usage
-  ;(ctx.passCalls ??= []).push({ stage, end, max_tokens: maxTokens, output_tokens: counted?.output_tokens ?? null, reasoning_tokens: counted?.reasoning_tokens ?? null, limit_ms: limitMs ?? null })
+  ;(ctx.passCalls ??= []).push({
+    stage, end, max_tokens: maxTokens, output_tokens: counted?.output_tokens ?? null, reasoning_tokens: counted?.reasoning_tokens ?? null, limit_ms: limitMs ?? null,
+    ...(config.review.promptCache ? cacheCallFields(ctx, stage, counted) : {}),
+  })
+}
+
+function passModel(ctx: ReviewContext, stage: string): string {
+  if (stage === 'judge') return config.judge.model
+  if (stage === 'breadth') return ctx.breadthModel || config.breadth.model || config.judge.model
+  if (stage.startsWith('lens:')) return config.lenses.model || config.anthropic.model
+  return config.anthropic.model
+}
+
+function cacheCallFields(ctx: ReviewContext, stage: string, u: Partial<LLMUsage> | undefined): Pick<PassCall, 'input_tokens' | 'cache_read_tokens' | 'cache_write_tokens' | 'cost_usd'> {
+  if (u?.input_tokens === undefined) return { input_tokens: null, cache_read_tokens: null, cache_write_tokens: null, cost_usd: null }
+  const read = u.cache_read_input_tokens ?? 0
+  const write = u.cache_creation_input_tokens ?? 0
+  const cost = u.cost_usd ?? (u.attempts ? estimateAttemptsCost(u.attempts, passModel(ctx, stage)) : estimateCost({ input: u.input_tokens, output: u.output_tokens ?? 0, cache_read: read, cache_write: write }, passModel(ctx, stage)))
+  return { input_tokens: u.input_tokens, cache_read_tokens: read, cache_write_tokens: write, cost_usd: cost }
 }
 
 export function addUsage(ctx: ReviewContext, u: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number; cost_usd?: number; reasoning_tokens?: number }): void {

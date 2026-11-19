@@ -1,4 +1,4 @@
-import { SHOWN_LINE_CLAUSE, allowShownContext } from './breadth.js'
+import { SHOWN_LINE_CLAUSE, allowShownContext, passOverlay } from './breadth.js'
 import type { ReviewFinding } from './formatter.js'
 
 export interface Lens { name: string; when: string; overlay: string; scenarioTag?: boolean }
@@ -87,6 +87,10 @@ export function lensSystemPrompt(reviewerPrompt: string, lens: Lens, limit: numb
     ? `\n\n## FINDINGS LIMIT\nReport at most ${limit} findings, prioritized by severity and impact. If more exist, include only the most important and omit the rest.`
     : ''
   return `${reviewerPrompt}${limitSection}\n\n${shownAnchors ? allowShownContext(lens.overlay) : lens.overlay}`
+}
+
+export function lensOverlay(lens: Lens, limit: number, shownAnchors = false): string {
+  return passOverlay(shownAnchors ? allowShownContext(lens.overlay) : lens.overlay, limit)
 }
 
 export function lensBriefing(known: readonly ReviewFinding[]): string {

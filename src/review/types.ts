@@ -4,6 +4,7 @@
 
 import type { VCSAdapter, PRInfo, ChangedFile, ReviewComment, CommentReply } from '../vcs/adapter.js'
 import type { LoadedPrompt } from '../prompt/loader.js'
+import type { LLMUsage } from '../llm/shared.js'
 import type { FileContext } from '../context/fetcher.js'
 import type { ReviewObject, ReviewFinding, FindingScore } from './formatter.js'
 import type { KeptFinding, AlsoAffectsLog, FirstPassSite, FirstPassSiteLog } from './findings-output.js'
@@ -12,7 +13,7 @@ import type { SuggestedFixStats } from './suggested-fix.js'
 import type { BreadthStatus, SecondLookStatus, LensStatus, CandidateOrigin, BreadthPlan } from './breadth.js'
 import type { ShownSource } from './shown-anchors.js'
 import type { LensRecommendation } from './lenses.js'
-import type { SiteDropReason } from './client.js'
+import type { SiteDropReason, SharedPrefix } from './client.js'
 
 /** Every node in the review flow. */
 export enum State {
@@ -57,7 +58,28 @@ export interface LensRun {
   model: string
   findings: ReviewFinding[]
   promptHash?: string
-  usage?: { input_tokens: number; output_tokens: number; cost_usd?: number }
+  usage?: StageUsage
+}
+
+export interface StageUsage {
+  input_tokens: number
+  output_tokens: number
+  cost_usd?: number
+  cache_read_input_tokens?: number
+  cache_creation_input_tokens?: number
+  attempts?: LLMUsage[]
+}
+
+export type UncachedReason = 'model' | 'effort' | 'unsupported_model' | 'no_judge' | 'rereview' | 'bundled' | 'no_shared_pass'
+  | 'skipped_small' | 'skipped_few_untouched' | 'skipped_no_findings' | 'skipped_budget' | 'skipped_time'
+  | `rejected_400: ${string}` | 'off_after_400' | `skipped_after_plan: ${string}`
+
+export interface PromptCacheLog {
+  ttl: '5m'
+  reviewer_marked: boolean
+  shared_stages: string[]
+  uncached: Array<{ stage: string; reason: UncachedReason }>
+  session_id?: string
 }
 
 export interface SinkResult {
@@ -75,6 +97,10 @@ export interface PassCall {
   output_tokens: number | null
   reasoning_tokens: number | null
   limit_ms: number | null
+  input_tokens?: number | null
+  cache_read_tokens?: number | null
+  cache_write_tokens?: number | null
+  cost_usd?: number | null
 }
 
 export type OutcomeSink = (outcome: ReviewOutcome) => void | SinkResult | Promise<void | SinkResult>
@@ -120,7 +146,7 @@ export interface ReviewContext {
   reviewObject?: ReviewObject   // reviewer's structured output — typed source for findings/delta metrics
   skipReason?: string
   usage: { input_tokens: number; output_tokens: number; cache_read: number; cache_write: number; cost_usd?: number; reasoning?: number }
-  judgeUsage?: { input_tokens: number; output_tokens: number; cost_usd?: number }
+  judgeUsage?: StageUsage
   judgeScores?: FindingScore[]   // judge's per-finding 0–10 confidence — logged, never posted
   judgeStatus?: 'disabled' | 'skipped_no_findings' | 'succeeded' | 'failed'   // what the judge did this run; unset when the judge stage wasn't reached
   judgePromptHash?: string   // sha256-12 of the judge prompt, set only when the judge actually ran
@@ -135,6 +161,9 @@ export interface ReviewContext {
   alsoAffectsRows?: number
   alsoAffectsLog?: AlsoAffectsLog[]
   passCalls?: PassCall[]
+  promptCache?: PromptCacheLog
+  cachePrefix?: SharedPrefix
+  reviewUsage?: StageUsage
   // Keyed by first-pass candidate index; every site also carries its own cN, so nothing downstream derives the id from a position.
   firstPassSites?: Map<number, FirstPassSite[]>
   firstPassSitesNamed?: FirstPassSite[]
@@ -146,12 +175,12 @@ export interface ReviewContext {
   breadthStatus?: BreadthStatus
   breadthModel?: string
   breadthPromptHash?: string
-  breadthUsage?: { input_tokens: number; output_tokens: number; cost_usd?: number }
+  breadthUsage?: StageUsage
   // Second-look re-reads the already-flagged files for misses; kept apart from reviewObject for the same reason as breadth.
   secondLookFindings?: ReviewFinding[]
   secondLookStatus?: SecondLookStatus
   secondLookPromptHash?: string
-  secondLookUsage?: { input_tokens: number; output_tokens: number; cost_usd?: number }
+  secondLookUsage?: StageUsage
   lensRuns?: LensRun[]
   lensRecommendations?: LensRecommendation[] | null
   untouchedFiles?: string[]
