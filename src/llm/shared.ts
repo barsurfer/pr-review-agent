@@ -16,6 +16,7 @@ export interface LLMOptions {
   maxRetries: number
   effort?: string   // Anthropic output_config.effort / OpenRouter reasoning.effort (low|medium|high|xhigh|max); unset = model default
   tolerateMissing?: string[]
+  signal?: AbortSignal
 }
 
 export interface LLMProvider {
@@ -29,6 +30,14 @@ export class TruncatedResponseError extends Error {
   constructor(message: string, readonly usage: LLMUsage) {
     super(message)
     this.name = 'TruncatedResponseError'
+  }
+}
+
+// A benchmark pass deadline fired; kept apart from TruncatedResponseError and transport errors so the stage records aborted_time, not failed.
+export class DeadlineAbortError extends Error {
+  constructor(message: string, readonly usage?: LLMUsage) {
+    super(message)
+    this.name = 'DeadlineAbortError'
   }
 }
 

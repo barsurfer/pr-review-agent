@@ -100,6 +100,8 @@ export const config = {
     // Output-token cap for reviewer + judge. The Claude 5 family thinks by default and that
     // counts against this budget, so too low a cap truncates (16k cut off Sonnet 5 mid-review).
     maxTokens: parseInt(optional('MAX_OUTPUT_TOKENS', '32000'), 10),
+    // Breadth, second-look and lens cap only, so a long extra pass can't also loosen the reviewer's or judge's bound; unset, 0 or invalid = MAX_OUTPUT_TOKENS.
+    extraPassMaxTokens: positiveOr(parseInt(optional('EXTRA_PASS_MAX_OUTPUT_TOKENS', '0'), 10), 0),
     // Replaces the reviewer's window and stands in for any other model the window table lacks (contextWindowFor); 0 = off.
     modelContextTokens: parseInt(optional('MODEL_CONTEXT_TOKENS', '0'), 10),
   },
@@ -134,8 +136,12 @@ export const config = {
     minFiles: finiteOr(parseInt(optional('BREADTH_MIN_FILES', '5'), 10), 5),
     minUntouched: finiteOr(parseInt(optional('BREADTH_MIN_UNTOUCHED', '3'), 10), 3),
     benchmarkDeadlineSeconds: positiveOr(Number(optional('BENCHMARK_DEADLINE_SECONDS', '840')), 840),
+    // Time kept for the judge after the pass deadline: a full 64k answer at the ~250 tok/s benchmark judges measured end to end.
+    judgeReserveSeconds: 270,
     // Off by default: pick the listed untouched targets by subsystem diversity and substance instead of diff order.
     priorityTargets: optional('ENABLE_BREADTH_PRIORITY_TARGETS', 'false') === 'true',
+    // Off by default; acts only under --benchmark: aborts an extra-pass call in time for the judge to finish before the kill.
+    passDeadline: optional('ENABLE_BENCHMARK_PASS_DEADLINE', 'false') === 'true',
   },
 
   // Off by default (each lens is another reviewer-sized call); the list stays raw so a benchmark label can overwrite it after load.
@@ -182,6 +188,8 @@ export const config = {
     secondLookBreadthTargets: optional('ENABLE_SECOND_LOOK_BREADTH_TARGETS', 'false') === 'true',
     // Off by default: it lengthens the second-look prompt, and in benchmark mode asks the extra passes for other places with the same defect.
     highImpact: optional('ENABLE_HIGH_IMPACT', 'false') === 'true',
+    // Off by default; acts only under --benchmark: breadth and second-look name other sites of first-pass findings as extra rows.
+    firstPassSites: optional('ENABLE_FIRST_PASS_SITES', 'false') === 'true',
     // On by default: without numbered lines ~40% of findings carried no line; set false to send the raw diff/context (saves the per-line gutter tokens).
     lineNumbers: optional('ENABLE_LINE_NUMBERS', 'true') !== 'false',
     // On by default with a kill switch: false always reviews the full delta after a target merge.

@@ -1,0 +1,434 @@
+{
+  "calls": [
+    {
+      "pass": "review",
+      "system": "75b25925cbe83285",
+      "user": "162976883fcf33be",
+      "schema": "80775966efbc2761",
+      "opts": {
+        "model": "claude-haiku-5-5",
+        "maxTokens": 64000,
+        "maxRetries": 1,
+        "effort": "high"
+      }
+    },
+    {
+      "pass": "breadth",
+      "system": "b0877c566ca004ba",
+      "user": "331ba1a9c5b4e82f",
+      "schema": "b122defeed9f6cdf",
+      "opts": {
+        "model": "claude-haiku-5-5",
+        "maxTokens": 64000,
+        "maxRetries": 1,
+        "effort": "high"
+      }
+    },
+    {
+      "pass": "second_look",
+      "system": "34da140d8f0283cb",
+      "user": "fe65b77301900d9c",
+      "schema": "b122defeed9f6cdf",
+      "opts": {
+        "model": "claude-haiku-5-5",
+        "maxTokens": 64000,
+        "maxRetries": 1,
+        "effort": "high"
+      }
+    },
+    {
+      "pass": "impact",
+      "system": "c03359d883a9a7bd",
+      "user": "c906fa7ab43a1ec5",
+      "schema": "b122defeed9f6cdf",
+      "opts": {
+        "model": "claude-haiku-5-5",
+        "maxTokens": 64000,
+        "maxRetries": 1,
+        "effort": "high"
+      }
+    },
+    {
+      "pass": "reliability",
+      "system": "af8724b4afa63962",
+      "user": "817c4dfd37c5ae60",
+      "schema": "b122defeed9f6cdf",
+      "opts": {
+        "model": "claude-haiku-5-5",
+        "maxTokens": 64000,
+        "maxRetries": 1,
+        "effort": "high"
+      }
+    },
+    {
+      "pass": "judge",
+      "system": "3c4bdfdaba163339",
+      "user": "b46b543b3ab51369",
+      "schema": "40f6be83e39a3172",
+      "opts": {
+        "model": "claude-haiku-5-5",
+        "maxTokens": 64000,
+        "maxRetries": 1,
+        "effort": "high"
+      }
+    }
+  ],
+  "record": {
+    "run_id": "bitbucket-repo-100-aaa111222333",
+    "vcs": "bitbucket",
+    "workspace": "test",
+    "repo_slug": "repo",
+    "pr_id": "100",
+    "pr_author": "dev",
+    "source_commit": "aaa111222333",
+    "source_branch": "feature/x",
+    "target_branch": "develop",
+    "changed_files": 2,
+    "changed_lines": 7,
+    "diff_size": {
+      "files": {
+        "added": 1,
+        "modified": 1,
+        "deleted": 0,
+        "renamed": 0
+      },
+      "lines_added": 7,
+      "lines_removed": 0,
+      "reviewable_files": 2,
+      "reviewable_lines_added": 7,
+      "reviewable_lines_removed": 0
+    },
+    "context_files_fetched": 2,
+    "degraded": false,
+    "review_number": 1,
+    "action": "REVIEW",
+    "skip_reason": null,
+    "model": "claude-haiku-5-5",
+    "effort": "high",
+    "tokens": {
+      "input": 600,
+      "output": 300,
+      "cache_read": 0,
+      "cache_write": 0,
+      "estimated_input": 4442
+    },
+    "cost_usd": 0,
+    "judge_model": "claude-haiku-5-5",
+    "judge_effort": "high",
+    "judge_tokens": {
+      "input": 100,
+      "output": 50
+    },
+    "judge_cost_usd": 0,
+    "dry_run": false,
+    "force": "off",
+    "prompt_source": "stack:typescript-node",
+    "prompt_hash": "a1e3b14e248c",
+    "judge_prompt_hash": "3c4bdfdaba16",
+    "judge_status": "succeeded",
+    "verdict_score": 70,
+    "computed_score": 68,
+    "review_findings": {
+      "high": 0,
+      "medium": 1,
+      "low": 1
+    },
+    "findings": {
+      "high": 2,
+      "medium": 2,
+      "low": 1
+    },
+    "finding_scores": [
+      {
+        "title": "Race on conns",
+        "severity": "MEDIUM",
+        "score": 8,
+        "file": "src/pool.ts",
+        "lines": "2-3"
+      },
+      {
+        "title": "Cache never evicts",
+        "severity": "MEDIUM",
+        "score": 8,
+        "file": "src/cache.ts",
+        "lines": "1"
+      },
+      {
+        "title": "Double put on retry",
+        "severity": "HIGH",
+        "score": 8,
+        "file": "src/pool.ts",
+        "lines": "4"
+      },
+      {
+        "title": "take before load",
+        "severity": "HIGH",
+        "score": 8,
+        "file": "src/cache.ts",
+        "lines": "3"
+      },
+      {
+        "title": "pop on empty",
+        "severity": "LOW",
+        "score": 8,
+        "file": "src/pool.ts",
+        "lines": "3"
+      }
+    ],
+    "min_finding_score": 8,
+    "anchored_findings": [
+      {
+        "anchor": "src/pool.ts:2-3",
+        "severity": "MEDIUM",
+        "type": "other",
+        "description": "get/put mutate conns without a lock; take() in src/cache.ts:3 hands out the same conn."
+      },
+      {
+        "anchor": "src/cache.ts:1",
+        "severity": "MEDIUM",
+        "type": "other",
+        "description": "Unbounded map."
+      },
+      {
+        "anchor": "src/pool.ts:4",
+        "severity": "HIGH",
+        "type": "other",
+        "description": "A retried put pushes twice."
+      },
+      {
+        "anchor": "src/cache.ts:3",
+        "severity": "HIGH",
+        "type": "other",
+        "description": "Old cache data is unread."
+      },
+      {
+        "anchor": "src/pool.ts:3",
+        "severity": "LOW",
+        "type": "other",
+        "description": "Returns undefined."
+      }
+    ],
+    "review_candidates": [
+      {
+        "id": "c0",
+        "origin": "review",
+        "severity": "MEDIUM",
+        "title": "Race on conns",
+        "file": "src/pool.ts",
+        "lines": "2-3",
+        "body": "get/put mutate conns without a lock; take() in src/cache.ts:3 hands out the same conn."
+      },
+      {
+        "id": "c1",
+        "origin": "review",
+        "severity": "LOW",
+        "title": "Unused take export",
+        "file": "src/cache.ts",
+        "lines": "2",
+        "body": "Nothing imports take."
+      },
+      {
+        "id": "c2",
+        "origin": "breadth",
+        "severity": "MEDIUM",
+        "title": "Cache never evicts",
+        "file": "src/cache.ts",
+        "lines": "1",
+        "body": "Unbounded map."
+      },
+      {
+        "id": "c3",
+        "origin": "second_look",
+        "severity": "HIGH",
+        "title": "Double put on retry",
+        "file": "src/pool.ts",
+        "lines": "4",
+        "body": "A retried put pushes twice."
+      },
+      {
+        "id": "c4",
+        "origin": "lens:impact",
+        "severity": "HIGH",
+        "title": "take before load",
+        "file": "src/cache.ts",
+        "lines": "3",
+        "body": "Old cache data is unread."
+      },
+      {
+        "id": "c5",
+        "origin": "lens:reliability",
+        "severity": "LOW",
+        "title": "pop on empty",
+        "file": "src/pool.ts",
+        "lines": "3",
+        "body": "Returns undefined."
+      }
+    ],
+    "judge_decisions": [
+      {
+        "candidate_id": "c0",
+        "reason_category": "validated",
+        "reclassified_from": null,
+        "action": "keep",
+        "original_severity": "MEDIUM",
+        "final_severity": "MEDIUM",
+        "score": 8,
+        "evidence": "src/pool.ts:2",
+        "note": "ok",
+        "rewritten": false,
+        "anchor_source": "reviewer",
+        "anchor_file": "src/pool.ts",
+        "anchor_lines": "2-3"
+      },
+      {
+        "candidate_id": "c1",
+        "reason_category": "incorrect",
+        "reclassified_from": null,
+        "action": "drop",
+        "original_severity": "LOW",
+        "final_severity": null,
+        "score": 8,
+        "evidence": "src/pool.ts:2",
+        "note": "ok",
+        "rewritten": false,
+        "anchor_source": "reviewer",
+        "anchor_file": "src/cache.ts",
+        "anchor_lines": "2"
+      },
+      {
+        "candidate_id": "c2",
+        "reason_category": "validated",
+        "reclassified_from": null,
+        "action": "keep",
+        "original_severity": "MEDIUM",
+        "final_severity": "MEDIUM",
+        "score": 8,
+        "evidence": "src/pool.ts:2",
+        "note": "ok",
+        "rewritten": false,
+        "anchor_source": "reviewer",
+        "anchor_file": "src/cache.ts",
+        "anchor_lines": "1"
+      },
+      {
+        "candidate_id": "c3",
+        "reason_category": "validated",
+        "reclassified_from": null,
+        "action": "keep",
+        "original_severity": "HIGH",
+        "final_severity": "HIGH",
+        "score": 8,
+        "evidence": "src/pool.ts:2",
+        "note": "ok",
+        "rewritten": false,
+        "anchor_source": "reviewer",
+        "anchor_file": "src/pool.ts",
+        "anchor_lines": "4"
+      },
+      {
+        "candidate_id": "c4",
+        "reason_category": "validated",
+        "reclassified_from": null,
+        "action": "keep",
+        "original_severity": "HIGH",
+        "final_severity": "HIGH",
+        "score": 8,
+        "evidence": "src/pool.ts:2",
+        "note": "ok",
+        "rewritten": false,
+        "anchor_source": "reviewer",
+        "anchor_file": "src/cache.ts",
+        "anchor_lines": "3"
+      },
+      {
+        "candidate_id": "c5",
+        "reason_category": "validated",
+        "reclassified_from": null,
+        "action": "keep",
+        "original_severity": "LOW",
+        "final_severity": "LOW",
+        "score": 8,
+        "evidence": "src/pool.ts:2",
+        "note": "ok",
+        "rewritten": false,
+        "anchor_source": "reviewer",
+        "anchor_file": "src/pool.ts",
+        "anchor_lines": "3"
+      }
+    ],
+    "judge_anomalies": {
+      "unknown_ids": 0,
+      "undecided": 0,
+      "duplicate_ids": 0,
+      "drop_without_evidence": 0
+    },
+    "judge_policy": {
+      "keep_minor": true,
+      "keep_unverified": true,
+      "file_context": false
+    },
+    "breadth_status": "succeeded",
+    "breadth_model": "claude-haiku-5-5",
+    "breadth_prompt_hash": "b0877c566ca0",
+    "breadth_tokens": {
+      "input": 100,
+      "output": 50
+    },
+    "breadth_cost_usd": 0,
+    "second_look_status": "succeeded",
+    "second_look_prompt_hash": "34da140d8f02",
+    "second_look_tokens": {
+      "input": 100,
+      "output": 50
+    },
+    "second_look_cost_usd": 0,
+    "lens_runs": [
+      {
+        "name": "impact",
+        "status": "succeeded",
+        "model": "claude-haiku-5-5",
+        "prompt_hash": "c03359d883a9",
+        "tokens": {
+          "input": 100,
+          "output": 50
+        },
+        "cost_usd": 0,
+        "findings": 1
+      },
+      {
+        "name": "reliability",
+        "status": "succeeded",
+        "model": "claude-haiku-5-5",
+        "prompt_hash": "af8724b4afa6",
+        "tokens": {
+          "input": 100,
+          "output": 50
+        },
+        "cost_usd": 0,
+        "findings": 1
+      }
+    ],
+    "untouched_files": {
+      "count": 0,
+      "paths": [],
+      "cut": 0
+    },
+    "recall_levers": {
+      "j_quality": false,
+      "sl_breadth": false,
+      "j_shown_anchor": false,
+      "b_priority": false
+    },
+    "touch_rate": null,
+    "delta": null,
+    "checked_commit": "aaa111222333",
+    "jenkins": null,
+    "error": null
+  },
+  "posted": [
+    [
+      "100",
+      "### Summary\nS\n\n### Findings\n- **HIGH – Double put on retry** (`src/pool.ts:4`)\n  A retried put pushes twice.\n\n- **HIGH – take before load** (`src/cache.ts:3`)\n  Old cache data is unread.\n\n- **MEDIUM – Race on conns** (`src/pool.ts:2-3`)\n  get/put mutate conns without a lock; take() in src/cache.ts:3 hands out the same conn.\n\n- **MEDIUM – Cache never evicts** (`src/cache.ts:1`)\n  Unbounded map.\n\n- **LOW – pop on empty** (`src/pool.ts:3`)\n  Returns undefined.\n\n### Behavioral Diff\nNone.\n\n### Production Risk\nNone.\n\n### Unresolved Questions\nNone.\n\n### Merge Confidence: 70%\n\n*\"This verdict is opinionated and must be validated by a human reviewer.\"*\n\n---\n*Reviewed by test-bot (claude-haiku-5-5) | Prompt: stack:typescript-node | Review #1 | Commit: aaa111222333 | Build: <commit>*"
+    ]
+  ]
+}

@@ -1,6 +1,6 @@
 import axios from 'axios'
 import { config } from '../config.js'
-import { TruncatedResponseError, missingRequired } from './shared.js'
+import { TruncatedResponseError, DeadlineAbortError, missingRequired } from './shared.js'
 import type { LLMProvider, LLMUsage, LLMOptions } from './shared.js'
 
 // OpenRouter's OpenAI-compatible gateway. Non-streaming: OpenAI semantics don't force streaming
@@ -66,17 +66,20 @@ export class OpenRouterProvider implements LLMProvider {
   private async send(url: string, headers: Record<string, string>, body: Record<string, unknown>, opts: LLMOptions): Promise<OpenRouterResponse> {
     let lastErr: unknown
     for (let attempt = 0; attempt <= opts.maxRetries; attempt++) {
+      if (opts.signal?.aborted) throw deadlineAbort(opts)
       try {
-        const resp = await axios.post<OpenRouterResponse>(url, body, { headers, timeout: OPENROUTER_TIMEOUT_MS })
+        const resp = await axios.post<OpenRouterResponse>(url, body, opts.signal ? { headers, timeout: OPENROUTER_TIMEOUT_MS, signal: opts.signal } : { headers, timeout: OPENROUTER_TIMEOUT_MS })
         const data = resp.data
         // OpenRouter can return HTTP 200 with an error object instead of choices.
         if (data?.error) throw openRouterError(typeof data.error.code === 'number' ? data.error.code : undefined, data.error.message ?? 'OpenRouter returned an error', data.error.code)
         return data
       } catch (err: unknown) {
         if (isOpenRouterError(err)) throw err
+        // A cancelled request has no response, so isRetryable would otherwise send it again.
+        if (opts.signal?.aborted) throw deadlineAbort(opts)
         lastErr = err
         if (attempt < opts.maxRetries && isRetryable(err)) {
-          await delay(retryDelayMs(attempt, err))
+          await delay(retryDelayMs(attempt, err), opts.signal)
           continue
         }
         throw axiosToError(err)
@@ -208,6 +211,15 @@ function retryDelayMs(attempt: number, err: unknown): number {
   return Math.min(500 * 2 ** attempt, 8000)
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms))
+// Wakes early on abort, so a long Retry-After never outlives the pass deadline; the loop then throws.
+function delay(ms: number, signal?: AbortSignal): Promise<void> {
+  if (!signal) return new Promise(resolve => setTimeout(resolve, ms))
+  return new Promise(resolve => {
+    if (signal.aborted) return resolve()
+    const onAbort = () => { clearTimeout(timer); resolve() }
+    const timer = setTimeout(() => { signal.removeEventListener('abort', onAbort); resolve() }, ms)
+    signal.addEventListener('abort', onAbort, { once: true })
+  })
 }
+
+const deadlineAbort = (opts: LLMOptions): DeadlineAbortError => new DeadlineAbortError(`Model call aborted at the benchmark pass deadline (${opts.model})`)

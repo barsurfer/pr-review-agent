@@ -6,12 +6,13 @@ import type { VCSAdapter, PRInfo, ChangedFile, ReviewComment, CommentReply } fro
 import type { LoadedPrompt } from '../prompt/loader.js'
 import type { FileContext } from '../context/fetcher.js'
 import type { ReviewObject, ReviewFinding, FindingScore } from './formatter.js'
-import type { KeptFinding, AlsoAffectsLog } from './findings-output.js'
+import type { KeptFinding, AlsoAffectsLog, FirstPassSite, FirstPassSiteLog } from './findings-output.js'
 import type { AppliedDecision, JudgeAnomalies, RenderJudged } from './judge-decisions.js'
 import type { SuggestedFixStats } from './suggested-fix.js'
 import type { BreadthStatus, SecondLookStatus, LensStatus, CandidateOrigin, BreadthPlan } from './breadth.js'
 import type { ShownSource } from './shown-anchors.js'
 import type { LensRecommendation } from './lenses.js'
+import type { SiteDropReason } from './client.js'
 
 /** Every node in the review flow. */
 export enum State {
@@ -63,6 +64,17 @@ export interface SinkResult {
   counterpartRows?: number
   alsoAffectsRows?: number
   alsoAffects?: AlsoAffectsLog[]
+  firstPassSiteRows?: number
+  firstPassSites?: FirstPassSiteLog[]
+}
+
+export interface PassCall {
+  stage: string
+  end: 'ok' | 'truncated' | 'aborted_time' | 'error'
+  max_tokens: number
+  output_tokens: number | null
+  reasoning_tokens: number | null
+  limit_ms: number | null
 }
 
 export type OutcomeSink = (outcome: ReviewOutcome) => void | SinkResult | Promise<void | SinkResult>
@@ -122,6 +134,13 @@ export interface ReviewContext {
   counterpartRows?: number
   alsoAffectsRows?: number
   alsoAffectsLog?: AlsoAffectsLog[]
+  passCalls?: PassCall[]
+  // Keyed by first-pass candidate index; every site also carries its own cN, so nothing downstream derives the id from a position.
+  firstPassSites?: Map<number, FirstPassSite[]>
+  firstPassSitesNamed?: FirstPassSite[]
+  firstPassSitesDropped?: Partial<Record<FirstPassSite['via'], Partial<Record<SiteDropReason, number>>>>
+  firstPassSiteRows?: number
+  firstPassSitesLog?: FirstPassSiteLog[]
   // Kept apart from reviewObject so reviewer metrics and the judge-failure fallback stay reviewer-only.
   breadthFindings?: ReviewFinding[]
   breadthStatus?: BreadthStatus

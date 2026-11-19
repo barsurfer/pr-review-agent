@@ -16,17 +16,17 @@ const isGeneratedOrLock = (path: string): boolean => GENERATED_OR_LOCK.some(re =
 
 export type BreadthStatus =
   | 'disabled' | 'skipped_no_judge' | 'skipped_rereview' | 'skipped_bundled'
-  | 'skipped_small' | 'skipped_few_untouched' | 'skipped_limit' | 'skipped_budget' | 'skipped_time' | 'succeeded' | 'failed'
+  | 'skipped_small' | 'skipped_few_untouched' | 'skipped_limit' | 'skipped_budget' | 'skipped_time' | 'aborted_time' | 'succeeded' | 'failed'
 
 export type CandidateOrigin = 'review' | 'breadth' | 'second_look' | `lens:${string}`
 
 export type SecondLookStatus =
   | 'disabled' | 'skipped_no_judge' | 'skipped_rereview' | 'skipped_bundled'
-  | 'skipped_no_findings' | 'skipped_limit' | 'skipped_budget' | 'skipped_time' | 'succeeded' | 'failed'
+  | 'skipped_no_findings' | 'skipped_limit' | 'skipped_budget' | 'skipped_time' | 'aborted_time' | 'succeeded' | 'failed'
 
 export type LensStatus =
   | 'skipped_no_judge' | 'skipped_rereview' | 'skipped_bundled'
-  | 'skipped_limit' | 'skipped_budget' | 'skipped_time' | 'succeeded' | 'failed'
+  | 'skipped_limit' | 'skipped_budget' | 'skipped_time' | 'aborted_time' | 'succeeded' | 'failed'
 
 export const MAX_UNTOUCHED_LISTED = 40
 
@@ -72,11 +72,11 @@ export function allowShownContext(lens: string): string {
   return lens.replace(SHOWN_LINE_CLAUSE, () => 'a numeric line on an added or modified line, or on an unchanged line you were shown when it explains a defect this change introduces.')
 }
 
-export function breadthSystemPrompt(reviewerPrompt: string, limit: number, shownAnchors = false): string {
+export function breadthSystemPrompt(reviewerPrompt: string, limit: number, shownAnchors = false, firstPassSites = false): string {
   const limitSection = limit > 0
     ? `\n\n## FINDINGS LIMIT\nReport at most ${limit} findings, prioritized by severity and impact. If more exist, include only the most important and omit the rest.`
     : ''
-  return `${reviewerPrompt}${limitSection}\n\n${shownAnchors ? allowShownContext(BREADTH_LENS) : BREADTH_LENS}`
+  return `${reviewerPrompt}${limitSection}\n\n${shownAnchors ? allowShownContext(BREADTH_LENS) : BREADTH_LENS}${firstPassSites ? `\n\n${FIRST_PASS_SITES_SECTION}` : ''}`
 }
 
 export interface BreadthPlan {
@@ -141,9 +141,9 @@ export function prioritizeUntouched(untouched: readonly string[], filteredDiff: 
 }
 
 // Titles and anchors only: enough to avoid repeats and seed the same-defect search without re-sending every body.
-export function breadthBriefing(firstPass: readonly ReviewFinding[], untouched: readonly string[], plan?: BreadthPlan): string {
+export function breadthBriefing(firstPass: readonly ReviewFinding[], untouched: readonly string[], plan?: BreadthPlan, ids?: ReadonlyMap<ReviewFinding, string>): string {
   const located = (f: ReviewFinding) => (f.file ? `${f.file}${f.lines ? `:${f.lines}` : ''}` : '(no file)')
-  const findings = firstPass.length ? firstPass.map(f => `- ${located(f)} — ${f.title}`).join('\n') : 'None.'
+  const findings = firstPass.length ? firstPass.map(f => `- ${idTag(f, ids)}${located(f)} — ${f.title}`).join('\n') : 'None.'
   if (plan) {
     const more = plan.omitted > 0 ? `\n- …and ${plan.omitted} more eligible file(s) not listed` : ''
     return `## First-pass findings (already reported — do not repeat):\n${findings}\n\n## Files with no finding yet (prioritized targets; unlisted files remain in the supplied diff):\n${plan.selected.length ? plan.selected.map(p => `- ${p}`).join('\n') : 'None.'}${more}`
@@ -183,22 +183,28 @@ export const IMPACT_ITEM = `4. What breaks in a real scenario: follow the change
 
 const SECOND_LOOK_ANCHOR = '\nDo not repeat a first-pass finding'
 
+// The judge candidate id, so a site maps back to its first-pass finding without trusting any position.
+const idTag = (f: ReviewFinding, ids?: ReadonlyMap<ReviewFinding, string>): string => (ids?.has(f) ? `[${ids.get(f)}] ` : '')
+
+export const FIRST_PASS_SITES_SECTION = `## OTHER SITES OF FIRST-PASS FINDINGS
+First-pass findings in the message carry an id in brackets, e.g. [c3]. When the same root cause makes the same failure happen on an added or modified line in another file you were shown (a sibling call site, a parallel handler or route, the other side of a mismatched contract), list that place in first_pass_sites with the finding's id. Such a place is not a repeat. Never list the finding's own file, a place mentioned only as evidence, cause or where the fix goes, or a different problem. At most 3 places per id; omit the field when there are none.`
+
 export function withImpactItem(lens: string): string {
   if (lens.split(SECOND_LOOK_ANCHOR).length !== 2) throw new Error('Second-look anchor not found')
   return lens.replace(SECOND_LOOK_ANCHOR, () => `\n${IMPACT_ITEM}${SECOND_LOOK_ANCHOR}`)
 }
 
-export function secondLookSystemPrompt(reviewerPrompt: string, limit: number, shownAnchors = false, highImpact = false): string {
+export function secondLookSystemPrompt(reviewerPrompt: string, limit: number, shownAnchors = false, highImpact = false, firstPassSites = false): string {
   const limitSection = limit > 0
     ? `\n\n## FINDINGS LIMIT\nReport at most ${limit} findings, prioritized by severity and impact. If more exist, include only the most important and omit the rest.`
     : ''
   const overlay = highImpact ? withImpactItem(SECOND_LOOK_LENS) : SECOND_LOOK_LENS
-  return `${reviewerPrompt}${limitSection}\n\n${shownAnchors ? allowShownContext(overlay) : overlay}`
+  return `${reviewerPrompt}${limitSection}\n\n${shownAnchors ? allowShownContext(overlay) : overlay}${firstPassSites ? `\n\n${FIRST_PASS_SITES_SECTION}` : ''}`
 }
 
 // Known findings (review + breadth) in the target files — titles + anchors only, so the pass avoids repeats.
-export function secondLookBriefing(known: readonly ReviewFinding[]): string {
+export function secondLookBriefing(known: readonly ReviewFinding[], ids?: ReadonlyMap<ReviewFinding, string>): string {
   const located = (f: ReviewFinding) => (f.file ? `${f.file}${f.lines ? `:${f.lines}` : ''}` : '(no file)')
-  const findings = known.length ? known.map(f => `- ${located(f)} — ${f.title}`).join('\n') : 'None.'
+  const findings = known.length ? known.map(f => `- ${idTag(f, ids)}${located(f)} — ${f.title}`).join('\n') : 'None.'
   return `## Findings already reported (do NOT repeat — find additional distinct problems in these files):\n${findings}`
 }

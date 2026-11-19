@@ -1,6 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { config } from '../config.js'
-import { TruncatedResponseError, missingRequired } from './shared.js'
+import { TruncatedResponseError, DeadlineAbortError, missingRequired } from './shared.js'
 import type { LLMProvider, LLMUsage, LLMOptions } from './shared.js'
 
 export class AnthropicProvider implements LLMProvider {
@@ -36,8 +36,17 @@ export class AnthropicProvider implements LLMProvider {
   // effort (when set) rides output_config; models that don't support it (e.g. Haiku 4.5) 400, so
   // catch that and retry once without it rather than fail the review.
   private streamFinal(params: Record<string, unknown>, opts: LLMOptions): Promise<Anthropic.Message> {
-    const run = (p: Record<string, unknown>): Promise<Anthropic.Message> =>
-      this.client.messages.stream(p as Parameters<typeof this.client.messages.stream>[0], { maxRetries: opts.maxRetries }).finalMessage()
+    const run = (p: Record<string, unknown>): Promise<Anthropic.Message> => {
+      const params = p as Parameters<typeof this.client.messages.stream>[0]
+      if (!opts.signal) return this.client.messages.stream(params, { maxRetries: opts.maxRetries }).finalMessage()
+      // The SDK links this signal to the stream and to its retry backoff, so one abort ends the call wherever it is.
+      const stream = this.client.messages.stream(params, { maxRetries: opts.maxRetries, signal: opts.signal })
+      return stream.finalMessage().catch((err: unknown) => {
+        if (!opts.signal?.aborted) throw err
+        const partial = stream.currentMessage?.usage
+        throw new DeadlineAbortError(`Model call aborted at the benchmark pass deadline (${opts.model})`, partial ? mapUsage(partial) : undefined)
+      })
+    }
     if (!opts.effort) return run(params)
     const withEffort = { ...params, output_config: { ...((params.output_config as Record<string, unknown>) ?? {}), effort: opts.effort } }
     return run(withEffort).catch((err: unknown) => {
