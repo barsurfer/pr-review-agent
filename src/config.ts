@@ -162,6 +162,8 @@ export const config = {
     model: optional('REPLY_MODEL', ''),
     // Off by default (Bitbucket only): skip replying to a dev comment @-directed solely at someone else.
     skipDirectedElsewhere: optional('SKIP_DIRECTED_REPLIES', 'false') === 'true',
+    // Off by default: a new review resets the reply budget, and a question that meets the limit gets a one-time note.
+    limitPerReview: optional('ENABLE_REPLY_LIMIT_PER_REVIEW', 'false') === 'true',
   },
 
   trigger: {

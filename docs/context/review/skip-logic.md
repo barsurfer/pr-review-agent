@@ -137,6 +137,10 @@ Once the agent has replied `MAX_REPLY_COMMENTS` times (default: 5) on a PR, furt
 
 Set `MAX_REPLY_COMMENTS=0` to disable.
 
+**What the limit ends.** At `CHECK_REPLIES` (no review ran, or a review ran and returned `NO_CHANGE`) the run stops with the reply unanswered: `DEDUP_SKIP` / `reply limit reached (n/N)` on the pure dedup path, and the upstream `NO_CHANGE` label and reason kept when a review ran (the paid run is not relabelled as a dedup). At the 0-finding re-review gate in `JUDGE_REVIEW` the limit does not end the run: it logs `Unanswered dev reply, but reply limit reached (n/N) — finishing the re-review without answering` and continues as if no reply were open, so the result is `NO_NEW_FINDINGS` (prior clean, or a quiet target merge) or a posted re-review. Before this fix both stops were `DEDUP_SKIP`, which discarded a paid re-review and repeated on every push.
+
+**Per-review count (`ENABLE_REPLY_LIMIT_PER_REVIEW` / `--reply-limit-per-review`, default off).** Both checks count only agent replies (reply footer) dated after the supersede-boundary review, so a newly posted review starts a fresh budget. `CHECK_REPLIES` makes one extra `getRepliesToReviewComments(prId, reviewIds, true)` call for this (no adapter change); the gate reads its own discussion. `MAX_REPLY_COMMENTS=0` still means unlimited and makes no extra call. See [replies.md](replies.md#reply-limit-note).
+
 ---
 
 ## 6. Oversized Diff (fetch failure) — GitHub
@@ -237,7 +241,6 @@ CLI wins over env; an empty or whitespace CLI value falls back to the env value.
 | Coherent structured `NO_CHANGE` (`no_change: true`, zero findings), with or without a reply | A regex-only or self-contradicting `NO_CHANGE` (`no_change` plus findings, a bare `NO_CHANGE` line inside a finding) |
 | `NO_NEW_FINDINGS`, single-pass or bundled, including the target-merge one (§2) | `POST_REVIEW`'s "empty or NO_CHANGE after cleanup" skip |
 | 0-finding re-review that answers a reply, when the prior review was clean and nothing is still open, or when the target-merge rule (§2) would have suppressed the confirmation | The same reply when the prior review had findings or one is still open (today's next-event confirmation post is kept) |
-| JUDGE-gate reply limit | A run whose delta fetch failed (the full-diff fallback was told to report only new findings but could not see what was new). A delta dropped as larger than the PR diff still marks |
 | Pre-post race (another run already posted for this head) | A bundled run with an unreviewed file or a self-contradicting `NO_CHANGE` bundle |
 
 Why a field and not `action`: `NO_CHANGE`, `REPLY` and `DEDUP_SKIP` each mix trustworthy endings with untrustworthy ones, and storing the head of a `SKIP` would suppress the review once the skip condition lifts. With nothing set, `checked_commit` is the only record change: an additive key on checked runs. Posted reviews carry it too; the footer already covers them, so CI needs no special case.
