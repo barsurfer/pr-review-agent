@@ -12,7 +12,8 @@ vi.mock('../../config.js', () => ({
 const { post } = vi.hoisted(() => ({ post: vi.fn() }))
 vi.mock('axios', () => ({ default: { post } }))
 
-import { createProvider, TruncatedResponseError } from '../provider.js'
+import { createProvider, TruncatedResponseError, isSystemMessageRejection } from '../provider.js'
+import { estimateCost, estimateAttemptsCost } from '../../review/usage.js'
 import { isContextLengthError } from '../../review/parsers.js'
 import { config } from '../../config.js'
 
@@ -381,5 +382,116 @@ describe('OpenRouterProvider effort', () => {
       expect(err).toBeInstanceOf(TruncatedResponseError)
       expect((err as TruncatedResponseError).usage.output_tokens).toBe(400)
     })
+  })
+})
+
+describe('OpenRouterProvider prompt-cache request shape and usage', () => {
+  const schema = { required: ['findings'], properties: { findings: { items: { required: ['title'] } } } } as Record<string, unknown>
+  const parts = [{ text: 'U', cache: true as const }, { text: 'B' }]
+  const cacheOpts = { ...opts, model: 'anthropic/claude-haiku-5.5', systemAfter: 'O', sessionId: 'sess-1' }
+  const cachedUsage = { prompt_tokens: 100000, completion_tokens: 500, prompt_tokens_details: { cached_tokens: 99000, cache_write_tokens: 0 } }
+
+  it('a string user with no new options sends exactly the previous body', async () => {
+    post.mockResolvedValue(okText(JSON.stringify({ findings: [] }), {}))
+    await createProvider('k').completeStructured('s', 'u', schema, opts)
+    expect(post.mock.calls[0][1]).toStrictEqual({
+      model: 'openai/gpt-x', max_tokens: 1000, response_format: { type: 'json_schema', json_schema: { name: 'result', schema, strict: false } },
+      messages: [{ role: 'system', content: 's' }, { role: 'user', content: 'u' }], usage: { include: true },
+    })
+  })
+
+  it('parts, systemAfter and sessionId give content parts with cache_control, a trailing system message and session_id', async () => {
+    post.mockResolvedValue(okText(JSON.stringify({ findings: [] }), cachedUsage))
+    await createProvider('k').completeStructured('s', parts, schema, cacheOpts)
+    expect(post.mock.calls[0][1]).toStrictEqual({
+      model: 'anthropic/claude-haiku-5.5', max_tokens: 1000, response_format: { type: 'json_schema', json_schema: { name: 'result', schema, strict: false } },
+      messages: [
+        { role: 'system', content: 's' },
+        { role: 'user', content: [{ type: 'text', text: 'U', cache_control: { type: 'ephemeral' } }, { type: 'text', text: 'B' }] },
+        { role: 'system', content: 'O' },
+      ],
+      usage: { include: true }, session_id: 'sess-1',
+    })
+  })
+
+  it('success: prompt_tokens minus reads and writes is the input; a string request keeps the previous inclusive mapping', async () => {
+    post.mockResolvedValue(okText(JSON.stringify({ findings: [] }), { prompt_tokens: 50000, completion_tokens: 10, prompt_tokens_details: { cached_tokens: 0, cache_write_tokens: 48000 }, cost: 0, cost_details: { upstream_inference_cost: 0.0061 } }))
+    expect((await createProvider('k').completeStructured('s', parts, schema, cacheOpts)).usage).toEqual({ input_tokens: 2000, output_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 48000, cost_usd: 0.0061 })
+    post.mockResolvedValue(okText(JSON.stringify({ findings: [] }), cachedUsage))
+    expect((await createProvider('k').completeStructured('s', 'u', schema, opts)).usage).toEqual({ input_tokens: 100000, output_tokens: 500, cache_read_input_tokens: 99000, cache_creation_input_tokens: 0 })
+  })
+
+  it('truncation: finish_reason length with 100000 prompt / 99000 cached carries 1000 input + 99000 read, costed on the Haiku 5.5 card up to 100K', async () => {
+    post.mockResolvedValue(resp({ choices: [{ message: { content: '{"fi' }, finish_reason: 'length' }], usage: cachedUsage }))
+    const err = await createProvider('k').completeStructured('s', parts, schema, cacheOpts).catch(e => e)
+    expect(err).toBeInstanceOf(TruncatedResponseError)
+    expect(err.usage).toEqual({ input_tokens: 1000, output_tokens: 500, cache_read_input_tokens: 99000, cache_creation_input_tokens: 0 })
+    const u = err.usage
+    // 1000 × $0.10 + 99000 × $0.10 × 0.1 + 500 × $0.50, per 1M.
+    expect(estimateCost({ input: u.input_tokens, output: u.output_tokens, cache_read: u.cache_read_input_tokens, cache_write: u.cache_creation_input_tokens }, 'anthropic/claude-haiku-5.5')).toBe(0.0013)
+  })
+
+  it('resend: a missing finding key resends once and sums both normalized usages', async () => {
+    post.mockResolvedValueOnce(okText(JSON.stringify({ findings: [{}] }), cachedUsage))
+    post.mockResolvedValueOnce(okText(JSON.stringify({ findings: [{ title: 't' }] }), cachedUsage))
+    const { usage } = await createProvider('k').completeStructured('s', parts, schema, cacheOpts)
+    expect(post).toHaveBeenCalledTimes(2)
+    expect(usage).toEqual({ input_tokens: 2000, output_tokens: 1000, cache_read_input_tokens: 198000, cache_creation_input_tokens: 0 })
+  })
+
+  it('resend that truncates still carries the first attempt, both normalized', async () => {
+    post.mockResolvedValueOnce(okText(JSON.stringify({ findings: [{}] }), cachedUsage))
+    post.mockResolvedValueOnce(resp({ choices: [{ message: { content: '{' }, finish_reason: 'length' }], usage: cachedUsage }))
+    const err = await createProvider('k').completeStructured('s', parts, schema, cacheOpts).catch(e => e)
+    expect(err.usage).toEqual({ input_tokens: 2000, output_tokens: 1000, cache_read_input_tokens: 198000, cache_creation_input_tokens: 0 })
+  })
+
+  it('a 400 for the trailing system message is sent once and recognized, so the caller re-sends its uncached request', async () => {
+    post.mockRejectedValue({ response: { status: 400, data: { error: { message: "role 'system' is not supported" } } } })
+    const err = await createProvider('k').completeStructured('s', parts, schema, { ...cacheOpts, effort: 'high' }).catch(e => e)
+    expect(isSystemMessageRejection(err)).toBe(true)
+    expect(post).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('OpenRouterProvider usage with ENABLE_PROMPT_CACHE on', () => {
+  const cfg = config as unknown as { review?: { promptCache: boolean } }
+  const schema = { required: ['findings'], properties: { findings: { items: { required: ['title'] } } } } as Record<string, unknown>
+  const autoCached = { prompt_tokens: 100000, completion_tokens: 500, prompt_tokens_details: { cached_tokens: 99000 } }
+  beforeEach(() => { cfg.review = { promptCache: true } })
+  afterEach(() => { delete cfg.review })
+
+  it('an unmarked judge call the upstream cached on its own still maps to 1000 input + 99000 read', async () => {
+    post.mockResolvedValue(okText(JSON.stringify({ findings: [] }), autoCached))
+    const { usage } = await createProvider('k').completeStructured('judge system', 'judge user', schema, { ...opts, model: 'openai/gpt-x' })
+    expect(usage).toEqual({ input_tokens: 1000, output_tokens: 500, cache_read_input_tokens: 99000, cache_creation_input_tokens: 0 })
+    expect((post.mock.calls[0][1] as { messages: unknown[] }).messages).toEqual([{ role: 'system', content: 'judge system' }, { role: 'user', content: 'judge user' }])
+  })
+
+  it('complete() and a truncated unmarked call are normalized too', async () => {
+    post.mockResolvedValue(okText('hi', autoCached))
+    expect((await createProvider('k').complete('s', 'u', opts)).usage).toMatchObject({ input_tokens: 1000, cache_read_input_tokens: 99000 })
+    post.mockResolvedValue(resp({ choices: [{ message: { content: '{' }, finish_reason: 'length' }], usage: autoCached }))
+    const err = await createProvider('k').completeStructured('s', 'u', schema, opts).catch(e => e)
+    expect(err.usage).toMatchObject({ input_tokens: 1000, cache_read_input_tokens: 99000 })
+  })
+
+  it('a resend keeps each attempt, so Haiku 5.5 is priced per request: $0.0027, not $0.0134 on the summed 200K prompt', async () => {
+    post.mockResolvedValueOnce(okText(JSON.stringify({ findings: [{}] }), autoCached))
+    post.mockResolvedValueOnce(okText(JSON.stringify({ findings: [{ title: 't' }] }), autoCached))
+    const { usage } = await createProvider('k').completeStructured('s', 'u', schema, { ...opts, model: 'anthropic/claude-haiku-5.5' })
+    const attempt = { input_tokens: 1000, output_tokens: 500, cache_read_input_tokens: 99000, cache_creation_input_tokens: 0 }
+    expect(usage).toEqual({ input_tokens: 2000, output_tokens: 1000, cache_read_input_tokens: 198000, cache_creation_input_tokens: 0, attempts: [attempt, attempt] })
+    expect(estimateAttemptsCost(usage.attempts!, 'anthropic/claude-haiku-5.5')).toBe(0.0027)
+    expect(estimateCost({ input: 2000, output: 1000, cache_read: 198000 }, 'anthropic/claude-haiku-5.5')).toBe(0.0134)
+  })
+
+  it('with the flag off a resend carries no attempts', async () => {
+    cfg.review = { promptCache: false }
+    post.mockResolvedValueOnce(okText(JSON.stringify({ findings: [{}] }), autoCached))
+    post.mockResolvedValueOnce(okText(JSON.stringify({ findings: [{ title: 't' }] }), autoCached))
+    const { usage } = await createProvider('k').completeStructured('s', 'u', schema, opts)
+    expect('attempts' in usage).toBe(false)
+    expect(usage.input_tokens).toBe(200000)
   })
 })

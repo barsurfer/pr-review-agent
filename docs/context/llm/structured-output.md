@@ -64,6 +64,28 @@ The reviewer returns a typed object (`REVIEW_OUTPUT_SCHEMA` in `src/review/clien
 
 ---
 
+## Prompt Cache (`ENABLE_PROMPT_CACHE`)
+
+Default off; with it off every request, record, findings row and settings line is byte-identical to v0.0.58 (pinned by `identity-v0057.test.ts` and `identity-v0058.test.ts`, the latter with FP_SITES, the 128k extra-pass cap and the pass deadline on).
+
+**Seam.** `completeStructured(system, user: string | UserPart[], schema, opts)` with `UserPart = { text, cache?: true }`; `LLMOptions` gains `systemAfter?` and `sessionId?`. A string `user` with neither option builds the previous params exactly. Anthropic turns parts into text blocks (`cache_control: {type:"ephemeral"}` on the cached one) and appends `{role:"system", content: systemAfter}` after the user turn; `sessionId` is ignored. OpenRouter builds the same message array (system, user content parts, trailing system) and adds `session_id` to the body. OpenRouter's wording for a rejected mid-conversation system message is unverified, so `isSystemMessageRejection` (`shared.ts`) counts any 400 on a `systemAfter` call; Anthropic then skips its effort retry, so the 400 surfaces after one call.
+
+**Usage.** Anthropic's `input_tokens` already excludes cache reads and writes. OpenRouter's `prompt_tokens` includes both, and OpenRouter caches some upstreams on its own (an OpenAI judge too), so with the flag on every OpenRouter response, marked or not, on every `mapOpenRouterUsage` path (`complete`, success, the `TruncatedResponseError` built in `firstChoice`, the summed missing-field resend and `withPriorUsage`) maps `input_tokens = prompt_tokens − cached_tokens − cache_write_tokens`, `cache_read_input_tokens = cached_tokens`, `cache_creation_input_tokens = cache_write_tokens`. With the flag off the previous inclusive mapping is unchanged. Under the flag a resent call's summed usage also carries `attempts` (each attempt's usage), so cost estimates price Haiku 5.5's tier per request (`estimateAttemptsCost`). Cost stays `usage.cost` when > 0, else `cost_details.upstream_inference_cost` (BYOK; includes the write premium and read discount).
+
+**Request shapes (flag on, reviewer marked).** S = the reviewer's composed system prompt (with its FINDINGS LIMIT and SPLIT CHECK), F = `sharedOutputSchema({lensRecommendation, alsoAffects: HI under --benchmark, scenario: HI, firstPassSites: FP_SITES under --benchmark})` (the reviewer schema object itself when no extra applies; `required` is always the reviewer's), U = the reviewer's successful-attempt user message (`ctx.cachePrefix.block`, so a diff-only retry carries through).
+
+| Stage | system | messages | schema |
+|---|---|---|---|
+| Reviewer | S | user `[U + cache]` | F |
+| Eligible breadth / second look / lens (`runSharedPass`) | S | user `[U + cache, briefing]`, then system overlay | F |
+| Ineligible pass, judge | today's request, uncached | | |
+
+Passes send `tolerateMissing = SHARED_PASS_TOLERATE` (summary, the three text lists, can_be_split, lens_recommendations, first_pass_sites), so an OpenRouter resend fires only for a missing `findings` or finding-item key; they keep only `findings` (via `sanitizeFindingExtras`) and `first_pass_sites`. `runReview` strips the reviewer's own `also_affects`, `scenario` and root `first_pass_sites`. A pass's `promptHash` is sha256-12 of S + overlay.
+
+**Eligibility.** The marker needs a first review on the single-pass path, `JUDGING_MODEL` set, a reviewer model accepted by `takesSystemAfter` (`model-id.ts`) and at least one enabled pass whose effective model and effort strings equal the reviewer's (`planPromptCache` in `index.ts`). Anything else logs `prompt_cache.uncached[{stage, reason}]`: passes `model`, `effort`, `unsupported_model`, `unsupported_system_message`; the reviewer `rereview`, `no_judge`, `unsupported_model`, `no_shared_pass`, `bundled`. Gates already certain before the reviewer call also exclude a pass (`skipped_small`, `skipped_few_untouched`, `skipped_no_findings`, `skipped_budget`, `skipped_time`), so a write is never bought for a pass that will skip. There is no fallback layout: the first 400 on a cached pass re-sends that call as its flag-off request and turns the cache off for the rest of the run (`cachedOrUncached`; that and every later shared pass logs `unsupported_system_message`, passes that already ran cached stay in `shared_stages`). Cached passes are budgeted from the stored prefix (S + U + overlay + briefing, chars/4), not `estimatedInputTokens`, which still counts file contexts a diff-only retry dropped.
+
+---
+
 ## Structured Judge Output
 
 The judge (`JUDGE_OUTPUT_SCHEMA`) rules on reviewer candidates by id and writes the narrative. It never writes the posted markdown:

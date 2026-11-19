@@ -5,8 +5,8 @@ import { AnthropicProvider } from './anthropic-provider.js'
 import { OpenRouterProvider } from './openrouter-provider.js'
 import type { LLMProvider } from './shared.js'
 
-export type { LLMProvider, LLMUsage, LLMOptions } from './shared.js'
-export { TruncatedResponseError, DeadlineAbortError, missingRequired } from './shared.js'
+export type { LLMProvider, LLMUsage, LLMOptions, UserPart } from './shared.js'
+export { TruncatedResponseError, DeadlineAbortError, missingRequired, isSystemMessageRejection } from './shared.js'
 export { anthropicBaseUrl, anthropicClientOptions } from './anthropic-provider.js'
 
 export function createProvider(apiKey: string): LLMProvider {

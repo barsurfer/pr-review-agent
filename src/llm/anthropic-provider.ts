@@ -1,7 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { config } from '../config.js'
-import { TruncatedResponseError, DeadlineAbortError, missingRequired } from './shared.js'
-import type { LLMProvider, LLMUsage, LLMOptions } from './shared.js'
+import { TruncatedResponseError, DeadlineAbortError, missingRequired, isSystemMessageRejection } from './shared.js'
+import type { LLMProvider, LLMUsage, LLMOptions, UserPart } from './shared.js'
 
 export class AnthropicProvider implements LLMProvider {
   private readonly client: Anthropic
@@ -15,8 +15,8 @@ export class AnthropicProvider implements LLMProvider {
     return { text: textOf(response, opts.maxTokens), usage: mapUsage(response.usage) }
   }
 
-  async completeStructured<T>(system: string, user: string, schema: Record<string, unknown>, opts: LLMOptions): Promise<{ object: T; usage: LLMUsage }> {
-    const response = await this.streamFinal({ model: opts.model, max_tokens: opts.maxTokens, system, output_config: { format: { type: 'json_schema', schema } }, messages: [{ role: 'user', content: user }] }, opts)
+  async completeStructured<T>(system: string, user: string | UserPart[], schema: Record<string, unknown>, opts: LLMOptions): Promise<{ object: T; usage: LLMUsage }> {
+    const response = await this.streamFinal({ model: opts.model, max_tokens: opts.maxTokens, system, output_config: { format: { type: 'json_schema', schema } }, messages: anthropicMessages(user, opts.systemAfter) }, opts)
     const text = textOf(response, opts.maxTokens)
     let object: T
     try {
@@ -50,13 +50,19 @@ export class AnthropicProvider implements LLMProvider {
     if (!opts.effort) return run(params)
     const withEffort = { ...params, output_config: { ...((params.output_config as Record<string, unknown>) ?? {}), effort: opts.effort } }
     return run(withEffort).catch((err: unknown) => {
-      if (err instanceof Anthropic.BadRequestError) {
+      // A 400 on a systemAfter call goes to the caller's uncached re-send, which keeps this effort retry.
+      if (err instanceof Anthropic.BadRequestError && !(opts.systemAfter && isSystemMessageRejection(err))) {
         console.warn(`  effort "${opts.effort}" not accepted by ${opts.model} — retrying without it`)
         return run(params)
       }
       throw err
     })
   }
+}
+
+function anthropicMessages(user: string | UserPart[], systemAfter?: string): Array<{ role: string; content: unknown }> {
+  const content = typeof user === 'string' ? user : user.map(p => ({ type: 'text', text: p.text, ...(p.cache ? { cache_control: { type: 'ephemeral' } } : {}) }))
+  return [{ role: 'user', content }, ...(systemAfter ? [{ role: 'system', content: systemAfter }] : [])]
 }
 
 // A max_tokens stop is a cut-off response — refuse rather than post a partial. Newer models

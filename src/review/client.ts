@@ -2,7 +2,7 @@ import { readFileSync } from 'fs'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { createHash } from 'crypto'
-import { createProvider, type LLMUsage } from '../llm/provider.js'
+import { createProvider, type LLMUsage, type UserPart } from '../llm/provider.js'
 import { renderReview, ISSUE_TYPES, SCENARIOS, type ReviewObject, type ReviewFinding, type FindingScore } from './formatter.js'
 import type { KeptFinding, FirstPassSite } from './findings-output.js'
 import {
@@ -25,6 +25,15 @@ export interface ModelResult {
   /** Reviewer's structured output — typed source for findings/delta metrics. Review runs only. */
   review?: ReviewObject
   lensRecommendations?: LensRecommendation[] | null
+  cacheBlock?: string
+}
+
+// The prefix every cached call repeats byte for byte: the reviewer's system prompt, its schema and its user message.
+export interface SharedPrefix {
+  system: string
+  schema: Record<string, unknown>
+  block: string
+  sessionId?: string
 }
 
 export interface JudgeResult extends ModelResult {
@@ -184,27 +193,44 @@ export async function runReview(
   changesSinceLastReview = '',
   lineNumbers = false,
   lensRecommendation = false,
+  cache?: { schema: Record<string, unknown>; sessionId?: string },
 ): Promise<ModelResult> {
   const userMessage = buildUserMessage(prInfo, diff, fileContexts, previousReviews, developerReplies, changesSinceLastReview, lineNumbers)
 
   console.log(`Sending request to the model (${model}, maxRetries: ${maxRetries})...`)
   const callOpts = { model, maxTokens, maxRetries, effort: effort || undefined }
-  const { object: raw, usage } = await createProvider(apiKey).completeStructured<ReviewObject & { lens_recommendations?: unknown }>(
-    prompt.content, userMessage, reviewOutputSchema(lensRecommendation),
-    // A log-only field must never cost a review, so a model that omits it still yields the review.
-    lensRecommendation ? { ...callOpts, tolerateMissing: ['lens_recommendations'] } : callOpts,
-  )
+  // A log-only field must never cost a review, so a model that omits it still yields the review.
+  const opts = lensRecommendation ? { ...callOpts, tolerateMissing: ['lens_recommendations'] } : callOpts
+  const { object: raw, usage } = cache
+    ? await createProvider(apiKey).completeStructured<ReviewObject & { lens_recommendations?: unknown; first_pass_sites?: unknown }>(
+        prompt.content, [{ text: userMessage, cache: true }], cache.schema, cache.sessionId ? { ...opts, sessionId: cache.sessionId } : opts,
+      )
+    : await createProvider(apiKey).completeStructured<ReviewObject & { lens_recommendations?: unknown; first_pass_sites?: unknown }>(
+        prompt.content, userMessage, reviewOutputSchema(lensRecommendation), opts,
+      )
   // missingRequired passes a null key and strict:false (OpenRouter) can send one; null findings is no verdict, so fail as a missing key does, keeping the paid usage.
   if (!Array.isArray(raw.findings)) throw Object.assign(new Error('Structured output missing required field(s): findings'), { usage })
   const { lens_recommendations: recommended, ...stripped } = raw
-  const object = coerceTextLists(lensRecommendation ? stripped : raw)
+  const reviewed = cache ? stripPassExtras(stripped) : lensRecommendation ? stripped : raw
+  const object = coerceTextLists(reviewed)
   const text = renderReview(object)
 
   console.log(`Review received (${usage.input_tokens} in / ${usage.output_tokens} out tokens, ${object.no_change ? 'NO_CHANGE' : `${object.findings.length} findings`})`)
 
-  return lensRecommendation
+  const result: ModelResult = lensRecommendation
     ? { text, usage, review: object, lensRecommendations: sanitizeLensRecommendations(recommended) }
     : { text, usage, review: object }
+  return cache ? { ...result, cacheBlock: userMessage } : result
+}
+
+// The shared schema offers the passes' extras to the reviewer too; its own review must never carry them.
+function stripPassExtras(review: ReviewObject & { first_pass_sites?: unknown }): ReviewObject {
+  const { first_pass_sites: _sites, ...rest } = review
+  return { ...rest, findings: rest.findings.map(f => {
+    if (!f || typeof f !== 'object') return f
+    const { also_affects: _also, scenario: _scenario, ...kept } = f
+    return kept
+  }) }
 }
 
 const REQUIRED_TEXT_LISTS = ['behavioral_diff', 'production_risk', 'unresolved_questions'] as const
@@ -269,6 +295,28 @@ export function sanitizeFindingExtras(finding: ReviewFinding): ReviewFinding {
   return { ...rest, ...(also.length ? { also_affects: also } : {}), ...(scenario ? { scenario } : {}) }
 }
 
+const sharedVariants = new Map<string, Record<string, unknown>>()
+
+// Schema F: the reviewer's schema plus every extra a pass in this run may fill; no extra returns the reviewer's schema object itself.
+export function sharedOutputSchema(opts: { lensRecommendation?: boolean; alsoAffects?: boolean; scenario?: boolean; firstPassSites?: boolean }): Record<string, unknown> {
+  const base = reviewOutputSchema(!!opts.lensRecommendation)
+  const alsoAffects = !!opts.alsoAffects, scenario = !!opts.scenario, firstPassSites = !!opts.firstPassSites
+  if (!alsoAffects && !scenario && !firstPassSites) return base
+  const key = `${!!opts.lensRecommendation}:${alsoAffects}:${scenario}:${firstPassSites}`
+  const cached = sharedVariants.get(key)
+  if (cached) return cached
+  const schema = structuredClone(base) as { properties: Record<string, unknown> & { findings: { items: { properties: Record<string, unknown> } } } }
+  const props = schema.properties.findings.items.properties
+  if (alsoAffects) props.also_affects = structuredClone(ALSO_AFFECTS_PROPERTY)
+  if (scenario) props.scenario = structuredClone(SCENARIO_PROPERTY)
+  if (firstPassSites) schema.properties.first_pass_sites = structuredClone(FIRST_PASS_SITES_PROPERTY)
+  sharedVariants.set(key, schema)
+  return schema
+}
+
+// Schema F requires the reviewer's text fields too; a pass leaves them empty, so only findings and its item keys may trigger a resend.
+export const SHARED_PASS_TOLERATE = ['summary', 'behavioral_diff', 'production_risk', 'unresolved_questions', 'can_be_split', 'lens_recommendations', 'first_pass_sites']
+
 export type SiteDropReason = 'not_array' | 'not_object' | 'unknown_id' | 'bad_file' | 'bad_lines' | 'bad_where' | 'over_keep'
 
 // Keyed by first-pass candidate index; an id the pass was not briefed with, or a malformed entry, is dropped rather than resent.
@@ -323,6 +371,34 @@ export async function runLens(
   const findings = Array.isArray(object.findings) ? object.findings : []
   return {
     findings: schema === BREADTH_OUTPUT_SCHEMA ? findings : findings.map(sanitizeFindingExtras), usage, promptHash: createHash('sha256').update(systemPrompt).digest('hex').slice(0, 12),
+    ...(sites ? { firstPassSites: object.first_pass_sites } : {}),
+  }
+}
+
+// The overlay rides a trailing system message: as user text after the cached block it suppressed pass thinking in the probes.
+export async function runSharedPass(
+  apiKey: string,
+  model: string,
+  maxRetries: number,
+  maxTokens: number,
+  effort: string,
+  prefix: SharedPrefix,
+  briefing: string,
+  overlay: string,
+  label: string,
+  signal?: AbortSignal,
+): Promise<{ findings: ReviewFinding[]; usage: LLMUsage; promptHash: string; firstPassSites?: unknown }> {
+  const sites = 'first_pass_sites' in ((prefix.schema as { properties?: object }).properties ?? {})
+  const user: UserPart[] = [{ text: prefix.block, cache: true }, { text: briefing }]
+  console.log(`Sending to ${label} reviewer (${model}, maxRetries: ${maxRetries}, cached prefix)...`)
+  const { object, usage } = await createProvider(apiKey).completeStructured<{ findings: ReviewFinding[]; first_pass_sites?: unknown }>(
+    prefix.system, user, prefix.schema,
+    { model, maxTokens, maxRetries, effort: effort || undefined, ...(signal ? { signal } : {}), tolerateMissing: SHARED_PASS_TOLERATE, systemAfter: overlay, ...(prefix.sessionId ? { sessionId: prefix.sessionId } : {}) },
+  )
+  console.log(`${label[0].toUpperCase()}${label.slice(1)} received (${usage.input_tokens} in / ${usage.cache_read_input_tokens ?? 0} cache read / ${usage.cache_creation_input_tokens ?? 0} cache write / ${usage.output_tokens} out tokens, ${object.findings?.length ?? 0} findings)`)
+  const findings = Array.isArray(object.findings) ? object.findings : []
+  return {
+    findings: findings.map(sanitizeFindingExtras), usage, promptHash: createHash('sha256').update(`${prefix.system}\n\n${overlay}`).digest('hex').slice(0, 12),
     ...(sites ? { firstPassSites: object.first_pass_sites } : {}),
   }
 }
