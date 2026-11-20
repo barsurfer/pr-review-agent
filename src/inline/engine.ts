@@ -29,7 +29,7 @@ const isCapable = (a: VCSAdapter): a is Capable =>
   typeof a.listMarkedThreads === 'function' && typeof a.postInlineComment === 'function' && typeof a.postTopLevelComment === 'function'
   && typeof a.postThreadComment === 'function' && typeof a.editComment === 'function'
 
-const STOPPED: readonly InlineOutcome[] = ['concurrent_run', 'head_moved_skip', 'head_moved_partial', 'identity_mismatch', 'force_invalidate_failed']
+const STOPPED: readonly InlineOutcome[] = ['concurrent_run', 'head_moved_skip', 'head_moved_partial', 'head_check_failed', 'identity_mismatch', 'force_invalidate_failed']
 
 const forced = (ctx: ReviewContext): boolean => ctx.force === 'clean' || ctx.force === 're-review'
 
@@ -476,6 +476,10 @@ class Engine implements InlineEngine {
       case 'head_moved_partial':
         ctx.action = 'SKIP'
         ctx.skipReason = `the PR head moved to ${res.headMovedAt ?? 'a newer commit'} after some writes; the next run reviews the new head`
+        break
+      case 'head_check_failed':
+        ctx.action = 'SKIP'
+        ctx.skipReason = 'the PR head could not be confirmed; no further writes were made and the head was not recorded'
         break
       case 'identity_mismatch':
         ctx.action = 'SKIP'

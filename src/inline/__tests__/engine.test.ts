@@ -341,6 +341,20 @@ describe('writing a review', () => {
     expect(deps.markHeadChecked).not.toHaveBeenCalled()
   })
 
+  it('maps a failed head lookup to a skip whose reason does not say the head moved', async () => {
+    const e = engineOf(fake)
+    const ctx = ctxOf(fake)
+    const deps = depsOf()
+    await e.step(State.CHECK_PREVIOUS_REVIEWS, ctx, deps)
+    reviewed(ctx, [finding()])
+    fake.adapter.getPullRequestInfo = vi.fn(async () => { throw new Error('boom') }) as never
+    expect(await e.step(State.POST_REVIEW, ctx, deps)).toBe(State.SKIP)
+    expect(writes(fake)).toEqual([])
+    expect(e.record().outcome).toBe('head_check_failed')
+    expect(ctx.skipReason).not.toMatch(/moved/)
+    expect(deps.markHeadChecked).not.toHaveBeenCalled()
+  })
+
   it('maps a head that moves after the first write to head_moved_partial', async () => {
     fake.hooks.onCreate = kind => { if (kind === 'root') fake.hooks.head = 'f'.repeat(40) }
     const e = engineOf(fake)

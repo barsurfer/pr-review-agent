@@ -147,7 +147,7 @@ export function composeSummary(input: ComposeInput): ComposedSummary {
   const split = splitAtFindings(input.review.plain, input.review.findings)
   const pre = sanitizeNarrative(split.pre)
   const post = sanitizeNarrative(split.post)
-  const todo = input.todoSection ? sanitizeNarrative(input.todoSection).text : ''
+  const todoText = input.todoSection ? sanitizeNarrative(input.todoSection).text : ''
   const removed = pre.removed + post.removed
 
   const open = [...input.threads].sort((a, b) => RANK[b.severity] - RANK[a.severity] || kOf(b.id) - kOf(a.id))
@@ -198,7 +198,7 @@ export function composeSummary(input: ComposeInput): ComposedSummary {
       preText,
       `### Findings\n${findings.join('\n\n')}`,
       postText,
-      todo,
+      todoText,
       p.resolved && input.resolved.length ? `### Resolved by developers\n${input.resolved.map(r => resolvedRow(r)).join('\n')}` : '',
       `### Review History\n${history.slice(-p.history).join('\n')}`,
       footer,

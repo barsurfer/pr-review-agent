@@ -41,7 +41,7 @@ export type SummaryOnlyReason = 'low' | 'no_line' | 'out_of_hunk' | 'old_side' |
 
 export type InlineOutcome =
   | 'written' | 'write_failed' | 'replies_only' | 'dedup' | 'skipped' | 'incoherent_no_change' | 'write_uncertain' | 'force_invalidate_failed'
-  | 'head_moved_skip' | 'head_moved_partial' | 'concurrent_run' | 'identity_unavailable' | 'identity_mismatch' | 'dry_run'
+  | 'head_moved_skip' | 'head_moved_partial' | 'head_check_failed' | 'concurrent_run' | 'identity_unavailable' | 'identity_mismatch' | 'dry_run'
 
 export interface InlineRecord {
   active: boolean

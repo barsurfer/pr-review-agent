@@ -8,7 +8,7 @@ Opt-in, Bitbucket only. Findings are posted as inline threads on the diff, with 
 |---|---|---|
 | `ENABLE_INLINE_REVIEWS` | `false` | Turns the inline engine on. Off: the legacy flow runs exactly as before. |
 | `ENABLE_INLINE_LOW_THREADS` | `false` | Also open threads for LOW findings. Off: LOW findings are listed in the summary only. |
-| `AGENT_ACCOUNT_ID` | empty | The agent's Bitbucket account id. Optional: the adapter normally reads it from `GET /2.0/user`. Set it only when that lookup fails; a value that disagrees with the adapter stops the run (`identity_mismatch`). |
+| `AGENT_ACCOUNT_ID` | empty | The agent's Bitbucket account id. Optional only when `GET /2.0/user` works. That call returns 403 for Bitbucket credentials without account read scope (seen in a live dry run); the adapter then has no identity, the engine stops with "agent identity is unavailable" and posts nothing, so set this to the bot's `account_id` (`712020:...` form). The `{uuid}` form also works (braces are stripped; both forms are compared against the author's `account_id` and `uuid`); a value that disagrees with the adapter stops the run (`identity_mismatch`). |
 | `MAX_FINDING_REPLIES` | `5` | Agent answers per finding thread (0 = unlimited). At the limit the agent posts one "Replies paused" note, then stays silent. |
 
 With the flag on but a non-Bitbucket adapter, or a `--benchmark` run, the legacy flow runs and the record says `inline: { active: false, reason }`.
@@ -17,7 +17,7 @@ With the flag on but a non-Bitbucket adapter, or a `--benchmark` run, the legacy
 
 The engine in `src/inline/` has its own state and its own writer. It hooks into `review()` through `ctx.inline.step`, which intercepts a few FSM states (see [fsm.md](fsm.md)); every other state, and the whole pipeline that produces findings (reviewer, passes, judge, bundled review), is the legacy code. With the flag off no engine is built and nothing behaves differently; the identity fixtures under `src/__tests__/__fixtures__/identity-v00*` pin this.
 
-Each engine sees only its own artifacts. Flag off on a PR with inline artifacts gives a legacy first review; flag on again resumes from the inline summary and threads. First enable on a PR with legacy reviews gives a full first inline review, and the legacy comment is never edited.
+Each engine sees only its own artifacts. Flag off on a PR with inline artifacts gives a legacy first review; flag on again resumes from the inline summary and threads. First enable on a PR with legacy reviews gives a full first inline review, and the legacy comment is never edited. The first inline run starts as review 1 and does not read the legacy reviews as previous reviews (`ctx.previousReviews` is always empty in the engine).
 
 ## Output
 
@@ -33,7 +33,7 @@ Each engine sees only its own artifacts. Flag off on a PR with inline artifacts 
 - **Re-raise rule.** A finding matching a developer-resolved thread is not posted again at the same or lower severity. At a higher severity it opens a new thread with a new id, titled `(was F<k>, dismissed)`.
 - **Matching.** Findings match threads by file, title similarity and line, with lines mapped through each push's delta. Within one run only the strict match (title similarity 0.8 plus nearby lines) merges findings, so a repeat of a root planned in this run gets no thread and no id of its own but stays a `no thread` row (reason `duplicate`), while a loosely similar distinct finding still gets a thread. Titles are compared in the capped form posted in rows and roots, so a long title matches itself.
 - **Trust.** Markers and state count only on comments by the agent's own ids. A forged marker or a summary edited by someone else is ignored (`untrusted_markers`, `summary_check: tampered`); the next run overwrites a tampered summary in place.
-- **Writes are checked.** The head is re-read before the first write (moved: nothing posted, `head_moved_skip`); other runs' threads or summary appearing after planning stop the run (`concurrent_run`); a created comment under another author stops it (`identity_mismatch`).
+- **Writes are checked.** The head is re-read before the first write (moved: nothing posted, `head_moved_skip`; moved after some writes: `head_moved_partial`; lookup failed: `head_check_failed`, no further writes, head not recorded, no retry); other runs' threads or summary appearing after planning stop the run (`concurrent_run`); a created comment under another author stops it (`identity_mismatch`).
 - **Uncertain creates** (timeout, no response) are never resent in the same run and the head is not recorded, so the next run re-reviews and finds the comment if it landed. Cost: one extra review. A new summary is created without the head and the head is added by an edit once the create is acknowledged; a lost create, or a failed or uncertain head edit, leaves the head unrecorded and the next run edits the one existing summary.
 - **`--force`** on a completed head first removes it from the signed state, then reviews again; no duplicate threads.
 - **Unchanged runs keep the review.** A merge-only push, a zero-line delta or a coherent `NO_CHANGE` refreshes the summary (thread rows, history, footer, state) but keeps the last verified narrative and its `no thread` rows; only a summary with no usable narrative falls back to a one-line placeholder.

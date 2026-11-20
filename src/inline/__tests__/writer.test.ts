@@ -165,6 +165,35 @@ describe('writeInline: head checks', () => {
     expect(res.headRecorded).toBe(false)
   })
 
+  it('a failed head lookup before any write reports head_check_failed, not a moved head', async () => {
+    const fake = makeFake()
+    fake.adapter.getPullRequestInfo = async () => { throw new Error('boom') }
+    const input = inputFor(fake, { roots: [planned(1)] })
+    const res = await writeInline(input)
+    expect(res.outcome).toBe('head_check_failed')
+    expect(creates(fake)).toEqual([])
+    expect(fake.counts.edit).toBe(0)
+    expect(res.headMovedAt).toBeUndefined()
+    expect(res.headRecorded).toBe(false)
+    expect(input.headChecked()).toBe(0)
+  })
+
+  it('a failed head lookup after a root was posted stops further writes and records no head', async () => {
+    const fake = makeFake()
+    fake.hooks.failPost = () => undefined
+    const orig = fake.adapter.postInlineComment
+    fake.adapter.postInlineComment = async (...a) => {
+      const r = await orig(...a)
+      fake.adapter.getPullRequestInfo = async () => { throw new Error('boom') }
+      return r
+    }
+    const res = await writeInline(inputFor(fake, { roots: [planned(1), planned(2)] }))
+    expect(res.outcome).toBe('head_check_failed')
+    expect(res.posted.map(p => p.root.id)).toEqual(['F1'])
+    expect(summaryOf(fake)).toBeUndefined()
+    expect(res.headRecorded).toBe(false)
+  })
+
   it('a push landing during the summary-only re-list writes nothing and records no head', async () => {
     const fake = makeFake()
     fake.add({ body: summaryBody({ n: 1, commits: [A] }), authorIds: [ME] })

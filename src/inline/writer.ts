@@ -83,7 +83,8 @@ export async function writeInline(input: WriteInput): Promise<WriteResult> {
   let expectedBody = input.summary.kind === 'found' ? input.summary.comment.body : ''
 
   const stop = (outcome: InlineOutcome): WriteResult => { res.outcome = outcome; return res }
-  const moved = (): InlineOutcome => (touched ? 'head_moved_partial' : 'head_moved_skip')
+  let headCheckFailed = false
+  const moved = (): InlineOutcome => (headCheckFailed ? 'head_check_failed' : touched ? 'head_moved_partial' : 'head_moved_skip')
 
   if (input.dryRun) return dryRun(input, res, loaded, head12)
 
@@ -93,7 +94,8 @@ export async function writeInline(input: WriteInput): Promise<WriteResult> {
       if (now === head12) return false
       res.headMovedAt = now
     } catch (err: unknown) {
-      console.warn(`  Head check failed (${msg(err)}) - treating the head as moved`)
+      console.warn(`  Head check failed (${msg(err)}) - no further writes`)
+      headCheckFailed = true
     }
     return true
   }
