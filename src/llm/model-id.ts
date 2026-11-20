@@ -30,3 +30,10 @@ export function tableContextWindow(model: string): number | undefined {
 const SYSTEM_AFTER_MODELS = /^claude-(opus-5|opus-5-5|opus-4-8|fable-.+|mythos-.+|sonnet-5-5|haiku-5-5)$/
 
 export const takesSystemAfter = (model: string): boolean => SYSTEM_AFTER_MODELS.test(baseModelId(model))
+
+export const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max']
+
+// Models documented or probed to accept a per-message effort change (output_config on a mid-conversation system message).
+const EFFORT_AFTER_MODELS = /^claude-(opus-5|opus-5-5|fable-5-[12]|mythos-5-[12]|sonnet-5-5|haiku-5-5)$/
+
+export const takesEffortAfter = (model: string): boolean => EFFORT_AFTER_MODELS.test(baseModelId(model))

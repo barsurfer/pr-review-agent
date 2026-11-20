@@ -175,13 +175,14 @@ export async function runBundledReview(ctx: ReviewContext, maxInputTokens: numbe
   return { ok: true }
 }
 
-export function recordPassCall(ctx: ReviewContext, stage: string, maxTokens: number, limitMs: number | undefined, usage?: Partial<LLMUsage>, err?: unknown): void {
+export function recordPassCall(ctx: ReviewContext, stage: string, maxTokens: number, limitMs: number | undefined, usage?: Partial<LLMUsage>, err?: unknown, passEffort?: string): void {
   const end: PassCall['end'] = err === undefined ? 'ok' : err instanceof DeadlineAbortError ? 'aborted_time' : err instanceof TruncatedResponseError ? 'truncated' : 'error'
   // An aborted stream's usage is a start-of-message snapshot, so its output count would read as a real ~1-token answer.
   const counted = end === 'aborted_time' ? undefined : usage
   ;(ctx.passCalls ??= []).push({
     stage, end, max_tokens: maxTokens, output_tokens: counted?.output_tokens ?? null, reasoning_tokens: counted?.reasoning_tokens ?? null, limit_ms: limitMs ?? null,
     ...(config.review.promptCache ? cacheCallFields(ctx, stage, counted) : {}),
+    ...(passEffort !== undefined ? { pass_effort: passEffort, final_reasoning_tokens: counted?.final_reasoning_tokens ?? null } : {}),
   })
 }
 

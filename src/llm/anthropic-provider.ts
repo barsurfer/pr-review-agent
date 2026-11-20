@@ -16,7 +16,7 @@ export class AnthropicProvider implements LLMProvider {
   }
 
   async completeStructured<T>(system: string, user: string | UserPart[], schema: Record<string, unknown>, opts: LLMOptions): Promise<{ object: T; usage: LLMUsage }> {
-    const response = await this.streamFinal({ model: opts.model, max_tokens: opts.maxTokens, system, output_config: { format: { type: 'json_schema', schema } }, messages: anthropicMessages(user, opts.systemAfter) }, opts)
+    const response = await this.streamFinal({ model: opts.model, max_tokens: opts.maxTokens, system, output_config: { format: { type: 'json_schema', schema } }, messages: anthropicMessages(user, opts.systemAfter, opts.effortAfter) }, opts)
     const text = textOf(response, opts.maxTokens)
     let object: T
     try {
@@ -28,7 +28,7 @@ export class AnthropicProvider implements LLMProvider {
     // miss required keys — fail loudly here instead of crashing later on `.length` of undefined.
     const missing = missingRequired(object, schema, false, opts.tolerateMissing)
     if (missing.length) throw Object.assign(new Error(`Structured output missing required field(s): ${missing.join(', ')}`), { usage: mapUsage(response.usage) })
-    return { object, usage: mapUsage(response.usage) }
+    return { object, usage: { ...mapUsage(response.usage), ...finalReasoning(response, opts) } }
   }
 
   // Stream + finalMessage (not create): the SDK rejects a non-streaming request whose max_tokens
@@ -38,9 +38,10 @@ export class AnthropicProvider implements LLMProvider {
   private streamFinal(params: Record<string, unknown>, opts: LLMOptions): Promise<Anthropic.Message> {
     const run = (p: Record<string, unknown>): Promise<Anthropic.Message> => {
       const params = p as Parameters<typeof this.client.messages.stream>[0]
-      if (!opts.signal) return this.client.messages.stream(params, { maxRetries: opts.maxRetries }).finalMessage()
+      const requestOptions = { maxRetries: opts.maxRetries, ...(opts.effortAfter ? { headers: { 'anthropic-beta': EFFORT_AFTER_BETA } } : {}) }
+      if (!opts.signal) return this.client.messages.stream(params, requestOptions).finalMessage()
       // The SDK links this signal to the stream and to its retry backoff, so one abort ends the call wherever it is.
-      const stream = this.client.messages.stream(params, { maxRetries: opts.maxRetries, signal: opts.signal })
+      const stream = this.client.messages.stream(params, { ...requestOptions, signal: opts.signal })
       return stream.finalMessage().catch((err: unknown) => {
         if (!opts.signal?.aborted) throw err
         const partial = stream.currentMessage?.usage
@@ -50,6 +51,8 @@ export class AnthropicProvider implements LLMProvider {
     if (!opts.effort) return run(params)
     const withEffort = { ...params, output_config: { ...((params.output_config as Record<string, unknown>) ?? {}), effort: opts.effort } }
     return run(withEffort).catch((err: unknown) => {
+      // A retry without effort would change the cached prefix, so a keepEffort call hands every error to the caller.
+      if (opts.keepEffort) throw err
       // A 400 on a systemAfter call goes to the caller's uncached re-send, which keeps this effort retry.
       if (err instanceof Anthropic.BadRequestError && !(opts.systemAfter && isSystemMessageRejection(err))) {
         console.warn(`  effort "${opts.effort}" not accepted by ${opts.model} — retrying without it`)
@@ -60,9 +63,18 @@ export class AnthropicProvider implements LLMProvider {
   }
 }
 
-function anthropicMessages(user: string | UserPart[], systemAfter?: string): Array<{ role: string; content: unknown }> {
+const EFFORT_AFTER_BETA = 'mid-conversation-output-config-2026-07-01'
+
+function anthropicMessages(user: string | UserPart[], systemAfter?: string, effortAfter?: string): Array<{ role: string; content: unknown }> {
   const content = typeof user === 'string' ? user : user.map(p => ({ type: 'text', text: p.text, ...(p.cache ? { cache_control: { type: 'ephemeral' } } : {}) }))
-  return [{ role: 'user', content }, ...(systemAfter ? [{ role: 'system', content: systemAfter }] : [])]
+  const effort = effortAfter ? [{ role: 'system', content: [], output_config: { effort: effortAfter } }] : []
+  return [{ role: 'user', content }, ...effort, ...(systemAfter ? [{ role: 'system', content: systemAfter }] : [])]
+}
+
+// A reported 0 is a real answer here, unlike reasoning_tokens, which drops it.
+function finalReasoning(response: Anthropic.Message, opts: LLMOptions): { final_reasoning_tokens?: number } {
+  const thinking = response.usage.output_tokens_details?.thinking_tokens
+  return (opts.effortAfter !== undefined || opts.keepEffort) && typeof thinking === 'number' ? { final_reasoning_tokens: thinking } : {}
 }
 
 // A max_tokens stop is a cut-off response — refuse rather than post a partial. Newer models

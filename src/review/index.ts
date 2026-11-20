@@ -5,8 +5,8 @@
 import { createHash } from 'crypto'
 import { config } from '../config.js'
 import { contextWindowFor } from '../llm/context-window.js'
-import { takesSystemAfter } from '../llm/model-id.js'
-import { DeadlineAbortError, isSystemMessageRejection, type LLMUsage } from '../llm/shared.js'
+import { takesSystemAfter, takesEffortAfter, baseModelId } from '../llm/model-id.js'
+import { DeadlineAbortError, isSystemMessageRejection, sumAttempts, type LLMUsage, type LLMOptions } from '../llm/shared.js'
 import { loadPrompt, type LoadedPrompt } from '../prompt/loader.js'
 import { describeHttpError } from '../vcs/http-retry.js'
 import { fetchContext } from '../context/fetcher.js'
@@ -183,7 +183,9 @@ const extraPassMaxTokens = (ctx: ReviewContext): number => (ctx.outcomeSink && c
 
 // An aborted stream's output count is a start-of-message snapshot, so only its input tokens count as spend; pass_calls shows null for the same reason.
 function spentUsage<U extends { output_tokens: number; reasoning_tokens?: number }>(err: unknown, usage: U | undefined): U | undefined {
-  return usage && err instanceof DeadlineAbortError ? { ...usage, output_tokens: 0, reasoning_tokens: undefined } : usage
+  const partial = usage && err instanceof DeadlineAbortError ? { ...usage, output_tokens: 0, reasoning_tokens: undefined } : usage
+  const completed = err instanceof DeadlineAbortError ? err.completed : undefined
+  return completed ? (partial ? sumAttempts(completed, partial as unknown as LLMUsage) as unknown as U : completed as unknown as U) : partial
 }
 
 const passStopAtSeconds = (): number => config.breadth.benchmarkDeadlineSeconds - config.breadth.judgeReserveSeconds
@@ -247,25 +249,82 @@ function planPromptCache(ctx: ReviewContext): PromptCacheLog {
   return log
 }
 
+function planPassEffort(log: PromptCacheLog): NonNullable<PromptCacheLog['pass_effort']> {
+  const effort = config.review.cachedPassEffort
+  const status = !log.reviewer_marked ? 'no_shared_pass' : !takesEffortAfter(config.anthropic.model) ? 'unsupported_model' : 'on'
+  if (status !== 'on') console.log(`  Cached pass effort ${effort} not sent: ${status}`)
+  else if (baseModelId(config.anthropic.model) === 'claude-sonnet-5-5') console.warn(`  CACHED_PASS_EFFORT=${effort} on Sonnet 5.5: a lowered cached-pass effort was measured to remove its reasoning entirely`)
+  return { effort, status }
+}
+
 const sharedPrefix = (ctx: ReviewContext, stage: string): SharedPrefix | undefined =>
   ctx.cachePrefix && ctx.promptCache?.shared_stages.includes(stage) ? ctx.cachePrefix : undefined
 
+const briefMessage = (err: unknown): string => String((err as Error).message ?? '').replace(/\s+/g, ' ').trim().slice(0, 120)
+
+type PassEffortExtra = Pick<LLMOptions, 'effortAfter' | 'keepEffort'>
+
+const hasCallUsage = (x: unknown): boolean => typeof x === 'object' && x !== null && 'callUsage' in x
+
+// The row shows the last request only; an undefined callUsage that exists means it reported none.
+const callUsageOf = (x: { usage?: LLMUsage }): LLMUsage | undefined => (hasCallUsage(x) ? (x as { callUsage?: LLMUsage }).callUsage : x.usage)
+
+// The effort a cached pass's row reports: what its last request sent, so the row stays honest after a fallback.
+function passEffortSent(ctx: ReviewContext, prefix: SharedPrefix | undefined): string | undefined {
+  const pe = ctx.promptCache?.pass_effort
+  if (!config.review.cachedPassEffort || !pe || !prefix) return undefined
+  return pe.status === 'on' ? pe.effort : pe.status.startsWith('rejected_400') ? config.review.effort || 'default' : undefined
+}
+
+// Totals take the aggregate in usage and the row takes callUsage, so a paid attempt is counted once.
+async function carryPrior<T extends { usage: LLMUsage }>(prior: LLMUsage | undefined, run: () => Promise<T>): Promise<T & { callUsage?: LLMUsage }> {
+  if (!prior) return run()
+  try {
+    const result = await run()
+    return { ...result, usage: sumAttempts(prior, result.usage), callUsage: result.usage }
+  } catch (err: unknown) {
+    if (typeof err !== 'object' || err === null) throw err
+    const own = (err as { usage?: LLMUsage }).usage
+    const spent = spentUsage(err, own)
+    throw Object.assign(err, { usage: spent ? sumAttempts(prior, spent) : prior, callUsage: own })
+  }
+}
+
+// The effort message rides after the cached block, so the cache still reads; a 400 turns it off for the run and the shipped request is sent instead.
+async function effortPass<T extends { usage: LLMUsage }>(ctx: ReviewContext, stage: string, limitMs: number | undefined, run: (extra?: PassEffortExtra) => Promise<T>): Promise<T & { callUsage?: LLMUsage }> {
+  const pe = ctx.promptCache?.pass_effort
+  const effort = config.review.cachedPassEffort
+  if (!effort || !pe) return run()
+  if (pe.status !== 'on') return pe.status.startsWith('rejected_400') ? run({ keepEffort: true }) : run()
+  try {
+    return await run({ effortAfter: effort, keepEffort: true })
+  } catch (err: unknown) {
+    if (!isSystemMessageRejection(err)) throw err
+    recordPassCall(ctx, stage, extraPassMaxTokens(ctx), limitMs, (err as { usage?: LLMUsage }).usage, err, effort)
+    pe.status = `rejected_400: ${briefMessage(err)}`
+    console.warn(`  ${stage}: the per-message effort was rejected (${(err as Error).message}) — sending the shipped cached request; no later pass sends it`)
+    return carryPrior((err as { usage?: LLMUsage }).usage, () => run({ keepEffort: true }))
+  }
+}
+
 // The probes rejected the overlay-as-user-text layout, so a rejected system message falls back to today's uncached request, never to that.
-async function cachedOrUncached<T>(ctx: ReviewContext, stage: string, limitMs: number | undefined, cached: () => Promise<T>, uncached: () => Promise<T>): Promise<T> {
+async function cachedOrUncached<T extends { usage: LLMUsage }>(ctx: ReviewContext, stage: string, limitMs: number | undefined, cached: () => Promise<T>, uncached: () => Promise<T>): Promise<T> {
   try {
     return await cached()
   } catch (err: unknown) {
     if (!isSystemMessageRejection(err)) throw err
-    recordPassCall(ctx, stage, extraPassMaxTokens(ctx), limitMs, undefined, err)
+    const withEffort = !!config.review.cachedPassEffort
+    const failed = err as { usage?: LLMUsage }
+    recordPassCall(ctx, stage, extraPassMaxTokens(ctx), limitMs, withEffort ? callUsageOf(failed) : undefined, err, withEffort ? passEffortSent(ctx, ctx.cachePrefix) : undefined)
     // The same model would reject every later pass too, so the rest of the run sends today's requests without another 400 each.
     const log = ctx.promptCache!
     const at = log.shared_stages.indexOf(stage)
-    const message = String((err as Error).message ?? '').replace(/\s+/g, ' ').trim().slice(0, 120)
+    const message = briefMessage(err)
     log.uncached.push({ stage, reason: `rejected_400: ${message}` }, ...log.shared_stages.slice(at + 1).map(s => ({ stage: s, reason: 'off_after_400' as const })))
     log.shared_stages = log.shared_stages.slice(0, at)
     ctx.cachePrefix = undefined
     console.warn(`  ${stage}: the cached request was rejected (${(err as Error).message}) — re-sending it uncached; the prompt cache is off for the rest of this run`)
-    return uncached()
+    return withEffort ? carryPrior(failed.usage, uncached) : uncached()
   }
 }
 
@@ -699,6 +758,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       const recommend = config.lenses.recommend && ctx.reviewNumber === 1
       const recommendTail: [boolean?] = recommend ? [true] : []
       if (config.review.promptCache) ctx.promptCache = planPromptCache(ctx)
+      if (ctx.promptCache && config.review.cachedPassEffort) ctx.promptCache.pass_effort = planPassEffort(ctx.promptCache)
       const cache = ctx.promptCache?.reviewer_marked
         ? { schema: sharedOutputSchema({ lensRecommendation: recommend, alsoAffects: hiBench(ctx), scenario: !!config.review.highImpact, firstPassSites: fpSites(ctx) }), ...(ctx.promptCache.session_id ? { sessionId: ctx.promptCache.session_id } : {}) }
         : undefined
@@ -836,7 +896,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
             ctx.prInfo!, ctx.filteredDiff!, ctx.fileContexts ?? [], system, briefing, config.review.lineNumbers, ...tail,
           )
           return prefix
-            ? cachedOrUncached(ctx, 'breadth', limitMs, () => runSharedPass(config.llmApiKey, model, config.judge.maxRetries, extraPassMaxTokens(ctx), effort, prefix, briefing, overlay, 'breadth', signal), uncached)
+            ? cachedOrUncached(ctx, 'breadth', limitMs, () => effortPass(ctx, 'breadth', limitMs, extra => runSharedPass(config.llmApiKey, model, config.judge.maxRetries, extraPassMaxTokens(ctx), effort, prefix, briefing, overlay, 'breadth', signal, extra)), uncached)
             : uncached()
         })
         ctx.breadthFindings = result.findings
@@ -847,16 +907,16 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         ctx.breadthStatus = 'succeeded'
         console.log(`  Breadth review: ${coverage.untouched.length} untouched file(s) → ${result.findings.length} finding(s)`)
         // Last in the try, so a throw above is recorded once by the catch, never twice.
-        recordPassCall(ctx, 'breadth', extraPassMaxTokens(ctx), limitMs, result.usage)
+        recordPassCall(ctx, 'breadth', extraPassMaxTokens(ctx), limitMs, callUsageOf(result), undefined, passEffortSent(ctx, sharedPrefix(ctx, 'breadth')))
       } catch (err: unknown) {
         // A truncated response carries its usage; count it so the record shows what the failed call cost.
         const e = err as Error & { usage?: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number; cost_usd?: number; reasoning_tokens?: number } }
-        const used = spentUsage(err, e.usage)
+        const used = hasCallUsage(e) ? e.usage : spentUsage(err, e.usage)
         if (used) {
           ctx.breadthUsage = stageUsage(used)
           addUsage(ctx, used)
         }
-        recordPassCall(ctx, 'breadth', extraPassMaxTokens(ctx), limitMs, e.usage, err)
+        recordPassCall(ctx, 'breadth', extraPassMaxTokens(ctx), limitMs, callUsageOf(e), err, passEffortSent(ctx, sharedPrefix(ctx, 'breadth')))
         if (err instanceof DeadlineAbortError) {
           ctx.breadthStatus = 'aborted_time'
           console.warn(`  Breadth review stopped at the ${passStopAtSeconds()}s pass deadline (${Math.round((Date.now() - ctx.startTime) / 1000)}s elapsed) — continuing with first-pass findings only`)
@@ -934,7 +994,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
             ctx.prInfo!, restrictedDiff, contexts, system, briefing, config.review.lineNumbers, 'second-look', ...tail,
           )
           return prefix
-            ? cachedOrUncached(ctx, 'second_look', limitMs, () => runSharedPass(config.llmApiKey, model, config.anthropic.maxRetries, extraPassMaxTokens(ctx), config.review.effort, prefix, sharedBriefing, overlay, 'second-look', signal), () => {
+            ? cachedOrUncached(ctx, 'second_look', limitMs, () => effortPass(ctx, 'second_look', limitMs, extra => runSharedPass(config.llmApiKey, model, config.anthropic.maxRetries, extraPassMaxTokens(ctx), config.review.effort, prefix, sharedBriefing, overlay, 'second-look', signal, extra)), () => {
                 if (config.judge.shownAnchors) ctx.shownSecondLook = buildShownSource(restrictedDiff, contexts)
                 return uncached()
               })
@@ -947,15 +1007,15 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         if (ids) addFirstPassSites(ctx, sanitizeFirstPassSites(result.firstPassSites, ids.index, 'second_look'), 'second_look', 'Second-look')
         ctx.secondLookStatus = 'succeeded'
         console.log(`  Second-look: ${flagged.length} flagged file(s) → ${result.findings.length} additional finding(s)`)
-        recordPassCall(ctx, 'second_look', extraPassMaxTokens(ctx), limitMs, result.usage)
+        recordPassCall(ctx, 'second_look', extraPassMaxTokens(ctx), limitMs, callUsageOf(result), undefined, passEffortSent(ctx, sharedPrefix(ctx, 'second_look')))
       } catch (err: unknown) {
         const e = err as Error & { usage?: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number; cost_usd?: number; reasoning_tokens?: number } }
-        const used = spentUsage(err, e.usage)
+        const used = hasCallUsage(e) ? e.usage : spentUsage(err, e.usage)
         if (used) {
           ctx.secondLookUsage = stageUsage(used)
           addUsage(ctx, used)
         }
-        recordPassCall(ctx, 'second_look', extraPassMaxTokens(ctx), limitMs, e.usage, err)
+        recordPassCall(ctx, 'second_look', extraPassMaxTokens(ctx), limitMs, callUsageOf(e), err, passEffortSent(ctx, sharedPrefix(ctx, 'second_look')))
         if (err instanceof DeadlineAbortError) {
           ctx.secondLookStatus = 'aborted_time'
           console.warn(`  Second-look stopped at the ${passStopAtSeconds()}s pass deadline (${Math.round((Date.now() - ctx.startTime) / 1000)}s elapsed) — continuing with first-pass and breadth findings only`)
@@ -1029,7 +1089,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
               ctx.prInfo!, ctx.filteredDiff!, ctx.fileContexts ?? [], system, briefing, config.review.lineNumbers, `lens:${lens.name}`, ...tail,
             )
             return prefix
-              ? cachedOrUncached(ctx, `lens:${lens.name}`, limitMs, () => runSharedPass(config.llmApiKey, model, config.anthropic.maxRetries, extraPassMaxTokens(ctx), effort, prefix, briefing, overlay, `lens:${lens.name}`, signal), uncached)
+              ? cachedOrUncached(ctx, `lens:${lens.name}`, limitMs, () => effortPass(ctx, `lens:${lens.name}`, limitMs, extra => runSharedPass(config.llmApiKey, model, config.anthropic.maxRetries, extraPassMaxTokens(ctx), effort, prefix, briefing, overlay, `lens:${lens.name}`, signal, extra)), uncached)
               : uncached()
           })
           run.findings = result.findings
@@ -1038,15 +1098,15 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
           addUsage(ctx, result.usage)
           run.status = 'succeeded'
           console.log(`  Lens ${lens.name}: ${result.findings.length} finding(s)`)
-          recordPassCall(ctx, `lens:${lens.name}`, extraPassMaxTokens(ctx), limitMs, result.usage)
+          recordPassCall(ctx, `lens:${lens.name}`, extraPassMaxTokens(ctx), limitMs, callUsageOf(result), undefined, passEffortSent(ctx, sharedPrefix(ctx, `lens:${lens.name}`)))
         } catch (err: unknown) {
           const e = err as Error & { usage?: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number; cost_usd?: number; reasoning_tokens?: number } }
-          const used = spentUsage(err, e.usage)
+          const used = hasCallUsage(e) ? e.usage : spentUsage(err, e.usage)
           if (used) {
             run.usage = stageUsage(used)
             addUsage(ctx, used)
           }
-          recordPassCall(ctx, `lens:${lens.name}`, extraPassMaxTokens(ctx), limitMs, e.usage, err)
+          recordPassCall(ctx, `lens:${lens.name}`, extraPassMaxTokens(ctx), limitMs, callUsageOf(e), err, passEffortSent(ctx, sharedPrefix(ctx, `lens:${lens.name}`)))
           if (err instanceof DeadlineAbortError) {
             run.status = 'aborted_time'
             halt = 'skipped_time'

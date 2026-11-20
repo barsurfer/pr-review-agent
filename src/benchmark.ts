@@ -1,6 +1,7 @@
 // ReviewBench benchmark mode. Never throws: any failure still writes an empty findings file, because one failed PR fails the whole run.
 
 import { config } from './config.js'
+import { EFFORT_LEVELS } from './llm/model-id.js'
 import { review } from './review/index.js'
 import { ReviewBenchAdapter, readReviewBenchEnv, readPrJson } from './vcs/reviewbench.js'
 import { mergeJudgedFindingsWithStats, mapFindings, keptToReportFindings, isAnchored, anchorToFile, firstAddedLines, withCounterparts, counterpartFindings, alsoAffectsRows, firstPassSiteRows, buildFindingsReport, writeFindingsReport, countFindingBullets, type ReportFinding, type AlsoAffectsLog, type FirstPassSiteLog } from './review/findings-output.js'
@@ -47,6 +48,12 @@ const CONFIG_LABELS: Record<string, (value: string, name: string) => void> = {
   HI: flag(on => { config.review.highImpact = on }),
   FP_SITES: flag(on => { config.review.firstPassSites = on }),
   CACHE: flag(on => { config.review.promptCache = on }),
+  C_EFFORT: (v, name) => {
+    const value = v.trim()
+    if (/^(0|off)$/i.test(value)) config.review.cachedPassEffort = ''
+    else if (EFFORT_LEVELS.includes(value)) config.review.cachedPassEffort = value
+    else console.warn(`  Ignoring config label ${name}=${v}: expected 0, off or ${EFFORT_LEVELS.join('|')}`)
+  },
   DX: flag(on => { if (on) config.diffExcludePatterns = [...DX_PATTERNS] }),
   // One value label doubles as the on/off switch because the manifest caps labels at 6.
   LENSES: (v, name) => {
@@ -81,7 +88,8 @@ function applyBenchmarkConfig(env: NodeJS.ProcessEnv): void {
   applyConfigLabels(env)
   // The harness flags any config label whose value never appears in the agent's output.
   // Flags print under their label keys and 0/1 values, so a label set in the UI and a baked ENABLE_* value both show up here.
-  console.log(`Benchmark settings: model=${config.anthropic.model} effort=${config.review.effort || 'default'} judge_model=${config.judge.model || 'off'} judge_effort=${config.judge.effort || 'default'} nits=${bit(config.review.enableNitpicks)} j_minor=${bit(config.judge.policy.keepMinor)} j_unver=${bit(config.judge.policy.keepUnverified)} j_ctx=${bit(config.judge.fileContext)} lnum=${bit(config.review.lineNumbers)} breadth=${bit(config.breadth.enabled)} b_files=${config.breadth.minFiles} b_untch=${config.breadth.minUntouched} second_look=${bit(config.review.secondLook)} j_quality=${bit(config.judge.quality)} sl_breadth=${bit(config.review.secondLookBreadthTargets)} j_shown_anchor=${bit(config.judge.shownAnchors)} b_priority=${bit(config.breadth.priorityTargets)} sfx=${bit(config.judge.suggestedFixes)} j_proposal=${bit(config.judge.proposals)}${activeLenses(config.lenses).length ? ` lenses=${config.lenses.list}` : ''}${config.lenses.recommend ? ' lens_rec=1' : ''}${config.judge.policy.keepTestGaps ? ' j_tgap=1' : ''}${config.benchmarkCounterpartRows ? ' xrows=1' : ''}${config.review.highImpact ? ' hi=1' : ''}${config.review.firstPassSites ? ' fp_sites=1' : ''}${config.anthropic.extraPassMaxTokens ? ` xp_max=${config.anthropic.extraPassMaxTokens}` : ''}${config.breadth.passDeadline ? ' pass_deadline=1' : ''}${config.diffExcludePatterns.join(',') === DX_PATTERNS.join(',') ? ' dx=1' : ''}${config.review.promptCache ? ' cache=1' : ''}`)
+  console.log(`Benchmark settings: model=${config.anthropic.model} effort=${config.review.effort || 'default'} judge_model=${config.judge.model || 'off'} judge_effort=${config.judge.effort || 'default'} nits=${bit(config.review.enableNitpicks)} j_minor=${bit(config.judge.policy.keepMinor)} j_unver=${bit(config.judge.policy.keepUnverified)} j_ctx=${bit(config.judge.fileContext)} lnum=${bit(config.review.lineNumbers)} breadth=${bit(config.breadth.enabled)} b_files=${config.breadth.minFiles} b_untch=${config.breadth.minUntouched} second_look=${bit(config.review.secondLook)} j_quality=${bit(config.judge.quality)} sl_breadth=${bit(config.review.secondLookBreadthTargets)} j_shown_anchor=${bit(config.judge.shownAnchors)} b_priority=${bit(config.breadth.priorityTargets)} sfx=${bit(config.judge.suggestedFixes)} j_proposal=${bit(config.judge.proposals)}${activeLenses(config.lenses).length ? ` lenses=${config.lenses.list}` : ''}${config.lenses.recommend ? ' lens_rec=1' : ''}${config.judge.policy.keepTestGaps ? ' j_tgap=1' : ''}${config.benchmarkCounterpartRows ? ' xrows=1' : ''}${config.review.highImpact ? ' hi=1' : ''}${config.review.firstPassSites ? ' fp_sites=1' : ''}${config.anthropic.extraPassMaxTokens ? ` xp_max=${config.anthropic.extraPassMaxTokens}` : ''}${config.breadth.passDeadline ? ' pass_deadline=1' : ''}${config.diffExcludePatterns.join(',') === DX_PATTERNS.join(',') ? ' dx=1' : ''}${config.review.promptCache ? ' cache=1' : ''}${config.review.cachedPassEffort ? ` c_effort=${config.review.cachedPassEffort}` : ''}`)
+  if (config.review.cachedPassEffort && !config.review.promptCache) console.warn('  C_EFFORT is set but CACHE=0 - no pass shares the cache, so it has no effect.')
   if (config.judge.proposals && !config.judge.model) console.warn('  J_PROPOSAL=1 but the judge is off - no proposals will be produced.')
   // Nitpicks emit but the default policy drops minor, so without keepMinor nothing new posts.
   if (config.review.enableNitpicks && !config.judge.policy.keepMinor) {

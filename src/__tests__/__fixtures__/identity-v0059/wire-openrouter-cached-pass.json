@@ -1,0 +1,99 @@
+{
+  "post": [
+    [
+      "https://openrouter.ai/api/v1/chat/completions",
+      {
+        "model": "anthropic/claude-haiku-5.5",
+        "max_tokens": 64000,
+        "response_format": {
+          "type": "json_schema",
+          "json_schema": {
+            "name": "result",
+            "schema": {
+              "type": "object",
+              "required": [
+                "findings"
+              ],
+              "properties": {
+                "findings": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "title"
+                    ],
+                    "properties": {
+                      "title": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "strict": false
+          }
+        },
+        "messages": [
+          {
+            "role": "system",
+            "content": "S"
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "PR block",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              },
+              {
+                "type": "text",
+                "text": "briefing"
+              }
+            ]
+          },
+          {
+            "role": "system",
+            "content": "OVERLAY"
+          }
+        ],
+        "usage": {
+          "include": true
+        },
+        "user": "my-repo",
+        "session_id": "sess-1",
+        "reasoning": {
+          "effort": "high"
+        }
+      },
+      {
+        "headers": {
+          "Authorization": "Bearer k",
+          "Content-Type": "application/json",
+          "HTTP-Referer": "https://app.example",
+          "X-OpenRouter-Title": "my-app"
+        },
+        "timeout": 600000
+      }
+    ]
+  ],
+  "result": {
+    "object": {
+      "findings": [
+        {
+          "title": "x"
+        }
+      ]
+    },
+    "usage": {
+      "input_tokens": 60,
+      "output_tokens": 20,
+      "cache_read_input_tokens": 40,
+      "cache_creation_input_tokens": 0,
+      "cost_usd": 0.001
+    }
+  }
+}

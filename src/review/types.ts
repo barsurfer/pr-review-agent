@@ -81,6 +81,7 @@ export interface PromptCacheLog {
   shared_stages: string[]
   uncached: Array<{ stage: string; reason: UncachedReason }>
   session_id?: string
+  pass_effort?: { effort: string; status: 'on' | 'unsupported_model' | 'no_shared_pass' | `rejected_400: ${string}` }
 }
 
 export interface SinkResult {
@@ -102,6 +103,8 @@ export interface PassCall {
   cache_read_tokens?: number | null
   cache_write_tokens?: number | null
   cost_usd?: number | null
+  pass_effort?: string
+  final_reasoning_tokens?: number | null
 }
 
 export type OutcomeSink = (outcome: ReviewOutcome) => void | SinkResult | Promise<void | SinkResult>
