@@ -36246,6 +36246,9 @@ function tableContextWindow(model) {
 }
 var SYSTEM_AFTER_MODELS = /^claude-(opus-5|opus-5-5|opus-4-8|fable-.+|mythos-.+|sonnet-5-5|haiku-5-5)$/;
 var takesSystemAfter = (model) => SYSTEM_AFTER_MODELS.test(baseModelId(model));
+var EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"];
+var EFFORT_AFTER_MODELS = /^claude-(opus-5|opus-5-5|fable-5-[12]|mythos-5-[12]|sonnet-5-5|haiku-5-5)$/;
+var takesEffortAfter = (model) => EFFORT_AFTER_MODELS.test(baseModelId(model));
 
 // src/config.ts
 function required(name) {
@@ -36255,6 +36258,14 @@ function required(name) {
 }
 function optional(name, defaultValue) {
   return process.env[name] ?? defaultValue;
+}
+function cachedPassEffort() {
+  const value = optional("CACHED_PASS_EFFORT", "").trim();
+  if (value && !EFFORT_LEVELS.includes(value)) {
+    console.warn(`CACHED_PASS_EFFORT=${value} is not one of ${EFFORT_LEVELS.join("|")} - ignoring it`);
+    return "";
+  }
+  return value;
 }
 function finiteOr(value, fallback) {
   return Number.isFinite(value) ? value : fallback;
@@ -36416,6 +36427,8 @@ var config = {
     firstPassSites: optional("ENABLE_FIRST_PASS_SITES", "false") === "true",
     // Off by default: a first review's eligible extra passes read the reviewer's prompt and PR context from a 5-minute prompt cache.
     promptCache: optional("ENABLE_PROMPT_CACHE", "false") === "true",
+    // Unset by default: cached extra passes send this effort as a per-message change after the cached block, so the cache still reads.
+    cachedPassEffort: cachedPassEffort(),
     // On by default: without numbered lines ~40% of findings carried no line; set false to send the raw diff/context (saves the per-line gutter tokens).
     lineNumbers: optional("ENABLE_LINE_NUMBERS", "true") !== "false",
     // On by default with a kill switch: false always reviews the full delta after a target merge.
@@ -43907,6 +43920,21 @@ function scanTodos(diff) {
 }
 
 // src/llm/shared.ts
+var withoutFinalReasoning = ({ final_reasoning_tokens: _f, ...rest }) => rest;
+function sumAttempts(...usages) {
+  const attempts = usages.flatMap((u) => u.attempts ?? [withoutFinalReasoning(u)]);
+  const sum2 = (pick) => attempts.reduce((n, a) => n + (pick(a) ?? 0), 0);
+  const reasoning = sum2((a) => a.reasoning_tokens);
+  return {
+    input_tokens: sum2((a) => a.input_tokens),
+    output_tokens: sum2((a) => a.output_tokens),
+    cache_read_input_tokens: sum2((a) => a.cache_read_input_tokens),
+    cache_creation_input_tokens: sum2((a) => a.cache_creation_input_tokens),
+    ...attempts.every((a) => a.cost_usd !== void 0) ? { cost_usd: sum2((a) => a.cost_usd) } : {},
+    ...reasoning > 0 ? { reasoning_tokens: reasoning } : {},
+    attempts
+  };
+}
 var hasCachePart = (user) => Array.isArray(user) && user.some((p) => p.cache);
 var TruncatedResponseError = class extends Error {
   constructor(message, usage) {
@@ -43923,6 +43951,8 @@ var DeadlineAbortError = class extends Error {
     this.name = "DeadlineAbortError";
   }
   usage;
+  // Usage of attempts that finished before the abort, kept apart from the aborted stream's partial usage.
+  completed;
 };
 var isSystemMessageRejection = (err) => err?.status === 400 && !isContextLengthError(err);
 function missingRequired(object, schema, deep = false, tolerate = []) {
@@ -44688,7 +44718,7 @@ var AnthropicProvider = class {
     return { text: textOf(response, opts2.maxTokens), usage: mapUsage(response.usage) };
   }
   async completeStructured(system, user, schema, opts2) {
-    const response = await this.streamFinal({ model: opts2.model, max_tokens: opts2.maxTokens, system, output_config: { format: { type: "json_schema", schema } }, messages: anthropicMessages(user, opts2.systemAfter) }, opts2);
+    const response = await this.streamFinal({ model: opts2.model, max_tokens: opts2.maxTokens, system, output_config: { format: { type: "json_schema", schema } }, messages: anthropicMessages(user, opts2.systemAfter, opts2.effortAfter) }, opts2);
     const text = textOf(response, opts2.maxTokens);
     let object;
     try {
@@ -44698,7 +44728,7 @@ var AnthropicProvider = class {
     }
     const missing = missingRequired(object, schema, false, opts2.tolerateMissing);
     if (missing.length) throw Object.assign(new Error(`Structured output missing required field(s): ${missing.join(", ")}`), { usage: mapUsage(response.usage) });
-    return { object, usage: mapUsage(response.usage) };
+    return { object, usage: { ...mapUsage(response.usage), ...finalReasoning(response, opts2) } };
   }
   // Stream + finalMessage (not create): the SDK rejects a non-streaming request whose max_tokens
   // could exceed the 10-min timeout, which the Claude 5 family hits since it thinks by default.
@@ -44707,8 +44737,9 @@ var AnthropicProvider = class {
   streamFinal(params, opts2) {
     const run = (p) => {
       const params2 = p;
-      if (!opts2.signal) return this.client.messages.stream(params2, { maxRetries: opts2.maxRetries }).finalMessage();
-      const stream5 = this.client.messages.stream(params2, { maxRetries: opts2.maxRetries, signal: opts2.signal });
+      const requestOptions = { maxRetries: opts2.maxRetries, ...opts2.effortAfter ? { headers: { "anthropic-beta": EFFORT_AFTER_BETA } } : {} };
+      if (!opts2.signal) return this.client.messages.stream(params2, requestOptions).finalMessage();
+      const stream5 = this.client.messages.stream(params2, { ...requestOptions, signal: opts2.signal });
       return stream5.finalMessage().catch((err) => {
         if (!opts2.signal?.aborted) throw err;
         const partial = stream5.currentMessage?.usage;
@@ -44718,6 +44749,7 @@ var AnthropicProvider = class {
     if (!opts2.effort) return run(params);
     const withEffort = { ...params, output_config: { ...params.output_config ?? {}, effort: opts2.effort } };
     return run(withEffort).catch((err) => {
+      if (opts2.keepEffort) throw err;
       if (err instanceof Anthropic.BadRequestError && !(opts2.systemAfter && isSystemMessageRejection(err))) {
         console.warn(`  effort "${opts2.effort}" not accepted by ${opts2.model} \u2014 retrying without it`);
         return run(params);
@@ -44726,9 +44758,15 @@ var AnthropicProvider = class {
     });
   }
 };
-function anthropicMessages(user, systemAfter) {
+var EFFORT_AFTER_BETA = "mid-conversation-output-config-2026-07-01";
+function anthropicMessages(user, systemAfter, effortAfter) {
   const content = typeof user === "string" ? user : user.map((p) => ({ type: "text", text: p.text, ...p.cache ? { cache_control: { type: "ephemeral" } } : {} }));
-  return [{ role: "user", content }, ...systemAfter ? [{ role: "system", content: systemAfter }] : []];
+  const effort = effortAfter ? [{ role: "system", content: [], output_config: { effort: effortAfter } }] : [];
+  return [{ role: "user", content }, ...effort, ...systemAfter ? [{ role: "system", content: systemAfter }] : []];
+}
+function finalReasoning(response, opts2) {
+  const thinking = response.usage.output_tokens_details?.thinking_tokens;
+  return (opts2.effortAfter !== void 0 || opts2.keepEffort) && typeof thinking === "number" ? { final_reasoning_tokens: thinking } : {};
 }
 function textOf(response, maxTokens) {
   if (response.stop_reason === "max_tokens") {
@@ -44775,17 +44813,19 @@ var OpenRouterProvider = class {
   }
   async completeStructured(system, user, schema, opts2) {
     const response_format = { type: "json_schema", json_schema: { name: "result", schema, strict: false } };
-    const payload = { model: opts2.model, max_tokens: opts2.maxTokens, response_format, messages: openRouterMessages(system, user, opts2.systemAfter) };
+    const payload = { model: opts2.model, max_tokens: opts2.maxTokens, response_format, messages: openRouterMessages(system, user, opts2.systemAfter, opts2.effortAfter) };
     const cached = cacheAware() || hasCachePart(user);
     const first = await this.structuredAttempt(payload, schema, opts2, cached);
-    if (!first.missing.length) return { object: first.object, usage: first.usage };
+    const strict = !!opts2.keepEffort || !!config.review?.cachedPassEffort;
+    const reported = (a) => (opts2.effortAfter !== void 0 || !!opts2.keepEffort) && a.reasoning !== void 0 ? { final_reasoning_tokens: a.reasoning } : {};
+    if (!first.missing.length) return { object: first.object, usage: { ...first.usage, ...reported(first) } };
     console.warn(`  Structured output from ${opts2.model} missing ${first.missing.join(", ")} \u2014 retrying once`);
     const second = await this.structuredAttempt(payload, schema, opts2, cached).catch((err) => {
-      throw withPriorUsage(err, first.usage);
+      throw withPriorUsage(err, first.usage, strict);
     });
-    const usage = sumUsage(first.usage, second.usage);
+    const usage = sumUsage(first.usage, second.usage, strict);
     if (second.missing.length) throw Object.assign(new Error(`Structured output missing required field(s): ${second.missing.join(", ")}`), { usage });
-    return { object: second.object, usage };
+    return { object: second.object, usage: { ...usage, ...reported(second) } };
   }
   async structuredAttempt(payload, schema, opts2, cached) {
     const data = await this.request(payload, opts2);
@@ -44796,7 +44836,8 @@ var OpenRouterProvider = class {
     } catch {
       throw new Error("Model returned invalid JSON despite structured output");
     }
-    return { object, usage: mapOpenRouterUsage(data.usage, cached), missing: missingRequired(object, schema, true, opts2.tolerateMissing) };
+    const reasoning = data.usage?.completion_tokens_details?.reasoning_tokens;
+    return { object, usage: mapOpenRouterUsage(data.usage, cached), missing: missingRequired(object, schema, true, opts2.tolerateMissing), ...typeof reasoning === "number" ? { reasoning } : {} };
   }
   async request(payload, opts2) {
     const url2 = `${config.openrouter.baseUrl.replace(/\/+$/, "")}/chat/completions`;
@@ -44809,7 +44850,7 @@ var OpenRouterProvider = class {
     const body = { ...payload, usage: { include: true }, ...config.repoSlug ? { user: config.repoSlug } : {}, ...opts2.sessionId ? { session_id: opts2.sessionId } : {} };
     if (!opts2.effort) return this.send(url2, headers, body, opts2);
     return this.send(url2, headers, { ...body, reasoning: { effort: opts2.effort } }, opts2).catch((err) => {
-      if (isReasoningRejection(err)) {
+      if (isReasoningRejection(err) && !opts2.keepEffort) {
         console.warn(`  effort "${opts2.effort}" not accepted by ${opts2.model} \u2014 retrying without it`);
         return this.send(url2, headers, body, opts2);
       }
@@ -44840,9 +44881,10 @@ var OpenRouterProvider = class {
   }
 };
 var OPENROUTER_TIMEOUT_MS = 6e5;
-function openRouterMessages(system, user, systemAfter) {
+function openRouterMessages(system, user, systemAfter, effortAfter) {
   const content = typeof user === "string" ? user : user.map((p) => ({ type: "text", text: p.text, ...p.cache ? { cache_control: { type: "ephemeral" } } : {} }));
-  return [{ role: "system", content: system }, { role: "user", content }, ...systemAfter ? [{ role: "system", content: systemAfter }] : []];
+  const effort = effortAfter ? [{ role: "system", content: "", configuration_update: { reasoning: { effort: effortAfter } } }] : [];
+  return [{ role: "system", content: system }, { role: "user", content }, ...effort, ...systemAfter ? [{ role: "system", content: systemAfter }] : []];
 }
 function firstChoice(data, maxTokens, cached = false) {
   const choice = data.choices?.[0];
@@ -44883,8 +44925,8 @@ function cachedUsage(u, cost, reasoning) {
     ...typeof reasoning === "number" && reasoning > 0 ? { reasoning_tokens: reasoning } : {}
   };
 }
-function sumUsage(a, b) {
-  const cost = a.cost_usd === void 0 && b.cost_usd === void 0 ? void 0 : (a.cost_usd ?? 0) + (b.cost_usd ?? 0);
+function sumUsage(a, b, strictCost = false) {
+  const cost = strictCost ? a.cost_usd === void 0 || b.cost_usd === void 0 ? void 0 : a.cost_usd + b.cost_usd : a.cost_usd === void 0 && b.cost_usd === void 0 ? void 0 : (a.cost_usd ?? 0) + (b.cost_usd ?? 0);
   const reasoning = (a.reasoning_tokens ?? 0) + (b.reasoning_tokens ?? 0);
   return {
     input_tokens: a.input_tokens + b.input_tokens,
@@ -44897,10 +44939,11 @@ function sumUsage(a, b) {
   };
 }
 var cacheAware = () => !!config.review?.promptCache;
-function withPriorUsage(err, prior) {
+function withPriorUsage(err, prior, strictCost = false) {
   if (!err || typeof err !== "object") return err;
   const own2 = err.usage;
-  return Object.assign(err, { usage: own2 ? sumUsage(prior, own2) : prior });
+  if ((strictCost || !!config.review?.cachedPassEffort) && err instanceof DeadlineAbortError) return Object.assign(err, { completed: own2 ? sumUsage(prior, own2, strictCost) : prior });
+  return Object.assign(err, { usage: own2 ? sumUsage(prior, own2, strictCost) : prior });
 }
 function openRouterError(status, rawMessage, code) {
   const hay = `${rawMessage} ${typeof code === "string" ? code : ""}`;
@@ -46806,7 +46849,7 @@ ${briefing}`;
     ...sites ? { firstPassSites: object.first_pass_sites } : {}
   };
 }
-async function runSharedPass(apiKey, model, maxRetries, maxTokens, effort, prefix, briefing, overlay, label, signal) {
+async function runSharedPass(apiKey, model, maxRetries, maxTokens, effort, prefix, briefing, overlay, label, signal, extra) {
   const sites = "first_pass_sites" in (prefix.schema.properties ?? {});
   const user = [{ text: prefix.block, cache: true }, { text: briefing }];
   console.log(`Sending to ${label} reviewer (${model}, maxRetries: ${maxRetries}, cached prefix)...`);
@@ -46814,7 +46857,7 @@ async function runSharedPass(apiKey, model, maxRetries, maxTokens, effort, prefi
     prefix.system,
     user,
     prefix.schema,
-    { model, maxTokens, maxRetries, effort: effort || void 0, ...signal ? { signal } : {}, tolerateMissing: SHARED_PASS_TOLERATE, systemAfter: overlay, ...prefix.sessionId ? { sessionId: prefix.sessionId } : {} }
+    { model, maxTokens, maxRetries, effort: effort || void 0, ...signal ? { signal } : {}, tolerateMissing: SHARED_PASS_TOLERATE, systemAfter: overlay, ...prefix.sessionId ? { sessionId: prefix.sessionId } : {}, ...extra }
   );
   console.log(`${label[0].toUpperCase()}${label.slice(1)} received (${usage.input_tokens} in / ${usage.cache_read_input_tokens ?? 0} cache read / ${usage.cache_creation_input_tokens ?? 0} cache write / ${usage.output_tokens} out tokens, ${object.findings?.length ?? 0} findings)`);
   const findings = Array.isArray(object.findings) ? object.findings : [];
@@ -47172,7 +47215,7 @@ function estimateCost(tokens2, model) {
   return Math.round(unroundedCost(tokens2, model) * 1e4) / 1e4;
 }
 function estimateAttemptsCost(attempts, model) {
-  const cost = attempts.reduce((sum2, a) => sum2 + unroundedCost({ input: a.input_tokens, output: a.output_tokens, cache_read: a.cache_read_input_tokens ?? 0, cache_write: a.cache_creation_input_tokens ?? 0 }, model), 0);
+  const cost = attempts.reduce((sum2, a) => sum2 + (a.cost_usd ?? unroundedCost({ input: a.input_tokens, output: a.output_tokens, cache_read: a.cache_read_input_tokens ?? 0, cache_write: a.cache_creation_input_tokens ?? 0 }, model)), 0);
   return Math.round(cost * 1e4) / 1e4;
 }
 function unroundedCost(tokens2, model) {
@@ -47192,7 +47235,7 @@ function getAgentVersion() {
     const pkg = JSON.parse((0, import_fs4.readFileSync)(pkgPath, "utf-8"));
     return pkg.version;
   } catch {
-    if (true) return "0.0.59";
+    if (true) return "0.0.60";
     return "unknown";
   }
 }
@@ -47204,7 +47247,7 @@ function getBuildCommit() {
     const dirty = (0, import_child_process.execSync)("git status --porcelain", opts2).toString().trim() ? "-dirty" : "";
     return hash + dirty;
   } catch {
-    if (true) return "cdf3fe6";
+    if (true) return "a8780bc";
     return "unknown";
   }
 }
@@ -47591,7 +47634,7 @@ Merged ${reviews.length} bundle review(s): ${merged.object.findings.length} find
   ctx.bundleUncertain = unreviewed.length > 0 || incoherent;
   return { ok: true };
 }
-function recordPassCall(ctx, stage, maxTokens, limitMs, usage, err) {
+function recordPassCall(ctx, stage, maxTokens, limitMs, usage, err, passEffort) {
   const end = err === void 0 ? "ok" : err instanceof DeadlineAbortError ? "aborted_time" : err instanceof TruncatedResponseError ? "truncated" : "error";
   const counted = end === "aborted_time" ? void 0 : usage;
   (ctx.passCalls ??= []).push({
@@ -47601,7 +47644,8 @@ function recordPassCall(ctx, stage, maxTokens, limitMs, usage, err) {
     output_tokens: counted?.output_tokens ?? null,
     reasoning_tokens: counted?.reasoning_tokens ?? null,
     limit_ms: limitMs ?? null,
-    ...config.review.promptCache ? cacheCallFields(ctx, stage, counted) : {}
+    ...config.review.promptCache ? cacheCallFields(ctx, stage, counted) : {},
+    ...passEffort !== void 0 ? { pass_effort: passEffort, final_reasoning_tokens: counted?.final_reasoning_tokens ?? null } : {}
   });
 }
 function passModel(ctx, stage) {
@@ -47903,7 +47947,9 @@ function addFirstPassSites(ctx, found, via, label) {
 }
 var extraPassMaxTokens = (ctx) => ctx.outcomeSink && config.anthropic.extraPassMaxTokens || config.anthropic.maxTokens;
 function spentUsage(err, usage) {
-  return usage && err instanceof DeadlineAbortError ? { ...usage, output_tokens: 0, reasoning_tokens: void 0 } : usage;
+  const partial = usage && err instanceof DeadlineAbortError ? { ...usage, output_tokens: 0, reasoning_tokens: void 0 } : usage;
+  const completed = err instanceof DeadlineAbortError ? err.completed : void 0;
+  return completed ? partial ? sumAttempts(completed, partial) : completed : partial;
 }
 var passStopAtSeconds = () => config.breadth.benchmarkDeadlineSeconds - config.breadth.judgeReserveSeconds;
 function passTimeLeftMs(ctx) {
@@ -47962,21 +48008,65 @@ function planPromptCache(ctx) {
   if (config.llmProvider === "openrouter") log.session_id = (0, import_crypto4.createHash)("sha256").update(`${ctx.repoSlug}:${ctx.prId}:${ctx.startTime}`).digest("hex").slice(0, 32);
   return log;
 }
+function planPassEffort(log) {
+  const effort = config.review.cachedPassEffort;
+  const status = !log.reviewer_marked ? "no_shared_pass" : !takesEffortAfter(config.anthropic.model) ? "unsupported_model" : "on";
+  if (status !== "on") console.log(`  Cached pass effort ${effort} not sent: ${status}`);
+  else if (baseModelId(config.anthropic.model) === "claude-sonnet-5-5") console.warn(`  CACHED_PASS_EFFORT=${effort} on Sonnet 5.5: a lowered cached-pass effort was measured to remove its reasoning entirely`);
+  return { effort, status };
+}
 var sharedPrefix = (ctx, stage) => ctx.cachePrefix && ctx.promptCache?.shared_stages.includes(stage) ? ctx.cachePrefix : void 0;
+var briefMessage = (err) => String(err.message ?? "").replace(/\s+/g, " ").trim().slice(0, 120);
+var hasCallUsage = (x) => typeof x === "object" && x !== null && "callUsage" in x;
+var callUsageOf = (x) => hasCallUsage(x) ? x.callUsage : x.usage;
+function passEffortSent(ctx, prefix) {
+  const pe = ctx.promptCache?.pass_effort;
+  if (!config.review.cachedPassEffort || !pe || !prefix) return void 0;
+  return pe.status === "on" ? pe.effort : pe.status.startsWith("rejected_400") ? config.review.effort || "default" : void 0;
+}
+async function carryPrior(prior, run) {
+  if (!prior) return run();
+  try {
+    const result = await run();
+    return { ...result, usage: sumAttempts(prior, result.usage), callUsage: result.usage };
+  } catch (err) {
+    if (typeof err !== "object" || err === null) throw err;
+    const own2 = err.usage;
+    const spent = spentUsage(err, own2);
+    throw Object.assign(err, { usage: spent ? sumAttempts(prior, spent) : prior, callUsage: own2 });
+  }
+}
+async function effortPass(ctx, stage, limitMs, run) {
+  const pe = ctx.promptCache?.pass_effort;
+  const effort = config.review.cachedPassEffort;
+  if (!effort || !pe) return run();
+  if (pe.status !== "on") return pe.status.startsWith("rejected_400") ? run({ keepEffort: true }) : run();
+  try {
+    return await run({ effortAfter: effort, keepEffort: true });
+  } catch (err) {
+    if (!isSystemMessageRejection(err)) throw err;
+    recordPassCall(ctx, stage, extraPassMaxTokens(ctx), limitMs, err.usage, err, effort);
+    pe.status = `rejected_400: ${briefMessage(err)}`;
+    console.warn(`  ${stage}: the per-message effort was rejected (${err.message}) \u2014 sending the shipped cached request; no later pass sends it`);
+    return carryPrior(err.usage, () => run({ keepEffort: true }));
+  }
+}
 async function cachedOrUncached(ctx, stage, limitMs, cached, uncached) {
   try {
     return await cached();
   } catch (err) {
     if (!isSystemMessageRejection(err)) throw err;
-    recordPassCall(ctx, stage, extraPassMaxTokens(ctx), limitMs, void 0, err);
+    const withEffort = !!config.review.cachedPassEffort;
+    const failed = err;
+    recordPassCall(ctx, stage, extraPassMaxTokens(ctx), limitMs, withEffort ? callUsageOf(failed) : void 0, err, withEffort ? passEffortSent(ctx, ctx.cachePrefix) : void 0);
     const log = ctx.promptCache;
     const at = log.shared_stages.indexOf(stage);
-    const message = String(err.message ?? "").replace(/\s+/g, " ").trim().slice(0, 120);
+    const message = briefMessage(err);
     log.uncached.push({ stage, reason: `rejected_400: ${message}` }, ...log.shared_stages.slice(at + 1).map((s) => ({ stage: s, reason: "off_after_400" })));
     log.shared_stages = log.shared_stages.slice(0, at);
     ctx.cachePrefix = void 0;
     console.warn(`  ${stage}: the cached request was rejected (${err.message}) \u2014 re-sending it uncached; the prompt cache is off for the rest of this run`);
-    return uncached();
+    return withEffort ? carryPrior(failed.usage, uncached) : uncached();
   }
 }
 var cachedEstimate = (prefix, overlay, briefing) => Math.ceil((prefix.system.length + prefix.block.length + overlay.length + briefing.length) / 4);
@@ -48343,6 +48433,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
       const recommend = config.lenses.recommend && ctx.reviewNumber === 1;
       const recommendTail = recommend ? [true] : [];
       if (config.review.promptCache) ctx.promptCache = planPromptCache(ctx);
+      if (ctx.promptCache && config.review.cachedPassEffort) ctx.promptCache.pass_effort = planPassEffort(ctx.promptCache);
       const cache = ctx.promptCache?.reviewer_marked ? { schema: sharedOutputSchema({ lensRecommendation: recommend, alsoAffects: hiBench(ctx), scenario: !!config.review.highImpact, firstPassSites: fpSites(ctx) }), ...ctx.promptCache.session_id ? { sessionId: ctx.promptCache.session_id } : {} } : void 0;
       const reviewTail = cache ? [recommend, cache] : recommendTail;
       const call = () => runReview(
@@ -48486,7 +48577,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
             config.review.lineNumbers,
             ...tail
           );
-          return prefix ? cachedOrUncached(ctx, "breadth", limitMs, () => runSharedPass(config.llmApiKey, model, config.judge.maxRetries, extraPassMaxTokens(ctx), effort, prefix, briefing, overlay, "breadth", signal), uncached) : uncached();
+          return prefix ? cachedOrUncached(ctx, "breadth", limitMs, () => effortPass(ctx, "breadth", limitMs, (extra) => runSharedPass(config.llmApiKey, model, config.judge.maxRetries, extraPassMaxTokens(ctx), effort, prefix, briefing, overlay, "breadth", signal, extra)), uncached) : uncached();
         });
         ctx.breadthFindings = result.findings;
         ctx.breadthPromptHash = result.promptHash;
@@ -48495,15 +48586,15 @@ If this PR spans multiple independent themes that could each be a separate, inde
         if (ids) addFirstPassSites(ctx, sanitizeFirstPassSites(result.firstPassSites, ids.index, "breadth"), "breadth", "Breadth");
         ctx.breadthStatus = "succeeded";
         console.log(`  Breadth review: ${coverage.untouched.length} untouched file(s) \u2192 ${result.findings.length} finding(s)`);
-        recordPassCall(ctx, "breadth", extraPassMaxTokens(ctx), limitMs, result.usage);
+        recordPassCall(ctx, "breadth", extraPassMaxTokens(ctx), limitMs, callUsageOf(result), void 0, passEffortSent(ctx, sharedPrefix(ctx, "breadth")));
       } catch (err) {
         const e = err;
-        const used = spentUsage(err, e.usage);
+        const used = hasCallUsage(e) ? e.usage : spentUsage(err, e.usage);
         if (used) {
           ctx.breadthUsage = stageUsage(used);
           addUsage(ctx, used);
         }
-        recordPassCall(ctx, "breadth", extraPassMaxTokens(ctx), limitMs, e.usage, err);
+        recordPassCall(ctx, "breadth", extraPassMaxTokens(ctx), limitMs, callUsageOf(e), err, passEffortSent(ctx, sharedPrefix(ctx, "breadth")));
         if (err instanceof DeadlineAbortError) {
           ctx.breadthStatus = "aborted_time";
           console.warn(`  Breadth review stopped at the ${passStopAtSeconds()}s pass deadline (${Math.round((Date.now() - ctx.startTime) / 1e3)}s elapsed) \u2014 continuing with first-pass findings only`);
@@ -48596,7 +48687,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
             "second-look",
             ...tail
           );
-          return prefix ? cachedOrUncached(ctx, "second_look", limitMs, () => runSharedPass(config.llmApiKey, model, config.anthropic.maxRetries, extraPassMaxTokens(ctx), config.review.effort, prefix, sharedBriefing, overlay, "second-look", signal), () => {
+          return prefix ? cachedOrUncached(ctx, "second_look", limitMs, () => effortPass(ctx, "second_look", limitMs, (extra) => runSharedPass(config.llmApiKey, model, config.anthropic.maxRetries, extraPassMaxTokens(ctx), config.review.effort, prefix, sharedBriefing, overlay, "second-look", signal, extra)), () => {
             if (config.judge.shownAnchors) ctx.shownSecondLook = buildShownSource(restrictedDiff, contexts);
             return uncached();
           }) : uncached();
@@ -48608,15 +48699,15 @@ If this PR spans multiple independent themes that could each be a separate, inde
         if (ids) addFirstPassSites(ctx, sanitizeFirstPassSites(result.firstPassSites, ids.index, "second_look"), "second_look", "Second-look");
         ctx.secondLookStatus = "succeeded";
         console.log(`  Second-look: ${flagged.length} flagged file(s) \u2192 ${result.findings.length} additional finding(s)`);
-        recordPassCall(ctx, "second_look", extraPassMaxTokens(ctx), limitMs, result.usage);
+        recordPassCall(ctx, "second_look", extraPassMaxTokens(ctx), limitMs, callUsageOf(result), void 0, passEffortSent(ctx, sharedPrefix(ctx, "second_look")));
       } catch (err) {
         const e = err;
-        const used = spentUsage(err, e.usage);
+        const used = hasCallUsage(e) ? e.usage : spentUsage(err, e.usage);
         if (used) {
           ctx.secondLookUsage = stageUsage(used);
           addUsage(ctx, used);
         }
-        recordPassCall(ctx, "second_look", extraPassMaxTokens(ctx), limitMs, e.usage, err);
+        recordPassCall(ctx, "second_look", extraPassMaxTokens(ctx), limitMs, callUsageOf(e), err, passEffortSent(ctx, sharedPrefix(ctx, "second_look")));
         if (err instanceof DeadlineAbortError) {
           ctx.secondLookStatus = "aborted_time";
           console.warn(`  Second-look stopped at the ${passStopAtSeconds()}s pass deadline (${Math.round((Date.now() - ctx.startTime) / 1e3)}s elapsed) \u2014 continuing with first-pass and breadth findings only`);
@@ -48699,7 +48790,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
               `lens:${lens.name}`,
               ...tail
             );
-            return prefix ? cachedOrUncached(ctx, `lens:${lens.name}`, limitMs, () => runSharedPass(config.llmApiKey, model, config.anthropic.maxRetries, extraPassMaxTokens(ctx), effort, prefix, briefing, overlay, `lens:${lens.name}`, signal), uncached) : uncached();
+            return prefix ? cachedOrUncached(ctx, `lens:${lens.name}`, limitMs, () => effortPass(ctx, `lens:${lens.name}`, limitMs, (extra) => runSharedPass(config.llmApiKey, model, config.anthropic.maxRetries, extraPassMaxTokens(ctx), effort, prefix, briefing, overlay, `lens:${lens.name}`, signal, extra)), uncached) : uncached();
           });
           run.findings = result.findings;
           run.promptHash = result.promptHash;
@@ -48707,15 +48798,15 @@ If this PR spans multiple independent themes that could each be a separate, inde
           addUsage(ctx, result.usage);
           run.status = "succeeded";
           console.log(`  Lens ${lens.name}: ${result.findings.length} finding(s)`);
-          recordPassCall(ctx, `lens:${lens.name}`, extraPassMaxTokens(ctx), limitMs, result.usage);
+          recordPassCall(ctx, `lens:${lens.name}`, extraPassMaxTokens(ctx), limitMs, callUsageOf(result), void 0, passEffortSent(ctx, sharedPrefix(ctx, `lens:${lens.name}`)));
         } catch (err) {
           const e = err;
-          const used = spentUsage(err, e.usage);
+          const used = hasCallUsage(e) ? e.usage : spentUsage(err, e.usage);
           if (used) {
             run.usage = stageUsage(used);
             addUsage(ctx, used);
           }
-          recordPassCall(ctx, `lens:${lens.name}`, extraPassMaxTokens(ctx), limitMs, e.usage, err);
+          recordPassCall(ctx, `lens:${lens.name}`, extraPassMaxTokens(ctx), limitMs, callUsageOf(e), err, passEffortSent(ctx, sharedPrefix(ctx, `lens:${lens.name}`)));
           if (err instanceof DeadlineAbortError) {
             run.status = "aborted_time";
             halt = "skipped_time";
@@ -49211,6 +49302,12 @@ var CONFIG_LABELS = {
   CACHE: flag((on) => {
     config.review.promptCache = on;
   }),
+  C_EFFORT: (v, name) => {
+    const value = v.trim();
+    if (/^(0|off)$/i.test(value)) config.review.cachedPassEffort = "";
+    else if (EFFORT_LEVELS.includes(value)) config.review.cachedPassEffort = value;
+    else console.warn(`  Ignoring config label ${name}=${v}: expected 0, off or ${EFFORT_LEVELS.join("|")}`);
+  },
   DX: flag((on) => {
     if (on) config.diffExcludePatterns = [...DX_PATTERNS];
   }),
@@ -49241,7 +49338,8 @@ function applyBenchmarkConfig(env) {
   if (!env.MAX_CHANGED_LINES) config.thresholds.maxChangedLines = 0;
   config.review.splitCheck = false;
   applyConfigLabels(env);
-  console.log(`Benchmark settings: model=${config.anthropic.model} effort=${config.review.effort || "default"} judge_model=${config.judge.model || "off"} judge_effort=${config.judge.effort || "default"} nits=${bit(config.review.enableNitpicks)} j_minor=${bit(config.judge.policy.keepMinor)} j_unver=${bit(config.judge.policy.keepUnverified)} j_ctx=${bit(config.judge.fileContext)} lnum=${bit(config.review.lineNumbers)} breadth=${bit(config.breadth.enabled)} b_files=${config.breadth.minFiles} b_untch=${config.breadth.minUntouched} second_look=${bit(config.review.secondLook)} j_quality=${bit(config.judge.quality)} sl_breadth=${bit(config.review.secondLookBreadthTargets)} j_shown_anchor=${bit(config.judge.shownAnchors)} b_priority=${bit(config.breadth.priorityTargets)} sfx=${bit(config.judge.suggestedFixes)} j_proposal=${bit(config.judge.proposals)}${activeLenses(config.lenses).length ? ` lenses=${config.lenses.list}` : ""}${config.lenses.recommend ? " lens_rec=1" : ""}${config.judge.policy.keepTestGaps ? " j_tgap=1" : ""}${config.benchmarkCounterpartRows ? " xrows=1" : ""}${config.review.highImpact ? " hi=1" : ""}${config.review.firstPassSites ? " fp_sites=1" : ""}${config.anthropic.extraPassMaxTokens ? ` xp_max=${config.anthropic.extraPassMaxTokens}` : ""}${config.breadth.passDeadline ? " pass_deadline=1" : ""}${config.diffExcludePatterns.join(",") === DX_PATTERNS.join(",") ? " dx=1" : ""}${config.review.promptCache ? " cache=1" : ""}`);
+  console.log(`Benchmark settings: model=${config.anthropic.model} effort=${config.review.effort || "default"} judge_model=${config.judge.model || "off"} judge_effort=${config.judge.effort || "default"} nits=${bit(config.review.enableNitpicks)} j_minor=${bit(config.judge.policy.keepMinor)} j_unver=${bit(config.judge.policy.keepUnverified)} j_ctx=${bit(config.judge.fileContext)} lnum=${bit(config.review.lineNumbers)} breadth=${bit(config.breadth.enabled)} b_files=${config.breadth.minFiles} b_untch=${config.breadth.minUntouched} second_look=${bit(config.review.secondLook)} j_quality=${bit(config.judge.quality)} sl_breadth=${bit(config.review.secondLookBreadthTargets)} j_shown_anchor=${bit(config.judge.shownAnchors)} b_priority=${bit(config.breadth.priorityTargets)} sfx=${bit(config.judge.suggestedFixes)} j_proposal=${bit(config.judge.proposals)}${activeLenses(config.lenses).length ? ` lenses=${config.lenses.list}` : ""}${config.lenses.recommend ? " lens_rec=1" : ""}${config.judge.policy.keepTestGaps ? " j_tgap=1" : ""}${config.benchmarkCounterpartRows ? " xrows=1" : ""}${config.review.highImpact ? " hi=1" : ""}${config.review.firstPassSites ? " fp_sites=1" : ""}${config.anthropic.extraPassMaxTokens ? ` xp_max=${config.anthropic.extraPassMaxTokens}` : ""}${config.breadth.passDeadline ? " pass_deadline=1" : ""}${config.diffExcludePatterns.join(",") === DX_PATTERNS.join(",") ? " dx=1" : ""}${config.review.promptCache ? " cache=1" : ""}${config.review.cachedPassEffort ? ` c_effort=${config.review.cachedPassEffort}` : ""}`);
+  if (config.review.cachedPassEffort && !config.review.promptCache) console.warn("  C_EFFORT is set but CACHE=0 - no pass shares the cache, so it has no effect.");
   if (config.judge.proposals && !config.judge.model) console.warn("  J_PROPOSAL=1 but the judge is off - no proposals will be produced.");
   if (config.review.enableNitpicks && !config.judge.policy.keepMinor) {
     console.warn("  NITS=1 but J_MINOR=0 \u2014 nitpicks are logged for offline scoring only; set J_MINOR=1 to post them.");
