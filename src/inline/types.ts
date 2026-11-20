@@ -37,7 +37,7 @@ export interface SummaryState { n: number; commits: string[] }
 
 export interface Listed { severity: string; title: string; gist: string; file?: string; lines?: string }
 
-export type SummaryOnlyReason = 'low' | 'no_line' | 'out_of_hunk' | 'old_side' | 'over_cap'
+export type SummaryOnlyReason = 'low' | 'no_line' | 'out_of_hunk' | 'old_side' | 'over_cap' | 'duplicate'
 
 export type InlineOutcome =
   | 'written' | 'write_failed' | 'replies_only' | 'dedup' | 'skipped' | 'incoherent_no_change' | 'write_uncertain' | 'force_invalidate_failed'

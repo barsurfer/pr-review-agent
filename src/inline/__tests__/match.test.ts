@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { titleSimilarity, parseDeltaMap, mapLine, createDeltaMapper, mapEntries, matches, type MappedEntry } from '../match.js'
 import type { ThreadEntry } from '../types.js'
+import { sanitizeTitle } from '../rows.js'
 
 const A = 'aaaaaaaaaaaa'
 const B = 'bbbbbbbbbbbb'
@@ -103,6 +104,15 @@ describe('matches', () => {
     expect(matches(mapped(entry()), { ...repeat, file: 'src/b.ts' }, 'open')).toBe(false)
   })
 
+  it('a title longer than the posted cap still matches itself, in resolved and open mode', () => {
+    const long = 'Unbounded retry loop in the session refresh path can exhaust the connection pool under sustained upstream failure and then deadlock every worker'
+    const stored = sanitizeTitle(long)
+    expect(stored.length).toBeLessThan(long.length)
+    const e = entry({ title: stored, resolved: true })
+    expect(matches(mapped(e), { title: long, file: 'src/a.ts', lines: '100' }, 'resolved')).toBe(true)
+    expect(matches(mapped({ ...e, resolved: false }, 100, 0, false), { title: long, file: 'src/a.ts', lines: '100' }, 'open')).toBe(true)
+  })
+
   it('open: an unmapped location needs 0.8', () => {
     expect(matches(mapped(entry(), 100, 0, false), repeat, 'open')).toBe(false)
     expect(matches(mapped(entry(), 100, 0, false), { ...repeat, title: entry().title }, 'open')).toBe(true)
@@ -114,5 +124,15 @@ describe('matches', () => {
     expect(matches(mapped(r), { ...repeat, title: r.title, lines: '105' }, 'resolved')).toBe(true)
     expect(matches(mapped(r), { ...repeat, title: r.title, lines: '150' }, 'resolved')).toBe(false)
     expect(matches(mapped(r, 100, 0, false), { ...repeat, title: r.title }, 'resolved')).toBe(false)
+  })
+})
+
+describe('mapEntries across a rename', () => {
+  it('maps the saved path and lines together through the rename and the inserted lines', async () => {
+    const diff = 'diff --git a/src/old.ts b/src/new.ts\nsimilarity index 90%\nrename from src/old.ts\nrename to src/new.ts\n--- a/src/old.ts\n+++ b/src/new.ts\n@@ -0,0 +1,100 @@\n' +
+      Array.from({ length: 100 }, (_, i) => `+n${i}`).join('\n') + '\n'
+    const mapper = createDeltaMapper(async () => diff, B)
+    const [m] = await mapEntries([entry({ file: 'src/old.ts', lines: '100', openedAt: A })], mapper)
+    expect(m.loc).toMatchObject({ file: 'src/new.ts', line: 200, mapped: true })
   })
 })

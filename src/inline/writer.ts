@@ -176,6 +176,8 @@ export async function writeInline(input: WriteInput): Promise<WriteResult> {
     if (await headMoved()) return stop(moved())
     const listed = await relist()
     if (!listed.ok) return stop(listed.outcome)
+    // A push can land during the re-list, so the head is re-checked right before the group's first write.
+    if (await headMoved()) return stop(moved())
     const summaryId = listed.reg.summary.kind === 'found' ? listed.reg.summary.comment.id : undefined
     const byTarget = new Map<string, MarkedThread>()
     for (const t of listed.threads) {
@@ -237,6 +239,7 @@ export async function writeInline(input: WriteInput): Promise<WriteResult> {
     if (await headMoved()) return stop(moved())
     const listed = await relist()
     if (!listed.ok) return stop(listed.outcome)
+    if (await headMoved()) return stop(moved())
     const present = new Set(listed.reg.entries.map(e => e.id))
     const settled = res.failed.filter(f => f.reason === 'post_uncertain' && present.has(f.root.id))
     res.failed = res.failed.filter(f => !settled.includes(f))

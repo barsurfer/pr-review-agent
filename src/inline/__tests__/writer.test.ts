@@ -164,6 +164,32 @@ describe('writeInline: head checks', () => {
     expect(summaryOf(fake)).toBeUndefined()
     expect(res.headRecorded).toBe(false)
   })
+
+  it('a push landing during the summary-only re-list writes nothing and records no head', async () => {
+    const fake = makeFake()
+    fake.add({ body: summaryBody({ n: 1, commits: [A] }), authorIds: [ME] })
+    const list = fake.adapter.listMarkedThreads
+    fake.adapter.listMarkedThreads = async (...a) => { const r = await list(...a); fake.hooks.head = 'd'.repeat(40); return r }
+    const input = inputFor(fake)
+    const res = await writeInline(input)
+    expect(res.outcome).toBe('head_moved_skip')
+    expect(fake.counts.edit).toBe(0)
+    expect(res.headRecorded).toBe(false)
+    expect(input.headChecked()).toBe(0)
+  })
+
+  it('a push landing during the answers re-list posts no reply', async () => {
+    const fake = makeFake()
+    const rootId = fake.add({ body: rootBody({ severity: 'HIGH', title: 'Old', body: 'x', id: 'F1', c12: A }), authorIds: [ME], inline: { path: 'src/a.ts', line: 1 } })
+    const q = fake.add({ parentId: rootId, body: 'why?', authorIds: ['dev'] })
+    fake.add({ body: summaryBody({ n: 1, commits: [A] }), authorIds: [ME] })
+    const list = fake.adapter.listMarkedThreads
+    fake.adapter.listMarkedThreads = async (...a) => { const r = await list(...a); fake.hooks.head = 'd'.repeat(40); return r }
+    const res = await writeInline(inputFor(fake, { answers: [{ target: 'F1', rootId: String(rootId), through: String(q), text: 'Because.' }] }))
+    expect(res.outcome).toBe('head_moved_skip')
+    expect(creates(fake)).toEqual([])
+    expect(fake.counts.edit).toBe(0)
+  })
 })
 
 describe('writeInline: concurrency', () => {

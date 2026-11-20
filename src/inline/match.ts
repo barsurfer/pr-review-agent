@@ -1,5 +1,6 @@
 import { parseLineRange } from '../review/findings-output.js'
 import type { ThreadEntry } from './types.js'
+import { sanitizeTitle } from './rows.js'
 
 export const MAX_BASES = 5
 const NEAR = 10
@@ -144,7 +145,8 @@ export interface Candidate { title: string; file?: string; lines?: string }
 
 export function matches(m: MappedEntry, c: Candidate, kind: 'open' | 'resolved'): boolean {
   if (!c.file || !m.loc.file || c.file !== m.loc.file) return false
-  const sim = titleSimilarity(m.entry.title, c.title)
+  // Stored titles are capped when posted, so both sides are capped alike or a long title never matches its own thread.
+  const sim = titleSimilarity(sanitizeTitle(m.entry.title), sanitizeTitle(c.title))
   const cl = parseLineRange(c.lines)?.start
   if (kind === 'resolved') {
     if (!m.loc.mapped || m.loc.line === undefined || cl === undefined) return false

@@ -22,7 +22,8 @@ vi.mock('../config.js', () => ({
     vcsProvider: 'bitbucket',
     anthropic: { apiKey: 'test-key', model: 'claude-sonnet-5-5', baseUrl: '', maxRetries: 1, maxInputTokens: 250000, maxTokens: 64000, extraPassMaxTokens: 128000 },
     judge: { model: 'claude-haiku-5-5', maxRetries: 1, effort: 'high', policy: { keepMinor: true, keepUnverified: true }, fileContext: false },
-    breadth: { enabled: true, model: '', effort: '', minFiles: 1, minUntouched: 0, benchmarkDeadlineSeconds: 840, judgeReserveSeconds: 270, passDeadline: false },
+    // Pinned to what v0.0.61 resolved from an empty model (the judge's), so a later change to the breadth default cannot move the recorded fixtures.
+    breadth: { enabled: true, model: 'claude-haiku-5-5', effort: 'high', minFiles: 1, minUntouched: 0, benchmarkDeadlineSeconds: 840, judgeReserveSeconds: 270, passDeadline: false },
     lenses: { enabled: true, list: 'rel', model: '', recommend: false },
     agentIdentity: 'test-bot',
     reply: { maxComments: 5 },

@@ -52,7 +52,7 @@ export function selectInlineEngine(adapter: VCSAdapter, outcomeSink?: OutcomeSin
 
 const emptyRecord = (): InlineRecord => ({
   active: true, completed: false, identity: 'unavailable', summary_check: 'missing', summary: 'not_written',
-  roots: { posted: 0, failed: 0, summary_only: { low: 0, no_line: 0, out_of_hunk: 0, old_side: 0, over_cap: 0 } },
+  roots: { posted: 0, failed: 0, summary_only: { low: 0, no_line: 0, out_of_hunk: 0, old_side: 0, over_cap: 0, duplicate: 0 } },
   suppressed: { open_duplicate: 0, resolved: 0, in_run_duplicate: 0 }, raised_over_resolved: 0,
   answers: { threads: 0, posted: 0, failed: 0, deferred_cap: 0, limit_notes: 0, summary: 0 },
   reply_usage: null, untrusted_markers: 0, writes_reconciled: 0, rows_collapsed: 0, footer_lines_removed: 0,

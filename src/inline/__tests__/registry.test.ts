@@ -127,13 +127,14 @@ describe('buildRegistry', () => {
     expect(reg.nextK).toBe(5)
   })
 
-  it('the location and base come from the verified row, else from the root line and openedAt', () => {
+  it('the path, lines and base come together from the verified row, else from the root path, line and openedAt', () => {
     const base2 = 'f'.repeat(12)
     const rows = [threadRow({ severity: 'HIGH', title: 'Null user', file: 'src/old.ts', lines: '100-104', base: base2, id: 'F1', url: 'u2' })]
     const withRow = buildRegistry([summaryThread(5, validSummary(rows)), findingThread(2, 1, { path: 'src/new.ts', line: 7 })], api)
     const without = buildRegistry([findingThread(2, 1, { path: 'src/new.ts', line: 7 })], api)
     if (withRow.status !== 'ok' || without.status !== 'ok') throw new Error('expected ok')
-    expect(withRow.entries[0]).toMatchObject({ file: 'src/new.ts', lines: '100-104', openedAt: base2 })
+    // Pairing the thread's current path with the row's old lines would map src/new.ts:100 instead of through the rename.
+    expect(withRow.entries[0]).toMatchObject({ file: 'src/old.ts', lines: '100-104', openedAt: base2 })
     expect(without.entries[0]).toMatchObject({ file: 'src/new.ts', lines: '7', openedAt: C })
   })
 

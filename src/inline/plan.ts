@@ -44,9 +44,9 @@ export function planRun(input: PlanInput): RunPlan {
   for (const f of ordered) {
     const dup = open.find(m => matches(m, f, 'open'))
     if (dup) { plan.suppressed.open.push({ finding: f, id: dup.entry.id }); continue }
-    // The lenient open rule would silently drop a distinct finding with no thread and no row, so within a run only the strict rule merges.
+    // A same-run twin gets no thread but stays a summary-only row, because the strict title match can still join two distinct findings.
     const twin = planned.find(m => matches(m, f, 'resolved'))
-    if (twin) { plan.suppressed.sameRun.push({ finding: f, id: twin.entry.id }); continue }
+    if (twin) { plan.suppressed.sameRun.push({ finding: f, id: twin.entry.id }); plan.summaryOnly.push({ finding: f, reason: 'duplicate' }); continue }
 
     let was: string | undefined
     const hits = resolved.filter(m => matches(m, f, 'resolved'))

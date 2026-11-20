@@ -103,7 +103,8 @@ export function buildRegistry(threads: readonly MarkedThread[], identity: OkIden
       severity: text.severity,
       title: text.title,
       gist: text.gist,
-      file: t.root.inline?.path ?? row?.file ?? '',
+      // The row's path, lines and base were saved together; the thread's own path may be a different revision's.
+      file: row?.file ?? t.root.inline?.path ?? '',
       ...(row ? (row.lines ? { lines: row.lines } : {}) : line !== undefined ? { lines: String(line) } : {}),
       openedAt: row ? row.base : marker.openedAt,
       ...(text.was ? { was: text.was } : {}),

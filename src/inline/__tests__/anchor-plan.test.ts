@@ -115,13 +115,13 @@ describe('planRun', () => {
     const p = await run([e], [], async () => d)
     expect([...p.changedInPush]).toEqual(['F1'])
   })
-  it('plans an identical finding of the same run once, without a second id', async () => {
+  it('plans an identical finding of the same run once, without a second id, and keeps the twin as a duplicate summary-only row', async () => {
     const f = find({ lines: '10' })
     const p = await run([], [f, { ...f, body: 'same finding again' }], noDelta)
     expect(p.create.map(r => r.id)).toEqual(['F5'])
     expect(p.suppressed.open).toEqual([])
     expect(p.suppressed.sameRun).toEqual([{ finding: expect.objectContaining({ body: 'same finding again' }), id: 'F5' }])
-    expect(p.summaryOnly).toHaveLength(0)
+    expect(p.summaryOnly).toEqual([{ finding: expect.objectContaining({ body: 'same finding again' }), reason: 'duplicate' }])
   })
 
   it('plans both of two findings in one run whose titles are only about 0.6 similar', async () => {
