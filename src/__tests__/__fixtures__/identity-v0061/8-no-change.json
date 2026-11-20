@@ -1,0 +1,195 @@
+{
+  "requests": [
+    {
+      "method": "GET",
+      "url": "/repositories/test/repo/pullrequests/100"
+    },
+    {
+      "method": "GET",
+      "url": "/repositories/test/repo/pullrequests/100/diff"
+    },
+    {
+      "method": "GET",
+      "url": "https://api.bitbucket.org/2.0/repositories/test/repo/diff/test/repo:aaa1112223334444444444444444444444444444%0Dba5e222222222222222222222222222222222222?from_pullrequest_id=100"
+    },
+    {
+      "method": "GET",
+      "url": "/repositories/test/repo/pullrequests/100/diffstat"
+    },
+    {
+      "method": "GET",
+      "url": "https://api.bitbucket.org/2.0/repositories/test/repo/diffstat/test/repo:aaa1112223334444444444444444444444444444%0Dba5e222222222222222222222222222222222222?from_pullrequest_id=100"
+    },
+    {
+      "method": "GET",
+      "url": "/repositories/test/repo/pullrequests/100/comments"
+    },
+    {
+      "method": "GET",
+      "url": "/repositories/test/repo/diff/aaa1112223334444444444444444444444444444..bbb111222333"
+    },
+    {
+      "method": "GET",
+      "url": "/repositories/test/repo/pullrequests/100/comments"
+    },
+    {
+      "method": "GET",
+      "url": "/repositories/test/repo/src/aaa1112223334444444444444444444444444444/.agent-review-instructions.md"
+    },
+    {
+      "method": "GET",
+      "url": "/repositories/test/repo/src/aaa1112223334444444444444444444444444444/docs/.agent-review-instructions.md"
+    },
+    {
+      "method": "GET",
+      "url": "/repositories/test/repo/src/aaa1112223334444444444444444444444444444/src/.agent-review-instructions.md"
+    },
+    {
+      "method": "GET",
+      "url": "/repositories/test/repo/src/aaa1112223334444444444444444444444444444/src/docs/.agent-review-instructions.md"
+    },
+    {
+      "method": "GET",
+      "url": "/repositories/test/repo/src/develop/.agent-review-instructions.md"
+    },
+    {
+      "method": "GET",
+      "url": "/repositories/test/repo/src/develop/docs/.agent-review-instructions.md"
+    },
+    {
+      "method": "GET",
+      "url": "/repositories/test/repo/src/develop/src/.agent-review-instructions.md"
+    },
+    {
+      "method": "GET",
+      "url": "/repositories/test/repo/src/develop/src/docs/.agent-review-instructions.md"
+    },
+    {
+      "method": "GET",
+      "url": "/repositories/test/repo/src/aaa1112223334444444444444444444444444444/src/pool.ts"
+    },
+    {
+      "method": "GET",
+      "url": "/repositories/test/repo/src/aaa1112223334444444444444444444444444444/src/cache.ts"
+    },
+    {
+      "method": "GET",
+      "url": "/repositories/test/repo/pullrequests/100/comments"
+    }
+  ],
+  "calls": [
+    {
+      "stage": "review",
+      "system": "75b25925cbe83285",
+      "user": "97d3db7ae9a961d1",
+      "schema": "80775966efbc2761",
+      "systemAfter": "<undefined>",
+      "opts": {
+        "model": "claude-sonnet-5-5",
+        "maxTokens": 64000,
+        "maxRetries": 1,
+        "effort": "high"
+      }
+    }
+  ],
+  "completes": [],
+  "record": {
+    "run_id": "bitbucket-repo-100-aaa111222333",
+    "vcs": "bitbucket",
+    "workspace": "test",
+    "repo_slug": "repo",
+    "pr_id": "100",
+    "pr_author": "Dev One",
+    "source_commit": "aaa1112223334444444444444444444444444444",
+    "source_branch": "feature/pool",
+    "target_branch": "develop",
+    "changed_files": 2,
+    "changed_lines": 7,
+    "diff_size": {
+      "files": {
+        "added": 1,
+        "modified": 1,
+        "deleted": 0,
+        "renamed": 0
+      },
+      "lines_added": 7,
+      "lines_removed": 0,
+      "reviewable_files": 2,
+      "reviewable_lines_added": 7,
+      "reviewable_lines_removed": 0
+    },
+    "context_files_fetched": 2,
+    "degraded": false,
+    "review_number": 2,
+    "action": "NO_CHANGE",
+    "skip_reason": "No changes since last review",
+    "model": "claude-sonnet-5-5",
+    "effort": "high",
+    "tokens": {
+      "input": 100,
+      "output": 50,
+      "cache_read": 0,
+      "cache_write": 0,
+      "estimated_input": 4634
+    },
+    "cost_usd": 0.0007,
+    "judge_model": "claude-haiku-5-5",
+    "judge_effort": "high",
+    "judge_tokens": null,
+    "judge_cost_usd": null,
+    "dry_run": false,
+    "force": "off",
+    "prompt_source": "stack:typescript-node",
+    "prompt_hash": "a1e3b14e248c",
+    "judge_prompt_hash": null,
+    "judge_status": null,
+    "verdict_score": null,
+    "computed_score": 100,
+    "review_findings": {
+      "high": 0,
+      "medium": 0,
+      "low": 0
+    },
+    "findings": {
+      "high": 0,
+      "medium": 0,
+      "low": 0
+    },
+    "finding_scores": null,
+    "min_finding_score": null,
+    "anchored_findings": null,
+    "review_candidates": null,
+    "judge_decisions": null,
+    "judge_anomalies": null,
+    "judge_policy": null,
+    "breadth_status": null,
+    "breadth_model": null,
+    "breadth_prompt_hash": null,
+    "breadth_tokens": null,
+    "breadth_cost_usd": null,
+    "second_look_status": null,
+    "second_look_prompt_hash": null,
+    "second_look_tokens": null,
+    "second_look_cost_usd": null,
+    "lens_runs": null,
+    "untouched_files": null,
+    "recall_levers": {
+      "j_quality": false,
+      "sl_breadth": false,
+      "j_shown_anchor": false,
+      "b_priority": false
+    },
+    "touch_rate": null,
+    "delta": {
+      "developer_replies": 0,
+      "human_replies": 0,
+      "agent_replies": 0,
+      "resolved": 0,
+      "still_open": 0,
+      "new_findings": 0
+    },
+    "checked_commit": "aaa1112223334444444444444444444444444444",
+    "jenkins": null,
+    "error": null
+  }
+}

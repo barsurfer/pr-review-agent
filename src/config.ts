@@ -26,6 +26,10 @@ function finiteOr(value: number, fallback: number): number {
   return Number.isFinite(value) ? value : fallback
 }
 
+function nonNegativeOr(value: number, fallback: number): number {
+  return Number.isFinite(value) && value >= 0 ? value : fallback
+}
+
 // Same fallback as reviewbench/entrypoint.mjs, so the breadth time guard and the kill agree on the deadline.
 function positiveOr(value: number, fallback: number): number {
   return Number.isFinite(value) && value > 0 ? value : fallback
@@ -174,6 +178,8 @@ export const config = {
     skipDirectedElsewhere: optional('SKIP_DIRECTED_REPLIES', 'false') === 'true',
     // Off by default: a new review resets the reply budget, and a question that meets the limit gets a one-time note.
     limitPerReview: optional('ENABLE_REPLY_LIMIT_PER_REVIEW', 'false') === 'true',
+    // Inline engine only: per-thread answer budget; unset, malformed or negative falls back to 5, 0 = unlimited.
+    maxFindingReplies: nonNegativeOr(parseInt(optional('MAX_FINDING_REPLIES', '5'), 10), 5),
   },
 
   trigger: {
@@ -185,6 +191,12 @@ export const config = {
   triggerEventKind: optional('TRIGGER_EVENT_KIND', '').trim(),
 
   review: {
+    // Off by default: findings become inline threads plus one signed summary (Bitbucket only) instead of the legacy review comment.
+    inlineReviews: optional('ENABLE_INLINE_REVIEWS', 'false') === 'true',
+    // Off by default: LOW findings also get inline threads instead of summary-only rows.
+    inlineLowThreads: optional('ENABLE_INLINE_LOW_THREADS', 'false') === 'true',
+    // Overrides the adapter's identity lookup; empty = use the lookup.
+    inlineAgentAccountId: optional('AGENT_ACCOUNT_ID', '').trim(),
     maxFindings: parseInt(optional('MAX_FINDINGS', '0'), 10),   // 0 = unlimited
     splitCheck: optional('ENABLE_SPLIT_CHECK', 'true') !== 'false',
     todoScan: optional('ENABLE_TODO_SCAN', 'true') !== 'false',

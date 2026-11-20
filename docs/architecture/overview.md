@@ -44,6 +44,7 @@ pr-review-agent/
 │   │   ├── bundler.ts            # Split an over-budget PR into directory bundles
 │   │   ├── bundled.ts            # Per-bundle reviewer+judge orchestration
 │   │   └── client.ts             # Review/judge/reply calls + REVIEW/JUDGE output schemas
+│   ├── inline/                   # Opt-in inline-review engine (ENABLE_INLINE_REVIEWS, Bitbucket): threads, signed summary, per-thread replies, own writer
 │   ├── llm/
 │   │   ├── provider.ts           # Stable facade + createProvider factory (LLM_PROVIDER); re-exports shared surface
 │   │   ├── shared.ts             # LLMProvider/LLMUsage/LLMOptions contracts, TruncatedResponseError, missingRequired

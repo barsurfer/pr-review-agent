@@ -1,0 +1,143 @@
+{
+  "requests": [
+    {
+      "method": "GET",
+      "url": "/repositories/test/repo/pullrequests/100"
+    },
+    {
+      "method": "GET",
+      "url": "/repositories/test/repo/pullrequests/100/diff"
+    },
+    {
+      "method": "GET",
+      "url": "https://api.bitbucket.org/2.0/repositories/test/repo/diff/test/repo:aaa1112223334444444444444444444444444444%0Dba5e222222222222222222222222222222222222?from_pullrequest_id=100"
+    },
+    {
+      "method": "GET",
+      "url": "/repositories/test/repo/pullrequests/100/diffstat"
+    },
+    {
+      "method": "GET",
+      "url": "https://api.bitbucket.org/2.0/repositories/test/repo/diffstat/test/repo:aaa1112223334444444444444444444444444444%0Dba5e222222222222222222222222222222222222?from_pullrequest_id=100"
+    },
+    {
+      "method": "GET",
+      "url": "/repositories/test/repo/pullrequests/100/comments"
+    },
+    {
+      "method": "GET",
+      "url": "/repositories/test/repo/pullrequests/100/comments"
+    },
+    {
+      "method": "POST",
+      "url": "/repositories/test/repo/pullrequests/100/comments",
+      "body": {
+        "parent": {
+          "id": 1
+        },
+        "content": {
+          "raw": "The lock is not needed because pop and push run on one tick.\n\n---\n*Reply by test-bot (claude-sonnet-5-5)*"
+        }
+      }
+    }
+  ],
+  "calls": [],
+  "completes": [
+    {
+      "system": "44a8c4ec4aafb7c5",
+      "user": "0b6bf7fbc72aa2f9",
+      "opts": {
+        "model": "claude-sonnet-5-5",
+        "maxTokens": 4096,
+        "maxRetries": 1
+      }
+    }
+  ],
+  "record": {
+    "run_id": "bitbucket-repo-100-aaa111222333",
+    "vcs": "bitbucket",
+    "workspace": "test",
+    "repo_slug": "repo",
+    "pr_id": "100",
+    "pr_author": "Dev One",
+    "source_commit": "aaa1112223334444444444444444444444444444",
+    "source_branch": "feature/pool",
+    "target_branch": "develop",
+    "changed_files": 2,
+    "changed_lines": 7,
+    "diff_size": {
+      "files": {
+        "added": 1,
+        "modified": 1,
+        "deleted": 0,
+        "renamed": 0
+      },
+      "lines_added": 7,
+      "lines_removed": 0,
+      "reviewable_files": 2,
+      "reviewable_lines_added": 7,
+      "reviewable_lines_removed": 0
+    },
+    "context_files_fetched": 0,
+    "degraded": false,
+    "review_number": 1,
+    "action": "REPLY",
+    "skip_reason": null,
+    "model": "claude-sonnet-5-5",
+    "effort": "high",
+    "tokens": {
+      "input": 100,
+      "output": 50,
+      "cache_read": 0,
+      "cache_write": 0,
+      "estimated_input": 0
+    },
+    "cost_usd": 0.0007,
+    "judge_model": "claude-haiku-5-5",
+    "judge_effort": "high",
+    "judge_tokens": null,
+    "judge_cost_usd": null,
+    "dry_run": false,
+    "force": "off",
+    "prompt_source": "none",
+    "prompt_hash": null,
+    "judge_prompt_hash": null,
+    "judge_status": null,
+    "verdict_score": null,
+    "computed_score": null,
+    "review_findings": null,
+    "findings": null,
+    "finding_scores": null,
+    "min_finding_score": null,
+    "anchored_findings": null,
+    "review_candidates": null,
+    "judge_decisions": null,
+    "judge_anomalies": null,
+    "judge_policy": null,
+    "breadth_status": null,
+    "breadth_model": null,
+    "breadth_prompt_hash": null,
+    "breadth_tokens": null,
+    "breadth_cost_usd": null,
+    "second_look_status": null,
+    "second_look_prompt_hash": null,
+    "second_look_tokens": null,
+    "second_look_cost_usd": null,
+    "lens_runs": null,
+    "untouched_files": null,
+    "recall_levers": {
+      "j_quality": false,
+      "sl_breadth": false,
+      "j_shown_anchor": false,
+      "b_priority": false
+    },
+    "touch_rate": null,
+    "delta": null,
+    "reply_authors": [
+      "{dev-uuid}"
+    ],
+    "checked_commit": "aaa1112223334444444444444444444444444444",
+    "jenkins": null,
+    "error": null
+  }
+}

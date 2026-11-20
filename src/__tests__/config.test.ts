@@ -329,3 +329,33 @@ describe('recall-lever flags', () => {
     expect(JSON.stringify([explicit.judge, explicit.review, explicit.breadth])).toBe(snapshot)
   })
 })
+
+describe('inline review settings', () => {
+  afterEach(() => { vi.unstubAllEnvs() })
+
+  const load = async (env: Record<string, string>) => {
+    vi.unstubAllEnvs()
+    for (const [name, value] of Object.entries(env)) vi.stubEnv(name, value)
+    vi.resetModules()
+    return (await import('../config.js')).config
+  }
+
+  it('defaults to off, empty account id and 5 finding replies', async () => {
+    const c = await load({})
+    expect(c.review).toMatchObject({ inlineReviews: false, inlineLowThreads: false, inlineAgentAccountId: '' })
+    expect(c.reply.maxFindingReplies).toBe(5)
+  })
+
+  it('turns the flags on only from the exact string true and trims the account id', async () => {
+    const c = await load({ ENABLE_INLINE_REVIEWS: 'true', ENABLE_INLINE_LOW_THREADS: 'true', AGENT_ACCOUNT_ID: ' 712020:abc ' })
+    expect(c.review).toMatchObject({ inlineReviews: true, inlineLowThreads: true, inlineAgentAccountId: '712020:abc' })
+    const off = await load({ ENABLE_INLINE_REVIEWS: '1', ENABLE_INLINE_LOW_THREADS: 'yes' })
+    expect(off.review).toMatchObject({ inlineReviews: false, inlineLowThreads: false })
+  })
+
+  it('MAX_FINDING_REPLIES honors 0 and positives and falls back to 5 for empty, NaN or negative', async () => {
+    expect((await load({ MAX_FINDING_REPLIES: '0' })).reply.maxFindingReplies).toBe(0)
+    expect((await load({ MAX_FINDING_REPLIES: '9' })).reply.maxFindingReplies).toBe(9)
+    for (const bad of ['', 'many', '-1']) expect((await load({ MAX_FINDING_REPLIES: bad })).reply.maxFindingReplies).toBe(5)
+  })
+})

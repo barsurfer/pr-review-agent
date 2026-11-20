@@ -14,6 +14,7 @@ import type { BreadthStatus, SecondLookStatus, LensStatus, CandidateOrigin, Brea
 import type { ShownSource } from './shown-anchors.js'
 import type { LensRecommendation } from './lenses.js'
 import type { SiteDropReason, SharedPrefix } from './client.js'
+import type { InlineEngine } from '../inline/types.js'
 
 /** Every node in the review flow. */
 export enum State {
@@ -128,6 +129,7 @@ export interface ReviewContext {
   readonly logUsage: boolean
   readonly repoSlug: string
   readonly outcomeSink?: OutcomeSink
+  readonly inline?: InlineEngine
   readonly trigger?: TriggerInfo
   readonly checkedCommit?: string
   readonly startTime: number
