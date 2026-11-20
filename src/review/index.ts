@@ -4,6 +4,7 @@
 
 import { createHash } from 'crypto'
 import { config } from '../config.js'
+import { breadthPass } from './breadth-pass.js'
 import { contextWindowFor } from '../llm/context-window.js'
 import { takesSystemAfter, takesEffortAfter, baseModelId } from '../llm/model-id.js'
 import { DeadlineAbortError, isSystemMessageRejection, sumAttempts, type LLMUsage, type LLMOptions } from '../llm/shared.js'
@@ -222,7 +223,7 @@ function planPromptCache(ctx: ReviewContext): PromptCacheLog {
   const model = config.anthropic.model
   const effort = config.review.effort
   const passes = [
-    ...(config.breadth.enabled ? [{ stage: 'breadth', model: config.breadth.model || config.judge.model, effort: config.breadth.effort || (config.breadth.model ? '' : config.judge.effort) }] : []),
+    ...(config.breadth.enabled ? [{ stage: 'breadth', ...breadthPass() }] : []),
     ...(config.review.secondLook ? [{ stage: 'second_look', model, effort }] : []),
     ...activeLenses(config.lenses).map(l => ({ stage: `lens:${l.name}`, model: config.lenses.model || model, effort: config.lenses.model ? '' : effort })),
   ]
@@ -851,9 +852,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       const remaining = config.review.maxFindings > 0 ? config.review.maxFindings - firstPass.length : 0
       if (config.review.maxFindings > 0 && remaining <= 0) { ctx.breadthStatus = 'skipped_limit'; return State.SECOND_LOOK }
 
-      // Resolved here, after benchmark labels were applied, so RB_CONFIG_JUDGE_MODEL also picks the breadth model.
-      const model = config.breadth.model || config.judge.model
-      const effort = config.breadth.effort || (config.breadth.model ? '' : config.judge.effort)
+      const { model, effort } = breadthPass()
       const fp = fpSites(ctx)
       const ids = fp ? firstPassIds(firstPass, firstPass) : undefined
       const system = breadthSystemPrompt(ctx.prompt!.content, remaining, config.judge.shownAnchors, fp)
