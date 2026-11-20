@@ -36364,7 +36364,7 @@ var config = {
     // Off by default: it changes the judge prompt and posts code whose fix quality is unmeasured.
     suggestedFixes: optional("ENABLE_SUGGESTED_FIXES", "false") === "true"
   },
-  // Off by default: a second reviewer-sized call. The model is resolved at run time (empty → the judge model) so benchmark labels apply.
+  // Off by default: a second reviewer-sized call. Model and effort resolve through breadthPass() (empty → the reviewer's).
   breadth: {
     enabled: optional("ENABLE_BREADTH_REVIEW", "false") === "true",
     model: optional("BREADTH_MODEL", ""),
@@ -43730,6 +43730,13 @@ var GitHubAdapter = class {
 init_define_STACK_PROMPTS();
 var import_crypto4 = require("crypto");
 
+// src/review/breadth-pass.ts
+init_define_STACK_PROMPTS();
+function breadthPass() {
+  const { model, effort } = config.breadth;
+  return { model: model || config.anthropic.model, effort: effort || (model ? "" : config.review.effort) };
+}
+
 // src/llm/context-window.ts
 init_define_STACK_PROMPTS();
 var LOOKUP_TIMEOUT_MS = 5e3;
@@ -47235,7 +47242,7 @@ function getAgentVersion() {
     const pkg = JSON.parse((0, import_fs4.readFileSync)(pkgPath, "utf-8"));
     return pkg.version;
   } catch {
-    if (true) return "0.0.61";
+    if (true) return "0.0.62";
     return "unknown";
   }
 }
@@ -47247,7 +47254,7 @@ function getBuildCommit() {
     const dirty = (0, import_child_process.execSync)("git status --porcelain", opts2).toString().trim() ? "-dirty" : "";
     return hash + dirty;
   } catch {
-    if (true) return "3810db2";
+    if (true) return "5e85635";
     return "unknown";
   }
 }
@@ -47650,7 +47657,7 @@ function recordPassCall(ctx, stage, maxTokens, limitMs, usage, err, passEffort) 
 }
 function passModel(ctx, stage) {
   if (stage === "judge") return config.judge.model;
-  if (stage === "breadth") return ctx.breadthModel || config.breadth.model || config.judge.model;
+  if (stage === "breadth") return ctx.breadthModel || breadthPass().model;
   if (stage.startsWith("lens:")) return config.lenses.model || config.anthropic.model;
   return config.anthropic.model;
 }
@@ -47984,7 +47991,7 @@ function planPromptCache(ctx) {
   const model = config.anthropic.model;
   const effort = config.review.effort;
   const passes = [
-    ...config.breadth.enabled ? [{ stage: "breadth", model: config.breadth.model || config.judge.model, effort: config.breadth.effort || (config.breadth.model ? "" : config.judge.effort) }] : [],
+    ...config.breadth.enabled ? [{ stage: "breadth", ...breadthPass() }] : [],
     ...config.review.secondLook ? [{ stage: "second_look", model, effort }] : [],
     ...activeLenses(config.lenses).map((l) => ({ stage: `lens:${l.name}`, model: config.lenses.model || model, effort: config.lenses.model ? "" : effort }))
   ];
@@ -48527,8 +48534,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
         ctx.breadthStatus = "skipped_limit";
         return 15 /* SECOND_LOOK */;
       }
-      const model = config.breadth.model || config.judge.model;
-      const effort = config.breadth.effort || (config.breadth.model ? "" : config.judge.effort);
+      const { model, effort } = breadthPass();
       const fp = fpSites(ctx);
       const ids = fp ? firstPassIds(firstPass, firstPass) : void 0;
       const system = breadthSystemPrompt(ctx.prompt.content, remaining, config.judge.shownAnchors, fp);
