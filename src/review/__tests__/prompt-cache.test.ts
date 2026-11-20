@@ -273,6 +273,13 @@ describe('prompt cache with HI and FP_SITES', () => {
 describe('prompt cache eligibility', () => {
   const same = (a: any, b: any) => expect({ system: a.system, user: a.user, schema: a.schema, opts: a.opts }).toEqual({ system: b.system, user: b.user, schema: b.schema, opts: b.opts })
 
+  it('Sonnet reviewer with a Haiku judge: breadth follows the reviewer and shares the cache', async () => {
+    const tweak = () => { cfg.anthropic.model = 'claude-sonnet-5-5'; cfg.review.effort = 'medium'; cfg.lenses.enabled = false }
+    const cached = await production(on(tweak))
+    expect(cached.record.prompt_cache).toMatchObject({ reviewer_marked: true, shared_stages: ['breadth', 'second_look'], uncached: [] })
+    expect(cached.record.breadth_model).toBe('claude-sonnet-5-5')
+  })
+
   it('model mismatch: a breadth model unlike the reviewer runs breadth uncached with exactly its flag-off request', async () => {
     const tweak = () => { cfg.breadth.model = 'claude-sonnet-5-5' }
     const off = await production(tweak)

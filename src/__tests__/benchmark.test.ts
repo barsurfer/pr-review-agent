@@ -589,7 +589,7 @@ describe('breadth review (end-to-end)', () => {
 
     const r = usageRecord()
     expect(r.breadth_status).toBe('succeeded')
-    expect(r.breadth_model).toBe('claude-sonnet-5')
+    expect(r.breadth_model).toBe('claude-haiku-4-5-20251001')
     expect(r.review_candidates.map((c: any) => c.origin)).toEqual(['review', 'breadth'])
     expect(r.review_findings).toEqual({ high: 0, medium: 1, low: 0 })
     expect(r.untouched_files).toEqual({ count: 4, paths: ['src/b.ts', 'src/c.ts', 'src/d.ts', 'src/e.ts'], cut: 0 })
@@ -685,7 +685,7 @@ describe('breadth review (end-to-end)', () => {
     expect(r.breadth_tokens).toEqual({ input: 70_000, output: 30_000 })
     expect(r.tokens).toMatchObject({ input: 100 + 70_000 + 100, output: 50 + 30_000 + 50 })
     expect(r.cost_usd).toBeCloseTo(
-      estimateCost({ input: 100, output: 50 }, 'claude-haiku-4-5-20251001') + estimateCost({ input: 100, output: 50 }, 'claude-sonnet-5') + estimateCost({ input: 70_000, output: 30_000 }, 'claude-sonnet-5'), 4)
+      estimateCost({ input: 100, output: 50 }, 'claude-haiku-4-5-20251001') + estimateCost({ input: 100, output: 50 }, 'claude-sonnet-5') + estimateCost({ input: 70_000, output: 30_000 }, 'claude-haiku-4-5-20251001'), 4)
   })
 
   it('a judge failure after breadth falls back to the reviewer findings only', async () => {
@@ -737,15 +737,29 @@ describe('breadth review (end-to-end)', () => {
     })
   })
 
-  it('resolves the breadth model at run time, so a JUDGE_MODEL label also moves breadth', async () => {
+  it('without BREADTH_MODEL breadth follows the reviewer model and effort, not the judge', async () => {
     cfg.breadth.enabled = true
     respond(firstPass, breadthOut, keepAll(2))
 
-    await runBenchmark({ ...multiFixture(), RB_CONFIG_JUDGE_MODEL: 'claude-haiku-5-5' })
+    await runBenchmark({ ...multiFixture(), RB_CONFIG_MODEL: 'claude-opus-5', RB_CONFIG_EFFORT: 'high', RB_CONFIG_JUDGE_MODEL: 'claude-haiku-5-5', RB_CONFIG_JUDGE_EFFORT: 'low' })
 
     const breadthCall = completeStructured.mock.calls.find(c => c[2] === BREADTH_OUTPUT_SCHEMA)!
-    expect(breadthCall[3]).toMatchObject({ model: 'claude-haiku-5-5' })
-    expect(usageRecord().breadth_model).toBe('claude-haiku-5-5')
+    expect(breadthCall[3]).toMatchObject({ model: 'claude-opus-5', effort: 'high' })
+    expect(usageRecord().breadth_model).toBe('claude-opus-5')
+  })
+
+  it('BREADTH_MODEL is used as set, with no effort unless BREADTH_EFFORT is', async () => {
+    cfg.breadth = { ...cfg.breadth, enabled: true, model: 'claude-sonnet-5' }
+    respond(firstPass, breadthOut, keepAll(2))
+    await runBenchmark({ ...multiFixture(), RB_CONFIG_EFFORT: 'high' })
+    const breadthCall = () => completeStructured.mock.calls.find(c => c[2] === BREADTH_OUTPUT_SCHEMA)![3]
+    expect(breadthCall()).toMatchObject({ model: 'claude-sonnet-5' })
+    expect(breadthCall().effort).toBeFalsy()
+
+    completeStructured.mockClear()
+    cfg.breadth.effort = 'low'
+    await runBenchmark({ ...multiFixture(), RB_CONFIG_EFFORT: 'high' })
+    expect(breadthCall()).toMatchObject({ model: 'claude-sonnet-5', effort: 'low' })
   })
 
   it('runs at exactly BREADTH_MIN_UNTOUCHED untouched files', async () => {

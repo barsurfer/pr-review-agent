@@ -3,6 +3,7 @@
 // ---------------------------------------------------------------------------
 
 import { config } from '../config.js'
+import { breadthPass } from './breadth-pass.js'
 import { fetchContext, type FileContext } from '../context/fetcher.js'
 import { runReview, runJudge } from './client.js'
 import type { JudgeOptions } from './judge-decisions.js'
@@ -188,7 +189,7 @@ export function recordPassCall(ctx: ReviewContext, stage: string, maxTokens: num
 
 function passModel(ctx: ReviewContext, stage: string): string {
   if (stage === 'judge') return config.judge.model
-  if (stage === 'breadth') return ctx.breadthModel || config.breadth.model || config.judge.model
+  if (stage === 'breadth') return ctx.breadthModel || breadthPass().model
   if (stage.startsWith('lens:')) return config.lenses.model || config.anthropic.model
   return config.anthropic.model
 }

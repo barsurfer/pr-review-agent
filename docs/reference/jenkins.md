@@ -344,8 +344,8 @@ pass on every first review (`ENABLE_BREADTH_REVIEW=true`, `BREADTH_MIN_FILES=1`,
   From the next release it is sent as `reasoning.effort`, which OpenRouter maps to Anthropic's
   `output_config.effort`, so the same pipeline reasons more: more output tokens, higher cost and
   slower runs, which is what the setting always asked for.
-- **Breadth follows the judge.** With `BREADTH_MODEL` and `BREADTH_EFFORT` unset, the breadth pass
-  runs on the judge model at the judge effort, so `--judge-model` and `--judge-effort` set it too. It
+- **Breadth follows the reviewer.** With `BREADTH_MODEL` and `BREADTH_EFFORT` unset, the breadth pass
+  runs on the reviewer model at the reviewer effort, so it can share the reviewer's prompt cache. It
   runs only on first, single-pass reviews with a judge. With `BREADTH_MIN_UNTOUCHED=0` it runs on
   every first review that has at least `BREADTH_MIN_FILES` reviewable files, even when the reviewer
   flagged every file.

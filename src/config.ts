@@ -138,7 +138,7 @@ export const config = {
     suggestedFixes: optional('ENABLE_SUGGESTED_FIXES', 'false') === 'true',
   },
 
-  // Off by default: a second reviewer-sized call. The model is resolved at run time (empty → the judge model) so benchmark labels apply.
+  // Off by default: a second reviewer-sized call. Model and effort resolve through breadthPass() (empty → the reviewer's).
   breadth: {
     enabled: optional('ENABLE_BREADTH_REVIEW', 'false') === 'true',
     model: optional('BREADTH_MODEL', ''),

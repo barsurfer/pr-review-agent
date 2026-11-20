@@ -111,9 +111,9 @@ describe('input budgets per stage (MAX_INPUT_TOKENS 2,000,000, MAX_OUTPUT_TOKENS
     })
   })
 
-  it('(luna reviewer, Haiku 4.5 judge): the known 200K judge still caps the main and breadth budgets; reviewer-model stages get luna\'s window', async () => {
+  it('(luna reviewer, Haiku 4.5 judge): the known 200K judge still caps the main budget; reviewer-model stages get luna\'s window', async () => {
     expect(await budgets(LUNA, HAIKU_45)).toEqual({
-      main: 168_000, breadth: { model: HAIKU_45, budget: 168_000 }, secondLook: { model: LUNA, budget: 1_018_000 }, lens: { model: LUNA, budget: 1_018_000 }, lookups: 1,
+      main: 168_000, breadth: { model: LUNA, budget: 1_018_000 }, secondLook: { model: LUNA, budget: 1_018_000 }, lens: { model: LUNA, budget: 1_018_000 }, lookups: 1,
     })
   })
 
@@ -125,7 +125,7 @@ describe('input budgets per stage (MAX_INPUT_TOKENS 2,000,000, MAX_OUTPUT_TOKENS
 
   it('MODEL_CONTEXT_TOKENS=1,000,000 with (luna, Haiku 4.5): the override cannot lift past the known judge window', async () => {
     expect(await budgets(LUNA, HAIKU_45, 1_000_000)).toEqual({
-      main: 168_000, breadth: { model: HAIKU_45, budget: 168_000 }, secondLook: { model: LUNA, budget: 968_000 }, lens: { model: LUNA, budget: 968_000 }, lookups: 0,
+      main: 168_000, breadth: { model: LUNA, budget: 968_000 }, secondLook: { model: LUNA, budget: 968_000 }, lens: { model: LUNA, budget: 968_000 }, lookups: 0,
     })
   })
 })
