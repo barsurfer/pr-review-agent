@@ -115,7 +115,7 @@ describe('writeInline: order and basics', () => {
     await writeInline(inputFor(fake, { adapter: spy, roots: [planned(1)] }))
     expect(seen.length).toBeGreaterThan(0)
     expect(seen.filter(n => /resolve|reopen/i.test(n))).toEqual([])
-    expect(new Set(seen)).toEqual(new Set(['getPullRequestInfo', 'listMarkedThreads', 'postInlineComment', 'postTopLevelComment']))
+    expect(new Set(seen)).toEqual(new Set(['getPullRequestInfo', 'listMarkedThreads', 'postInlineComment', 'postTopLevelComment', 'editComment']))
   })
 
   it('creates the summary when none exists, and a dry run touches nothing', async () => {
@@ -393,7 +393,7 @@ describe('writeInline: summary writes', () => {
     const id = withSummary(fake, [A])
     const input = inputFor(fake)
     const build = input.buildSummary!
-    input.buildSummary = (r, s) => { fake.comments.splice(fake.comments.findIndex(c => c.id === id), 1); return build(r, s) }
+    input.buildSummary = (r, s) => { const at = fake.comments.findIndex(c => c.id === id); if (at >= 0) fake.comments.splice(at, 1); return build(r, s) }
     const res = await writeInline(input)
     expect(res.summary).toBe('created')
     expect(fake.comments.filter(c => c.body.startsWith(SUMMARY_HEADER))).toHaveLength(1)

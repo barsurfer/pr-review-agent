@@ -1,4 +1,5 @@
 import { createAnchorer } from './anchor.js'
+import { parseLineRange } from '../review/findings-output.js'
 import { matches, type MappedEntry } from './match.js'
 import type { Severity, SummaryOnlyReason } from './types.js'
 
@@ -22,7 +23,7 @@ export interface PlannedRoot { id: string; finding: PlanFinding; path: string; l
 export interface RunPlan {
   create: PlannedRoot[]
   summaryOnly: { finding: PlanFinding; reason: SummaryOnlyReason }[]
-  suppressed: { open: { finding: PlanFinding; id: string }[]; resolved: { finding: PlanFinding; id: string }[] }
+  suppressed: { open: { finding: PlanFinding; id: string }[]; sameRun: { finding: PlanFinding; id: string }[]; resolved: { finding: PlanFinding; id: string }[] }
   changedInPush: Set<string>
 }
 
@@ -30,9 +31,10 @@ export function planRun(input: PlanInput): RunPlan {
   const cap = input.maxNewRoots ?? MAX_NEW_ROOTS_PER_RUN
   const anchorOf = createAnchorer(input.diff)
   const open = input.entries.filter(m => !m.entry.resolved)
+  const planned: MappedEntry[] = []
   const resolved = input.entries.filter(m => m.entry.resolved)
   const plan: RunPlan = {
-    create: [], summaryOnly: [], suppressed: { open: [], resolved: [] },
+    create: [], summaryOnly: [], suppressed: { open: [], sameRun: [], resolved: [] },
     changedInPush: new Set(open.filter(m => m.changed).map(m => m.entry.id)),
   }
   let k = input.nextK
@@ -42,6 +44,9 @@ export function planRun(input: PlanInput): RunPlan {
   for (const f of ordered) {
     const dup = open.find(m => matches(m, f, 'open'))
     if (dup) { plan.suppressed.open.push({ finding: f, id: dup.entry.id }); continue }
+    // The lenient open rule would silently drop a distinct finding with no thread and no row, so within a run only the strict rule merges.
+    const twin = planned.find(m => matches(m, f, 'resolved'))
+    if (twin) { plan.suppressed.sameRun.push({ finding: f, id: twin.entry.id }); continue }
 
     let was: string | undefined
     const hits = resolved.filter(m => matches(m, f, 'resolved'))
@@ -55,7 +60,10 @@ export function planRun(input: PlanInput): RunPlan {
     const a = anchorOf(f.file, f.lines)
     if (!a.ok) { plan.summaryOnly.push({ finding: f, reason: a.reason }); continue }
     if (plan.create.length >= cap) { plan.summaryOnly.push({ finding: f, reason: 'over_cap' }); continue }
-    plan.create.push({ id: `F${k++}`, finding: f, path: a.path, line: a.line, ...(was ? { was } : {}) })
+    const root: PlannedRoot = { id: `F${k++}`, finding: f, path: a.path, line: a.line, ...(was ? { was } : {}) }
+    plan.create.push(root)
+    // A later identical finding in this run must match the root just planned, as it would a posted thread.
+    planned.push({ entry: { id: root.id, k: 0, severity: f.severity, title: f.title, gist: '', file: f.file ?? a.path, lines: f.lines, openedAt: '', rootId: '', url: '', resolved: false, humanComments: 0 }, loc: { file: f.file ?? a.path, ...(parseLineRange(f.lines) ? { line: parseLineRange(f.lines)!.start } : {}), g: 0, mapped: true }, changed: false })
   }
   return plan
 }

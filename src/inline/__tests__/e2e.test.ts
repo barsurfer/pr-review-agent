@@ -9,7 +9,7 @@ const cfg = vi.hoisted(() => ({
   judge: { model: '', maxRetries: 1, effort: '', policy: { keepMinor: true, keepUnverified: true }, fileContext: false },
   breadth: { enabled: false, model: '', effort: '', minFiles: 1, minUntouched: 0, benchmarkDeadlineSeconds: 840, judgeReserveSeconds: 270, passDeadline: false },
   lenses: { enabled: false, list: 'rel', model: '', recommend: false },
-  reply: { maxComments: 5, maxFindingReplies: 5, model: 'claude-haiku-5-5' },
+  reply: { maxComments: 5, maxFindingReplies: 5, model: 'claude-haiku-5-5', skipDirectedElsewhere: false },
   review: {
     inlineReviews: true, inlineLowThreads: false, inlineAgentAccountId: '',
     maxFindings: 0, splitCheck: false, todoScan: false, effort: '', enableNitpicks: false, secondLook: false, lineNumbers: false, promptCache: false,
@@ -189,6 +189,28 @@ describe('a merge-only push', () => {
   })
 })
 
+describe('a quiet re-review', () => {
+  it('keeps a LOW summary-only finding, and the next review still lists it', async () => {
+    reviewerFinds([POOL, STYLE])
+    await run()
+    expect(summaries()[0].body).toContain('Inconsistent naming')
+
+    push(HEAD_B)
+    fake.hooks.commitDiff = () => DELTA
+    reviewerFinds([])
+    await run()
+    expect(verify(summaries()[0].body, ME)).toEqual({ n: 2, commits: [HEAD12, B12] })
+    expect(summaries()[0].body).toContain('- **LOW – Inconsistent naming** (`src/two.ts:20`) · no thread')
+
+    push(HEAD_C)
+    reviewerFinds([])
+    await run()
+    const prompt = JSON.stringify(mockRunReview.mock.calls.at(-1))
+    expect(prompt).toContain('Noted earlier without a thread')
+    expect(prompt).toContain('Inconsistent naming')
+  })
+})
+
 describe('human resolution', () => {
   it('suppresses a same-severity return and opens a new id with the was marker at a higher severity', async () => {
     reviewerFinds([POOL, NULLS])
@@ -214,6 +236,21 @@ describe('human resolution', () => {
 })
 
 describe('developer replies', () => {
+  it.each([
+    ['off', false, 1],
+    ['on', true, 0],
+  ])('SKIP_DIRECTED_REPLIES %s: a reply @-directed at someone else is answered %s time(s)', async (_n, setting, answers) => {
+    cfg.reply.skipDirectedElsewhere = setting
+    reviewerFinds([POOL])
+    await run()
+    const poolId = rootOf('Pool leaks')[0].id
+    const q = ask(poolId, '@{99999999-8888-7777-6666-555555555555} please look')
+    answerTo('F1', q)
+    await run()
+    expect(agentReplies(poolId)).toHaveLength(answers)
+    cfg.reply.skipDirectedElsewhere = false
+  })
+
   it('answers once in the finding thread with the coverage marker, and not again on the next run', async () => {
     reviewerFinds([POOL, NULLS])
     await run()
@@ -290,7 +327,7 @@ describe('foreign edits and forged markers', () => {
     expect(mine).toHaveLength(1)
     expect(parseRootMarker(mine[0].body)!.id).toBe('F1')
     expect(summaries().filter(s => s.authorIds[0] === ME)).toHaveLength(1)
-    expect(fake.editBodies).toEqual([])
+    expect(fake.editBodies).toHaveLength(1)
   })
 })
 
@@ -385,6 +422,43 @@ describe('head moves and uncertain creates', () => {
     expect(verify(summaries()[0].body, ME)!.commits).toEqual([HEAD12])
   })
 
+  it('leaves the head unrecorded when the summary create response is lost, then edits the one summary and records it next run', async () => {
+    fake.hooks.lateCommit = true
+    fake.hooks.failPost = (_n, kind) => (kind === 'summary' ? httpErr() : undefined)
+    reviewerFinds([POOL])
+    const record = await run()
+    expect(fake.calls.filter(c => c === 'summary')).toHaveLength(1)
+    expect(record!.inline!.outcome).toBe('write_uncertain')
+    expect(record!.checked_commit).toBeUndefined()
+    expect(summaries()).toHaveLength(1)
+    expect(verify(summaries()[0].body, ME)!.commits).toEqual([])
+
+    fake.hooks.failPost = undefined
+    fake.hooks.lateCommit = false
+    mockRunReview.mockClear()
+    await run()
+    expect(mockRunReview).toHaveBeenCalledTimes(1)
+    expect(summaries()).toHaveLength(1)
+    expect(roots()).toHaveLength(1)
+    expect(verify(summaries()[0].body, ME)!.commits).toEqual([HEAD12])
+  })
+
+  it.each([[403, 'written'], [undefined, 'write_uncertain']] as const)('keeps the head unrecorded when the head edit after the summary create fails (%s)', async (status, outcome) => {
+    fake.hooks.failEdit = () => httpErr(status)
+    reviewerFinds([POOL])
+    const record = await run()
+    expect(record!.inline!.outcome).toBe(outcome)
+    expect(record!.checked_commit).toBeUndefined()
+    expect(summaries()).toHaveLength(1)
+    expect(verify(summaries()[0].body, ME)!.commits).toEqual([])
+
+    fake.hooks.failEdit = undefined
+    await run()
+    expect(summaries()).toHaveLength(1)
+    expect(roots()).toHaveLength(1)
+    expect(verify(summaries()[0].body, ME)!.commits).toEqual([HEAD12])
+  })
+
   it('posts a create that never committed exactly once on the next run', async () => {
     fake.hooks.failPost = (n, kind) => (kind === 'root' && n === 1 ? httpErr() : undefined)
     reviewerFinds([POOL])
@@ -442,7 +516,7 @@ describe('flag on versus off', () => {
     reviewerFinds([POOL])
     const record = await run()
     expect(fake.comments.find(c => c.id === legacy)!.body).toBe(legacyBody)
-    expect(fake.editBodies).toEqual([])
+    expect(fake.editBodies).toHaveLength(1)
     expect(summaries()).toHaveLength(1)
     expect(summaries()[0].id).not.toBe(legacy)
     expect(record!.review_number).toBe(1)

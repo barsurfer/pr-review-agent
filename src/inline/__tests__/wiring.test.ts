@@ -9,7 +9,7 @@ const cfg = vi.hoisted(() => ({
   judge: { model: '', maxRetries: 1, effort: '', policy: { keepMinor: true, keepUnverified: true }, fileContext: false },
   breadth: { enabled: false, model: '', effort: '', minFiles: 1, minUntouched: 0, benchmarkDeadlineSeconds: 840, judgeReserveSeconds: 270, passDeadline: false },
   lenses: { enabled: false, list: 'rel', model: '', recommend: false },
-  reply: { maxComments: 5, maxFindingReplies: 5, model: 'claude-haiku-5-5' },
+  reply: { maxComments: 5, maxFindingReplies: 5, model: 'claude-haiku-5-5', skipDirectedElsewhere: false },
   review: {
     inlineReviews: true, inlineLowThreads: false, inlineAgentAccountId: '',
     maxFindings: 0, splitCheck: false, todoScan: false, effort: '', enableNitpicks: false, secondLook: false, lineNumbers: false, promptCache: false,
@@ -270,6 +270,17 @@ describe('reply usage', () => {
     expect(record!.tokens).toMatchObject({ input: 2000, output: 700 })
     expect(record!.inline!.reply_usage).toEqual({ model: 'claude-haiku-5-5', input_tokens: 1000, output_tokens: 200, cost_usd: 0.0002 })
     expect(record!.model).toBe('claude-sonnet-5-5')
+  })
+
+  it('keeps the estimated reviewer cost when only the reply call reports a cost', async () => {
+    seedSummary({ n: 1, commits: [A] })
+    const rootId = seedThread('F1', 'Unbounded pool growth', 5)
+    const q = fake.add({ parentId: rootId, body: 'Why does this matter?', authorIds: ['dev'] })
+    completeStructured.mockResolvedValue({ object: { answers: [{ id: 'F1', through: String(q), text: 'It grows without bound.' }] }, usage: { input_tokens: 1000, output_tokens: 200, cost_usd: 0.01 } })
+    mockRunReview.mockImplementation(async () => answerWith(object([], { delta_stats: { resolved: 0, still_open: 1, new_findings: 0 } })))
+    const record = await review(fake.adapter, '7', false)
+    // Reviewer estimated from its own tokens at Sonnet 5.5 (0.007); the reply keeps its reported 0.01.
+    expect(record!.cost_usd).toBeCloseTo(0.007 + 0.01, 6)
   })
 
   it('counts the usage of a failed dedup reply once, at the reply model', async () => {

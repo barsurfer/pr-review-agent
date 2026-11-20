@@ -98,7 +98,7 @@ describe('planRun', () => {
   })
 
   it('eligibility: LOW off, anchor reasons, and the per-run cap', async () => {
-    const mk = (n: number): PlanFinding[] => Array.from({ length: n }, (_, i) => find({ title: `Distinct problem number ${i}`, lines: '9' }))
+    const mk = (n: number): PlanFinding[] => Array.from({ length: n }, (_, i) => find({ title: `Distinct problem number ${i + 10}`, lines: '9' }))
     const p = await run([], [find({ severity: 'LOW', title: 'low one' }), find({ title: 'noline', lines: undefined }), find({ title: 'oop', lines: '500' }), find({ title: 'old', file: 'gone.ts', lines: '1' })], noDelta)
     expect(p.summaryOnly.map(s => s.reason).sort()).toEqual(['low', 'no_line', 'old_side', 'out_of_hunk'])
     const capped = await run([], mk(22), noDelta)
@@ -114,5 +114,24 @@ describe('planRun', () => {
     const d = 'diff --git a/src/a.ts b/src/a.ts\n--- a/src/a.ts\n+++ b/src/a.ts\n@@ -10,1 +10,1 @@\n-old\n+new\n'
     const p = await run([e], [], async () => d)
     expect([...p.changedInPush]).toEqual(['F1'])
+  })
+  it('plans an identical finding of the same run once, without a second id', async () => {
+    const f = find({ lines: '10' })
+    const p = await run([], [f, { ...f, body: 'same finding again' }], noDelta)
+    expect(p.create.map(r => r.id)).toEqual(['F5'])
+    expect(p.suppressed.open).toEqual([])
+    expect(p.suppressed.sameRun).toEqual([{ finding: expect.objectContaining({ body: 'same finding again' }), id: 'F5' }])
+    expect(p.summaryOnly).toHaveLength(0)
+  })
+
+  it('plans both of two findings in one run whose titles are only about 0.6 similar', async () => {
+    const p = await run([], [find({ lines: '10', title: 'Distinct problem number 11' }), find({ lines: '10', title: 'Distinct problem number 12' })], noDelta)
+    expect(p.create.map(r => r.id)).toEqual(['F5', 'F6'])
+    expect(p.suppressed.sameRun).toEqual([])
+  })
+
+  it('still plans a different finding at another location of the same run', async () => {
+    const p = await run([], [find({ lines: '10' }), find({ lines: '10', title: 'Unrelated race in token refresh' })], noDelta)
+    expect(p.create.map(r => r.id)).toEqual(['F5', 'F6'])
   })
 })

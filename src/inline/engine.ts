@@ -53,7 +53,7 @@ export function selectInlineEngine(adapter: VCSAdapter, outcomeSink?: OutcomeSin
 const emptyRecord = (): InlineRecord => ({
   active: true, completed: false, identity: 'unavailable', summary_check: 'missing', summary: 'not_written',
   roots: { posted: 0, failed: 0, summary_only: { low: 0, no_line: 0, out_of_hunk: 0, old_side: 0, over_cap: 0 } },
-  suppressed: { open_duplicate: 0, resolved: 0 }, raised_over_resolved: 0,
+  suppressed: { open_duplicate: 0, resolved: 0, in_run_duplicate: 0 }, raised_over_resolved: 0,
   answers: { threads: 0, posted: 0, failed: 0, deferred_cap: 0, limit_notes: 0, summary: 0 },
   reply_usage: null, untrusted_markers: 0, writes_reconciled: 0, rows_collapsed: 0, footer_lines_removed: 0,
 })
@@ -271,9 +271,11 @@ class Engine implements InlineEngine {
     const paths = (ctx.changedFiles ?? []).map(f => f.path)
     const found = quiet ? [] : (ctx.judgedFindings ?? ctx.reviewObject?.findings ?? []).map(f => toPlanFinding(f, paths))
     const n = found.length
+    const carry = this.s!.carry
     return this.writeRun(ctx, deps, {
-      plain: guard?.ok ? guard.cleaned : QUIET_PLAIN,
+      plain: guard?.ok ? guard.cleaned : quiet ? (carry.plain ?? QUIET_PLAIN) : QUIET_PLAIN,
       findings: found,
+      ...(quiet ? { carriedSummaryOnly: carry.summaryOnly } : {}),
       todoSection: guard?.ok ? guard.todoSection : '',
       historyText: r => (n === 0 ? 'no findings' : `${n} finding${n === 1 ? '' : 's'}, ${r.posted.length} new thread${r.posted.length === 1 ? '' : 's'}`),
     })
@@ -296,7 +298,7 @@ class Engine implements InlineEngine {
     for (const m of mapped) geo.set(m.entry.id, await this.geoOf(m.entry, mapper, s.head12))
     const plan = planRun({ findings: src.findings, entries: mapped, diff: ctx.diff ?? '', nextK: s.reg.nextK, lowThreads: config.review.inlineLowThreads })
     for (const x of plan.summaryOnly) this.rec.roots!.summary_only[x.reason]++
-    this.rec.suppressed = { open_duplicate: plan.suppressed.open.length, resolved: plan.suppressed.resolved.length }
+    this.rec.suppressed = { open_duplicate: plan.suppressed.open.length, resolved: plan.suppressed.resolved.length, in_run_duplicate: plan.suppressed.sameRun.length }
 
     const replies = await this.replyPlan(ctx)
     const footer = { identity: config.agentIdentity, model: config.anthropic.model, build: getBuildCommit() }
@@ -357,15 +359,16 @@ class Engine implements InlineEngine {
     const model = config.reply.model || config.anthropic.model
     const plan = await planReplies({
       threads: s.threads, who: s.who, summaryRootId: s.summaryRootId,
-      maxFinding: config.reply.maxFindingReplies, maxSummary: config.reply.maxComments,
+      maxFinding: config.reply.maxFindingReplies, maxSummary: config.reply.maxComments, skipDirected: config.reply.skipDirectedElsewhere,
       call: { apiKey: config.llmApiKey, model, maxRetries: config.anthropic.maxRetries, diff: ctx.filteredDiff ?? ctx.diff ?? '' },
     })
     this.rec.answers!.threads = plan.threads
     this.rec.answers!.deferred_cap = plan.deferredCap
     if (plan.usage) {
-      this.replyUsage = plan.usage
-      addUsage(ctx, plan.usage)
       const u = plan.usage
+      // The reply's reported cost stays out of the aggregate so a reviewer with no reported cost is still estimated; the record adds the reply once.
+      this.replyUsage = { ...u, cost_usd: undefined }
+      addUsage(ctx, this.replyUsage)
       this.rec.reply_usage = {
         model, input_tokens: u.input_tokens, output_tokens: u.output_tokens,
         cost_usd: u.cost_usd ?? (u.attempts ? estimateAttemptsCost(u.attempts, model) : estimateCost({ input: u.input_tokens, output: u.output_tokens, cache_read: u.cache_read_input_tokens ?? 0, cache_write: u.cache_creation_input_tokens ?? 0 }, model)),

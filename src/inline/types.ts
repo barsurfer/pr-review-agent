@@ -52,7 +52,7 @@ export interface InlineRecord {
   summary_check?: 'valid' | 'tampered' | 'missing'
   summary?: 'created' | 'edited' | 'not_written'
   roots?: { posted: number; failed: number; summary_only: Record<SummaryOnlyReason, number> }
-  suppressed?: { open_duplicate: number; resolved: number }
+  suppressed?: { open_duplicate: number; resolved: number; in_run_duplicate: number }
   raised_over_resolved?: number
   answers?: { threads: number; posted: number; failed: number; deferred_cap: number; limit_notes: number; summary: number }
   reply_usage?: { model: string; input_tokens: number; output_tokens: number; cost_usd: number } | null

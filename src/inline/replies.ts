@@ -27,7 +27,7 @@ export function targetOf(thread: MarkedThread, summaryRootId?: string): string |
   return parseRootMarker(thread.root.body)?.id ?? null
 }
 
-export function threadView(thread: MarkedThread, target: string, who: ReplyIdentity): ThreadView {
+export function threadView(thread: MarkedThread, target: string, who: ReplyIdentity, skipDirected = false): ThreadView {
   const comments = [...thread.comments].sort((a, b) => a.seq - b.seq)
   const trusted = (c: MarkedComment): boolean => isTrusted(who.ids, c.authorIds)
   const byId = new Map<string, MarkedComment>([[thread.root.id, thread.root], ...comments.map((c): [string, MarkedComment] => [c.id, c])])
@@ -53,7 +53,7 @@ export function threadView(thread: MarkedThread, target: string, who: ReplyIdent
   const questions: Question[] = []
   for (const c of comments) {
     if (trusted(c)) continue
-    if (decideDirectedElsewhere(c.body, ids, names).drop) continue
+    if (skipDirected && decideDirectedElsewhere(c.body, ids, names).drop) continue
     const parent = c.parentId ? byId.get(c.parentId) : undefined
     const toAgent = parent ? trusted(parent) : false
     if (toAgent || mentionsAgent(c.body, ids, names)) questions.push({ id: c.id, seq: c.seq, author: c.author, body: c.body, createdOn: c.createdOn })

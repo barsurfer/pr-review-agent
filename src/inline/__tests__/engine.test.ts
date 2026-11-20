@@ -4,7 +4,7 @@ const cfg = vi.hoisted(() => ({
   llmApiKey: 'k',
   agentIdentity: 'review-bot',
   anthropic: { model: 'claude-sonnet-5-5', maxRetries: 1, maxTokens: 64000 },
-  reply: { maxComments: 5, maxFindingReplies: 5, model: 'claude-haiku-5-5' },
+  reply: { maxComments: 5, maxFindingReplies: 5, model: 'claude-haiku-5-5', skipDirectedElsewhere: false },
   judge: { suggestedFixes: true },
   review: { inlineReviews: true, inlineLowThreads: false, inlineAgentAccountId: '', todoScan: false },
   diffExcludePatterns: [] as string[],
@@ -256,7 +256,7 @@ describe('writing a review', () => {
     await e.step(State.CHECK_PREVIOUS_REVIEWS, ctx, depsOf())
     reviewed(ctx, [finding(), finding({ severity: 'LOW', title: 'Unused var', lines: '9' })])
     await e.step(State.POST_REVIEW, ctx, depsOf())
-    expect(writes(fake)).toEqual(['root', 'summary'])
+    expect(writes(fake)).toEqual(['root', 'summary', 'edit'])
     expect(roots(fake)[0].inline).toEqual({ path: 'src/a.ts', line: 4 })
     expect(summaryOf(fake)!.body).toContain('Not posted as threads')
     expect(e.record().roots).toMatchObject({ posted: 1, failed: 0, summary_only: { low: 1 } })
@@ -279,7 +279,7 @@ describe('writing a review', () => {
     expect(posted).toHaveLength(1)
     expect(posted[0].body).toContain('**HIGH – Unbounded render loop** (was F2, dismissed)')
     expect(posted[0].body).toContain('*Finding F3 |')
-    expect(e.record()).toMatchObject({ suppressed: { open_duplicate: 1, resolved: 1 }, raised_over_resolved: 1 })
+    expect(e.record()).toMatchObject({ suppressed: { open_duplicate: 1, resolved: 0, in_run_duplicate: 1 }, raised_over_resolved: 1 })
     expect(ctx.action).toBe('RE_REVIEW')
     neverClosed(fake)
   })
@@ -531,6 +531,34 @@ describe('unchanged runs keep the last review', () => {
     const e = engineOf(fake)
     expect(await run(e, nextCtx())).toBe(State.DONE)
     keeps()
+  })
+
+  const quiet = async (e: ReturnType<typeof engineOf>, ctx: ReviewContext, text: string): Promise<void> => {
+    const deps = depsOf()
+    await e.step(State.CHECK_PREVIOUS_REVIEWS, ctx, deps)
+    const obj = reviewObject([], text ? { summary: text } : {})
+    ctx.reviewObject = obj
+    ctx.reviewText = text === '' ? '' : renderReview(obj)
+    ctx.action = 'NO_NEW_FINDINGS'
+    expect(await e.step(State.SKIP, ctx, deps)).toBe(State.DONE)
+  }
+
+  it('a quiet re-review keeps the earlier summary-only rows and the last narrative when it has none of its own', async () => {
+    await firstReview()
+    await quiet(engineOf(fake), nextCtx(), '')
+    const body = summaryOf(fake)!.body
+    expect(body).toContain('- **LOW – Unused var** (`src/a.ts:9`) · no thread\n  Dead code.')
+    expect(body).toContain('Profile load now checks the user')
+    expect(body).not.toContain('No new findings.')
+    expect(verify(body, ME)).toEqual({ n: 2, commits: [HEAD12, 'eeeeeeeeeeee'] })
+  })
+
+  it('a quiet re-review keeps the summary-only rows but uses its own narrative when it has one', async () => {
+    await firstReview()
+    await quiet(engineOf(fake), nextCtx(), '### Summary\nNothing new in this push.\n\n### Findings\nNo findings.')
+    const body = summaryOf(fake)!.body
+    expect(body).toContain('- **LOW – Unused var** (`src/a.ts:9`) · no thread')
+    expect(body).toContain('Nothing new in this push.')
   })
 
   it('falls back to the placeholder when the loaded summary has no narrative', async () => {

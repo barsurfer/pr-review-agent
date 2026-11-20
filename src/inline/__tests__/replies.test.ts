@@ -59,7 +59,13 @@ describe('threadView', () => {
     const other = '99999999-8888-7777-6666-555555555555'
     const kept = human(10, `@{${other}} and @{${BOT_UUID}} can you check?`, 1)
     const dropped = human(11, `@{${other}} please look`, 1)
-    expect(threadView(thread(1, [kept, dropped]), 'F1', who).pending.map(q => q.id)).toEqual(['10'])
+    expect(threadView(thread(1, [kept, dropped]), 'F1', who, true).pending.map(q => q.id)).toEqual(['10'])
+  })
+
+  it('answers a reply directed at another user when the skip setting is off', () => {
+    const dropped = human(11, '@{99999999-8888-7777-6666-555555555555} please look', 1)
+    expect(threadView(thread(1, [dropped]), 'F1', who).pending.map(q => q.id)).toEqual(['11'])
+    expect(threadView(thread(1, [dropped]), 'F1', who, false).pending.map(q => q.id)).toEqual(['11'])
   })
 
   it('never reads a trusted-author comment as a question', () => {

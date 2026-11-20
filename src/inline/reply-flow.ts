@@ -12,6 +12,7 @@ export interface ReplyPlanInput {
   summaryRootId?: string
   maxFinding: number
   maxSummary: number
+  skipDirected?: boolean
   call: CallArgs
 }
 
@@ -39,7 +40,7 @@ export async function planReplies(input: ReplyPlanInput): Promise<ReplyPlan> {
     // A marker-shaped root by anyone else is not our finding, so its thread is never answered.
     if (target !== 'summary' && !isTrusted(input.who.ids, t.root.authorIds)) continue
     if (target !== 'summary' && !parseRootMarker(t.root.body)) continue
-    const view = threadView(t, target, input.who)
+    const view = threadView(t, target, input.who, input.skipDirected)
     views.push(view)
     if (!t.resolved) open.add(target)
   }

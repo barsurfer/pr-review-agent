@@ -79,6 +79,7 @@ export async function writeInline(input: WriteInput): Promise<WriteResult> {
   let touched = false
   let uncertain = false
   let invalidated = false
+  let headInSummary = false
   let expectedBody = input.summary.kind === 'found' ? input.summary.comment.body : ''
 
   const stop = (outcome: InlineOutcome): WriteResult => { res.outcome = outcome; return res }
@@ -243,39 +244,51 @@ export async function writeInline(input: WriteInput): Promise<WriteResult> {
 
     const base = invalidated ? loaded.commits.filter(c => c !== head12) : loaded.commits
     const recordHead = !uncertain
-    const state: SummaryState = { n: input.nextN, commits: recordHead ? addCommit({ n: input.nextN, commits: base }, head12).commits : base }
-    const body = input.buildSummary(res, state)
-    const written = await writeSummary(body, listed.reg.summary)
+    const stateFor = (withHead: boolean): SummaryState => ({ n: input.nextN, commits: withHead ? addCommit({ n: input.nextN, commits: base }, head12).commits : base })
+    const bodyFor = (withHead: boolean): string => input.buildSummary!(res, stateFor(withHead))
+    headInSummary = recordHead
+    const written = await writeSummary(bodyFor, listed.reg.summary, recordHead)
     if (written === 'identity_mismatch') return stop('identity_mismatch')
     if (written === 'concurrent_run') return stop('concurrent_run')
-    res.newState = state
+    res.newState = stateFor(headInSummary)
     if (written === 'uncertain') uncertain = true
-    else if (recordHead) { res.headRecorded = true; input.markHeadChecked() }
+    else if (headInSummary) { res.headRecorded = true; input.markHeadChecked() }
   }
 
   res.outcome = uncertain ? 'write_uncertain' : input.mode === 'review' ? 'written' : 'replies_only'
   return res
 
-  async function writeSummary(body: string, current: Selection): Promise<'ok' | 'uncertain' | 'identity_mismatch' | 'concurrent_run'> {
+  async function writeSummary(bodyFor: (withHead: boolean) => string, current: Selection, withHead: boolean): Promise<'ok' | 'uncertain' | 'identity_mismatch' | 'concurrent_run'> {
     const fail = (why: string): never => { throw new InlineWriteError(why, { ...res, outcome: uncertain ? 'write_uncertain' : 'write_failed' }) }
     const create = async (): Promise<'ok' | 'uncertain' | 'identity_mismatch'> => {
+      let posted: Awaited<ReturnType<WriterAdapter['postTopLevelComment']>>
       try {
-        const posted = await adapter.postTopLevelComment(prId, body)
-        touched = true
-        if (!trusted(posted.authorIds)) return 'identity_mismatch'
-        res.summary = 'created'
-        return 'ok'
+        // A create whose response is lost may still have landed, so it never carries the head; the head goes in by edit once the create is acknowledged.
+        posted = await adapter.postTopLevelComment(prId, bodyFor(false))
       } catch (err: unknown) {
         if (refused(err)) return fail(`Summary create refused (${msg(err)})`)
         touched = true
+        headInSummary = false
         console.warn(`  Summary create outcome unknown (${msg(err)}) - not resent`)
         return 'uncertain'
+      }
+      touched = true
+      if (!trusted(posted.authorIds)) return 'identity_mismatch'
+      res.summary = 'created'
+      if (!withHead) return 'ok'
+      try {
+        await adapter.editComment(prId, posted.id, bodyFor(true))
+        return 'ok'
+      } catch (err: unknown) {
+        headInSummary = false
+        console.warn(`  Head checkpoint edit ${refused(err) ? 'refused' : 'outcome unknown'} (${msg(err)}) - head not recorded`)
+        return refused(err) ? 'ok' : 'uncertain'
       }
     }
     if (current.kind === 'none') return create()
     if (!trusted(current.comment.authorIds)) return 'identity_mismatch'
     try {
-      await adapter.editComment(prId, current.comment.id, body)
+      await adapter.editComment(prId, current.comment.id, bodyFor(withHead))
       touched = true
       res.summary = 'edited'
       return 'ok'
