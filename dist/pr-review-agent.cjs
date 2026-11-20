@@ -47235,7 +47235,7 @@ function getAgentVersion() {
     const pkg = JSON.parse((0, import_fs4.readFileSync)(pkgPath, "utf-8"));
     return pkg.version;
   } catch {
-    if (true) return "0.0.60";
+    if (true) return "0.0.61";
     return "unknown";
   }
 }
@@ -47247,7 +47247,7 @@ function getBuildCommit() {
     const dirty = (0, import_child_process.execSync)("git status --porcelain", opts2).toString().trim() ? "-dirty" : "";
     return hash + dirty;
   } catch {
-    if (true) return "a8780bc";
+    if (true) return "3810db2";
     return "unknown";
   }
 }
