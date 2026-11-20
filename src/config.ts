@@ -1,5 +1,5 @@
 import 'dotenv/config'
-import { tableContextWindow } from './llm/model-id.js'
+import { tableContextWindow, EFFORT_LEVELS } from './llm/model-id.js'
 
 function required(name: string): string {
   const value = process.env[name]
@@ -9,6 +9,16 @@ function required(name: string): string {
 
 function optional(name: string, defaultValue: string): string {
   return process.env[name] ?? defaultValue
+}
+
+// An unknown level reads as off: an invalid per-message effort would 400 every cached pass.
+function cachedPassEffort(): string {
+  const value = optional('CACHED_PASS_EFFORT', '').trim()
+  if (value && !EFFORT_LEVELS.includes(value)) {
+    console.warn(`CACHED_PASS_EFFORT=${value} is not one of ${EFFORT_LEVELS.join('|')} - ignoring it`)
+    return ''
+  }
+  return value
 }
 
 // CI passes unset parameters as empty strings, and parseInt('') is NaN, which would silently disable a threshold compared against it.
@@ -194,6 +204,8 @@ export const config = {
     firstPassSites: optional('ENABLE_FIRST_PASS_SITES', 'false') === 'true',
     // Off by default: a first review's eligible extra passes read the reviewer's prompt and PR context from a 5-minute prompt cache.
     promptCache: optional('ENABLE_PROMPT_CACHE', 'false') === 'true',
+    // Unset by default: cached extra passes send this effort as a per-message change after the cached block, so the cache still reads.
+    cachedPassEffort: cachedPassEffort(),
     // On by default: without numbered lines ~40% of findings carried no line; set false to send the raw diff/context (saves the per-line gutter tokens).
     lineNumbers: optional('ENABLE_LINE_NUMBERS', 'true') !== 'false',
     // On by default with a kill switch: false always reviews the full delta after a target merge.

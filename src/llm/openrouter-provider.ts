@@ -18,19 +18,22 @@ export class OpenRouterProvider implements LLMProvider {
     // strict:false — our REVIEW/JUDGE schemas don't meet OpenAI strict's all-keys-required rule;
     // JSON.parse + missingRequired below is the fidelity guard instead. Gate models on supported_parameters.
     const response_format = { type: 'json_schema', json_schema: { name: 'result', schema, strict: false } }
-    const payload = { model: opts.model, max_tokens: opts.maxTokens, response_format, messages: openRouterMessages(system, user, opts.systemAfter) }
+    const payload = { model: opts.model, max_tokens: opts.maxTokens, response_format, messages: openRouterMessages(system, user, opts.systemAfter, opts.effortAfter) }
     const cached = cacheAware() || hasCachePart(user)
     const first = await this.structuredAttempt<T>(payload, schema, opts, cached)
-    if (!first.missing.length) return { object: first.object, usage: first.usage }
+    // The setting also covers the uncached fallback, which carries no keepEffort.
+    const strict = !!opts.keepEffort || !!config.review?.cachedPassEffort
+    const reported = (a: { reasoning?: number }): { final_reasoning_tokens?: number } => ((opts.effortAfter !== undefined || !!opts.keepEffort) && a.reasoning !== undefined ? { final_reasoning_tokens: a.reasoning } : {})
+    if (!first.missing.length) return { object: first.object, usage: { ...first.usage, ...reported(first) } }
     // A strict:false model can drop a nested required field on one sample and not the next; one resend costs less than failing the run.
     console.warn(`  Structured output from ${opts.model} missing ${first.missing.join(', ')} — retrying once`)
-    const second = await this.structuredAttempt<T>(payload, schema, opts, cached).catch((err: unknown) => { throw withPriorUsage(err, first.usage) })
-    const usage = sumUsage(first.usage, second.usage)
+    const second = await this.structuredAttempt<T>(payload, schema, opts, cached).catch((err: unknown) => { throw withPriorUsage(err, first.usage, strict) })
+    const usage = sumUsage(first.usage, second.usage, strict)
     if (second.missing.length) throw Object.assign(new Error(`Structured output missing required field(s): ${second.missing.join(', ')}`), { usage })
-    return { object: second.object, usage }
+    return { object: second.object, usage: { ...usage, ...reported(second) } }
   }
 
-  private async structuredAttempt<T>(payload: Record<string, unknown>, schema: Record<string, unknown>, opts: LLMOptions, cached: boolean): Promise<{ object: T; usage: LLMUsage; missing: string[] }> {
+  private async structuredAttempt<T>(payload: Record<string, unknown>, schema: Record<string, unknown>, opts: LLMOptions, cached: boolean): Promise<{ object: T; usage: LLMUsage; missing: string[]; reasoning?: number }> {
     const data = await this.request(payload, opts)
     const text = contentOf(firstChoice(data, opts.maxTokens, cached))
     let object: T
@@ -39,7 +42,8 @@ export class OpenRouterProvider implements LLMProvider {
     } catch {
       throw new Error('Model returned invalid JSON despite structured output')
     }
-    return { object, usage: mapOpenRouterUsage(data.usage, cached), missing: missingRequired(object, schema, true, opts.tolerateMissing) }
+    const reasoning = data.usage?.completion_tokens_details?.reasoning_tokens
+    return { object, usage: mapOpenRouterUsage(data.usage, cached), missing: missingRequired(object, schema, true, opts.tolerateMissing), ...(typeof reasoning === 'number' ? { reasoning } : {}) }
   }
 
   private async request(payload: Record<string, unknown>, opts: LLMOptions): Promise<OpenRouterResponse> {
@@ -57,7 +61,8 @@ export class OpenRouterProvider implements LLMProvider {
     if (!opts.effort) return this.send(url, headers, body, opts)
     // OpenRouter maps reasoning.effort to Claude 4.6+ output_config.effort; like the Anthropic provider, a rejected value is retried without it.
     return this.send(url, headers, { ...body, reasoning: { effort: opts.effort } }, opts).catch((err: unknown) => {
-      if (isReasoningRejection(err)) {
+      // A resend without the top-level effort would change the cached prefix, so a keepEffort call hands the rejection to the caller.
+      if (isReasoningRejection(err) && !opts.keepEffort) {
         console.warn(`  effort "${opts.effort}" not accepted by ${opts.model} — retrying without it`)
         return this.send(url, headers, body, opts)
       }
@@ -99,9 +104,10 @@ interface OpenRouterResponse {
 
 const OPENROUTER_TIMEOUT_MS = 600_000
 
-function openRouterMessages(system: string, user: string | UserPart[], systemAfter?: string): Array<{ role: string; content: unknown }> {
+function openRouterMessages(system: string, user: string | UserPart[], systemAfter?: string, effortAfter?: string): Array<{ role: string; content: unknown }> {
   const content = typeof user === 'string' ? user : user.map(p => ({ type: 'text', text: p.text, ...(p.cache ? { cache_control: { type: 'ephemeral' } } : {}) }))
-  return [{ role: 'system', content: system }, { role: 'user', content }, ...(systemAfter ? [{ role: 'system', content: systemAfter }] : [])]
+  const effort = effortAfter ? [{ role: 'system', content: '', configuration_update: { reasoning: { effort: effortAfter } } }] : []
+  return [{ role: 'system', content: system }, { role: 'user', content }, ...effort, ...(systemAfter ? [{ role: 'system', content: systemAfter }] : [])]
 }
 
 function firstChoice(data: OpenRouterResponse, maxTokens: number, cached = false): NonNullable<OpenRouterResponse['choices']>[number] {
@@ -150,8 +156,11 @@ function cachedUsage(u: OpenRouterResponse['usage'], cost: number | undefined, r
   }
 }
 
-function sumUsage(a: LLMUsage, b: LLMUsage): LLMUsage {
-  const cost = a.cost_usd === undefined && b.cost_usd === undefined ? undefined : (a.cost_usd ?? 0) + (b.cost_usd ?? 0)
+// strictCost: a mixed pair sums no cost, so the attempt-by-attempt estimate prices the unreported one.
+function sumUsage(a: LLMUsage, b: LLMUsage, strictCost = false): LLMUsage {
+  const cost = strictCost
+    ? (a.cost_usd === undefined || b.cost_usd === undefined ? undefined : a.cost_usd + b.cost_usd)
+    : a.cost_usd === undefined && b.cost_usd === undefined ? undefined : (a.cost_usd ?? 0) + (b.cost_usd ?? 0)
   const reasoning = (a.reasoning_tokens ?? 0) + (b.reasoning_tokens ?? 0)
   return {
     input_tokens: a.input_tokens + b.input_tokens,
@@ -168,10 +177,12 @@ function sumUsage(a: LLMUsage, b: LLMUsage): LLMUsage {
 const cacheAware = (): boolean => !!config.review?.promptCache
 
 // The first attempt was paid for, so a resend that fails another way still reports it.
-function withPriorUsage(err: unknown, prior: LLMUsage): unknown {
+function withPriorUsage(err: unknown, prior: LLMUsage, strictCost = false): unknown {
   if (!err || typeof err !== 'object') return err
   const own = (err as { usage?: LLMUsage }).usage
-  return Object.assign(err, { usage: own ? sumUsage(prior, own) : prior })
+  // The uncached fallback of a feature run carries no keepEffort, so the setting itself keeps its completed attempts.
+  if ((strictCost || !!config.review?.cachedPassEffort) && err instanceof DeadlineAbortError) return Object.assign(err, { completed: own ? sumUsage(prior, own, strictCost) : prior })
+  return Object.assign(err, { usage: own ? sumUsage(prior, own, strictCost) : prior })
 }
 
 type StatusError = Error & { status?: number; __openrouter?: true }

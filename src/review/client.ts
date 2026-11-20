@@ -394,13 +394,14 @@ export async function runSharedPass(
   overlay: string,
   label: string,
   signal?: AbortSignal,
+  extra?: { effortAfter?: string; keepEffort?: true },
 ): Promise<{ findings: ReviewFinding[]; usage: LLMUsage; promptHash: string; firstPassSites?: unknown }> {
   const sites = 'first_pass_sites' in ((prefix.schema as { properties?: object }).properties ?? {})
   const user: UserPart[] = [{ text: prefix.block, cache: true }, { text: briefing }]
   console.log(`Sending to ${label} reviewer (${model}, maxRetries: ${maxRetries}, cached prefix)...`)
   const { object, usage } = await createProvider(apiKey).completeStructured<{ findings: ReviewFinding[]; first_pass_sites?: unknown }>(
     prefix.system, user, prefix.schema,
-    { model, maxTokens, maxRetries, effort: effort || undefined, ...(signal ? { signal } : {}), tolerateMissing: SHARED_PASS_TOLERATE, systemAfter: overlay, ...(prefix.sessionId ? { sessionId: prefix.sessionId } : {}) },
+    { model, maxTokens, maxRetries, effort: effort || undefined, ...(signal ? { signal } : {}), tolerateMissing: SHARED_PASS_TOLERATE, systemAfter: overlay, ...(prefix.sessionId ? { sessionId: prefix.sessionId } : {}), ...extra },
   )
   console.log(`${label[0].toUpperCase()}${label.slice(1)} received (${usage.input_tokens} in / ${usage.cache_read_input_tokens ?? 0} cache read / ${usage.cache_creation_input_tokens ?? 0} cache write / ${usage.output_tokens} out tokens, ${object.findings?.length ?? 0} findings)`)
   const findings = Array.isArray(object.findings) ? object.findings : []

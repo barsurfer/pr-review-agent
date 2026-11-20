@@ -12,6 +12,8 @@ export interface LLMUsage {
   reasoning_tokens?: number
   // Each attempt of a resent call (prompt cache only), so cost estimates apply Haiku 5.5's prompt-size tier per request, not to the sum.
   attempts?: LLMUsage[]
+  // The accepted response's reported reasoning count, 0 included (absent = unknown); set only on feature-enabled cached calls and never summed.
+  final_reasoning_tokens?: number
 }
 
 export type UserPart = { text: string; cache?: true }
@@ -25,11 +27,31 @@ export interface LLMOptions {
   signal?: AbortSignal
   systemAfter?: string
   sessionId?: string
+  effortAfter?: string
+  keepEffort?: true
 }
 
 export interface LLMProvider {
   complete(system: string, user: string, opts: LLMOptions): Promise<{ text: string; usage: LLMUsage }>
   completeStructured<T>(system: string, user: string | UserPart[], schema: Record<string, unknown>, opts: LLMOptions): Promise<{ object: T; usage: LLMUsage }>
+}
+
+const withoutFinalReasoning = ({ final_reasoning_tokens: _f, ...rest }: LLMUsage): LLMUsage => rest
+
+// The aggregate omits cost_usd unless every attempt reported one, so a mixed set is priced attempt by attempt instead of undercounted.
+export function sumAttempts(...usages: LLMUsage[]): LLMUsage {
+  const attempts = usages.flatMap(u => u.attempts ?? [withoutFinalReasoning(u)])
+  const sum = (pick: (u: LLMUsage) => number | undefined): number => attempts.reduce((n, a) => n + (pick(a) ?? 0), 0)
+  const reasoning = sum(a => a.reasoning_tokens)
+  return {
+    input_tokens: sum(a => a.input_tokens),
+    output_tokens: sum(a => a.output_tokens),
+    cache_read_input_tokens: sum(a => a.cache_read_input_tokens),
+    cache_creation_input_tokens: sum(a => a.cache_creation_input_tokens),
+    ...(attempts.every(a => a.cost_usd !== undefined) ? { cost_usd: sum(a => a.cost_usd) } : {}),
+    ...(reasoning > 0 ? { reasoning_tokens: reasoning } : {}),
+    attempts,
+  }
 }
 
 export const hasCachePart = (user: string | UserPart[]): boolean => Array.isArray(user) && user.some(p => p.cache)
@@ -45,6 +67,9 @@ export class TruncatedResponseError extends Error {
 
 // A benchmark pass deadline fired; kept apart from TruncatedResponseError and transport errors so the stage records aborted_time, not failed.
 export class DeadlineAbortError extends Error {
+  // Usage of attempts that finished before the abort, kept apart from the aborted stream's partial usage.
+  completed?: LLMUsage
+
   constructor(message: string, readonly usage?: LLMUsage) {
     super(message)
     this.name = 'DeadlineAbortError'

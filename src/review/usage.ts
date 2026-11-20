@@ -176,9 +176,9 @@ export function estimateCost(tokens: StageTokens, model: string): number {
   return Math.round(unroundedCost(tokens, model) * 10000) / 10000 // 4 decimal places
 }
 
-// Haiku 5.5's tier is per request, so a resent call is priced attempt by attempt and only the sum is rounded.
+// Haiku 5.5's tier is per request, so each attempt is priced alone; one that reported a cost keeps it.
 export function estimateAttemptsCost(attempts: readonly LLMUsage[], model: string): number {
-  const cost = attempts.reduce((sum, a) => sum + unroundedCost({ input: a.input_tokens, output: a.output_tokens, cache_read: a.cache_read_input_tokens ?? 0, cache_write: a.cache_creation_input_tokens ?? 0 }, model), 0)
+  const cost = attempts.reduce((sum, a) => sum + (a.cost_usd ?? unroundedCost({ input: a.input_tokens, output: a.output_tokens, cache_read: a.cache_read_input_tokens ?? 0, cache_write: a.cache_creation_input_tokens ?? 0 }, model)), 0)
   return Math.round(cost * 10000) / 10000
 }
 
