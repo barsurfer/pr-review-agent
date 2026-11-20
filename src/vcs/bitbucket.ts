@@ -1,7 +1,7 @@
 import axios, { AxiosInstance, AxiosRequestConfig } from 'axios'
 import { hasReviewFooter, hasReplyFooter } from '../review/formatter.js'
 import { decideDirectedElsewhere, mentionsAgent } from './mention-filter.js'
-import type { VCSAdapter, PRInfo, ChangedFile, ReviewComment, CommentReply, ReplyResult } from './adapter.js'
+import type { VCSAdapter, PRInfo, ChangedFile, ReviewComment, CommentReply, ReplyResult, AgentIdentity, PostedComment, MarkedComment, MarkedThread } from './adapter.js'
 import { AGENT_REPLY_AUTHOR, authorIdOf } from './adapter.js'
 import { withCallLog, withRetry, OPTIONAL_RETRY_BUDGET_MS, OPTIONAL_RETRY_DELAYS_MS, FOUND_FILE_RETRY_BUDGET_MS } from './http-retry.js'
 
@@ -283,6 +283,107 @@ export class BitbucketAdapter implements VCSAdapter {
       `/repositories/${this.workspace}/${repoSlug}/pullrequests/${prId}/comments`,
       { parent: { id: Number(parentId) }, content: { raw: body } }
     )
+  }
+
+  // Both id forms, so the identity check matches whichever one the setting or /user carries.
+  private idsOf(user: any): string[] {
+    const ids: string[] = []
+    if (user?.account_id) ids.push(String(user.account_id))
+    if (user?.uuid) ids.push(String(user.uuid).replace(/[{}]/g, ''))
+    return ids
+  }
+
+  private async createComment(prId: string, payload: Record<string, unknown>): Promise<PostedComment> {
+    const repoSlug = this.getRepoSlug()
+    const { data } = await this.client.post(
+      `/repositories/${this.workspace}/${repoSlug}/pullrequests/${prId}/comments`,
+      payload,
+    )
+    const id = String(data.id)
+    const prLink = data.pullrequest?.links?.html?.href ?? `https://bitbucket.org/${this.workspace}/${repoSlug}/pull-requests/${prId}`
+    return { id, url: data.links?.html?.href ?? `${prLink}#comment-${id}`, createdOn: data.created_on ?? '', authorIds: this.idsOf(data.user) }
+  }
+
+  async postInlineComment(prId: string, anchor: { path: string; line: number }, body: string): Promise<PostedComment> {
+    return this.createComment(prId, { content: { raw: body }, inline: { path: anchor.path, to: anchor.line } })
+  }
+
+  async postTopLevelComment(prId: string, body: string): Promise<PostedComment> {
+    return this.createComment(prId, { content: { raw: body } })
+  }
+
+  async postThreadComment(prId: string, parentId: string, body: string): Promise<PostedComment> {
+    return this.createComment(prId, { parent: { id: Number(parentId) }, content: { raw: body } })
+  }
+
+  async editComment(prId: string, commentId: string, body: string): Promise<void> {
+    const repoSlug = this.getRepoSlug()
+    await this.client.put(
+      `/repositories/${this.workspace}/${repoSlug}/pullrequests/${prId}/comments/${commentId}`,
+      { content: { raw: body } },
+    )
+  }
+
+  async getAgentIdentity(): Promise<AgentIdentity> {
+    try {
+      const { data } = await this.client.get('/user')
+      const names = [...new Set([data?.display_name, data?.nickname].filter(Boolean).map((n: string) => String(n).toLowerCase()))]
+      return { ids: this.idsOf(data), names }
+    } catch {
+      return { ids: [], names: [] }
+    }
+  }
+
+  async listMarkedThreads(prId: string, isMarked: (body: string) => boolean): Promise<MarkedThread[]> {
+    const repoSlug = this.getRepoSlug()
+    const raw = await this.fetchComments(prId)
+    const byId = new Map<string, any>(raw.map(c => [String(c.id), c]))
+    const toMarked = (c: any): MarkedComment => ({
+      id: String(c.id),
+      seq: Number(c.id),
+      ...(c.parent?.id ? { parentId: String(c.parent.id) } : {}),
+      body: c.content?.raw ?? '',
+      author: c.user?.display_name ?? 'Unknown',
+      authorIds: this.idsOf(c.user),
+      createdOn: c.created_on ?? '',
+    })
+    const rootIds = new Set<string>()
+    for (const c of raw) if (!c.parent?.id && isMarked(c.content?.raw ?? '')) rootIds.add(String(c.id))
+
+    // Walk parent links at any depth; an absent ancestor (deleted) or a cycle reaches no root.
+    const rootOf = (id: string): string | null => {
+      const seen = new Set<string>()
+      let cur: string | undefined = id
+      while (cur !== undefined) {
+        if (rootIds.has(cur)) return cur
+        if (seen.has(cur)) return null
+        seen.add(cur)
+        const c = byId.get(cur)
+        cur = c?.parent?.id ? String(c.parent.id) : undefined
+      }
+      return null
+    }
+    const children = new Map<string, MarkedComment[]>()
+    for (const c of raw) {
+      const id = String(c.id)
+      if (rootIds.has(id)) continue
+      const root = c.parent?.id ? rootOf(String(c.parent.id)) : null
+      if (root) children.set(root, [...(children.get(root) ?? []), toMarked(c)])
+    }
+    const bySeq = (a: MarkedComment, b: MarkedComment) => a.seq - b.seq
+    return [...rootIds].map(id => {
+      const c = byId.get(id)
+      const prLink = c.pullrequest?.links?.html?.href ?? `https://bitbucket.org/${this.workspace}/${repoSlug}/pull-requests/${prId}`
+      return {
+        root: {
+          ...toMarked(c),
+          url: c.links?.html?.href ?? `${prLink}#comment-${id}`,
+          ...(c.inline?.path ? { inline: { path: String(c.inline.path), ...(typeof c.inline.to === 'number' ? { line: c.inline.to } : {}) } } : {}),
+        },
+        resolved: c.resolution != null,
+        comments: (children.get(id) ?? []).sort(bySeq),
+      }
+    }).sort((a, b) => a.root.seq - b.root.seq)
   }
 
   // Agent id-set/names derived from comment authors during the last getRepliesToReviewComments; the

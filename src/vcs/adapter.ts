@@ -27,6 +27,7 @@ export interface CommentReply {
   author: string
   // Platform account id for usage records only; never part of any model input.
   authorId?: string
+  findingId?: string
   // Set when a human answered a human without @-mentioning the agent: discussion context, never a question to answer.
   contextOnly?: true
   body: string
@@ -79,4 +80,39 @@ export interface VCSAdapter {
   getPrDiffAt?(sourceCommit: string, targetCommit: string): Promise<string>
   /** A commit's parents, first parent first; without it a quiet re-review after a target merge still posts its confirmation. */
   getCommitParents?(commit: string): Promise<string[]>
+  listMarkedThreads?: InlineCapableAdapter["listMarkedThreads"]
+  postInlineComment?: InlineCapableAdapter["postInlineComment"]
+  postTopLevelComment?: InlineCapableAdapter["postTopLevelComment"]
+  postThreadComment?: InlineCapableAdapter["postThreadComment"]
+  editComment?: InlineCapableAdapter["editComment"]
+  getAgentIdentity?: InlineCapableAdapter["getAgentIdentity"]
+}
+
+export interface AgentIdentity { ids: string[]; names: string[] }
+
+export interface PostedComment { id: string; url: string; createdOn: string; authorIds: string[] }
+
+export interface MarkedComment {
+  id: string
+  seq: number
+  parentId?: string
+  body: string
+  author: string
+  authorIds: string[]
+  createdOn: string
+}
+
+export interface MarkedThread {
+  root: MarkedComment & { url: string; inline?: { path: string; line?: number } }
+  resolved: boolean
+  comments: MarkedComment[]
+}
+
+export interface InlineCapableAdapter {
+  listMarkedThreads(prId: string, isMarked: (body: string) => boolean): Promise<MarkedThread[]>
+  postInlineComment(prId: string, anchor: { path: string; line: number }, body: string): Promise<PostedComment>
+  postTopLevelComment(prId: string, body: string): Promise<PostedComment>
+  postThreadComment(prId: string, parentId: string, body: string): Promise<PostedComment>
+  editComment(prId: string, commentId: string, body: string): Promise<void>
+  getAgentIdentity(): Promise<AgentIdentity>
 }

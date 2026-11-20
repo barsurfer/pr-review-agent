@@ -28,6 +28,7 @@ import { ignoredCommentAuthor } from './trigger.js'
 import { headMatches } from './checked-commit.js'
 import { outsideSections, changedPrFiles, narrowDelta, readableDiff, sameHead, diffPaths } from './target-merge.js'
 import { State } from './types.js'
+import { selectInlineEngine } from '../inline/engine.js'
 
 // Supersede boundary: the latest review that isn't human-resolved (a resolved review is dismissed, so it must not bury an unanswered reply); falls back to the last review when all are resolved.
 function supersedeBoundary<T extends { resolved?: boolean }>(reviews: T[]): T | undefined {
@@ -683,7 +684,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       const shown = (s: string) => shownLength(s, config.review.lineNumbers)
       const sizes = () => {
         const files = ctx.fileContexts!.reduce((sum, f) => sum + shown(f.content), 0)
-        const reviews = (ctx.previousReviews ?? []).reduce((sum, r) => sum + r.body.length, 0)
+        const reviews = (ctx.previousReviews ?? []).reduce((sum, r) => sum + r.body.length, 0) + (ctx.inline?.prior?.block.length ?? 0)
         const replies = (ctx.replies ?? []).reduce((sum, r) => sum + r.body.length, 0)
         const prompt = ctx.prompt!.content.length
         const diff = shown(ctx.filteredDiff!)
@@ -763,7 +764,8 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       const cache = ctx.promptCache?.reviewer_marked
         ? { schema: sharedOutputSchema({ lensRecommendation: recommend, alsoAffects: hiBench(ctx), scenario: !!config.review.highImpact, firstPassSites: fpSites(ctx) }), ...(ctx.promptCache.session_id ? { sessionId: ctx.promptCache.session_id } : {}) }
         : undefined
-      const reviewTail: [boolean?, { schema: Record<string, unknown>; sessionId?: string }?] = cache ? [recommend, cache] : recommendTail
+      const reviewTail: [boolean?, { schema: Record<string, unknown>; sessionId?: string }?, { block: string }?] =
+        ctx.inline?.prior ? [recommend, cache, ctx.inline.prior] : cache ? [recommend, cache] : recommendTail
 
       const call = () => runReview(
         config.llmApiKey,
@@ -1427,6 +1429,7 @@ export async function review(adapter: VCSAdapter, prId: string, dryRun = false, 
   const startTime = Date.now()
   const ctx: ReviewContext = {
     adapter, prId, dryRun, promptPath, force, logUsage, repoSlug, outcomeSink, trigger, checkedCommit, startTime,
+    inline: selectInlineEngine(adapter, outcomeSink),
     usage: { input_tokens: 0, output_tokens: 0, cache_read: 0, cache_write: 0 },
     estimatedInputTokens: 0,
     action: 'ERROR',
@@ -1438,7 +1441,7 @@ export async function review(adapter: VCSAdapter, prId: string, dryRun = false, 
   try {
     let state = State.CHECK_TRIGGER
     while (state !== State.DONE) {
-      state = await transition(state, ctx)
+      state = ctx.inline ? await ctx.inline.step(state, ctx, { transition, markHeadChecked, narrowTargetMergeDelta }) : await transition(state, ctx)
     }
   } catch (err: unknown) {
     ctx.action = 'ERROR'

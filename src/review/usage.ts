@@ -21,6 +21,8 @@ import { isCheckedCommitHash } from './checked-commit.js'
 import type { SuggestedFixStats } from './suggested-fix.js'
 import type { ReviewContext, LensRun, EventKind, PassCall, PromptCacheLog, StageUsage } from './types.js'
 import { isAgentReply } from '../vcs/adapter.js'
+import { inlineRecord } from '../inline/record.js'
+import type { InlineRecord } from '../inline/types.js'
 
 // 12 hex chars of sha256 — enough to tell prompt/code versions apart across runs without bloating the record.
 function hash12(s: string): string {
@@ -129,6 +131,7 @@ export interface UsageRecord {
   checked_commit?: string
   dedup_source?: 'checked_commit' | 'target_merge'
   reply_limit_note?: true
+  inline?: InlineRecord
   jenkins: { job: string; build: string; url: string } | null
   trigger?: { event: string | null; comment_author: string | null; event_kind?: EventKind }
   error: { type: string; message: string; status: number | null } | null
@@ -293,22 +296,25 @@ export function buildUsageRecord(
     cache_read: sum.cache_read + (r.usage?.cache_read_input_tokens ?? 0), cache_write: sum.cache_write + (r.usage?.cache_creation_input_tokens ?? 0),
   }), { input: 0, output: 0, cost: 0, cache_read: 0, cache_write: 0 })
   const lensCost = (lensRuns ?? []).reduce((sum, r) => sum + (r.cost_usd ?? 0), 0)
+  // Inline answers run on the reply model, so they leave the reviewer stage and are priced separately.
+  const inlineReply = config.review.inlineReviews ? ctx.inline?.replyUsage : undefined
+  const inlineReplyCost = inlineReply ? ctx.inline?.record().reply_usage?.cost_usd ?? 0 : 0
   // A reply-only run uses the reply model (REPLY_MODEL), so log + cost it at that model, not the reviewer's.
   const recordModel = ctx.action === 'REPLY' && config.reply.model ? config.reply.model : config.anthropic.model
   // Reviewer-only cost: subtract the per-stage actuals from the all-calls actual aggregate when present,
   // else estimate from the reviewer's own tokens. Summing the stages keeps the total consistent
   // with the per-stage columns even when only some calls reported an actual cost (mixed-vendor runs).
   const reviewerTokens: StageTokens = {
-        input: ctx.usage.input_tokens - (judgeTokens?.input ?? 0) - (breadthTokens?.input ?? 0) - (secondLookTokens?.input ?? 0) - lensUsage.input,
-        output: ctx.usage.output_tokens - (judgeTokens?.output ?? 0) - (breadthTokens?.output ?? 0) - (secondLookTokens?.output ?? 0) - lensUsage.output,
+        input: ctx.usage.input_tokens - (judgeTokens?.input ?? 0) - (breadthTokens?.input ?? 0) - (secondLookTokens?.input ?? 0) - lensUsage.input - (inlineReply?.input_tokens ?? 0),
+        output: ctx.usage.output_tokens - (judgeTokens?.output ?? 0) - (breadthTokens?.output ?? 0) - (secondLookTokens?.output ?? 0) - lensUsage.output - (inlineReply?.output_tokens ?? 0),
         ...(cache ? {
-          cache_read: ctx.usage.cache_read - (judgeTokens?.cache_read ?? 0) - (breadthTokens?.cache_read ?? 0) - (secondLookTokens?.cache_read ?? 0) - lensUsage.cache_read,
-          cache_write: ctx.usage.cache_write - (judgeTokens?.cache_write ?? 0) - (breadthTokens?.cache_write ?? 0) - (secondLookTokens?.cache_write ?? 0) - lensUsage.cache_write,
+          cache_read: ctx.usage.cache_read - (judgeTokens?.cache_read ?? 0) - (breadthTokens?.cache_read ?? 0) - (secondLookTokens?.cache_read ?? 0) - lensUsage.cache_read - (inlineReply?.cache_read_input_tokens ?? 0),
+          cache_write: ctx.usage.cache_write - (judgeTokens?.cache_write ?? 0) - (breadthTokens?.cache_write ?? 0) - (secondLookTokens?.cache_write ?? 0) - lensUsage.cache_write - (inlineReply?.cache_creation_input_tokens ?? 0),
         } : {}),
       }
   const reviewCall = cache ? ctx.reviewUsage : undefined
   const reviewerCost = ctx.usage.cost_usd !== undefined
-    ? ctx.usage.cost_usd - (ctx.judgeUsage?.cost_usd ?? 0) - (ctx.breadthUsage?.cost_usd ?? 0) - (ctx.secondLookUsage?.cost_usd ?? 0) - lensUsage.cost
+    ? ctx.usage.cost_usd - (ctx.judgeUsage?.cost_usd ?? 0) - (ctx.breadthUsage?.cost_usd ?? 0) - (ctx.secondLookUsage?.cost_usd ?? 0) - lensUsage.cost - (inlineReply?.cost_usd ?? 0)
     : reviewCall?.attempts
       ? estimateAttemptsCost(reviewCall.attempts, recordModel) + estimateCost({
           input: reviewerTokens.input - reviewCall.input_tokens, output: reviewerTokens.output - reviewCall.output_tokens,
@@ -367,7 +373,7 @@ export function buildUsageRecord(
       estimated_input: ctx.estimatedInputTokens,
       ...(ctx.usage.reasoning ? { reasoning: ctx.usage.reasoning } : {}),
     },
-    cost_usd: reviewerCost + (judgeCost ?? 0) + (breadthCost ?? 0) + (secondLookCost ?? 0) + lensCost,
+    cost_usd: reviewerCost + (judgeCost ?? 0) + (breadthCost ?? 0) + (secondLookCost ?? 0) + lensCost + inlineReplyCost,
     judge_model: judgeModel,
     judge_effort: config.judge.effort || null,
     judge_tokens: judgeTokens,
@@ -455,6 +461,7 @@ export function buildUsageRecord(
     ...(ctx.headChecked && !error && isCheckedCommitHash(ctx.prInfo!.sourceCommit) ? { checked_commit: ctx.prInfo!.sourceCommit } : {}),
     ...(ctx.dedupHit ? { dedup_source: ctx.dedupHit } : {}),
     ...(ctx.replyLimitNote ? { reply_limit_note: true as const } : {}),
+    ...(config.review.inlineReviews ? { inline: inlineRecord(ctx) } : {}),
     jenkins: getJenkinsMeta(),
     // Absent when CI passed no trigger, so those records serialize exactly as before.
     ...(ctx.trigger ? { trigger: { event: ctx.trigger.event || null, comment_author: ctx.trigger.commentAuthor || null, ...(ctx.trigger.kind ? { event_kind: ctx.trigger.kind } : {}) } } : {}),
