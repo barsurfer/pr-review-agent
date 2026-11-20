@@ -49,9 +49,33 @@ describe('reviewbench/Dockerfile baked defaults', () => {
     expect(env).toMatchObject({ JUDGING_MODEL: 'claude-haiku-5-5', REVIEW_EFFORT: 'high', JUDGE_EFFORT: 'high', ENABLE_LENSES: 'true', LENSES: 'rel' })
   })
 
-  it('leaves the test-gap policy and counterpart rows to their labels', () => {
-    expect(env).not.toHaveProperty('ENABLE_JUDGE_KEEP_TEST_GAPS')
-    expect(env).not.toHaveProperty('ENABLE_BENCHMARK_COUNTERPART_ROWS')
+  it('has no literal backslash-n: the whitespace-split parser would still read a mangled continuation, Docker would not', () => {
+    expect(DOCKERFILE).not.toContain('\\n')
+  })
+
+  it('writes each baked flag as its own continued ENV line with the expected $ARG value', () => {
+    const lines = DOCKERFILE.split(/\r?\n/)
+    for (const [key, arg] of [['ENABLE_JUDGE_KEEP_TEST_GAPS', 'JUDGE_KEEP_TEST_GAPS'], ['ENABLE_BENCHMARK_COUNTERPART_ROWS', 'COUNTERPART_ROWS'], ['ENABLE_HIGH_IMPACT', 'HIGH_IMPACT']]) {
+      const i = lines.findIndex(l => l.trim().replace(/\s*\\$/, '') === `${key}=$${arg}`)
+      expect(i, key).toBeGreaterThan(0)
+      expect(lines[i - 1], `${key} must follow a continued line`).toMatch(/\\$/)
+    }
+  })
+
+  it('bakes the test-gap policy, counterpart rows and high-impact on', () => {
+    expect(env).toMatchObject({ ENABLE_JUDGE_KEEP_TEST_GAPS: 'true', ENABLE_BENCHMARK_COUNTERPART_ROWS: 'true', ENABLE_HIGH_IMPACT: 'true' })
+  })
+
+  it('config.ts reads them on, and a 0 label turns each off over the baked env', async () => {
+    for (const [name, value] of Object.entries(env)) vi.stubEnv(name, value)
+    vi.stubEnv('ANTHROPIC_API_KEY', 'test-key')
+    vi.resetModules()
+    const { config } = await import('../config.js')
+    const { applyConfigLabels } = await import('../benchmark.js')
+
+    expect([config.judge.policy.keepTestGaps, config.benchmarkCounterpartRows, config.review.highImpact]).toEqual([true, true, true])
+    applyConfigLabels({ RB_CONFIG_J_TGAP: '0', RB_CONFIG_XROWS: '0', RB_CONFIG_HI: '0' })
+    expect([config.judge.policy.keepTestGaps, config.benchmarkCounterpartRows, config.review.highImpact]).toEqual([false, false, false])
   })
 
   it('config.ts reads the baked env as that judge, those efforts and the reliability lens', async () => {

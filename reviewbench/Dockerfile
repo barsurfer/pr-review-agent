@@ -46,6 +46,10 @@ ARG BREADTH_UNTOUCHED=0
 ARG SECOND_LOOK=true
 # Reliability lens baked on to free its label slot; as with the LENSES label the list is the switch, so an empty value runs no lens.
 ARG LENSES=rel
+# Test-gap policy, counterpart rows and high-impact baked on (settled levers) to free three label slots; the J_TGAP / XROWS / HI labels still turn each off with 0.
+ARG JUDGE_KEEP_TEST_GAPS=true
+ARG COUNTERPART_ROWS=true
+ARG HIGH_IMPACT=true
 ENV ENABLE_JUDGE_KEEP_MINOR=$JUDGE_KEEP_MINOR \
     ENABLE_JUDGE_KEEP_UNVERIFIED=$JUDGE_KEEP_UNVERIFIED \
     ENABLE_JUDGE_FILE_CONTEXT=$JUDGE_FILE_CONTEXT \
@@ -56,7 +60,10 @@ ENV ENABLE_JUDGE_KEEP_MINOR=$JUDGE_KEEP_MINOR \
     BREADTH_MIN_UNTOUCHED=$BREADTH_UNTOUCHED \
     ENABLE_SECOND_LOOK=$SECOND_LOOK \
     ENABLE_LENSES=true \
-    LENSES=$LENSES
+    LENSES=$LENSES \
+    ENABLE_JUDGE_KEEP_TEST_GAPS=$JUDGE_KEEP_TEST_GAPS \
+    ENABLE_BENCHMARK_COUNTERPART_ROWS=$COUNTERPART_ROWS \
+    ENABLE_HIGH_IMPACT=$HIGH_IMPACT
 
 # Runs as root like the reference agents: /work/out is a host mount whose owner we don't control.
 ENTRYPOINT ["node", "/app/entrypoint.mjs"]
