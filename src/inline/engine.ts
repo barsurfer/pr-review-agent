@@ -320,6 +320,7 @@ class Engine implements InlineEngine {
       mode: 'review', nextN: s.state.n + 1, roots: plan.create,
       rootText: r => rootBody({ severity: r.finding.severity, title: r.finding.title, body: r.finding.fix?.body ?? r.finding.body, ...(r.finding.fix ? { fixBlock: r.finding.fix.block } : {}), id: r.id, c12: s.head12, ...(r.was ? { was: r.was } : {}) }),
       answers: replies.answers, notes: replies.notes, buildSummary,
+      coveredByOpen: (r, ids) => mapped.some(m => ids.has(m.entry.id) && matches(m, r.finding, 'open')),
     })
     this.rec.raised_over_resolved = res.posted.filter(p => p.root.was).length
     return this.settle(ctx, res)
@@ -377,7 +378,7 @@ class Engine implements InlineEngine {
     return plan
   }
 
-  private async write(ctx: ReviewContext, deps: InlineDeps, parts: Pick<WriteInput, 'mode' | 'nextN' | 'roots' | 'rootText' | 'answers' | 'notes' | 'buildSummary'>): Promise<WriteResult> {
+  private async write(ctx: ReviewContext, deps: InlineDeps, parts: Pick<WriteInput, 'mode' | 'nextN' | 'roots' | 'rootText' | 'answers' | 'notes' | 'buildSummary' | 'coveredByOpen'>): Promise<WriteResult> {
     const s = this.s!
     try {
       return await writeInline({

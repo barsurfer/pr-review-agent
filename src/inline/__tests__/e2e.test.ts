@@ -233,6 +233,32 @@ describe('human resolution', () => {
     expect(verify(summaries()[0].body, ME)).toEqual({ n: 3, commits: [HEAD12, B12, C12] })
     neverClosed()
   })
+
+  it('a lower-severity thread reopened after planning cancels the re-raise over a still-resolved one', async () => {
+    cfg.review.inlineLowThreads = true
+    reviewerFinds([{ ...POOL, severity: 'LOW' }])
+    await run()
+    rootOf('Pool leaks')[0].resolved = true
+
+    push(HEAD_B)
+    reviewerFinds([{ ...POOL, severity: 'MEDIUM' }])
+    await run()
+    expect(idsOf()).toEqual(['F1', 'F2'])
+    rootOf('Pool leaks').forEach(r => { r.resolved = true })
+
+    push(HEAD_C)
+    reviewerFinds([POOL])
+    const first = rootOf('Pool leaks').find(r => parseRootMarker(r.body)?.id === 'F1')!
+    fake.hooks.commitDiff = () => { first.resolved = false; return DELTA }
+    await run()
+    expect(idsOf()).toEqual(['F1', 'F2'])
+    const body = summaries()[0].body
+    expect(body).not.toContain('F3')
+    expect(body).toContain(`[thread](https://x/c/${first.id})`)
+    expect(body.match(/Pool leaks connections/g)!.length).toBeGreaterThan(0)
+    expect(verify(body, ME)).toEqual({ n: 3, commits: [HEAD12, B12, C12] })
+    neverClosed()
+  })
 })
 
 describe('developer replies', () => {

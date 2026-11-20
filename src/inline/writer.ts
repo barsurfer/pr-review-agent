@@ -36,6 +36,7 @@ export interface WriteInput {
   rootText: (r: PlannedRoot) => string
   answers: readonly PlannedAnswer[]
   notes: readonly PlannedNote[]
+  coveredByOpen?: (root: PlannedRoot, openIds: ReadonlySet<string>) => boolean
   buildSummary?: (r: RootsResult, state: SummaryState) => string
   markHeadChecked: () => void
 }
@@ -148,7 +149,8 @@ export async function writeInline(input: WriteInput): Promise<WriteResult> {
     // A thread reopened since load already carries the finding, so a planned re-raise over it would duplicate.
     const open = new Set(listed.reg.entries.filter(e => !e.resolved).map(e => e.id))
     const plan = input.roots.filter(r => {
-      if (r.was && open.has(r.was)) { res.cancelled.push(r); return false }
+      // Any reopened thread can carry the finding, not only the one it was raised over, so the engine's open-match rule decides.
+      if ((r.was && open.has(r.was)) || input.coveredByOpen?.(r, open)) { res.cancelled.push(r); return false }
       return true
     })
     for (const root of plan) {
@@ -255,6 +257,7 @@ export async function writeInline(input: WriteInput): Promise<WriteResult> {
     const written = await writeSummary(bodyFor, listed.reg.summary, recordHead)
     if (written === 'identity_mismatch') return stop('identity_mismatch')
     if (written === 'concurrent_run') return stop('concurrent_run')
+    if (written === 'head_moved') return stop(moved())
     res.newState = stateFor(headInSummary)
     if (written === 'uncertain') uncertain = true
     else if (headInSummary) { res.headRecorded = true; input.markHeadChecked() }
@@ -263,7 +266,7 @@ export async function writeInline(input: WriteInput): Promise<WriteResult> {
   res.outcome = uncertain ? 'write_uncertain' : input.mode === 'review' ? 'written' : 'replies_only'
   return res
 
-  async function writeSummary(bodyFor: (withHead: boolean) => string, current: Selection, withHead: boolean): Promise<'ok' | 'uncertain' | 'identity_mismatch' | 'concurrent_run'> {
+  async function writeSummary(bodyFor: (withHead: boolean) => string, current: Selection, withHead: boolean): Promise<'ok' | 'uncertain' | 'identity_mismatch' | 'concurrent_run' | 'head_moved'> {
     const fail = (why: string): never => { throw new InlineWriteError(why, { ...res, outcome: uncertain ? 'write_uncertain' : 'write_failed' }) }
     const create = async (): Promise<'ok' | 'uncertain' | 'identity_mismatch'> => {
       let posted: Awaited<ReturnType<WriterAdapter['postTopLevelComment']>>
@@ -305,7 +308,11 @@ export async function writeInline(input: WriteInput): Promise<WriteResult> {
         try { threads = await adapter.listMarkedThreads(prId, isInlineMarked) } catch (e: unknown) { return fail(`Summary edit returned 404 and the re-list failed (${msg(e)})`) }
         const reg = buildRegistry(threads, identity)
         if (reg.status === 'identity_mismatch') return 'identity_mismatch'
-        if (reg.summary.kind === 'none') return create()
+        if (reg.summary.kind === 'none') {
+          // A push can land during the recovery re-list, and a created summary must not describe a stale head.
+          if (await headMoved()) return 'head_moved'
+          return create()
+        }
         return fail('Summary edit returned 404 but the summary still exists')
       }
       if (refused(err)) return fail(`Summary edit refused (${msg(err)})`)

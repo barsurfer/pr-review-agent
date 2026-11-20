@@ -264,6 +264,22 @@ describe('writeInline: concurrency', () => {
     expect(res.posted).toEqual([])
   })
 
+  it('a reopened thread other than the one a root was raised over cancels the root too', async () => {
+    const fake = makeFake()
+    const f1 = fake.add({ body: rootBody({ severity: 'LOW', title: 'Finding 3 title', body: 'x', id: 'F1', c12: A }), authorIds: [ME], inline: { path: 'src/a.ts', line: 3 }, resolved: true })
+    fake.add({ body: rootBody({ severity: 'MEDIUM', title: 'Finding 3 title', body: 'x', id: 'F2', c12: A }), authorIds: [ME], inline: { path: 'src/a.ts', line: 3 }, resolved: true })
+    const input = inputFor(fake, {
+      roots: [planned(3, { was: 'F2' })],
+      coveredByOpen: (r, ids) => ids.has('F1') && r.finding.title === 'Finding 3 title',
+    })
+    fake.comments.find(c => c.id === f1)!.resolved = false
+    const res = await writeInline(input)
+    expect(creates(fake)).toEqual(['summary'])
+    expect(res.cancelled.map(r => r.id)).toEqual(['F3'])
+    expect(res.posted).toEqual([])
+    expect(res.entries.filter(e => !e.resolved).map(e => e.id)).toEqual(['F1'])
+  })
+
   it('the id check refuses a planned id that already exists or repeats', async () => {
     const fake = makeFake()
     fake.add({ body: rootBody({ severity: 'HIGH', title: 'Other', body: 'x', id: 'F1', c12: A }), authorIds: [ME], inline: { path: 'src/b.ts', line: 1 } })
@@ -458,6 +474,32 @@ describe('writeInline: summary writes', () => {
     stays.hooks.failEdit = () => httpErr(404)
     await expect(writeInline(inputFor(stays))).rejects.toThrow(/still exists/)
     expect(stays.calls).not.toContain('summary')
+  })
+
+  it('a push or failed head lookup during the 404 recovery re-list creates no summary', async () => {
+    for (const mode of ['moved', 'lookup_failed'] as const) {
+      const fake = makeFake()
+      const id = withSummary(fake, [A])
+      const input = inputFor(fake)
+      const build = input.buildSummary!
+      input.buildSummary = (r, s) => { const at = fake.comments.findIndex(c => c.id === id); if (at >= 0) fake.comments.splice(at, 1); return build(r, s) }
+      const list = fake.adapter.listMarkedThreads
+      let lists = 0
+      fake.adapter.listMarkedThreads = async (...a) => {
+        const r = await list(...a)
+        if (++lists === 2) {
+          if (mode === 'moved') fake.hooks.head = 'd'.repeat(40)
+          else fake.adapter.getPullRequestInfo = async () => { throw new Error('boom') }
+        }
+        return r
+      }
+      const res = await writeInline(input)
+      expect(res.outcome).toBe(mode === 'moved' ? 'head_moved_skip' : 'head_check_failed')
+      expect(fake.calls).not.toContain('summary')
+      expect(res.summary).toBe('not_written')
+      expect(res.headRecorded).toBe(false)
+      expect(input.headChecked()).toBe(0)
+    }
   })
 
   it('records the head in commits and calls markHeadChecked even when the bundle was uncertain', async () => {
