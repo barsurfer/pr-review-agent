@@ -504,6 +504,13 @@ function getJudgePrompt(): string {
   }
 }
 
+export const JUDGE_OPEN_FINDINGS = `## OPEN FINDINGS ON THIS PR
+
+This is a re-review. The message ends with "Still Open on This PR": findings from earlier reviews whose threads are still open. They are not candidates: never return a decision for them. Decide every candidate exactly as you would without this list; an open finding is never a reason to drop, merge or downgrade a candidate.
+- Step 5 changes: write \`summary\`, \`production_risk\` and \`merge_confidence\` for the PR as a whole, weighing these open findings at their listed severity together with the candidates that survive. Under NARRATIVE FIELDS, open findings count as surviving findings.
+- Treat an open finding as still present unless the diff plainly shows its problem is gone; then say in \`summary\` that it appears fixed and its thread awaits resolution, and leave it out of \`production_risk\`.
+- F ids (e.g. F2) are thread ids, not candidate ids: you may name an open finding by its F id in \`summary\` and \`production_risk\`.`
+
 export async function runJudge(
   apiKey: string,
   model: string,
@@ -517,18 +524,22 @@ export async function runJudge(
   lineNumbers = false,
   breadthFrom?: number,
   options?: JudgeOptions,
+  // Inline only: absent, the judge request stays byte-identical for legacy and the benchmark.
+  open?: { block: string },
 ): Promise<JudgeResult> {
   const parts: string[] = []
   parts.push(renderDiff(diff, lineNumbers))
   if (fileContexts.length > 0) parts.push(renderFileContexts(fileContexts, lineNumbers))
   parts.push(`## Review to Validate:\n${renderCandidatesForJudge(review)}`)
+  if (open) parts.push(open.block)
   const userMessage = parts.join('\n\n')
 
   const quality = !!options?.quality
   const shownAnchors = !!options?.shownAnchors
   const proposals = !!options?.proposals
   const codeProposals = proposals && !!options?.codeProposals
-  const judgePrompt = quality || shownAnchors || proposals ? composeJudgePrompt(getJudgePrompt(), { quality, shownAnchors, proposals, codeProposals }) : getJudgePrompt()
+  const composedPrompt = quality || shownAnchors || proposals ? composeJudgePrompt(getJudgePrompt(), { quality, shownAnchors, proposals, codeProposals }) : getJudgePrompt()
+  const judgePrompt = open ? `${composedPrompt.trimEnd()}\n\n${JUDGE_OPEN_FINDINGS}\n` : composedPrompt
   const schema = judgeOutputSchema(quality, shownAnchors, proposals, codeProposals)
   const callOpts = { model, maxTokens, maxRetries, effort: effort || undefined }
   console.log(`Sending to judge (${model}, maxRetries: ${maxRetries}${fileContexts.length ? `, ${fileContexts.length} context file(s)` : ''})...`)

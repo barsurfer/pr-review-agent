@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { PRInfo } from '../../vcs/adapter.js'
 
 const completeStructured = vi.fn()
@@ -17,14 +17,17 @@ vi.mock('../../context/fetcher.js', () => ({ fetchContext: vi.fn().mockResolvedV
 // bundled.ts imports runReview from client.js, so the mock must be swappable for the real one.
 vi.mock('../../review/client.js', async (importOriginal) => {
   const actual = await importOriginal() as Record<string, unknown>
-  return { ...actual, runReview: vi.fn(), realRunReview: actual.runReview }
+  return { ...actual, runReview: vi.fn(), runJudge: vi.fn(), realRunReview: actual.runReview }
 })
 
 import * as client from '../../review/client.js'
 import { runBundledReview } from '../../review/bundled.js'
+import { config } from '../../config.js'
 
 const realRunReview = (client as unknown as { realRunReview: typeof client.runReview }).realRunReview
 const mockRun = vi.mocked(client.runReview)
+const mockJudge = vi.mocked(client.runJudge)
+const cfg = config as unknown as { judge: { model: string } }
 
 const pr: PRInfo = { id: '1', title: 'T', description: '', author: 'd', sourceBranch: 's', targetBranch: 't', sourceCommit: 'abc123abc123abc' }
 const BLOCK = '## Already Reported on This PR (Review #2, commit a1b2c3d4e5f6):\n[F1] HIGH · a.ts:1 · Thing'
@@ -119,5 +122,56 @@ describe('bundled call', () => {
     mockRun.mockClear()
     await runBundledReview(mkCtx({ prior: { block: 'x'.repeat(1000) }, priorFor: () => undefined }), 1000)
     expect(mockRun.mock.calls.length).toBeGreaterThan(without)
+  })
+})
+
+describe('bundled judge open block', () => {
+  const FILES = ['a/one.ts', 'a/two.ts', 'b/one.ts', 'b/two.ts']
+  const section = (p: string, n: number): string => `diff --git a/${p} b/${p}\n--- a/${p}\n+++ b/${p}\n@@ -1,1 +1,${n} @@\n${Array.from({ length: n }, (_, i) => `+l${i}`).join('\n')}\n`
+  const mkCtx = (inline: unknown) => ({
+    prInfo: pr, prompt, previousReviews: [], replies: [],
+    filteredDiff: FILES.map(p => section(p, 100)).join(''), deltaDiff: '',
+    changedFiles: FILES.map(path => ({ path, status: 'modified' })),
+    adapter: {}, usage: { input_tokens: 0, output_tokens: 0, cache_read: 0, cache_write: 0 }, inline,
+  }) as never
+  const withFinding = { ...object, findings: [{ severity: 'LOW', title: 'T', file: 'a/one.ts', lines: '1', body: 'b' }] }
+  const open = { block: '## Still Open on This PR (Review #2; lines as of commit a1b2c3d4e5f6, the diff above is at b2c3d4e5f6a7, so lines may have moved):\n- F1 · LOW · a/one.ts:1 · T' }
+
+  beforeEach(() => {
+    cfg.judge.model = 'claude-haiku-5-5'
+    mockRun.mockResolvedValue({ text: 'x', usage, review: withFinding } as never)
+    mockJudge.mockReset()
+    mockJudge.mockResolvedValue({ text: 'judged', usage, scores: [], promptHash: 'h', decisions: [], kept: [] } as never)
+  })
+  afterEach(() => { cfg.judge.model = '' })
+
+  it('hands each bundle judge [undefined, quality, open] when the engine has open threads for its files', async () => {
+    for (const quality of [undefined, true]) {
+      mockJudge.mockClear()
+      ;(cfg.judge as { quality?: boolean }).quality = quality
+      const judgeOpenFor = vi.fn((_files: string[]) => open)
+      await runBundledReview(mkCtx({ priorFor: () => undefined, judgeOpenFor }), 1000)
+      expect(mockJudge.mock.calls.length).toBeGreaterThan(1)
+      for (const c of mockJudge.mock.calls) {
+        expect(c).toHaveLength(13)
+        expect(c.slice(10)).toEqual([undefined, quality ? { quality: true } : undefined, open])
+      }
+      expect(judgeOpenFor.mock.calls.every(([files]) => Array.isArray(files) && files.length > 0)).toBe(true)
+    }
+    delete (cfg.judge as { quality?: boolean }).quality
+  })
+
+  it('keeps today\'s tail with no open threads, a priorFor-only stub or no engine', async () => {
+    for (const quality of [undefined, true]) {
+      ;(cfg.judge as { quality?: boolean }).quality = quality
+      const tail = quality ? [undefined, { quality: true }] : []
+      for (const inline of [undefined, { priorFor: () => undefined }, { priorFor: () => undefined, judgeOpenFor: () => undefined }]) {
+        mockJudge.mockClear()
+        await runBundledReview(mkCtx(inline), 1000)
+        expect(mockJudge.mock.calls.length).toBeGreaterThan(1)
+        for (const c of mockJudge.mock.calls) expect(c.slice(10)).toEqual(tail)
+      }
+    }
+    delete (cfg.judge as { quality?: boolean }).quality
   })
 })

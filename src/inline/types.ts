@@ -11,6 +11,8 @@ export interface InlineEngine {
   step(state: State, ctx: ReviewContext, deps: InlineDeps): Promise<State>
   prior?: { block: string }
   priorFor(files: string[]): { block: string } | undefined
+  judgeOpen?: { block: string }
+  judgeOpenFor?(files: string[]): { block: string } | undefined
   replyUsage?: LLMUsage
   record(): InlineRecord
 }

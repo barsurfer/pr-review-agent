@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildPrior, MAX_LIST_ROWS, type PriorItems } from '../reviewer-list.js'
+import { buildPrior, buildOpenList, MAX_LIST_ROWS, type PriorItems } from '../reviewer-list.js'
 import type { ThreadEntry, Listed } from '../types.js'
 
 const e = (k: number, o: Partial<ThreadEntry> = {}): ThreadEntry => ({
@@ -61,5 +61,51 @@ describe('buildPrior', () => {
 
   it('omits the location for a summary-only item without a file', () => {
     expect(buildPrior(items({ summaryOnly: [l({ file: undefined, lines: undefined, gist: '' })] }))!.block).toContain('\n- LOW · Unused helper')
+  })
+})
+
+describe('buildOpenList', () => {
+  const H = 'b2c3d4e5f6a7'
+
+  it('renders the golden block with the head in the header and a capped one-line gist', () => {
+    const long = 'x'.repeat(200)
+    const p = buildOpenList(items({
+      entries: [
+        e(1, { severity: 'LOW', title: 'Minor', gist: 'a\n b', lines: undefined }),
+        e(2, { severity: 'MEDIUM', title: 'Retries 4xx client errors', gist: long, file: 'src/http.ts', lines: '18' }),
+      ],
+    }), H)
+    expect(p!.block).toBe([
+      `## Still Open on This PR (Review #3; lines as of commit a1b2c3d4e5f6, the diff above is at ${H}, so lines may have moved):`,
+      `- F2 · MEDIUM · src/http.ts:18 · Retries 4xx client errors: ${'x'.repeat(159)}…`,
+      '- F1 · LOW · src/api/user.ts · Minor: a b',
+    ].join('\n'))
+  })
+
+  it('leaves out resolved and summary-only rows', () => {
+    const p = buildOpenList(items({ entries: [e(1, { resolved: true }), e(2)], summaryOnly: [l()] }), H)
+    expect(p!.block).toContain('F2')
+    expect(p!.block).not.toContain('F1')
+    expect(p!.block).not.toContain('Unused helper')
+  })
+
+  it('filters by file', () => {
+    const entries = [e(1, { file: 'a.ts' }), e(2, { file: 'b.ts' })]
+    expect(buildOpenList(items({ entries }), H, ['b.ts'])!.block).not.toContain('F1')
+    expect(buildOpenList(items({ entries }), H, ['c.ts'])).toBeUndefined()
+  })
+
+  it('is undefined with zero open threads', () => {
+    expect(buildOpenList(items(), H)).toBeUndefined()
+    expect(buildOpenList(items({ entries: [e(1, { resolved: true })] }), H)).toBeUndefined()
+  })
+
+  it('caps at 40 rows, severe first then newest', () => {
+    const entries = [...Array.from({ length: 45 }, (_, i) => e(i + 1, { severity: 'LOW' })), e(100, { severity: 'HIGH' })]
+    const out = buildOpenList(items({ entries }), H)!.block.split('\n').slice(1)
+    expect(out).toHaveLength(MAX_LIST_ROWS)
+    expect(out[0]).toContain('F100')
+    expect(out[1]).toContain('F45')
+    expect(out.join('\n')).not.toContain('F1 ')
   })
 })

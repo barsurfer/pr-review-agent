@@ -8,7 +8,7 @@ vi.mock('../../llm/provider.js', () => ({
 }))
 
 import { createHash } from 'crypto'
-import { runReview, runJudge, runCommentResponse, runLens, runBreadth, reviewOutputSchema, REVIEW_OUTPUT_SCHEMA, JUDGE_OUTPUT_SCHEMA, BREADTH_OUTPUT_SCHEMA } from '../client.js'
+import { runReview, runJudge, JUDGE_OPEN_FINDINGS, runCommentResponse, runLens, runBreadth, reviewOutputSchema, REVIEW_OUTPUT_SCHEMA, JUDGE_OUTPUT_SCHEMA, BREADTH_OUTPUT_SCHEMA } from '../client.js'
 import { LENS_REGISTRY } from '../lenses.js'
 import { renderReview, buildReviewFooter, buildReplyFooter, type ReviewObject, type ReviewFinding } from '../formatter.js'
 import { renderFixBlock, SUGGESTED_FIX_MARKER } from '../suggested-fix.js'
@@ -552,5 +552,52 @@ describe('authorId never reaches a model', () => {
     const withId = await send(withIds)
     expect(withId).toBe(await send(plain))
     expect(withId).not.toContain('secret-id')
+  })
+})
+
+describe('runJudge open findings (inline re-review)', () => {
+  beforeEach(() => { complete.mockReset(); completeStructured.mockReset() })
+
+  const review: ReviewObject = {
+    summary: 's', findings: [{ severity: 'LOW', title: 'Y', file: 'a.ts', lines: '9', body: 'y body' }],
+    behavioral_diff: [], production_risk: [], unresolved_questions: [],
+  }
+  const judged = {
+    decisions: [{ candidate_id: 'c0', reason_category: 'validated', evidence: 'a.ts:9', note: 'real', score: 7 }],
+    summary: 'ok', behavioral_diff: [], production_risk: [], unresolved_questions: [], merge_confidence: 80,
+  }
+  const open = { block: '## Still Open on This PR (Review #2; lines as of commit a1b2c3d4e5f6, the diff above is at b2c3d4e5f6a7, so lines may have moved):\n- F2 · MEDIUM · a.ts:3 · X' }
+  const sha12 = (s: string) => createHash('sha256').update(s).digest('hex').slice(0, 12)
+
+  it('without open the request is the legacy one and promptHash hashes the unchanged prompt', async () => {
+    completeStructured.mockResolvedValue({ object: judged, usage })
+    const res = await runJudge('key', 'model', 3, 16000, '', 'DIFF', review)
+    const [system, user] = completeStructured.mock.calls[0]
+    expect(system).not.toContain('OPEN FINDINGS')
+    expect(user).not.toContain('Still Open')
+    expect(res.promptHash).toBe(sha12(system))
+  })
+
+  it('appends the addendum after the plain prompt and the block last in the user message', async () => {
+    completeStructured.mockResolvedValue({ object: judged, usage })
+    await runJudge('key', 'model', 3, 16000, '', 'DIFF', review)
+    await runJudge('key', 'model', 3, 16000, '', 'DIFF', review, [], undefined, false, undefined, undefined, open)
+    const [plain, plainUser, plainSchema, plainOpts] = completeStructured.mock.calls[0]
+    const [system, user, schema, opts] = completeStructured.mock.calls[1]
+    expect(system).toBe(`${plain.trimEnd()}\n\n${JUDGE_OPEN_FINDINGS}\n`)
+    expect(user).toBe(`${plainUser}\n\n${open.block}`)
+    expect(schema).toEqual(plainSchema)
+    expect(opts).toEqual(plainOpts)
+  })
+
+  it('appends the addendum after the composed proposals prompt', async () => {
+    completeStructured.mockResolvedValue({ object: judged, usage })
+    const options = { proposals: true, codeProposals: true }
+    await runJudge('key', 'model', 3, 16000, '', 'DIFF', review, [], undefined, false, undefined, options)
+    const res = await runJudge('key', 'model', 3, 16000, '', 'DIFF', review, [], undefined, false, undefined, options, open)
+    const composed = completeStructured.mock.calls[0][0] as string
+    const system = completeStructured.mock.calls[1][0] as string
+    expect(system).toBe(`${composed.trimEnd()}\n\n${JUDGE_OPEN_FINDINGS}\n`)
+    expect(res.promptHash).toBe(sha12(system))
   })
 })

@@ -100,6 +100,7 @@ export function mapLine(map: DeltaMap, file: string, lines: string | undefined):
 
 export interface DeltaMapper {
   map(file: string, lines: string | undefined, base: string): Promise<Mapped | null>
+  delta(base: string): Promise<DeltaMap | null>
 }
 
 // Unmapped (null) covers a failed fetch, the 5-base cap and a deleted file; callers keep the old line and base then.
@@ -122,7 +123,27 @@ export function createDeltaMapper(fetchDelta: (base: string, head: string) => Pr
       const dm = await load(base)
       return dm ? mapLine(dm, file, lines) : null
     },
+    delta: load,
   }
+}
+
+export type CodeSince = 'same' | 'line' | 'file' | 'none' | 'deleted' | 'unknown'
+
+// The row base is the last re-mapped head, so only the marker's commit shows whether the code moved after the finding was written.
+export async function codeSince(mapper: DeltaMapper, anchor: { path: string; line?: number } | undefined, openedAt: string | undefined, head12: string): Promise<CodeSince> {
+  if (openedAt === head12) return 'same'
+  if (!openedAt || !anchor?.path) return 'unknown'
+  const dm = await mapper.delta(openedAt)
+  if (!dm) return 'unknown'
+  const f = dm.get(anchor.path)
+  if (!f) {
+    // Bitbucket may report the post-rename path, which the old-path-keyed map misses; "none" would wrongly mean the code is untouched.
+    return [...dm.values()].some(x => x.newPath === anchor.path) ? 'file' : 'none'
+  }
+  if (f.deleted) return 'deleted'
+  if (f.newPath !== anchor.path) return 'file'
+  if (anchor.line !== undefined && mapLine(dm, anchor.path, String(anchor.line))?.changed) return 'line'
+  return f.hunks.length > 0 ? 'file' : 'none'
 }
 
 export interface Loc { file: string; line?: number; g: number; mapped: boolean }

@@ -43,6 +43,8 @@ Implements the **generator-verifier** pattern: the reviewer model generates cand
 
 By default the judge sees only the diff, while the reviewer also saw full files. That means it can't confirm a claim that rests on unchanged code; such candidates land in `unverifiable`. With `ENABLE_LINE_NUMBERS` (default on) the diff and file context carry the same line-number gutter the reviewer sees (see [fetching/strategy.md](../fetching/strategy.md)).
 
+On inline re-reviews with open threads only, the user message ends with a `## Still Open on This PR (Review #n; lines as of commit <c12>, the diff above is at <head12>, so lines may have moved):` block (rows `- F2 · MEDIUM · file:lines · title: gist`) and the system prompt gets the `## OPEN FINDINGS ON THIS PR` addendum (`JUDGE_OPEN_FINDINGS`). The open findings are not candidates and never change a decision; they only feed `summary`, `production_risk` and `merge_confidence`. Bundled reviews pass each bundle only the open threads in its files. Absent the block (legacy, benchmark, first review, no open threads) the request is byte-identical.
+
 When `ENABLE_NITPICKS` is on (see [composition.md](composition.md)), the reviewer emits more real-but-low-impact candidates (dead code, stale docs/comments, misleading names, duplication, vacuous tests); these classify as `minor`, so they post only under `ENABLE_JUDGE_KEEP_MINOR`.
 
 ---

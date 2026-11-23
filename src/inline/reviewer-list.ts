@@ -18,6 +18,16 @@ function gistOf(l: Listed): string {
   return text ? `${sanitizeTitle(l.title)}: ${text}` : sanitizeTitle(l.title)
 }
 
+export function buildOpenList(items: PriorItems, head12: string, files?: readonly string[]): { block: string } | undefined {
+  const open = items.entries
+    .filter(e => !e.resolved && (!files || files.includes(e.file)))
+    .sort((a, b) => rank(b.severity) - rank(a.severity) || b.k - a.k)
+    .slice(0, MAX_LIST_ROWS)
+  if (open.length === 0) return undefined
+  const rows = open.map(e => `- ${e.id} · ${e.severity} · ${where(e.file, e.lines)}${gistOf(e)}`)
+  return { block: [`## Still Open on This PR (Review #${items.n}; lines as of commit ${items.commit}, the diff above is at ${head12}, so lines may have moved):`, ...rows].join('\n') }
+}
+
 // Open rows keep priority over resolved and summary-only ones, and within each group the most severe and newest stay.
 export function buildPrior(items: PriorItems, files?: readonly string[]): { block: string } | undefined {
   const keep = (file?: string): boolean => !files || (file !== undefined && files.includes(file))

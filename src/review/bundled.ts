@@ -138,7 +138,10 @@ export async function runBundledReview(ctx: ReviewContext, maxInputTokens: numbe
     console.log(`  Reviewer findings: ${found.high}H / ${found.medium}M / ${found.low}L`)
     if (config.judge.model && result.review && found.high + found.medium + found.low > 0) {
       // Shown-context anchors need per-pass provenance a bundle does not carry, so only the quality flag is forwarded here.
-      const judgeTail: [number?, JudgeOptions?] = config.judge.quality ? [undefined, { quality: true }] : []
+      const open = ctx.inline?.judgeOpenFor?.(bundle.files)
+      const judgeTail: [number?, JudgeOptions?, { block: string }?] = open
+        ? [undefined, config.judge.quality ? { quality: true } : undefined, open]
+        : config.judge.quality ? [undefined, { quality: true }] : []
       try {
         const verdict = await runJudge(
           config.llmApiKey, config.judge.model, config.judge.maxRetries, config.anthropic.maxTokens, config.judge.effort,

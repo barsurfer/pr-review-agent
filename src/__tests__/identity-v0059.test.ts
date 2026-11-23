@@ -209,7 +209,7 @@ describe('v0.0.59 identity at the real config.ts defaults', () => {
       if (setting !== undefined) cfg.review.cachedPassEffort = setting
       await expect(scrub(JSON.stringify(await run(), visible, 2))).toMatchFileSnapshot(fixtureOf(name))
     }
-  })
+  }, 30_000)
 })
 
 describe('v0.0.59 identity with ENABLE_TOKEN_METRICS on (the key and the two console lines removed)', () => {

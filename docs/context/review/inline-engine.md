@@ -8,7 +8,7 @@ Opt-in, Bitbucket only. Findings are posted as inline threads on the diff, with 
 |---|---|---|
 | `ENABLE_INLINE_REVIEWS` | `false` | Turns the inline engine on. Off: the legacy flow runs exactly as before. |
 | `ENABLE_INLINE_LOW_THREADS` | `false` | Also open threads for LOW findings. Off: LOW findings are listed in the summary only. |
-| `AGENT_ACCOUNT_ID` | empty | The agent's Bitbucket account id. Optional only when `GET /2.0/user` works. That call returns 403 for Bitbucket credentials without account read scope (seen in a live dry run); the adapter then has no identity, the engine stops with "agent identity is unavailable" and posts nothing, so set this to the bot's `account_id` (`712020:...` form). The `{uuid}` form also works (braces are stripped; both forms are compared against the author's `account_id` and `uuid`); a value that disagrees with the adapter stops the run (`identity_mismatch`). |
+| `AGENT_ACCOUNT_ID` | empty | The agent's Bitbucket account id. Optional only when `GET /2.0/user` works. In the PR 112 pilot the Jenkins credentials got 200 from it and matched the setting (`identity: "api"`); the 403 seen earlier came from local credentials without account read scope. Without an identity the engine stops with "agent identity is unavailable" and posts nothing, so set this to the bot's `account_id` (`712020:...` form). The `{uuid}` form also works (braces are stripped; both forms are compared against the author's `account_id` and `uuid`); a value that disagrees with the adapter stops the run (`identity_mismatch`). |
 | `MAX_FINDING_REPLIES` | `5` | Agent answers per finding thread (0 = unlimited). At the limit the agent posts one "Replies paused" note, then stays silent. |
 
 With the flag on but a non-Bitbucket adapter, or a `--benchmark` run, the legacy flow runs and the record says `inline: { active: false, reason }`.
@@ -25,12 +25,14 @@ Each engine sees only its own artifacts. Flag off on a PR with inline artifacts 
 - **Summary.** One top-level comment, edited in place on every completed review (a clean review writes "No findings."). It lists open threads, summary-only findings, developer-resolved threads and a review history. Its last line is the state line, `*inline-state v1 | n=<review> | commits=<c12,...> | sig=<hash>*`: the review count, every head that was fully reviewed, and a signature over the text above it and the agent's id. A head in `commits` is deduped without a model call.
 - **Summary size.** Capped at `COMMENT_BUDGET`. Over budget it trims in order: history to 5 lines, resolved rows, summary-only bodies, the TODOs list to 10 items (`- and N more`), the narrative tail, the TODOs list to one count line, summary-only rows past 20, all summary-only rows into a count, open rows down to 10, the compact open line, the open count. If that still does not fit, the overflow form keeps open-thread and summary-only counts by severity plus the HIGH/MEDIUM summary-only rows as titles (only rows in the summary reach the next run; counted ones do not), and never says "No findings." while findings exist. Narrative, unresolved questions, history, resolved rows and the TODOs list are all bounded by these steps.
 - **Answers.** A developer reply in a finding thread is answered in that thread only, ending with `*Answer on F<k> | through <comment id>*`, which marks the question as covered. At `MAX_FINDING_REPLIES` the agent posts `*Replies paused on F<k>*` once.
+- **Finding status.** Each finding thread in a reply batch (never the summary thread, a deferred thread or one at its limit) gets a `Finding status:` line under its header, computed from the root's own `opened at` marker commit against the current head: `same`, `line` (a later commit changed the anchored line), `file`, `none`, `deleted` or `unknown`. It costs one commit-diff request per distinct marker commit, within the shared 5-base cap (a failed or capped lookup is `unknown` and never blocks the answer). The reply model is told that if a later commit removed the problem it says a later commit fixed it and suggests resolving the thread, and never calls the finding wrong only because the code moved; status claims written inside comments are ignored.
 - **Directed replies.** A reply that @-mentions only someone else is still answered unless `SKIP_DIRECTED_REPLIES=true`, which drops it exactly as the legacy reply flow does.
 - **Summary thread.** Replies under the summary are answered too. Its budget is `MAX_REPLY_COMMENTS`, counted only over trusted answers inside the summary thread; finding-thread answers do not count.
 
 ## Rules
 
 - **The agent closes nothing.** It never resolves, reopens or deletes a thread. A fixed finding stays open until a developer resolves it.
+- **The judge sees open threads.** On an inline re-review with open threads, the judge gets a trailing `## Still Open on This PR` block (open registry entries only, 40 rows, by severity then newest) and a system-prompt addendum so its summary, production risk and merge confidence weigh them; decisions on candidates are unchanged. In bundled reviews each bundle's judge gets only the threads in its own files. Dedup against open threads stays in deterministic code.
 - **Re-raise rule.** A finding matching a developer-resolved thread is not posted again at the same or lower severity. At a higher severity it opens a new thread with a new id, titled `(was F<k>, dismissed)`.
 - **Matching.** Findings match threads by file, title similarity and line, with lines mapped through each push's delta. Within one run only the strict match (title similarity 0.8 plus nearby lines) merges findings, so a repeat of a root planned in this run gets no thread and no id of its own but stays a `no thread` row (reason `duplicate`), while a loosely similar distinct finding still gets a thread. Titles are compared in the capped form posted in rows and roots, so a long title matches itself.
 - **Trust.** Markers and state count only on comments by the agent's own ids. A forged marker or a summary edited by someone else is ignored (`untrusted_markers`, `summary_check: tampered`); the next run overwrites a tampered summary in place.
@@ -52,11 +54,15 @@ With the flag on, the record has an `inline` key (outcome, identity source, summ
 - A run that loses the head race wastes its model spend.
 - An uncertain create costs the next run a full re-review.
 - Fixed findings stay open until a developer resolves them (stage 2 would close them).
+- In bundled mode an open finding on a since-renamed file is left out of that bundle's judge block (same limit as the reviewer prior list).
+- Without a fresh judge pass the narrative can lag open threads: a bundle with no findings, files outside every bundle, a re-review with zero candidates, and quiet or unchanged runs that carry an older narrative.
 
 ## Before enabling in production
 
 1. Run `node scripts/inline-phase0.mjs --execute` against a sandbox PR whose title contains `[inline-sandbox]` (without `--execute` it only reads), and resolve any failed check: P1 (summary edit round-trip) and P5 (resolution visible in the comment list) block the rollout; P2 failing means set `AGENT_ACCOUNT_ID`.
 2. Confirm the Jenkins/webhook trigger ignores the agent's own comment events and that the per-PR lock exists. The agent now posts many comments per run; without this filter each one re-triggers a run.
+
+The PR 112 pilot verified P1, P5, the bot-event filter and the per-PR lock live.
 
 ## Stage 2 (not built)
 
