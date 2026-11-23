@@ -1,0 +1,380 @@
+{
+  "settings": "Benchmark settings: model=claude-sonnet-5-5 effort=high judge_model=claude-haiku-5-5 judge_effort=high nits=1 j_minor=1 j_unver=1 j_ctx=0 lnum=1 breadth=1 b_files=1 b_untch=0 second_look=1 j_quality=0 sl_breadth=0 j_shown_anchor=0 b_priority=0 sfx=0 j_proposal=0 lenses=rel j_tgap=1 xrows=1 xp_max=128000",
+  "calls": [
+    {
+      "stage": "review",
+      "system": "a1e3b14e248cf068",
+      "user": "1d6ee09d10f195b1",
+      "schema": "80775966efbc2761",
+      "systemAfter": "<undefined>",
+      "opts": {
+        "model": "claude-sonnet-5-5",
+        "maxTokens": 64000,
+        "maxRetries": 1,
+        "effort": "high"
+      }
+    },
+    {
+      "stage": "breadth",
+      "system": "b0877c566ca004ba",
+      "user": "b9fe90fd4ca44227",
+      "schema": "b122defeed9f6cdf",
+      "systemAfter": "<undefined>",
+      "opts": {
+        "model": "claude-haiku-5-5",
+        "maxTokens": 128000,
+        "maxRetries": 1,
+        "effort": "high"
+      }
+    },
+    {
+      "stage": "second_look",
+      "system": "34da140d8f0283cb",
+      "user": "59f4853e0b921ee7",
+      "schema": "b122defeed9f6cdf",
+      "systemAfter": "<undefined>",
+      "opts": {
+        "model": "claude-sonnet-5-5",
+        "maxTokens": 128000,
+        "maxRetries": 1,
+        "effort": "high"
+      }
+    },
+    {
+      "stage": "reliability",
+      "system": "af8724b4afa63962",
+      "user": "9469b4b3031c8138",
+      "schema": "b122defeed9f6cdf",
+      "systemAfter": "<undefined>",
+      "opts": {
+        "model": "claude-sonnet-5-5",
+        "maxTokens": 128000,
+        "maxRetries": 1,
+        "effort": "high"
+      }
+    },
+    {
+      "stage": "judge",
+      "system": "3c4bdfdaba163339",
+      "user": "5224188870aed5b7",
+      "schema": "40f6be83e39a3172",
+      "systemAfter": "<undefined>",
+      "opts": {
+        "model": "claude-haiku-5-5",
+        "maxTokens": 64000,
+        "maxRetries": 1,
+        "effort": "high"
+      }
+    }
+  ],
+  "record": {
+    "run_id": "reviewbench-owner/repo-7-aaa111222333",
+    "vcs": "reviewbench",
+    "workspace": "test",
+    "repo_slug": "owner/repo",
+    "pr_id": "7",
+    "pr_author": "unknown",
+    "source_commit": "aaa1112223334444444444444444444444444444",
+    "source_branch": "head@aaa111222333",
+    "target_branch": "base@ba5e22222222",
+    "changed_files": 2,
+    "changed_lines": 7,
+    "diff_size": {
+      "files": {
+        "added": 1,
+        "modified": 1,
+        "deleted": 0,
+        "renamed": 0
+      },
+      "lines_added": 7,
+      "lines_removed": 0,
+      "reviewable_files": 2,
+      "reviewable_lines_added": 7,
+      "reviewable_lines_removed": 0
+    },
+    "context_files_fetched": 2,
+    "degraded": false,
+    "review_number": 1,
+    "action": "REVIEW",
+    "skip_reason": null,
+    "model": "claude-sonnet-5-5",
+    "effort": "high",
+    "tokens": {
+      "input": 500,
+      "output": 250,
+      "cache_read": 0,
+      "cache_write": 0,
+      "estimated_input": 4442
+    },
+    "cost_usd": 0.0021,
+    "judge_model": "claude-haiku-5-5",
+    "judge_effort": "high",
+    "judge_tokens": {
+      "input": 100,
+      "output": 50
+    },
+    "judge_cost_usd": 0,
+    "dry_run": false,
+    "force": "off",
+    "prompt_source": "stack:typescript-node",
+    "prompt_hash": "a1e3b14e248c",
+    "judge_prompt_hash": "3c4bdfdaba16",
+    "judge_status": "succeeded",
+    "verdict_score": 70,
+    "computed_score": 80,
+    "review_findings": {
+      "high": 0,
+      "medium": 1,
+      "low": 1
+    },
+    "findings": {
+      "high": 1,
+      "medium": 2,
+      "low": 1
+    },
+    "finding_scores": [
+      {
+        "title": "Race on conns",
+        "severity": "MEDIUM",
+        "score": 8,
+        "file": "src/pool.ts",
+        "lines": "2-3"
+      },
+      {
+        "title": "Cache never evicts",
+        "severity": "MEDIUM",
+        "score": 8,
+        "file": "src/cache.ts",
+        "lines": "1"
+      },
+      {
+        "title": "Double put on retry",
+        "severity": "HIGH",
+        "score": 8,
+        "file": "src/pool.ts",
+        "lines": "4"
+      },
+      {
+        "title": "pop on empty",
+        "severity": "LOW",
+        "score": 8,
+        "file": "src/pool.ts",
+        "lines": "3"
+      }
+    ],
+    "min_finding_score": 8,
+    "anchored_findings": [
+      {
+        "anchor": "src/pool.ts:2-3",
+        "severity": "MEDIUM",
+        "type": "other",
+        "description": "get/put mutate conns without a lock; take() in src/cache.ts:3 hands out the same conn."
+      },
+      {
+        "anchor": "src/cache.ts:1",
+        "severity": "MEDIUM",
+        "type": "other",
+        "description": "Unbounded map."
+      },
+      {
+        "anchor": "src/pool.ts:4",
+        "severity": "HIGH",
+        "type": "other",
+        "description": "A retried put pushes twice."
+      },
+      {
+        "anchor": "src/pool.ts:3",
+        "severity": "LOW",
+        "type": "other",
+        "description": "Returns undefined."
+      }
+    ],
+    "review_candidates": [
+      {
+        "id": "c0",
+        "origin": "review",
+        "severity": "MEDIUM",
+        "type": null,
+        "title": "Race on conns",
+        "file": "src/pool.ts",
+        "lines": "2-3",
+        "body": "get/put mutate conns without a lock; take() in src/cache.ts:3 hands out the same conn."
+      },
+      {
+        "id": "c1",
+        "origin": "review",
+        "severity": "LOW",
+        "type": null,
+        "title": "Unused take export",
+        "file": "src/cache.ts",
+        "lines": "2",
+        "body": "Nothing imports take."
+      },
+      {
+        "id": "c2",
+        "origin": "breadth",
+        "severity": "MEDIUM",
+        "type": null,
+        "title": "Cache never evicts",
+        "file": "src/cache.ts",
+        "lines": "1",
+        "body": "Unbounded map."
+      },
+      {
+        "id": "c3",
+        "origin": "second_look",
+        "severity": "HIGH",
+        "type": null,
+        "title": "Double put on retry",
+        "file": "src/pool.ts",
+        "lines": "4",
+        "body": "A retried put pushes twice."
+      },
+      {
+        "id": "c4",
+        "origin": "lens:reliability",
+        "severity": "LOW",
+        "type": null,
+        "title": "pop on empty",
+        "file": "src/pool.ts",
+        "lines": "3",
+        "body": "Returns undefined."
+      }
+    ],
+    "judge_decisions": [
+      {
+        "candidate_id": "c0",
+        "reason_category": "validated",
+        "reclassified_from": null,
+        "action": "keep",
+        "original_severity": "MEDIUM",
+        "final_severity": "MEDIUM",
+        "score": 8,
+        "evidence": "src/pool.ts:2",
+        "note": "ok",
+        "rewritten": false,
+        "anchor_source": "reviewer",
+        "anchor_file": "src/pool.ts",
+        "anchor_lines": "2-3"
+      },
+      {
+        "candidate_id": "c1",
+        "reason_category": "incorrect",
+        "reclassified_from": null,
+        "action": "drop",
+        "original_severity": "LOW",
+        "final_severity": null,
+        "score": 8,
+        "evidence": "src/pool.ts:2",
+        "note": "ok",
+        "rewritten": false,
+        "anchor_source": "reviewer",
+        "anchor_file": "src/cache.ts",
+        "anchor_lines": "2"
+      },
+      {
+        "candidate_id": "c2",
+        "reason_category": "validated",
+        "reclassified_from": null,
+        "action": "keep",
+        "original_severity": "MEDIUM",
+        "final_severity": "MEDIUM",
+        "score": 8,
+        "evidence": "src/pool.ts:2",
+        "note": "ok",
+        "rewritten": false,
+        "anchor_source": "reviewer",
+        "anchor_file": "src/cache.ts",
+        "anchor_lines": "1"
+      },
+      {
+        "candidate_id": "c3",
+        "reason_category": "validated",
+        "reclassified_from": null,
+        "action": "keep",
+        "original_severity": "HIGH",
+        "final_severity": "HIGH",
+        "score": 8,
+        "evidence": "src/pool.ts:2",
+        "note": "ok",
+        "rewritten": false,
+        "anchor_source": "reviewer",
+        "anchor_file": "src/pool.ts",
+        "anchor_lines": "4"
+      },
+      {
+        "candidate_id": "c4",
+        "reason_category": "validated",
+        "reclassified_from": null,
+        "action": "keep",
+        "original_severity": "LOW",
+        "final_severity": "LOW",
+        "score": 8,
+        "evidence": "src/pool.ts:2",
+        "note": "ok",
+        "rewritten": false,
+        "anchor_source": "reviewer",
+        "anchor_file": "src/pool.ts",
+        "anchor_lines": "3"
+      }
+    ],
+    "judge_anomalies": {
+      "unknown_ids": 0,
+      "undecided": 0,
+      "duplicate_ids": 0,
+      "drop_without_evidence": 0
+    },
+    "judge_policy": {
+      "keep_minor": true,
+      "keep_unverified": true,
+      "file_context": false,
+      "keep_test_gaps": true
+    },
+    "breadth_status": "succeeded",
+    "breadth_model": "claude-haiku-5-5",
+    "breadth_prompt_hash": "b0877c566ca0",
+    "breadth_tokens": {
+      "input": 100,
+      "output": 50
+    },
+    "breadth_cost_usd": 0,
+    "second_look_status": "succeeded",
+    "second_look_prompt_hash": "34da140d8f02",
+    "second_look_tokens": {
+      "input": 100,
+      "output": 50
+    },
+    "second_look_cost_usd": 0.0007,
+    "lens_runs": [
+      {
+        "name": "reliability",
+        "status": "succeeded",
+        "model": "claude-sonnet-5-5",
+        "prompt_hash": "af8724b4afa6",
+        "tokens": {
+          "input": 100,
+          "output": 50
+        },
+        "cost_usd": 0.0007,
+        "findings": 1
+      }
+    ],
+    "counterpart_rows": 1,
+    "untouched_files": {
+      "count": 0,
+      "paths": [],
+      "cut": 0
+    },
+    "recall_levers": {
+      "j_quality": false,
+      "sl_breadth": false,
+      "j_shown_anchor": false,
+      "b_priority": false
+    },
+    "touch_rate": null,
+    "delta": null,
+    "jenkins": null,
+    "error": null
+  },
+  "findings": "{\n  \"pr\": {\n    \"repo\": \"https://github.com/owner/repo\",\n    \"pr_number\": 7,\n    \"base\": \"ba5e222222222222222222222222222222222222\",\n    \"head\": \"aaa1112223334444444444444444444444444444\"\n  },\n  \"agent\": \"my-agent\",\n  \"findings\": [\n    {\n      \"file\": \"src/pool.ts\",\n      \"start_line\": 2,\n      \"end_line\": 3,\n      \"message\": \"Race on conns: get/put mutate conns without a lock; take() in src/cache.ts:3 hands out the same conn.\",\n      \"producer\": \"my-agent\"\n    },\n    {\n      \"file\": \"src/cache.ts\",\n      \"start_line\": 1,\n      \"end_line\": 1,\n      \"message\": \"Cache never evicts: Unbounded map.\",\n      \"producer\": \"my-agent\"\n    },\n    {\n      \"file\": \"src/pool.ts\",\n      \"start_line\": 4,\n      \"end_line\": 4,\n      \"message\": \"Double put on retry: A retried put pushes twice.\",\n      \"producer\": \"my-agent\"\n    },\n    {\n      \"file\": \"src/pool.ts\",\n      \"start_line\": 3,\n      \"end_line\": 3,\n      \"message\": \"pop on empty: Returns undefined.\",\n      \"producer\": \"my-agent\"\n    },\n    {\n      \"file\": \"src/cache.ts\",\n      \"start_line\": 3,\n      \"end_line\": 3,\n      \"message\": \"Race on conns: get/put mutate conns without a lock; take() in src/cache.ts:3 hands out the same conn.\",\n      \"producer\": \"my-agent\"\n    }\n  ]\n}\n"
+}

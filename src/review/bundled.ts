@@ -25,7 +25,7 @@ export type BundledOutcome = { ok: true } | { ok: false; reason: string }
 
 export async function runBundledReview(ctx: ReviewContext, maxInputTokens: number): Promise<BundledOutcome> {
   const prInfo = ctx.prInfo!
-  const hist = [...(ctx.previousReviews ?? []), ...(ctx.replies ?? [])].reduce((n, r) => n + r.body.length, 0)
+  const hist = [...(ctx.previousReviews ?? []), ...(ctx.replies ?? [])].reduce((n, r) => n + r.body.length, 0) + (ctx.inline?.prior?.block.length ?? 0)
   const fixed = tok(ctx.prompt!.content.length + BUNDLE_NOTE_RESERVE_CHARS + prInfo.title.length + (prInfo.description?.length ?? 0) + hist)
   const target = Math.floor(maxInputTokens * FIT_RATIO)
   const diffBudget = target - fixed
@@ -80,6 +80,10 @@ export async function runBundledReview(ctx: ReviewContext, maxInputTokens: numbe
     }
     content += `\n\n## BUNDLED REVIEW\nThis PR is too large for one pass. You are reviewing bundle ${i + 1} of ${plan.bundles.length}; the diff contains only: ${bundle.files.slice(0, 40).join(', ')}${bundle.files.length > 40 ? ', ...' : ''}. Review only these files and do not flag code you cannot see. Leave \`can_be_split\` empty.`
 
+    const prior = ctx.inline?.priorFor(bundle.files)
+    // Padding (false, undefined) keeps `prior` at argument 16 without enabling the recommendation or cache.
+    const inlineTail: [boolean?, { schema: Record<string, unknown>; sessionId?: string }?, { block: string }?] = prior ? [false, undefined, prior] : []
+
     // Same backstop as CALL_MODEL: the chars/4 estimate can under-count, so on a context-length
     // rejection drop this bundle's file contexts and retry diff-only; if the diff alone won't fit,
     // leave the bundle unreviewed (surfaced under Unresolved Questions) rather than fail the PR.
@@ -90,7 +94,7 @@ export async function runBundledReview(ctx: ReviewContext, maxInputTokens: numbe
           const answer = await runReview(
             config.llmApiKey, config.anthropic.model, config.anthropic.maxRetries, config.anthropic.maxTokens, config.review.effort,
             prInfo, diff, bundleContexts, { ...ctx.prompt!, content }, ctx.previousReviews ?? [], ctx.replies ?? [], delta,
-            config.review.lineNumbers,
+            config.review.lineNumbers, ...inlineTail,
           )
           recordPassCall(ctx, 'review', config.anthropic.maxTokens, undefined, answer.usage)
           return answer

@@ -6,6 +6,7 @@ import { detectStacks } from './stack.js'
 import { DEFAULT_ROLE, DEFAULT_REVIEW_PRIORITIES, DEFAULT_SECURITY, DEFAULT_MENTAL_MODEL, DEFAULT_EXCEPTIONS } from './defaults.js'
 import { config } from '../config.js'
 import { describeHttpError } from '../vcs/http-retry.js'
+import { defaultTokenEstimator } from '../review/token-estimator.js'
 
 const REPO_PROMPT_FILE = '.agent-review-instructions.md'
 
@@ -168,7 +169,7 @@ export function validateLocalPrompt(path: string): void {
   const sections = parseRepoPrompt(content)
   logSections(sections)
   const filled = fillTemplate(template, sections)
-  console.log(`\nFilled prompt length: ${filled.length} chars (~${Math.ceil(filled.length / 4).toLocaleString()} tokens)`)
+  console.log(`\nFilled prompt length: ${filled.length} chars (~${defaultTokenEstimator.estimate(filled.length).toLocaleString()} tokens)`)
 }
 
 function looksLikeSymlink(content: string): boolean {

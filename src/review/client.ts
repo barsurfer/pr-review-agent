@@ -194,8 +194,9 @@ export async function runReview(
   lineNumbers = false,
   lensRecommendation = false,
   cache?: { schema: Record<string, unknown>; sessionId?: string },
+  prior?: { block: string },
 ): Promise<ModelResult> {
-  const userMessage = buildUserMessage(prInfo, diff, fileContexts, previousReviews, developerReplies, changesSinceLastReview, lineNumbers)
+  const userMessage = buildUserMessage(prInfo, diff, fileContexts, previousReviews, developerReplies, changesSinceLastReview, lineNumbers, prior?.block)
 
   console.log(`Sending request to the model (${model}, maxRetries: ${maxRetries})...`)
   const callOpts = { model, maxTokens, maxRetries, effort: effort || undefined }
@@ -439,6 +440,7 @@ function buildUserMessage(
   developerReplies: CommentReply[],
   changesSinceLastReview = '',
   lineNumbers = false,
+  priorBlock?: string,
 ): string {
   const parts: string[] = []
 
@@ -449,7 +451,9 @@ function buildUserMessage(
     parts.push(`## Description:\n${prInfo.description}`)
   }
 
-  if (previousReviews.length > 0) {
+  if (priorBlock) {
+    parts.push(priorBlock)
+  } else if (previousReviews.length > 0) {
     const latest = previousReviews[previousReviews.length - 1]
     parts.push(`## Previous Review by This Agent (latest of ${previousReviews.length} total):`)
     parts.push('This is the most recent review posted on an earlier revision of this PR. Acknowledge what was fixed, do not repeat issues that are now resolved, and call out anything still unaddressed.')
@@ -461,7 +465,7 @@ function buildUserMessage(
     parts.push(`## Developer Discussion on Previous Review(s):`)
     parts.push('Below is the conversation thread from previous reviews, including developer replies and the agent\'s own prior responses. IMPORTANT: If the agent previously acknowledged a finding as a false positive or accepted a developer\'s explanation, do NOT re-raise that finding. Treat the agent\'s prior conclusions as settled unless the new code changes invalidate them.')
     for (const r of developerReplies) {
-      parts.push(`**${r.author}** (${r.createdOn}):\n> ${stripOwnSuggestedFixes(r.body, 'reply')}`)
+      parts.push(`**${r.author}**${r.findingId ? ` [${r.findingId}]` : ''} (${r.createdOn}):\n> ${stripOwnSuggestedFixes(r.body, 'reply')}`)
     }
   }
 
@@ -470,7 +474,7 @@ function buildUserMessage(
   // The full diff above is the whole PR vs target — it doesn't mark which lines are new since the
   // last review, so on re-reviews scope the actual changes so fixes are visible without inferring
   // them from the previous review's prose.
-  if (changesSinceLastReview && previousReviews.length > 0) {
+  if (changesSinceLastReview && (previousReviews.length > 0 || priorBlock)) {
     parts.push(`## Changes Since Your Last Review:\nThe diff below is ONLY the lines changed since your previous review above — use it to see exactly what was added or fixed. Credit findings these changes resolve, and assess anything new. The complete PR diff is above for full context.\n\`\`\`diff\n${lineNumbers ? numberDiffLines(changesSinceLastReview) : changesSinceLastReview}\n\`\`\``)
   }
 
@@ -542,7 +546,7 @@ export async function runJudge(
   }
 }
 
-function getReplyPrompt(): string {
+export function getReplyPrompt(): string {
   try {
     const __dir = dirname(fileURLToPath(import.meta.url))
     return readFileSync(join(__dir, '..', 'prompt', 'reply-prompt.txt'), 'utf-8')

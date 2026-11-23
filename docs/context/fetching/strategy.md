@@ -58,6 +58,8 @@ If the estimated input exceeds `MAX_INPUT_TOKENS` in `ESTIMATE_TOKENS`, the agen
 
 `ESTIMATE_TOKENS` always logs a **per-section token breakdown** (`prompt / diff / delta / files ×N / prev_reviews ×N / replies ×N`, ~chars/4) so an over-budget run shows which section drove the size — a large diff vs many file contexts vs a long review/reply history. The breakdown is also included in the skip reason (so `results.jsonl` records the why).
 
+The estimate lives in `TokenEstimator` (`src/review/token-estimator.ts`, default instance `defaultTokenEstimator`) and is `chars / 4`, rounded up once per summed total. Known limitation: it undercounts real Claude 5.x input by about 1.7x (measured: 69,720 estimated vs 119,054 real; 43,390 vs 70,666; 21,012 vs 34,772), so `MAX_INPUT_TOKENS` effectively allows about 1.7x its value and Haiku's 100k price tier is reached near an estimate of 60k.
+
 ### Limits
 
 | Env var | Default | Purpose |

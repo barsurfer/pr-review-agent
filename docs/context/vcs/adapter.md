@@ -175,6 +175,12 @@ interface ReplyResult {
 
 ---
 
+## Inline reviews (stage 1)
+
+Optional adapter methods used only by the opt-in inline engine (`ENABLE_INLINE_REVIEWS`, Bitbucket only; see [../review/inline-engine.md](../review/inline-engine.md)): `postInlineComment`, `postTopLevelComment`, `postThreadComment`, `editComment`, `getAgentIdentity` and `listMarkedThreads`. The engine runs only when all are present; any other adapter keeps the legacy flow. Posts return the author ids so the engine can check every create. There is no resolve or reopen method: the agent closes nothing.
+
+---
+
 ## Phase 4: Inline Comment Extension (Deferred)
 
 ```typescript

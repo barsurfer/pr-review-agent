@@ -13,6 +13,7 @@ import { review } from './review/index.js'
 import { resolveTrigger } from './review/trigger.js'
 import { resolveCheckedCommit } from './review/checked-commit.js'
 import { cliOrEnv } from './review/cli-value.js'
+import { defaultTokenEstimator } from './review/token-estimator.js'
 import { validateLocalPrompt, loadPrompt } from './prompt/loader.js'
 import { runBenchmark } from './benchmark.js'
 import { resolveContextWindows } from './llm/context-window.js'
@@ -211,7 +212,7 @@ async function main(): Promise<void> {
     const changedFiles = await adapter.getChangedFiles(opts.prId!)
     const diff = await adapter.getDiff(opts.prId!)   // import-based stack overlays need the diff, as in a real run
     const result = await loadPrompt(adapter, prInfo, undefined, changedFiles, diff)
-    console.log(`\nFilled prompt length: ${result.content.length} chars (~${Math.ceil(result.content.length / 4).toLocaleString()} tokens)`)
+    console.log(`\nFilled prompt length: ${result.content.length} chars (~${defaultTokenEstimator.estimate(result.content.length).toLocaleString()} tokens)`)
     return
   }
 
