@@ -381,3 +381,26 @@ describe('characterization: an explicit undefined checked commit is the same run
     expect(await runScenario(SCENARIOS[name], true)).toEqual(nineArgs)
   })
 })
+
+describe('characterization: ENABLE_TOKEN_METRICS on is the same run', () => {
+  const METRIC_LINE = /^(log|warn|error): (Token metrics:|  Long-context tier:)/
+  const withMetrics = (s: Scenario): Scenario => ({ ...s, setup: () => { s.setup?.(); cfg.tokenMetrics = true } })
+  const seen: string[] = []
+
+  it.each(Object.keys(SCENARIOS))('%s', async (name) => {
+    const off = await runScenario(SCENARIOS[name])
+    const on = await runScenario(withMetrics(SCENARIOS[name]))
+    const metrics = (on.record as Record<string, unknown> | null)?.token_metrics
+    if (metrics !== undefined) seen.push(name)
+    // Absent only where the run ended before any estimate or model call, so a silently-off feature cannot pass everywhere.
+    const measured = on.model.length > 0 || on.console.some(l => /Estimated input/.test(l))
+    if (measured) expect(metrics, 'the setting must add the key').toBeDefined()
+    if (on.record) delete on.record.token_metrics
+
+    expect({ ...on, console: on.console.filter(l => !METRIC_LINE.test(l)) }).toEqual(off)
+  })
+
+  it('adds the key on at least one scenario', () => {
+    expect(seen.length).toBeGreaterThan(0)
+  })
+})

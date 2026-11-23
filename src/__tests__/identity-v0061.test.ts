@@ -437,3 +437,25 @@ describe('v0.0.61 identity at the real config.ts defaults', () => {
     }
   }, 60_000)
 })
+
+describe('v0.0.61 identity with ENABLE_TOKEN_METRICS on (the key and the two console lines removed)', () => {
+  it.each(SCENARIOS)('%s', async (name, _action, run) => {
+    cfg.tokenMetrics = true
+    const captured = await run() as any
+    const rows = captured.record.token_metrics?.calls
+    const made = (captured.calls?.length ?? 0) + (captured.completes?.length ?? 0)
+    const lines = logSpy.mock.calls.map(c => c.join(' ')).filter(l => l.startsWith('Token metrics:'))
+    // A skip before any estimate or call has nothing to measure, so the key stays absent.
+    if (made === 0 && captured.record.action === 'DEDUP_SKIP') {
+      expect(captured.record.token_metrics).toBeUndefined()
+      expect(lines).toHaveLength(0)
+    } else {
+      expect(captured.record.token_metrics, 'the setting must add the key').toBeDefined()
+      expect(rows.length).toBe(made)
+      expect(lines).toHaveLength(1)
+    }
+    delete captured.record.token_metrics
+    // Read-only compare: unlike toMatchFileSnapshot it can never write or rewrite a fixture.
+    expect(scrub(JSON.stringify(captured, visible, 2))).toBe(readFileSync(new URL(fixtureOf(name), import.meta.url), 'utf-8').replace(/\r\n/g, '\n'))
+  })
+})
