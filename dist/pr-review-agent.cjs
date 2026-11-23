@@ -3443,9 +3443,9 @@ var require_cli_options = __commonJS({
     var re = /^dotenv_config_(encoding|path|quiet|debug|override|DOTENV_KEY)=(.+)$/;
     module2.exports = function optionMatcher(args) {
       const options = args.reduce(function(acc, cur) {
-        const matches = cur.match(re);
-        if (matches) {
-          acc[matches[1]] = matches[2];
+        const matches2 = cur.match(re);
+        if (matches2) {
+          acc[matches2[1]] = matches2[2];
         }
         return acc;
       }, {});
@@ -12389,10 +12389,10 @@ var require_abort = __commonJS({
     init_define_STACK_PROMPTS();
     module2.exports = abort;
     function abort(state) {
-      Object.keys(state.jobs).forEach(clean.bind(state));
+      Object.keys(state.jobs).forEach(clean2.bind(state));
       state.jobs = {};
     }
-    function clean(key) {
+    function clean2(key) {
       if (typeof this.jobs[key] == "function") {
         this.jobs[key]();
       }
@@ -12705,7 +12705,7 @@ var require_sign = __commonJS({
     "use strict";
     init_define_STACK_PROMPTS();
     var $isNaN = require_isNaN();
-    module2.exports = function sign(number) {
+    module2.exports = function sign2(number) {
       if ($isNaN(number) || number === 0) {
         return number;
       }
@@ -13087,7 +13087,7 @@ var require_get_intrinsic = __commonJS({
     var min = require_min();
     var pow = require_pow();
     var round = require_round();
-    var sign = require_sign();
+    var sign2 = require_sign();
     var $Function = Function;
     var getEvalledConstructor = function(expressionSyntax) {
       try {
@@ -13201,7 +13201,7 @@ var require_get_intrinsic = __commonJS({
       "%Math.min%": min,
       "%Math.pow%": pow,
       "%Math.round%": round,
-      "%Math.sign%": sign,
+      "%Math.sign%": sign2,
       "%Reflect.getPrototypeOf%": $ReflectGPO
     };
     if (getProto) {
@@ -13307,8 +13307,8 @@ var require_get_intrinsic = __commonJS({
         throw new $SyntaxError("invalid intrinsic syntax, expected opening `%`");
       }
       var result = [];
-      $replace(string, rePropName, function(match, number, quote, subString) {
-        result[result.length] = quote ? $replace(subString, reEscapeChar, "$1") : number || match;
+      $replace(string, rePropName, function(match, number, quote2, subString) {
+        result[result.length] = quote2 ? $replace(subString, reEscapeChar, "$1") : number || match;
       });
       return result;
     };
@@ -14690,9 +14690,9 @@ var require_parse_proxy_response = __commonJS({
             read();
             return;
           }
-          const firstLine = buffered.toString("ascii", 0, buffered.indexOf("\r\n"));
-          const statusCode = +firstLine.split(" ")[1];
-          debug("got proxy server response: %o", firstLine);
+          const firstLine2 = buffered.toString("ascii", 0, buffered.indexOf("\r\n"));
+          const statusCode = +firstLine2.split(" ")[1];
+          debug("got proxy server response: %o", firstLine2);
           resolve4({
             statusCode,
             buffered
@@ -14802,7 +14802,7 @@ var require_agent = __commonJS({
           }
           const headers = Object.assign({}, proxy.headers);
           const hostname = `${opts2.host}:${opts2.port}`;
-          let payload = `CONNECT ${hostname} HTTP/1.1\r
+          let payload2 = `CONNECT ${hostname} HTTP/1.1\r
 `;
           if (proxy.auth) {
             headers["Proxy-Authorization"] = `Basic ${Buffer.from(proxy.auth).toString("base64")}`;
@@ -14814,11 +14814,11 @@ var require_agent = __commonJS({
           headers.Host = host;
           headers.Connection = "close";
           for (const name of Object.keys(headers)) {
-            payload += `${name}: ${headers[name]}\r
+            payload2 += `${name}: ${headers[name]}\r
 `;
           }
           const proxyResponsePromise = parse_proxy_response_1.default(socket);
-          socket.write(`${payload}\r
+          socket.write(`${payload2}\r
 `);
           const { statusCode, buffered } = yield proxyResponsePromise;
           if (statusCode === 200) {
@@ -15511,15 +15511,15 @@ var init_error = __esm({
         this.type = type ?? null;
       }
       static makeMessage(status, error, message) {
-        const msg = error?.message ? typeof error.message === "string" ? error.message : JSON.stringify(error.message) : error ? JSON.stringify(error) : message;
-        if (status && msg) {
-          return `${status} ${msg}`;
+        const msg2 = error?.message ? typeof error.message === "string" ? error.message : JSON.stringify(error.message) : error ? JSON.stringify(error) : message;
+        if (status && msg2) {
+          return `${status} ${msg2}`;
         }
         if (status) {
           return `${status} status code (no body)`;
         }
-        if (msg) {
-          return msg;
+        if (msg2) {
+          return msg2;
         }
         return "(no status code or body)";
       }
@@ -18328,12 +18328,12 @@ var init_headers = __esm({
     clearSentinel = /* @__PURE__ */ Symbol("clear");
     APPEND_HEADERS = /* @__PURE__ */ new Set(["x-stainless-helper"]);
     appendHeaderValue = (existing, addition) => {
-      const tokens2 = existing ? existing.split(",").map((t) => t.trim()).filter(Boolean) : [];
+      const tokens3 = existing ? existing.split(",").map((t) => t.trim()).filter(Boolean) : [];
       for (const tok of addition.split(",").map((t) => t.trim())) {
-        if (tok && !tokens2.includes(tok))
-          tokens2.push(tok);
+        if (tok && !tokens3.includes(tok))
+          tokens3.push(tok);
       }
-      return tokens2.join(", ");
+      return tokens3.join(", ");
     };
     buildHeaders = (newHeaders) => {
       const targetHeaders = new Headers();
@@ -19302,9 +19302,9 @@ var require_timing_safe_equal = __commonJS({
     init_define_STACK_PROMPTS();
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.timingSafeEqual = void 0;
-    function assert(expr, msg = "") {
+    function assert(expr, msg2 = "") {
       if (!expr) {
-        throw new Error(msg);
+        throw new Error(msg2);
       }
     }
     function timingSafeEqual(a, b) {
@@ -20018,7 +20018,7 @@ var require_dist2 = __commonJS({
           this.key = base64.decode(secret);
         }
       }
-      verify(payload, headers_) {
+      verify(payload2, headers_) {
         const headers = {};
         for (const key of Object.keys(headers_)) {
           headers[key.toLowerCase()] = headers_[key];
@@ -20030,7 +20030,7 @@ var require_dist2 = __commonJS({
           throw new WebhookVerificationError("Missing required headers");
         }
         const timestamp = this.verifyTimestamp(msgTimestamp);
-        const computedSignature = this.sign(msgId, timestamp, payload);
+        const computedSignature = this.sign(msgId, timestamp, payload2);
         const expectedSignature = computedSignature.split(",")[1];
         const passedSignatures = msgSignature.split(" ");
         const encoder = new globalThis.TextEncoder();
@@ -20040,21 +20040,21 @@ var require_dist2 = __commonJS({
             continue;
           }
           if ((0, timing_safe_equal_1.timingSafeEqual)(encoder.encode(signature), encoder.encode(expectedSignature))) {
-            return JSON.parse(payload.toString());
+            return JSON.parse(payload2.toString());
           }
         }
         throw new WebhookVerificationError("No matching signature found");
       }
-      sign(msgId, timestamp, payload) {
-        if (typeof payload === "string") {
-        } else if (payload.constructor.name === "Buffer") {
-          payload = payload.toString();
+      sign(msgId, timestamp, payload2) {
+        if (typeof payload2 === "string") {
+        } else if (payload2.constructor.name === "Buffer") {
+          payload2 = payload2.toString();
         } else {
           throw new Error("Expected payload to be of type string or Buffer.");
         }
         const encoder = new TextEncoder();
         const timestampNumber = Math.floor(timestamp.getTime() / 1e3);
-        const toSign = encoder.encode(`${msgId}.${timestampNumber}.${payload}`);
+        const toSign = encoder.encode(`${msgId}.${timestampNumber}.${payload2}`);
         const expectedSignature = base64.encode(sha256.hmac(this.key, toSign));
         return `v1,${expectedSignature}`;
       }
@@ -21863,10 +21863,10 @@ var init_file_store = __esm({
             throw new FileStoreError(FileStoreError.NOT_A_FILE, relPath);
           }
           const dest = this.resolveUnderRoot(relPath);
-          const payload = typeof data === "string" ? encodeUTF83(data) : data;
-          this.requireUtf8(relPath, payload);
+          const payload2 = typeof data === "string" ? encodeUTF83(data) : data;
+          this.requireUtf8(relPath, payload2);
           await makeDirsBelowRoot(this.rootPath, path.dirname(dest));
-          await replaceViaTemp(dest, payload, opts2?.executable ?? false);
+          await replaceViaTemp(dest, payload2, opts2?.executable ?? false);
         }
         /** The file's bytes; `null` when absent. */
         async get(relPath) {
@@ -21977,9 +21977,9 @@ var init_file_store = __esm({
           }
         }
         resolveUnderRoot(relPath) {
-          const norm = relPath.replace(/\\/g, "/").replace(/^\/+/, "");
-          const parts = norm.split("/").filter((p) => p !== "" && p !== ".");
-          if (path.posix.isAbsolute(norm) || parts.includes("..")) {
+          const norm2 = relPath.replace(/\\/g, "/").replace(/^\/+/, "");
+          const parts = norm2.split("/").filter((p) => p !== "" && p !== ".");
+          if (path.posix.isAbsolute(norm2) || parts.includes("..")) {
             throw new FileStoreError(FileStoreError.ESCAPES_ROOT, relPath);
           }
           return parts.length === 0 ? this.rootPath : path.join(this.rootPath, ...parts);
@@ -23066,7 +23066,7 @@ function betaGlobTool(ctx) {
       }
       const root = searchPath ? await resolvePath2(ctx, searchPath) : path3.resolve(ctx.workdir);
       const realRoot = searchPath ? root : await canonicalize(root);
-      const matches = [];
+      const matches2 = [];
       let remaining = WALK_MAX_ENTRIES;
       try {
         for await (const entry of fsGlob(pattern, {
@@ -23092,15 +23092,15 @@ function betaGlobTool(ctx) {
             mtime = (await fs4.stat(full)).mtimeMs;
           } catch {
           }
-          matches.push({ path: full, mtime });
+          matches2.push({ path: full, mtime });
         }
       } catch (e) {
         throw new ToolError(`glob: ${e instanceof Error ? e.message : String(e)}`);
       }
-      if (matches.length === 0)
+      if (matches2.length === 0)
         return "no matches";
-      matches.sort((a, b) => b.mtime - a.mtime);
-      return matches.slice(0, GLOB_RESULT_LIMIT).map((m) => m.path).join("\n");
+      matches2.sort((a, b) => b.mtime - a.mtime);
+      return matches2.slice(0, GLOB_RESULT_LIMIT).map((m) => m.path).join("\n");
     }
   });
 }
@@ -25133,7 +25133,7 @@ var init_parser = __esm({
     init_define_STACK_PROMPTS();
     tokenize2 = (input) => {
       let current = 0;
-      let tokens2 = [];
+      let tokens3 = [];
       while (current < input.length) {
         let char = input[current];
         if (char === "\\") {
@@ -25141,7 +25141,7 @@ var init_parser = __esm({
           continue;
         }
         if (char === "{") {
-          tokens2.push({
+          tokens3.push({
             type: "brace",
             value: "{"
           });
@@ -25149,7 +25149,7 @@ var init_parser = __esm({
           continue;
         }
         if (char === "}") {
-          tokens2.push({
+          tokens3.push({
             type: "brace",
             value: "}"
           });
@@ -25157,7 +25157,7 @@ var init_parser = __esm({
           continue;
         }
         if (char === "[") {
-          tokens2.push({
+          tokens3.push({
             type: "paren",
             value: "["
           });
@@ -25165,7 +25165,7 @@ var init_parser = __esm({
           continue;
         }
         if (char === "]") {
-          tokens2.push({
+          tokens3.push({
             type: "paren",
             value: "]"
           });
@@ -25173,7 +25173,7 @@ var init_parser = __esm({
           continue;
         }
         if (char === ":") {
-          tokens2.push({
+          tokens3.push({
             type: "separator",
             value: ":"
           });
@@ -25181,7 +25181,7 @@ var init_parser = __esm({
           continue;
         }
         if (char === ",") {
-          tokens2.push({
+          tokens3.push({
             type: "delimiter",
             value: ","
           });
@@ -25211,7 +25211,7 @@ var init_parser = __esm({
           if (danglingQuote) {
             current = input.length;
           } else {
-            tokens2.push({
+            tokens3.push({
               type: "string",
               value: input.slice(start, end)
             });
@@ -25237,7 +25237,7 @@ var init_parser = __esm({
             value += char;
             char = input[++current];
           }
-          tokens2.push({
+          tokens3.push({
             type: "number",
             value,
             unterminated: current === input.length
@@ -25255,7 +25255,7 @@ var init_parser = __esm({
             char = input[++current];
           }
           if (value == "true" || value == "false" || value === "null") {
-            tokens2.push({
+            tokens3.push({
               type: "name",
               value
             });
@@ -25267,11 +25267,11 @@ var init_parser = __esm({
         }
         current++;
       }
-      return tokens2;
+      return tokens3;
     };
-    strip = (tokens2) => {
+    strip = (tokens3) => {
       let open = [];
-      for (const token of tokens2) {
+      for (const token of tokens3) {
         if (token.type === "brace" || token.type === "paren") {
           if (token.value === "{" || token.value === "[") {
             open.push(token.value);
@@ -25281,10 +25281,10 @@ var init_parser = __esm({
         }
       }
       let innermostOpenBracket = open[open.length - 1];
-      let length = tokens2.length;
+      let length = tokens3.length;
       let JSON_NUMBER = /^-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][-+]?[0-9]+)?$/;
       while (length > 0) {
-        let lastToken = tokens2[length - 1];
+        let lastToken = tokens3[length - 1];
         switch (lastToken.type) {
           case "separator":
             length--;
@@ -25296,7 +25296,7 @@ var init_parser = __esm({
             }
             break;
           case "string":
-            let tokenBeforeTheLastToken = tokens2[length - 2];
+            let tokenBeforeTheLastToken = tokens3[length - 2];
             if (innermostOpenBracket === "{" && (tokenBeforeTheLastToken?.type === "delimiter" || tokenBeforeTheLastToken?.type === "brace" && tokenBeforeTheLastToken.value === "{")) {
               length--;
               continue;
@@ -25308,11 +25308,11 @@ var init_parser = __esm({
         }
         break;
       }
-      return tokens2.slice(0, length);
+      return tokens3.slice(0, length);
     };
-    unstrip = (tokens2) => {
+    unstrip = (tokens3) => {
       let tail = [];
-      tokens2.map((token) => {
+      tokens3.map((token) => {
         if (token.type === "brace") {
           if (token.value === "{") {
             tail.push("}");
@@ -25331,23 +25331,23 @@ var init_parser = __esm({
       if (tail.length > 0) {
         tail.reverse().map((item) => {
           if (item === "}") {
-            tokens2.push({
+            tokens3.push({
               type: "brace",
               value: "}"
             });
           } else if (item === "]") {
-            tokens2.push({
+            tokens3.push({
               type: "paren",
               value: "]"
             });
           }
         });
       }
-      return tokens2;
+      return tokens3;
     };
-    generate = (tokens2) => {
+    generate = (tokens3) => {
       let output = "";
-      tokens2.map((token) => {
+      tokens3.map((token) => {
         switch (token.type) {
           case "string":
             output += '"' + token.value + '"';
@@ -35547,8 +35547,8 @@ var init_client = __esm({
             onCacheWriteError: (err) => {
               loggerFor(this).debug("credential cache write failed (best-effort)", err);
             },
-            onSafetyWarning: (msg) => {
-              loggerFor(this).warn(msg);
+            onSafetyWarning: (msg2) => {
+              loggerFor(this).warn(msg2);
             }
           };
         }
@@ -36270,6 +36270,9 @@ function cachedPassEffort() {
 function finiteOr(value, fallback) {
   return Number.isFinite(value) ? value : fallback;
 }
+function nonNegativeOr(value, fallback) {
+  return Number.isFinite(value) && value >= 0 ? value : fallback;
+}
 function positiveOr(value, fallback) {
   return Number.isFinite(value) && value > 0 ? value : fallback;
 }
@@ -36396,7 +36399,9 @@ var config = {
     // Off by default (Bitbucket only): skip replying to a dev comment @-directed solely at someone else.
     skipDirectedElsewhere: optional("SKIP_DIRECTED_REPLIES", "false") === "true",
     // Off by default: a new review resets the reply budget, and a question that meets the limit gets a one-time note.
-    limitPerReview: optional("ENABLE_REPLY_LIMIT_PER_REVIEW", "false") === "true"
+    limitPerReview: optional("ENABLE_REPLY_LIMIT_PER_REVIEW", "false") === "true",
+    // Inline engine only: per-thread answer budget; unset, malformed or negative falls back to 5, 0 = unlimited.
+    maxFindingReplies: nonNegativeOr(parseInt(optional("MAX_FINDING_REPLIES", "5"), 10), 5)
   },
   trigger: {
     event: optional("TRIGGER_EVENT", "").trim(),
@@ -36405,6 +36410,12 @@ var config = {
   },
   triggerEventKind: optional("TRIGGER_EVENT_KIND", "").trim(),
   review: {
+    // Off by default: findings become inline threads plus one signed summary (Bitbucket only) instead of the legacy review comment.
+    inlineReviews: optional("ENABLE_INLINE_REVIEWS", "false") === "true",
+    // Off by default: LOW findings also get inline threads instead of summary-only rows.
+    inlineLowThreads: optional("ENABLE_INLINE_LOW_THREADS", "false") === "true",
+    // Overrides the adapter's identity lookup; empty = use the lookup.
+    inlineAgentAccountId: optional("AGENT_ACCOUNT_ID", "").trim(),
     maxFindings: parseInt(optional("MAX_FINDINGS", "0"), 10),
     // 0 = unlimited
     splitCheck: optional("ENABLE_SPLIT_CHECK", "true") !== "false",
@@ -36851,10 +36862,10 @@ var forEachEntry = (obj, fn) => {
   }
 };
 var matchAll = (regExp, str) => {
-  let matches;
+  let matches2;
   const arr = [];
-  while ((matches = regExp.exec(str)) !== null) {
-    arr.push(matches);
+  while ((matches2 = regExp.exec(str)) !== null) {
+    arr.push(matches2);
   }
   return arr;
 };
@@ -37156,13 +37167,13 @@ function normalizeValue(value) {
   return utils_default.isArray(value) ? value.map(normalizeValue) : sanitizeHeaderValue(String(value));
 }
 function parseTokens(str) {
-  const tokens2 = /* @__PURE__ */ Object.create(null);
+  const tokens3 = /* @__PURE__ */ Object.create(null);
   const tokensRE = /([^\s,;=]+)\s*(?:=\s*([^,;]+))?/g;
   let match;
   while (match = tokensRE.exec(str)) {
-    tokens2[match[1]] = match[2];
+    tokens3[match[1]] = match[2];
   }
-  return tokens2;
+  return tokens3;
 }
 var parameterNameRE = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
 function trimOWS(value) {
@@ -40877,8 +40888,8 @@ var xhr_default = isXHRAdapterSupported && function(config2) {
       request = null;
     };
     request.onerror = function handleError(event) {
-      const msg = event && event.message ? event.message : "Network Error";
-      const err = new AxiosError_default(msg, AxiosError_default.ERR_NETWORK, config2, request);
+      const msg2 = event && event.message ? event.message : "Network Error";
+      const err = new AxiosError_default(msg2, AxiosError_default.ERR_NETWORK, config2, request);
       err.event = event || null;
       reject(err);
       done();
@@ -42058,8 +42069,8 @@ function spread(callback) {
 
 // node_modules/axios/lib/helpers/isAxiosError.js
 init_define_STACK_PROMPTS();
-function isAxiosError(payload) {
-  return utils_default.isObject(payload) && payload.isAxiosError === true;
+function isAxiosError(payload2) {
+  return utils_default.isObject(payload2) && payload2.isAxiosError === true;
 }
 
 // node_modules/axios/lib/helpers/HttpStatusCode.js
@@ -42246,8 +42257,8 @@ function stripPreamble(text) {
 }
 var REVIEW_FOOTER_SOURCE = String.raw`^\*Reviewed by .+ \(.+\) \| Prompt: .+ \| (?:Review #\d+|\[Review #\d+\]\([^)]+\)) \| Commit: ([0-9a-f]+)( \| Build: [\w.-]+)?\*$`;
 function extractCommitHash(body) {
-  const matches = [...body.matchAll(new RegExp(REVIEW_FOOTER_SOURCE, "gm"))];
-  return matches.length ? matches[matches.length - 1][1] : null;
+  const matches2 = [...body.matchAll(new RegExp(REVIEW_FOOTER_SOURCE, "gm"))];
+  return matches2.length ? matches2[matches2.length - 1][1] : null;
 }
 function legacyCommitHash(body) {
   const match = body.match(/Commit: ([a-f0-9]+)/);
@@ -42276,8 +42287,8 @@ var SCENARIOS = ["install", "feature_off", "repeat", "old_data", "order", "contr
 var bullets = (items) => items.map((i) => `- ${i}`).join("\n");
 var listOrNone = (items) => items.length ? bullets(items) : "None.";
 function renderFinding(f, tag = "", suffix = "") {
-  const loc = f.file ? ` (\`${f.file}${f.lines ? `:${f.lines}` : ""}\`)` : "";
-  return `- ${tag}**${f.severity} \u2013 ${f.title}**${loc}
+  const loc2 = f.file ? ` (\`${f.file}${f.lines ? `:${f.lines}` : ""}\`)` : "";
+  return `- ${tag}**${f.severity} \u2013 ${f.title}**${loc2}
   ${f.body}${suffix}`;
 }
 function renderReview(r, opts2 = {}) {
@@ -42730,6 +42741,97 @@ var BitbucketAdapter = class {
       `/repositories/${this.workspace}/${repoSlug}/pullrequests/${prId}/comments`,
       { parent: { id: Number(parentId) }, content: { raw: body } }
     );
+  }
+  // Both id forms, so the identity check matches whichever one the setting or /user carries.
+  idsOf(user) {
+    const ids = [];
+    if (user?.account_id) ids.push(String(user.account_id));
+    if (user?.uuid) ids.push(String(user.uuid).replace(/[{}]/g, ""));
+    return ids;
+  }
+  async createComment(prId, payload2) {
+    const repoSlug = this.getRepoSlug();
+    const { data } = await this.client.post(
+      `/repositories/${this.workspace}/${repoSlug}/pullrequests/${prId}/comments`,
+      payload2
+    );
+    const id = String(data.id);
+    const prLink = data.pullrequest?.links?.html?.href ?? `https://bitbucket.org/${this.workspace}/${repoSlug}/pull-requests/${prId}`;
+    return { id, url: data.links?.html?.href ?? `${prLink}#comment-${id}`, createdOn: data.created_on ?? "", authorIds: this.idsOf(data.user) };
+  }
+  async postInlineComment(prId, anchor, body) {
+    return this.createComment(prId, { content: { raw: body }, inline: { path: anchor.path, to: anchor.line } });
+  }
+  async postTopLevelComment(prId, body) {
+    return this.createComment(prId, { content: { raw: body } });
+  }
+  async postThreadComment(prId, parentId, body) {
+    return this.createComment(prId, { parent: { id: Number(parentId) }, content: { raw: body } });
+  }
+  async editComment(prId, commentId, body) {
+    const repoSlug = this.getRepoSlug();
+    await this.client.put(
+      `/repositories/${this.workspace}/${repoSlug}/pullrequests/${prId}/comments/${commentId}`,
+      { content: { raw: body } }
+    );
+  }
+  async getAgentIdentity() {
+    try {
+      const { data } = await this.client.get("/user");
+      const names = [...new Set([data?.display_name, data?.nickname].filter(Boolean).map((n) => String(n).toLowerCase()))];
+      return { ids: this.idsOf(data), names };
+    } catch {
+      return { ids: [], names: [] };
+    }
+  }
+  async listMarkedThreads(prId, isMarked) {
+    const repoSlug = this.getRepoSlug();
+    const raw = await this.fetchComments(prId);
+    const byId = new Map(raw.map((c) => [String(c.id), c]));
+    const toMarked = (c) => ({
+      id: String(c.id),
+      seq: Number(c.id),
+      ...c.parent?.id ? { parentId: String(c.parent.id) } : {},
+      body: c.content?.raw ?? "",
+      author: c.user?.display_name ?? "Unknown",
+      authorIds: this.idsOf(c.user),
+      createdOn: c.created_on ?? ""
+    });
+    const rootIds = /* @__PURE__ */ new Set();
+    for (const c of raw) if (!c.parent?.id && isMarked(c.content?.raw ?? "")) rootIds.add(String(c.id));
+    const rootOf = (id) => {
+      const seen = /* @__PURE__ */ new Set();
+      let cur = id;
+      while (cur !== void 0) {
+        if (rootIds.has(cur)) return cur;
+        if (seen.has(cur)) return null;
+        seen.add(cur);
+        const c = byId.get(cur);
+        cur = c?.parent?.id ? String(c.parent.id) : void 0;
+      }
+      return null;
+    };
+    const children = /* @__PURE__ */ new Map();
+    for (const c of raw) {
+      const id = String(c.id);
+      if (rootIds.has(id)) continue;
+      const root = c.parent?.id ? rootOf(String(c.parent.id)) : null;
+      if (root) children.set(root, [...children.get(root) ?? [], toMarked(c)]);
+    }
+    const bySeq = (a, b) => a.seq - b.seq;
+    return [...rootIds].map((id) => {
+      const c = byId.get(id);
+      const prLink = c.pullrequest?.links?.html?.href ?? `https://bitbucket.org/${this.workspace}/${repoSlug}/pull-requests/${prId}`;
+      return {
+        root: {
+          ...toMarked(c),
+          url: c.links?.html?.href ?? `${prLink}#comment-${id}`,
+          ...c.inline?.path ? { inline: { path: String(c.inline.path), ...typeof c.inline.to === "number" ? { line: c.inline.to } : {} } } : {}
+        },
+        resolved: c.resolution != null,
+        comments: (children.get(id) ?? []).sort(bySeq)
+      };
+    }).sort((a, b) => a.root.seq - b.root.seq);
   }
   // Agent id-set/names derived from comment authors during the last getRepliesToReviewComments; the
   // caller can only add to the set. Empty set (no identity resolved) fails safe: keep everything + warn.
@@ -43728,7 +43830,7 @@ var GitHubAdapter = class {
 
 // src/review/index.ts
 init_define_STACK_PROMPTS();
-var import_crypto4 = require("crypto");
+var import_crypto5 = require("crypto");
 
 // src/review/breadth-pass.ts
 init_define_STACK_PROMPTS();
@@ -44430,6 +44532,20 @@ var DEFAULT_MENTAL_MODEL = `- Production load
 - It is 3am`;
 var DEFAULT_EXCEPTIONS = "No repo-specific exceptions. Apply all rules as written.";
 
+// src/review/token-estimator.ts
+init_define_STACK_PROMPTS();
+var TokenEstimator = class {
+  constructor(charsPerToken = 4) {
+    this.charsPerToken = charsPerToken;
+  }
+  charsPerToken;
+  // Callers sum chars first, then estimate once: per-part ceilings would not add up to the same total.
+  estimate(chars) {
+    return Math.ceil(chars / this.charsPerToken);
+  }
+};
+var defaultTokenEstimator = new TokenEstimator();
+
 // src/prompt/loader.ts
 var import_meta = {};
 var REPO_PROMPT_FILE = ".agent-review-instructions.md";
@@ -44544,7 +44660,7 @@ function validateLocalPrompt(path4) {
   logSections(sections2);
   const filled = fillTemplate(template, sections2);
   console.log(`
-Filled prompt length: ${filled.length} chars (~${Math.ceil(filled.length / 4).toLocaleString()} tokens)`);
+Filled prompt length: ${filled.length} chars (~${defaultTokenEstimator.estimate(filled.length).toLocaleString()} tokens)`);
 }
 function looksLikeSymlink(content) {
   const trimmed = content.trim();
@@ -44591,8 +44707,8 @@ async function loadPrompt(adapter2, prInfo, localPromptPath, changedFiles, diff)
       return await (found && lookupRetry ? adapter2.getRepoFileContent(path4, ref, { found: true }) : adapter2.getRepoFileContent(path4, ref));
     } catch (err) {
       lookupFailed = true;
-      const where = describeHttpError(err);
-      console.warn(`Warning: lookup of ${REPO_PROMPT_FILE} failed (${err.message}${where ? `; ${where}` : ""}) - continuing without repo instructions`);
+      const where2 = describeHttpError(err);
+      console.warn(`Warning: lookup of ${REPO_PROMPT_FILE} failed (${err.message}${where2 ? `; ${where2}` : ""}) - continuing without repo instructions`);
       return null;
     }
   };
@@ -44820,22 +44936,22 @@ var OpenRouterProvider = class {
   }
   async completeStructured(system, user, schema, opts2) {
     const response_format = { type: "json_schema", json_schema: { name: "result", schema, strict: false } };
-    const payload = { model: opts2.model, max_tokens: opts2.maxTokens, response_format, messages: openRouterMessages(system, user, opts2.systemAfter, opts2.effortAfter) };
+    const payload2 = { model: opts2.model, max_tokens: opts2.maxTokens, response_format, messages: openRouterMessages(system, user, opts2.systemAfter, opts2.effortAfter) };
     const cached = cacheAware() || hasCachePart(user);
-    const first = await this.structuredAttempt(payload, schema, opts2, cached);
+    const first = await this.structuredAttempt(payload2, schema, opts2, cached);
     const strict = !!opts2.keepEffort || !!config.review?.cachedPassEffort;
     const reported = (a) => (opts2.effortAfter !== void 0 || !!opts2.keepEffort) && a.reasoning !== void 0 ? { final_reasoning_tokens: a.reasoning } : {};
     if (!first.missing.length) return { object: first.object, usage: { ...first.usage, ...reported(first) } };
     console.warn(`  Structured output from ${opts2.model} missing ${first.missing.join(", ")} \u2014 retrying once`);
-    const second = await this.structuredAttempt(payload, schema, opts2, cached).catch((err) => {
+    const second = await this.structuredAttempt(payload2, schema, opts2, cached).catch((err) => {
       throw withPriorUsage(err, first.usage, strict);
     });
     const usage = sumUsage(first.usage, second.usage, strict);
     if (second.missing.length) throw Object.assign(new Error(`Structured output missing required field(s): ${second.missing.join(", ")}`), { usage });
     return { object: second.object, usage: { ...usage, ...reported(second) } };
   }
-  async structuredAttempt(payload, schema, opts2, cached) {
-    const data = await this.request(payload, opts2);
+  async structuredAttempt(payload2, schema, opts2, cached) {
+    const data = await this.request(payload2, opts2);
     const text = contentOf(firstChoice(data, opts2.maxTokens, cached));
     let object;
     try {
@@ -44846,7 +44962,7 @@ var OpenRouterProvider = class {
     const reasoning = data.usage?.completion_tokens_details?.reasoning_tokens;
     return { object, usage: mapOpenRouterUsage(data.usage, cached), missing: missingRequired(object, schema, true, opts2.tolerateMissing), ...typeof reasoning === "number" ? { reasoning } : {} };
   }
-  async request(payload, opts2) {
+  async request(payload2, opts2) {
     const url2 = `${config.openrouter.baseUrl.replace(/\/+$/, "")}/chat/completions`;
     const headers = {
       Authorization: `Bearer ${this.apiKey}`,
@@ -44854,7 +44970,7 @@ var OpenRouterProvider = class {
       ...config.openrouter.referer ? { "HTTP-Referer": config.openrouter.referer } : {},
       ...config.openrouter.title ? { "X-OpenRouter-Title": config.openrouter.title } : {}
     };
-    const body = { ...payload, usage: { include: true }, ...config.repoSlug ? { user: config.repoSlug } : {}, ...opts2.sessionId ? { session_id: opts2.sessionId } : {} };
+    const body = { ...payload2, usage: { include: true }, ...config.repoSlug ? { user: config.repoSlug } : {}, ...opts2.sessionId ? { session_id: opts2.sessionId } : {} };
     if (!opts2.effort) return this.send(url2, headers, body, opts2);
     return this.send(url2, headers, { ...body, reasoning: { effort: opts2.effort } }, opts2).catch((err) => {
       if (isReasoningRejection(err) && !opts2.keepEffort) {
@@ -45269,7 +45385,7 @@ function entryIndex(changedFiles, diff) {
   }
   return { changedFiles, changedPaths: changedFiles.map((f) => f.path), added };
 }
-function placeEntry(parent, entry, where, ix, isDuplicate, accepted) {
+function placeEntry(parent, entry, where2, ix, isDuplicate, accepted) {
   if (!isAnchored(parent)) return "parent_unanchored";
   const hit = resolveMention(String(entry.file ?? ""), ix.changedFiles);
   if (!hit) return "unresolved_path";
@@ -45281,13 +45397,13 @@ function placeEntry(parent, entry, where, ix, isDuplicate, accepted) {
   const fileAdded = ix.added.get(hit.path) ?? [];
   if (hit.status === "added" && end > (fileAdded.at(-1) ?? 0)) return "bad_lines";
   if (!fileAdded.some((l) => l >= start && l <= end)) return "not_changed_line";
-  if (!where) return "bad_where";
+  if (!where2) return "bad_where";
   if (isDuplicate({ file: hit.path, start, end })) return "duplicate";
   if (accepted >= ALSO_AFFECTS_CAP) return "over_cap";
   return { file: hit.path, start, end };
 }
-var copyRowMessage = (parent, where, whereNote) => {
-  const note = whereNote ? ` Same defect here: ${where.replace(/[.;:,]+$/, "").slice(0, 120)}.` : "";
+var copyRowMessage = (parent, where2, whereNote) => {
+  const note = whereNote ? ` Same defect here: ${where2.replace(/[.;:,]+$/, "").slice(0, 120)}.` : "";
   return parent.body ? `${parent.title}: ${parent.body}${note}` : note ? `${parent.title}:${note}` : parent.title;
 };
 function alsoAffectsRows(placed, copies, changedFiles, diff, producer, whereNote = ALSO_AFFECTS_WHERE_NOTE) {
@@ -45305,13 +45421,13 @@ function alsoAffectsRows(placed, copies, changedFiles, diff, producer, whereNote
     const sameIssue2 = (title) => normTitle(title) === normTitle(parent.title) || titlesOverlap(title, parent.title);
     const isDuplicate = (p) => taken.some((t) => t.file === p.file && t.start <= p.end && p.start <= t.end && sameIssue2(t.title));
     for (const entry of parent.alsoAffects ?? []) {
-      const where = String(entry.where ?? "").replace(/\s+/g, " ").trim();
-      const place = placeEntry(parent, entry, where, ix, isDuplicate, accepted);
-      log.push({ parent: parent.title, file: String(entry.file ?? ""), lines: String(entry.lines ?? ""), where, status: typeof place === "string" ? place : "row" });
+      const where2 = String(entry.where ?? "").replace(/\s+/g, " ").trim();
+      const place = placeEntry(parent, entry, where2, ix, isDuplicate, accepted);
+      log.push({ parent: parent.title, file: String(entry.file ?? ""), lines: String(entry.lines ?? ""), where: where2, status: typeof place === "string" ? place : "row" });
       if (typeof place === "string") continue;
       accepted++;
       taken.push({ ...place, title: parent.title });
-      rows.push({ file: place.file, start_line: place.start, end_line: place.end, message: copyRowMessage(parent, where, whereNote), producer });
+      rows.push({ file: place.file, start_line: place.start, end_line: place.end, message: copyRowMessage(parent, where2, whereNote), producer });
     }
   }
   return { rows, log };
@@ -45325,13 +45441,13 @@ function firstPassSiteRows(placed, priorRows, changedFiles, diff, producer, wher
   for (const parent of placed) {
     let accepted = 0;
     for (const site of parent.sites ?? []) {
-      const where = String(site.where ?? "").replace(/\s+/g, " ").trim();
-      const place = placeEntry(parent, site, where, ix, isDuplicate, accepted);
-      log.push({ id: site.id, via: site.via, parent: parent.title, file: String(site.file ?? ""), lines: String(site.lines ?? ""), where, status: typeof place === "string" ? place : "row" });
+      const where2 = String(site.where ?? "").replace(/\s+/g, " ").trim();
+      const place = placeEntry(parent, site, where2, ix, isDuplicate, accepted);
+      log.push({ id: site.id, via: site.via, parent: parent.title, file: String(site.file ?? ""), lines: String(site.lines ?? ""), where: where2, status: typeof place === "string" ? place : "row" });
       if (typeof place === "string") continue;
       accepted++;
       taken.push(place);
-      rows.push({ file: place.file, start_line: place.start, end_line: place.end, message: copyRowMessage(parent, where, whereNote), producer });
+      rows.push({ file: place.file, start_line: place.start, end_line: place.end, message: copyRowMessage(parent, where2, whereNote), producer });
     }
   }
   return { rows, log };
@@ -45587,23 +45703,23 @@ function quoteFile(candidate, d, idx) {
   const keys = [...idx.byFile.keys()];
   for (const raw of [candidate.file, d.anchor_file, filePrefix(d.anchor_quote), filePrefix(d.evidence)]) {
     if (!raw) continue;
-    const norm = normalizeFindingPath(String(raw), keys);
-    if (idx.byFile.has(norm)) return norm;
+    const norm2 = normalizeFindingPath(String(raw), keys);
+    if (idx.byFile.has(norm2)) return norm2;
   }
   return void 0;
 }
-function quoteMatches(idx, file, quote) {
-  const q = quote.trim();
+function quoteMatches(idx, file, quote2) {
+  const q = quote2.trim();
   const pool = file ? idx.byFile.get(file) ?? [] : [...idx.byFile.values()].flat();
   return pool.filter((a) => a.text.trim().includes(q));
 }
-function shownQuoteHit(src, rawFiles, quote) {
+function shownQuoteHit(src, rawFiles, quote2) {
   for (const raw of rawFiles) {
     if (!raw) continue;
     const key = normalizeFindingPath(String(raw), [...src.keys()]);
     const lines = shownFile(src, key);
     if (!lines) continue;
-    const hits = [...lines].filter(([, text]) => text.trim().includes(quote));
+    const hits = [...lines].filter(([, text]) => text.trim().includes(quote2));
     return hits.length === 1 ? { file: key, line: hits[0][0] } : null;
   }
   return null;
@@ -45623,13 +45739,13 @@ function resolveAnchor(candidate, d, idx, breadthOrigin = false, shown = {}) {
   if (judgeFile && isNumericLines(judgeLines) && shown.judge && coversRange(shown.judge, judgeFile, judgeLines)) {
     return { file: judgeFile, lines: judgeLines, source: "judge", basis: "shown_context" };
   }
-  const quote = cleanQuote(String(d.anchor_quote ?? ""));
-  if (idx.present && quote.length >= MIN_QUOTE_LEN) {
-    const hits = quoteMatches(idx, quoteFile(candidate, d, idx), quote);
+  const quote2 = cleanQuote(String(d.anchor_quote ?? ""));
+  if (idx.present && quote2.length >= MIN_QUOTE_LEN) {
+    const hits = quoteMatches(idx, quoteFile(candidate, d, idx), quote2);
     if (hits.length === 1) return { file: hits[0].file, lines: String(hits[0].line), source: "diff", basis: tracked ? "added_line" : void 0 };
   }
-  if (shown.judge && quote.length >= MIN_QUOTE_LEN) {
-    const hit = shownQuoteHit(shown.judge, [candidate.file, d.anchor_file, filePrefix(d.anchor_quote), filePrefix(d.evidence)], quote);
+  if (shown.judge && quote2.length >= MIN_QUOTE_LEN) {
+    const hit = shownQuoteHit(shown.judge, [candidate.file, d.anchor_file, filePrefix(d.anchor_quote), filePrefix(d.evidence)], quote2);
     if (hit) return { file: hit.file, lines: String(hit.line), source: "diff", basis: "shown_context" };
   }
   return { file: candidate.file ?? quoteFile(candidate, d, idx), lines: isNumericLines(candidate.lines) && !gated ? candidate.lines : void 0, source: "none", basis: tracked ? "fallback" : void 0 };
@@ -45871,17 +45987,17 @@ function expandLocations(candidate, locations, parent, idx) {
   const used = new Set(parent.file ? [normalizeFindingPath(parent.file, keys)] : []);
   const haystack = `${candidate.title}
 ${candidate.body}`;
-  for (const loc of locations) {
-    if (!loc || typeof loc !== "object") continue;
-    const file = normalizeFindingPath(String(loc.file ?? ""), keys);
+  for (const loc2 of locations) {
+    if (!loc2 || typeof loc2 !== "object") continue;
+    const file = normalizeFindingPath(String(loc2.file ?? ""), keys);
     if (!file || used.has(file)) continue;
     const base = file.split("/").pop();
     const uniqueBase = keys.filter((k) => k.split("/").pop() === base).length === 1;
-    const excerpt = String(loc.candidate_excerpt ?? "").trim();
-    const quote = cleanQuote(String(loc.anchor_quote ?? ""));
-    const range = isNumericLines(loc.lines) ? parseLineRange(loc.lines) : null;
-    const hits = !range || quote.length < MIN_QUOTE_LEN ? [] : (idx.byFile.get(file) ?? []).filter((a) => a.line >= range.start && a.line <= range.end && a.text.trim().includes(quote));
-    const body = String(loc.body ?? "").trim().slice(0, REWRITE_CAP);
+    const excerpt = String(loc2.candidate_excerpt ?? "").trim();
+    const quote2 = cleanQuote(String(loc2.anchor_quote ?? ""));
+    const range = isNumericLines(loc2.lines) ? parseLineRange(loc2.lines) : null;
+    const hits = !range || quote2.length < MIN_QUOTE_LEN ? [] : (idx.byFile.get(file) ?? []).filter((a) => a.line >= range.start && a.line <= range.end && a.text.trim().includes(quote2));
+    const body = String(loc2.body ?? "").trim().slice(0, REWRITE_CAP);
     const ok = idx.byFile.has(file) && excerpt.length > 0 && haystack.includes(excerpt) && (namesFile(excerpt, file) || uniqueBase && namesFile(excerpt, base)) && hits.length === 1 && body.length > 0;
     log.push({ file, accepted: ok });
     if (!ok) continue;
@@ -46210,7 +46326,7 @@ init_define_STACK_PROMPTS();
 
 // src/review/bundler.ts
 init_define_STACK_PROMPTS();
-var estimateTokens = (chars) => Math.ceil(chars / 4);
+var estimateTokens = (chars) => defaultTokenEstimator.estimate(chars);
 function splitDiffByFile(diff) {
   const out = /* @__PURE__ */ new Map();
   for (const section of diff.split(/(?=^diff --git )/m)) {
@@ -46353,10 +46469,10 @@ function subsystem(path4) {
   return slash < 0 ? "" : path4.slice(0, slash);
 }
 var dirOf = (path4) => path4.slice(0, Math.max(0, path4.lastIndexOf("/")));
-function pickDiverse(paths, slots, rank) {
+function pickDiverse(paths, slots, rank2) {
   const cmp = (a, b) => {
-    const [pa, la, na] = rank(a);
-    const [pb, lb, nb] = rank(b);
+    const [pa, la, na] = rank2(a);
+    const [pb, lb, nb] = rank2(b);
     return pa - pb || lb - la || (na < nb ? -1 : na > nb ? 1 : 0);
   };
   const groups = /* @__PURE__ */ new Map();
@@ -46386,10 +46502,10 @@ function prioritizeUntouched(untouched, filteredDiff, findings) {
   const found = findings.filter((f) => f.file).map((f) => normalizeFindingPath(f.file, changed));
   const foundDirs = new Set(found.map(dirOf));
   const foundSystems = new Set(found.map(subsystem));
-  const rank = (p) => [foundDirs.has(dirOf(p)) ? 0 : foundSystems.has(subsystem(p)) ? 1 : 2, size(p), p];
+  const rank2 = (p) => [foundDirs.has(dirOf(p)) ? 0 : foundSystems.has(subsystem(p)) ? 1 : 2, size(p), p];
   const otherSlots = Math.min(other.length, MAX_UNTOUCHED_LISTED - DOC_SLOTS + Math.max(0, DOC_SLOTS - docs.length));
   const docSlots = Math.min(docs.length, MAX_UNTOUCHED_LISTED - otherSlots);
-  const selected = [...pickDiverse(other, otherSlots, rank), ...pickDiverse(docs, docSlots, rank)];
+  const selected = [...pickDiverse(other, otherSlots, rank2), ...pickDiverse(docs, docSlots, rank2)];
   return { selected, deprioritizedReleaseEntries: untouched.length - eligible.length, omitted: eligible.length - selected.length };
 }
 function breadthBriefing(firstPass, untouched, plan, ids) {
@@ -46535,8 +46651,8 @@ function activeLenses(settings) {
   return settings.enabled ? parseLensList(settings.list).lenses : [];
 }
 function parseLensList(value) {
-  const canonical = (n) => Object.hasOwn(LENS_ALIASES, n) ? LENS_ALIASES[n] : n;
-  const names = [...new Set(value.split(/[,+]/).map((s) => canonical(s.trim().toLowerCase())).filter(Boolean))];
+  const canonical2 = (n) => Object.hasOwn(LENS_ALIASES, n) ? LENS_ALIASES[n] : n;
+  const names = [...new Set(value.split(/[,+]/).map((s) => canonical2(s.trim().toLowerCase())).filter(Boolean))];
   return {
     lenses: names.filter((n) => Object.hasOwn(LENS_REGISTRY, n)).map((n) => LENS_REGISTRY[n]),
     unknown: names.filter((n) => !Object.hasOwn(LENS_REGISTRY, n))
@@ -46691,8 +46807,8 @@ function reviewOutputSchema(lensRecommendation) {
   lensRecommendationSchema = schema;
   return schema;
 }
-async function runReview(apiKey, model, maxRetries, maxTokens, effort, prInfo, diff, fileContexts, prompt, previousReviews, developerReplies = [], changesSinceLastReview = "", lineNumbers = false, lensRecommendation = false, cache) {
-  const userMessage = buildUserMessage(prInfo, diff, fileContexts, previousReviews, developerReplies, changesSinceLastReview, lineNumbers);
+async function runReview(apiKey, model, maxRetries, maxTokens, effort, prInfo, diff, fileContexts, prompt, previousReviews, developerReplies = [], changesSinceLastReview = "", lineNumbers = false, lensRecommendation = false, cache, prior) {
+  const userMessage = buildUserMessage(prInfo, diff, fileContexts, previousReviews, developerReplies, changesSinceLastReview, lineNumbers, prior?.block);
   console.log(`Sending request to the model (${model}, maxRetries: ${maxRetries})...`);
   const callOpts = { model, maxTokens, maxRetries, effort: effort || void 0 };
   const opts2 = lensRecommendation ? { ...callOpts, tolerateMissing: ["lens_recommendations"] } : callOpts;
@@ -46767,8 +46883,8 @@ function sanitizeFindingExtras(finding) {
   const text = (v) => typeof v === "string" ? v.trim() : "";
   const also = (Array.isArray(rawAlso) ? rawAlso : []).flatMap((e) => {
     if (!e || typeof e !== "object") return [];
-    const { file, lines, where } = e;
-    const entry = { file: text(file), lines: text(lines), where: text(where).replace(/\s+/g, " ") };
+    const { file, lines, where: where2 } = e;
+    const entry = { file: text(file), lines: text(lines), where: text(where2).replace(/\s+/g, " ") };
     return entry.file && entry.lines && entry.where ? [entry] : [];
   }).slice(0, ALSO_AFFECTS_KEEP);
   const scenario = SCENARIOS.find((s) => s === rawScenario);
@@ -46806,10 +46922,10 @@ function sanitizeFirstPassSites(raw, ids, via) {
       drop("not_object");
       continue;
     }
-    const { id, file, lines, where } = e;
+    const { id, file, lines, where: where2 } = e;
     const key = text(id).replace(/^\[|\]$/g, "").toLowerCase();
     const index = ids.get(key);
-    const site = { id: key, file: text(file), lines: text(lines), where: text(where).replace(/\s+/g, " "), via };
+    const site = { id: key, file: text(file), lines: text(lines), where: text(where2).replace(/\s+/g, " "), via };
     if (index === void 0) {
       drop("unknown_id");
       continue;
@@ -46881,7 +46997,7 @@ async function runBreadth(apiKey, model, maxRetries, maxTokens, effort, prInfo, 
   const tail = signal ? [schema ?? BREADTH_OUTPUT_SCHEMA, signal] : schema ? [schema] : [];
   return runLens(apiKey, model, maxRetries, maxTokens, effort, prInfo, diff, fileContexts, systemPrompt, briefing, lineNumbers, label, ...tail);
 }
-function buildUserMessage(prInfo, diff, fileContexts, previousReviews, developerReplies, changesSinceLastReview = "", lineNumbers = false) {
+function buildUserMessage(prInfo, diff, fileContexts, previousReviews, developerReplies, changesSinceLastReview = "", lineNumbers = false, priorBlock) {
   const parts = [];
   parts.push(`## Pull Request: ${prInfo.title}`);
   parts.push(`## Branch: ${prInfo.sourceBranch} \u2192 ${prInfo.targetBranch}`);
@@ -46889,7 +47005,9 @@ function buildUserMessage(prInfo, diff, fileContexts, previousReviews, developer
     parts.push(`## Description:
 ${prInfo.description}`);
   }
-  if (previousReviews.length > 0) {
+  if (priorBlock) {
+    parts.push(priorBlock);
+  } else if (previousReviews.length > 0) {
     const latest = previousReviews[previousReviews.length - 1];
     parts.push(`## Previous Review by This Agent (latest of ${previousReviews.length} total):`);
     parts.push("This is the most recent review posted on an earlier revision of this PR. Acknowledge what was fixed, do not repeat issues that are now resolved, and call out anything still unaddressed.");
@@ -46900,12 +47018,12 @@ ${stripOwnSuggestedFixes(latest.body, "review")}`);
     parts.push(`## Developer Discussion on Previous Review(s):`);
     parts.push("Below is the conversation thread from previous reviews, including developer replies and the agent's own prior responses. IMPORTANT: If the agent previously acknowledged a finding as a false positive or accepted a developer's explanation, do NOT re-raise that finding. Treat the agent's prior conclusions as settled unless the new code changes invalidate them.");
     for (const r of developerReplies) {
-      parts.push(`**${r.author}** (${r.createdOn}):
+      parts.push(`**${r.author}**${r.findingId ? ` [${r.findingId}]` : ""} (${r.createdOn}):
 > ${stripOwnSuggestedFixes(r.body, "reply")}`);
     }
   }
   parts.push(renderDiff(diff, lineNumbers));
-  if (changesSinceLastReview && previousReviews.length > 0) {
+  if (changesSinceLastReview && (previousReviews.length > 0 || priorBlock)) {
     parts.push(`## Changes Since Your Last Review:
 The diff below is ONLY the lines changed since your previous review above \u2014 use it to see exactly what was added or fixed. Credit findings these changes resolve, and assess anything new. The complete PR diff is above for full context.
 \`\`\`diff
@@ -47104,8 +47222,8 @@ function mergeReviews(reviews, unreviewed = []) {
   const summary = `Large PR reviewed in ${reviews.length} bundle(s).
 ` + reviews.filter((r) => r.parsed.summary).map((r) => `- **${r.label}**: ${r.parsed.summary}`).join("\n");
   const findingsMd = findings.length ? findings.map((f) => {
-    const loc = f.file ? ` (\`${f.file}${f.lines ? `:${f.lines}` : ""}\`)` : "";
-    return `- **${f.severity} \u2013 ${f.title}**${loc}
+    const loc2 = f.file ? ` (\`${f.file}${f.lines ? `:${f.lines}` : ""}\`)` : "";
+    return `- **${f.severity} \u2013 ${f.title}**${loc2}
   ${f.body}`;
   }).join("\n\n") : "No findings.";
   let markdown = [
@@ -47169,6 +47287,13 @@ function headMatches(checked, sourceCommit) {
   return short.length >= 12 && long.startsWith(short);
 }
 
+// src/inline/record.ts
+init_define_STACK_PROMPTS();
+function inlineRecord(ctx) {
+  if (ctx.inline) return ctx.inline.record();
+  return { active: false, reason: ctx.outcomeSink ? "benchmark" : "unsupported_vcs" };
+}
+
 // src/review/usage.ts
 var import_meta3 = {};
 function hash12(s) {
@@ -47218,23 +47343,23 @@ function cacheReadRate(base) {
   if (base === "claude-sonnet-5-5" || base === "claude-opus-5-5") return 0.05;
   return 0.1;
 }
-function estimateCost(tokens2, model) {
-  return Math.round(unroundedCost(tokens2, model) * 1e4) / 1e4;
+function estimateCost(tokens3, model) {
+  return Math.round(unroundedCost(tokens3, model) * 1e4) / 1e4;
 }
 function estimateAttemptsCost(attempts, model) {
   const cost = attempts.reduce((sum2, a) => sum2 + (a.cost_usd ?? unroundedCost({ input: a.input_tokens, output: a.output_tokens, cache_read: a.cache_read_input_tokens ?? 0, cache_write: a.cache_creation_input_tokens ?? 0 }, model)), 0);
   return Math.round(cost * 1e4) / 1e4;
 }
-function unroundedCost(tokens2, model) {
+function unroundedCost(tokens3, model) {
   const base = baseModelId(model);
-  const read = tokens2.cache_read ?? 0;
-  const write = tokens2.cache_write ?? 0;
-  let p = base === "claude-haiku-5-5" ? haiku55Pricing(tokens2.input + read + write) : MODEL_PRICING[model] ?? MODEL_PRICING[base];
+  const read = tokens3.cache_read ?? 0;
+  const write = tokens3.cache_write ?? 0;
+  let p = base === "claude-haiku-5-5" ? haiku55Pricing(tokens3.input + read + write) : MODEL_PRICING[model] ?? MODEL_PRICING[base];
   if (!p) {
     console.warn(`No pricing entry for model "${model}" \u2014 estimating with claude-sonnet-4-6 rates`);
     p = MODEL_PRICING["claude-sonnet-4-6"];
   }
-  return read || write ? tokens2.input / 1e6 * p.input + write / 1e6 * p.input * 1.25 + read / 1e6 * p.input * cacheReadRate(base) + tokens2.output / 1e6 * p.output : tokens2.input / 1e6 * p.input + tokens2.output / 1e6 * p.output;
+  return read || write ? tokens3.input / 1e6 * p.input + write / 1e6 * p.input * 1.25 + read / 1e6 * p.input * cacheReadRate(base) + tokens3.output / 1e6 * p.output : tokens3.input / 1e6 * p.input + tokens3.output / 1e6 * p.output;
 }
 function getAgentVersion() {
   try {
@@ -47242,7 +47367,7 @@ function getAgentVersion() {
     const pkg = JSON.parse((0, import_fs4.readFileSync)(pkgPath, "utf-8"));
     return pkg.version;
   } catch {
-    if (true) return "0.0.62";
+    if (true) return "0.0.63";
     return "unknown";
   }
 }
@@ -47254,7 +47379,7 @@ function getBuildCommit() {
     const dirty = (0, import_child_process.execSync)("git status --porcelain", opts2).toString().trim() ? "-dirty" : "";
     return hash + dirty;
   } catch {
-    if (true) return "5e85635";
+    if (true) return "ae890ab";
     return "unknown";
   }
 }
@@ -47279,7 +47404,7 @@ function buildUsageRecord(ctx, durationMs, error) {
   const judgeModel = config.judge.model || null;
   const cache = !!config.review.promptCache;
   const tok = (u) => ({ input: u.input_tokens, output: u.output_tokens, ...cache ? { cache_read: u.cache_read_input_tokens ?? 0, cache_write: u.cache_creation_input_tokens ?? 0 } : {} });
-  const priced = (u, tokens2, model) => u.attempts ? estimateAttemptsCost(u.attempts, model) : estimateCost(tokens2, model);
+  const priced = (u, tokens3, model) => u.attempts ? estimateAttemptsCost(u.attempts, model) : estimateCost(tokens3, model);
   const judgeTokensRaw = ctx.judgeUsage ?? null;
   const judgeTokens = judgeTokensRaw ? tok(judgeTokensRaw) : null;
   const judgeCost = ctx.judgeUsage?.cost_usd ?? (judgeTokensRaw && judgeTokens && judgeModel ? priced(judgeTokensRaw, judgeTokens, judgeModel) : null);
@@ -47290,8 +47415,8 @@ function buildUsageRecord(ctx, durationMs, error) {
   const lenses = activeLenses(config.lenses);
   const lensSource = ctx.lensRuns ?? (ctx.bundleCount && lenses.length ? lenses.map((l) => ({ name: l.name, status: "skipped_bundled", model: config.lenses.model || config.anthropic.model, findings: [] })) : void 0);
   const lensRuns = lensSource?.map((r) => {
-    const tokens2 = r.usage ? tok(r.usage) : null;
-    return { name: r.name, status: r.status, model: r.model, prompt_hash: r.promptHash ?? null, tokens: tokens2, cost_usd: r.usage?.cost_usd ?? (r.usage && tokens2 ? priced(r.usage, tokens2, r.model) : null), findings: r.findings.length };
+    const tokens3 = r.usage ? tok(r.usage) : null;
+    return { name: r.name, status: r.status, model: r.model, prompt_hash: r.promptHash ?? null, tokens: tokens3, cost_usd: r.usage?.cost_usd ?? (r.usage && tokens3 ? priced(r.usage, tokens3, r.model) : null), findings: r.findings.length };
   }) ?? null;
   const lensUsage = (ctx.lensRuns ?? []).reduce((sum2, r) => ({
     input: sum2.input + (r.usage?.input_tokens ?? 0),
@@ -47301,17 +47426,19 @@ function buildUsageRecord(ctx, durationMs, error) {
     cache_write: sum2.cache_write + (r.usage?.cache_creation_input_tokens ?? 0)
   }), { input: 0, output: 0, cost: 0, cache_read: 0, cache_write: 0 });
   const lensCost = (lensRuns ?? []).reduce((sum2, r) => sum2 + (r.cost_usd ?? 0), 0);
+  const inlineReply = config.review.inlineReviews ? ctx.inline?.replyUsage : void 0;
+  const inlineReplyCost = inlineReply ? ctx.inline?.record().reply_usage?.cost_usd ?? 0 : 0;
   const recordModel = ctx.action === "REPLY" && config.reply.model ? config.reply.model : config.anthropic.model;
   const reviewerTokens = {
-    input: ctx.usage.input_tokens - (judgeTokens?.input ?? 0) - (breadthTokens?.input ?? 0) - (secondLookTokens?.input ?? 0) - lensUsage.input,
-    output: ctx.usage.output_tokens - (judgeTokens?.output ?? 0) - (breadthTokens?.output ?? 0) - (secondLookTokens?.output ?? 0) - lensUsage.output,
+    input: ctx.usage.input_tokens - (judgeTokens?.input ?? 0) - (breadthTokens?.input ?? 0) - (secondLookTokens?.input ?? 0) - lensUsage.input - (inlineReply?.input_tokens ?? 0),
+    output: ctx.usage.output_tokens - (judgeTokens?.output ?? 0) - (breadthTokens?.output ?? 0) - (secondLookTokens?.output ?? 0) - lensUsage.output - (inlineReply?.output_tokens ?? 0),
     ...cache ? {
-      cache_read: ctx.usage.cache_read - (judgeTokens?.cache_read ?? 0) - (breadthTokens?.cache_read ?? 0) - (secondLookTokens?.cache_read ?? 0) - lensUsage.cache_read,
-      cache_write: ctx.usage.cache_write - (judgeTokens?.cache_write ?? 0) - (breadthTokens?.cache_write ?? 0) - (secondLookTokens?.cache_write ?? 0) - lensUsage.cache_write
+      cache_read: ctx.usage.cache_read - (judgeTokens?.cache_read ?? 0) - (breadthTokens?.cache_read ?? 0) - (secondLookTokens?.cache_read ?? 0) - lensUsage.cache_read - (inlineReply?.cache_read_input_tokens ?? 0),
+      cache_write: ctx.usage.cache_write - (judgeTokens?.cache_write ?? 0) - (breadthTokens?.cache_write ?? 0) - (secondLookTokens?.cache_write ?? 0) - lensUsage.cache_write - (inlineReply?.cache_creation_input_tokens ?? 0)
     } : {}
   };
   const reviewCall = cache ? ctx.reviewUsage : void 0;
-  const reviewerCost = ctx.usage.cost_usd !== void 0 ? ctx.usage.cost_usd - (ctx.judgeUsage?.cost_usd ?? 0) - (ctx.breadthUsage?.cost_usd ?? 0) - (ctx.secondLookUsage?.cost_usd ?? 0) - lensUsage.cost : reviewCall?.attempts ? estimateAttemptsCost(reviewCall.attempts, recordModel) + estimateCost({
+  const reviewerCost = ctx.usage.cost_usd !== void 0 ? ctx.usage.cost_usd - (ctx.judgeUsage?.cost_usd ?? 0) - (ctx.breadthUsage?.cost_usd ?? 0) - (ctx.secondLookUsage?.cost_usd ?? 0) - lensUsage.cost - (inlineReply?.cost_usd ?? 0) : reviewCall?.attempts ? estimateAttemptsCost(reviewCall.attempts, recordModel) + estimateCost({
     input: reviewerTokens.input - reviewCall.input_tokens,
     output: reviewerTokens.output - reviewCall.output_tokens,
     cache_read: (reviewerTokens.cache_read ?? 0) - (reviewCall.cache_read_input_tokens ?? 0),
@@ -47367,7 +47494,7 @@ function buildUsageRecord(ctx, durationMs, error) {
       estimated_input: ctx.estimatedInputTokens,
       ...ctx.usage.reasoning ? { reasoning: ctx.usage.reasoning } : {}
     },
-    cost_usd: reviewerCost + (judgeCost ?? 0) + (breadthCost ?? 0) + (secondLookCost ?? 0) + lensCost,
+    cost_usd: reviewerCost + (judgeCost ?? 0) + (breadthCost ?? 0) + (secondLookCost ?? 0) + lensCost + inlineReplyCost,
     judge_model: judgeModel,
     judge_effort: config.judge.effort || null,
     judge_tokens: judgeTokens,
@@ -47447,6 +47574,7 @@ function buildUsageRecord(ctx, durationMs, error) {
     ...ctx.headChecked && !error && isCheckedCommitHash(ctx.prInfo.sourceCommit) ? { checked_commit: ctx.prInfo.sourceCommit } : {},
     ...ctx.dedupHit ? { dedup_source: ctx.dedupHit } : {},
     ...ctx.replyLimitNote ? { reply_limit_note: true } : {},
+    ...config.review.inlineReviews ? { inline: inlineRecord(ctx) } : {},
     jenkins: getJenkinsMeta(),
     // Absent when CI passed no trigger, so those records serialize exactly as before.
     ...ctx.trigger ? { trigger: { event: ctx.trigger.event || null, comment_author: ctx.trigger.commentAuthor || null, ...ctx.trigger.kind ? { event_kind: ctx.trigger.kind } : {} } } : {},
@@ -47454,8 +47582,8 @@ function buildUsageRecord(ctx, durationMs, error) {
   };
 }
 function settledPromptCache(ctx, log) {
-  const statusOf = (stage) => stage === "breadth" ? ctx.breadthStatus : stage === "second_look" ? ctx.secondLookStatus : ctx.lensRuns?.find((r) => `lens:${r.name}` === stage)?.status;
-  const skipped = log.shared_stages.map((stage) => ({ stage, status: statusOf(stage) ?? "not_reached" })).filter((s) => s.status === "not_reached" || s.status.startsWith("skipped_"));
+  const statusOf2 = (stage) => stage === "breadth" ? ctx.breadthStatus : stage === "second_look" ? ctx.secondLookStatus : ctx.lensRuns?.find((r) => `lens:${r.name}` === stage)?.status;
+  const skipped = log.shared_stages.map((stage) => ({ stage, status: statusOf2(stage) ?? "not_reached" })).filter((s) => s.status === "not_reached" || s.status.startsWith("skipped_"));
   if (!skipped.length) return log;
   return {
     ...log,
@@ -47481,7 +47609,7 @@ var MIN_DIFF_SHARE = 0.1;
 var BUNDLE_NOTE_RESERVE_CHARS = 1500;
 async function runBundledReview(ctx, maxInputTokens) {
   const prInfo = ctx.prInfo;
-  const hist = [...ctx.previousReviews ?? [], ...ctx.replies ?? []].reduce((n, r) => n + r.body.length, 0);
+  const hist = [...ctx.previousReviews ?? [], ...ctx.replies ?? []].reduce((n, r) => n + r.body.length, 0) + (ctx.inline?.prior?.block.length ?? 0);
   const fixed = estimateTokens(ctx.prompt.content.length + BUNDLE_NOTE_RESERVE_CHARS + prInfo.title.length + (prInfo.description?.length ?? 0) + hist);
   const target = Math.floor(maxInputTokens * FIT_RATIO);
   const diffBudget = target - fixed;
@@ -47536,6 +47664,8 @@ Report at most ${config.review.maxFindings} findings, prioritized by severity an
 
 ## BUNDLED REVIEW
 This PR is too large for one pass. You are reviewing bundle ${i + 1} of ${plan.bundles.length}; the diff contains only: ${bundle.files.slice(0, 40).join(", ")}${bundle.files.length > 40 ? ", ..." : ""}. Review only these files and do not flag code you cannot see. Leave \`can_be_split\` empty.`;
+    const prior = ctx.inline?.priorFor(bundle.files);
+    const inlineTail = prior ? [false, void 0, prior] : [];
     let bundleContexts = contexts;
     const result = await (async () => {
       for (; ; ) {
@@ -47553,7 +47683,8 @@ This PR is too large for one pass. You are reviewing bundle ${i + 1} of ${plan.b
             ctx.previousReviews ?? [],
             ctx.replies ?? [],
             delta,
-            config.review.lineNumbers
+            config.review.lineNumbers,
+            ...inlineTail
           );
           recordPassCall(ctx, "review", config.anthropic.maxTokens, void 0, answer.usage);
           return answer;
@@ -47831,6 +47962,1868 @@ function narrowDelta(delta, changed) {
 // src/review/types.ts
 init_define_STACK_PROMPTS();
 
+// src/inline/engine.ts
+init_define_STACK_PROMPTS();
+
+// src/inline/compose.ts
+init_define_STACK_PROMPTS();
+
+// src/inline/markers.ts
+init_define_STACK_PROMPTS();
+var SUMMARY_HEADER_LINE = "### Review summary";
+var SUMMARY_HEADER_TAG = "*inline-summary v1 | maintained by the review agent*";
+var SUMMARY_HEADER = `${SUMMARY_HEADER_LINE}
+${SUMMARY_HEADER_TAG}`;
+var ID = "F[1-9][0-9]{0,5}";
+var ROOT_RE = new RegExp(String.raw`^\*Finding (${ID}) \| opened at ([0-9a-f]{12})\*$`);
+var ANSWER_RE = new RegExp(String.raw`^\*Answer on (${ID}|summary) \| through ([A-Za-z0-9:_-]{1,64})\*$`);
+var NOTE_RE = new RegExp(String.raw`^\*Replies paused on (${ID}|summary)\*$`);
+var STATE_RE = /^\*inline-state v1 \| n=([1-9][0-9]{0,5}) \| commits=((?:[0-9a-f]{12}(?:,[0-9a-f]{12}){0,999})?) \| sig=([0-9a-f]{16})\*$/;
+var buildRootMarker = (id, c12) => `*Finding ${id} | opened at ${c12}*`;
+var buildAnswerMarker = (target, through) => `*Answer on ${target} | through ${through}*`;
+var buildNoteMarker = (target) => `*Replies paused on ${target}*`;
+var buildStateLine = (n, commits, sig) => `*inline-state v1 | n=${n} | commits=${commits.join(",")} | sig=${sig}*`;
+function lastNonEmptyLine(body) {
+  const lines = body.replace(/\r\n/g, "\n").split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) if (lines[i].trim() !== "") return lines[i].trimEnd();
+  return "";
+}
+function parseRootMarker(body) {
+  const m = ROOT_RE.exec(lastNonEmptyLine(body));
+  return m ? { id: m[1], openedAt: m[2] } : null;
+}
+function parseAnswerMarker(body) {
+  const m = ANSWER_RE.exec(lastNonEmptyLine(body));
+  return m ? { target: m[1], through: m[2] } : null;
+}
+function parseNoteMarker(body) {
+  const m = NOTE_RE.exec(lastNonEmptyLine(body));
+  return m ? { target: m[1] } : null;
+}
+function parseStateLine(line) {
+  const m = STATE_RE.exec(line);
+  return m ? { n: Number(m[1]), commits: m[2] ? m[2].split(",") : [], sig: m[3] } : null;
+}
+var GENERATED_LINE = [
+  new RegExp(REVIEW_FOOTER_SOURCE),
+  new RegExp(REPLY_FOOTER_SOURCE),
+  ROOT_RE,
+  ANSWER_RE,
+  NOTE_RE,
+  STATE_RE
+];
+function stripGeneratedFooters(text) {
+  let removed = 0;
+  const kept = text.replace(/\r\n/g, "\n").split("\n").filter((line) => {
+    const t = line.trimEnd();
+    if (GENERATED_LINE.some((re) => re.test(t))) {
+      removed++;
+      return false;
+    }
+    return true;
+  });
+  return { text: kept.join("\n").trimEnd(), removed };
+}
+
+// src/inline/state.ts
+init_define_STACK_PROMPTS();
+var import_crypto4 = require("crypto");
+var MAX_COMMITS = 1e3;
+function canonical(above) {
+  return above.replace(/\r\n/g, "\n").split("\n").map((l) => l.trimEnd()).join("\n").replace(/\n+$/, "");
+}
+var payload = (s) => `n=${s.n}|commits=${s.commits.join(",")}`;
+function sign(above, s, agentId) {
+  return (0, import_crypto4.createHash)("sha256").update(`${canonical(above)}
+${payload(s)}
+${agentId}`).digest("hex").slice(0, 16);
+}
+function withState(above, s, agentId) {
+  return `${canonical(above)}
+
+${buildStateLine(s.n, s.commits, sign(above, s, agentId))}`;
+}
+function splitState(body) {
+  const last = lastNonEmptyLine(body);
+  const state = parseStateLine(last);
+  if (!state) return null;
+  const lines = body.replace(/\r\n/g, "\n").split("\n");
+  let i = lines.length - 1;
+  while (i >= 0 && lines[i].trim() === "") i--;
+  return { above: lines.slice(0, i).join("\n"), state };
+}
+function verify(body, agentId) {
+  const split2 = splitState(body);
+  if (!split2) return null;
+  const s = { n: split2.state.n, commits: split2.state.commits };
+  return sign(split2.above, s, agentId) === split2.state.sig ? s : null;
+}
+function addCommit(s, c12) {
+  const commits = [...s.commits.filter((c) => c !== c12), c12];
+  return { n: s.n, commits: commits.slice(-MAX_COMMITS) };
+}
+
+// src/inline/rows.ts
+init_define_STACK_PROMPTS();
+var MAX_TITLE = 100;
+var MAX_HISTORY = 20;
+var CHANGED_SUFFIX = " \xB7 changed in this push";
+var SEV = "HIGH|MEDIUM|LOW";
+var FID = "F[1-9][0-9]{0,5}";
+function sanitizeTitle(t) {
+  const flat = t.replace(/\s+/g, " ").replace(/\*{2,}/g, "*").trim();
+  return flat.length > MAX_TITLE ? flat.slice(0, MAX_TITLE - 1).trimEnd() + "\u2026" : flat;
+}
+var loc = (file, lines) => lines ? `${file}:${lines}` : file;
+function threadRow(r) {
+  const was = r.was ? ` \xB7 was ${r.was} (dismissed)` : "";
+  return `- **${r.severity} \u2013 ${sanitizeTitle(r.title)}** (\`${loc(r.file, r.lines)}@${r.base}\`) \xB7 ${r.id}${was} \xB7 [thread](${r.url})${r.changed ? CHANGED_SUFFIX : ""}`;
+}
+function summaryOnlyRow(r, titleOnly = false) {
+  const where2 = r.file ? ` (\`${loc(r.file, r.lines)}\`)` : "";
+  const head = `- **${r.severity} \u2013 ${sanitizeTitle(r.title)}**${where2} \xB7 no thread`;
+  const body = r.body?.replace(/\s+/g, " ").trim();
+  return body && !titleOnly ? `${head}
+  ${body}` : head;
+}
+var resolvedRow = (r) => `- ${r.id} \xB7 resolved by a developer \xB7 ${r.severity} \u2013 ${sanitizeTitle(r.title)}`;
+function overflowLine(ids, maxChars = Infinity) {
+  const list = `Also open: ${ids.join(", ")}`;
+  return list.length <= maxChars ? list : `Also open: ${ids.length} more threads`;
+}
+var THREAD_RE = new RegExp(String.raw`^- \*\*(${SEV}) – (.+?)\*\* \(\`(.+)\`\) · (${FID})(?: · was (${FID}) \(dismissed\))? · \[thread\]\(([^)\s]+)\)( · changed in this push)?$`);
+var LOC_RE = /^(.+?)(?::([0-9]+(?:-[0-9]+)?))?@([0-9a-f]{12})$/;
+var SUMMARY_ONLY_RE = new RegExp(String.raw`^- \*\*(${SEV}) – (.+?)\*\*(?: \(\`(.+?)\`\))? · no thread$`);
+var PLAIN_LOC_RE = /^(.+?)(?::([0-9]+(?:-[0-9]+)?))?$/;
+var RESOLVED_RE = new RegExp(String.raw`^- (${FID}) · resolved by a developer · (${SEV}) – (.+)$`);
+var OVERFLOW_RE = new RegExp(String.raw`^Also open: (?:(${FID}(?:, ${FID})*)|([0-9]+) more threads)$`);
+function parseThreadRow(line) {
+  const m = THREAD_RE.exec(line);
+  if (!m) return null;
+  const l = LOC_RE.exec(m[3]);
+  if (!l) return null;
+  return {
+    kind: "thread",
+    severity: m[1],
+    title: m[2],
+    file: l[1],
+    ...l[2] ? { lines: l[2] } : {},
+    base: l[3],
+    id: m[4],
+    ...m[5] ? { was: m[5] } : {},
+    url: m[6],
+    ...m[7] ? { changed: true } : {}
+  };
+}
+function parseResolvedRow(line) {
+  const m = RESOLVED_RE.exec(line);
+  return m ? { kind: "resolved", id: m[1], severity: m[2], title: m[3] } : null;
+}
+function parseOverflow(line) {
+  const m = OVERFLOW_RE.exec(line);
+  if (!m) return null;
+  return m[1] ? { kind: "overflow", ids: m[1].split(", ") } : { kind: "overflow", count: Number(m[2]) };
+}
+function parseSummaryOnlyRow(line, bodyLine) {
+  const m = SUMMARY_ONLY_RE.exec(line);
+  if (!m) return null;
+  const l = m[3] ? PLAIN_LOC_RE.exec(m[3]) : null;
+  const body = bodyLine?.startsWith("  ") ? bodyLine.trim() : "";
+  return { kind: "summary_only", severity: m[1], title: m[2], ...l ? { file: l[1], ...l[2] ? { lines: l[2] } : {} } : {}, ...body ? { body } : {} };
+}
+function parseRows(body) {
+  const lines = body.replace(/\r\n/g, "\n").split("\n");
+  const out = { threads: [], summaryOnly: [], resolved: [] };
+  lines.forEach((line, i) => {
+    const t = parseThreadRow(line);
+    if (t) {
+      out.threads.push(t);
+      return;
+    }
+    const r = parseResolvedRow(line);
+    if (r) {
+      out.resolved.push(r);
+      return;
+    }
+    const o = parseOverflow(line);
+    if (o) {
+      out.overflow = o;
+      return;
+    }
+    const s = parseSummaryOnlyRow(line, lines[i + 1]);
+    if (s) out.summaryOnly.push(s);
+  });
+  return out;
+}
+function historyLine(n, c12, text) {
+  return `- Review ${n} \xB7 ${c12} \xB7 ${text.replace(/\s+/g, " ").trim()}`;
+}
+var HISTORY_RE = /^- Review ([0-9]+) · ([0-9a-f]{12}) · (.*)$/;
+function parseHistoryLine(line) {
+  const m = HISTORY_RE.exec(line);
+  return m ? { n: Number(m[1]), c12: m[2], text: m[3] } : null;
+}
+function parseHistory(body) {
+  return body.replace(/\r\n/g, "\n").split("\n").filter((l) => HISTORY_RE.test(l));
+}
+var capHistory = (lines, max = MAX_HISTORY) => lines.slice(-max);
+
+// src/inline/compose.ts
+var MAX_OPEN_ROWS = 50;
+var MIN_OPEN_ROWS = 10;
+var KEEP_SUMMARY_ONLY = 20;
+var MIN_HISTORY = 5;
+var PRE_FLOOR = 300;
+var TRUNC_MARGIN = 40;
+var OVERFLOW_IDS_MAX = 1500;
+var FINDINGS_HEADING = /^### Findings[ \t]*$/m;
+var RANK2 = { HIGH: 2, MEDIUM: 1, LOW: 0 };
+var kOf = (id) => Number(id.slice(1));
+function cleanAndGuard(raw, opts2) {
+  const cleaned = stripJenkinsMeta(stripPreamble(stripJudgeNotes(stripDeltaStats(stripPreviousFooter(raw)))));
+  if (!cleaned.trim() || isNoChange(cleaned)) return { ok: false, reason: "empty_or_no_change" };
+  const tailOk = opts2.judged ? parseVerdictScore(cleaned) !== null : /^#{1,4}\s*Unresolved Questions\b/im.test(cleaned);
+  if (!tailOk) {
+    throw new Error(`Review appears truncated \u2014 missing ${opts2.judged ? "Merge Confidence" : "Unresolved Questions"} section; refusing to post a partial review`);
+  }
+  const todos = opts2.todoScan ? scanTodos(opts2.diff) : [];
+  const todoSection = todos.length ? "\n\n### TODOs Introduced\n" + todos.map((t) => `- \`${t.file}:${t.line}\` \u2014 ${t.text}`).join("\n") : "";
+  return { ok: true, cleaned, todoSection };
+}
+function rootBody(r) {
+  const first = `**${r.severity} \u2013 ${sanitizeTitle(r.title)}**${r.was ? ` (was ${r.was}, dismissed)` : ""}`;
+  const text = stripGeneratedFooters(r.body).text;
+  return `${first}
+
+${text}${r.fixBlock ?? ""}
+
+${buildRootMarker(r.id, r.c12)}`;
+}
+function fixPart(f) {
+  if (!f.proposal || f.proposal.length > PROPOSAL_CAP) return void 0;
+  const code = fixCodeContent(f.proposal);
+  if (code === null) return void 0;
+  const body = f.bodyWithoutFix && fixFreeContent(f.bodyWithoutFix) !== null ? f.bodyWithoutFix : f.body;
+  const fence = fenceFor(code, body);
+  return fence.length > MAX_FENCE ? void 0 : { block: renderFixBlock(code, fence), body };
+}
+var inlineFooter = (identity, model, n, c12, build) => `---
+*Inline review by ${identity} (${model}) | Review ${n} | Commit ${c12}${build ? ` | Build ${build}` : ""}*`;
+function sanitizeNarrative(text) {
+  const stripped = stripGeneratedFooters(text);
+  let removed = stripped.removed;
+  const kept = stripped.text.split("\n").filter((line) => {
+    const t = line.trimEnd();
+    const forged = t === SUMMARY_HEADER_LINE || t === SUMMARY_HEADER_TAG || parseThreadRow(t) || parseResolvedRow(t) || parseOverflow(t) || parseHistoryLine(t) || parseSummaryOnlyRow(t);
+    if (forged) removed++;
+    return !forged;
+  });
+  return { text: kept.join("\n").trimEnd(), removed };
+}
+var GENERATED_SECTIONS = /* @__PURE__ */ new Set(["### Resolved by developers", "### Review History"]);
+var INLINE_FOOTER_RE = /^\*Inline review by .*\*$/;
+function carryNarrative(body) {
+  const split2 = splitState(body);
+  if (!split2) return null;
+  const lines = split2.above.split("\n");
+  const footer = lines.map((l) => INLINE_FOOTER_RE.test(l.trimEnd())).lastIndexOf(true);
+  const kept = footer < 0 ? lines : lines.slice(0, lines[footer - 1]?.trim() === "---" ? footer - 1 : footer);
+  let fenced = false;
+  const at = kept.findIndex((l) => {
+    if (/^[ \t]*(`{3,}|~{3,})/.test(l)) fenced = !fenced;
+    return !fenced && l.trimEnd() === "### Findings";
+  });
+  if (at < 0) return null;
+  const pre = kept.slice(2, at).join("\n").trim();
+  if (!pre) return null;
+  let i = at + 1;
+  while (i < kept.length && !kept[i].startsWith("### ")) i++;
+  const post = [];
+  let skip = false;
+  for (; i < kept.length; i++) {
+    const t = kept[i].trimEnd();
+    if (t.startsWith("### ")) skip = GENERATED_SECTIONS.has(t);
+    if (!skip) post.push(kept[i]);
+  }
+  const tail = post.join("\n").trim();
+  return `${pre}
+
+### Findings
+No findings.${tail ? `
+
+${tail}` : ""}`;
+}
+function splitAtFindings(plain, findings) {
+  const block = findings.length ? findings.map((f) => renderFinding(f)).join("\n\n") : "No findings.";
+  const exact = `### Findings
+${block}`;
+  const at = plain.indexOf(exact);
+  if (at >= 0) return { pre: plain.slice(0, at), post: plain.slice(at + exact.length) };
+  const heading = FINDINGS_HEADING.exec(plain);
+  if (!heading) return { pre: plain, post: "" };
+  const start = heading.index;
+  const next = /^### /m.exec(plain.slice(start + heading[0].length));
+  const end = next ? start + heading[0].length + next.index : plain.length;
+  return { pre: plain.slice(0, start), post: plain.slice(end) };
+}
+function closeFence(text) {
+  const fences = text.split("\n").filter((l) => /^[ \t]*(`{3,}|~{3,})/.test(l)).length;
+  return fences % 2 === 1 ? `${text}
+\`\`\`` : text;
+}
+var MIN_TODO_ITEMS = 10;
+function trimTodos(text, keep) {
+  if (!text) return text;
+  const [heading, ...items] = text.trim().split("\n");
+  if (keep >= items.length) return text;
+  if (keep <= 0) return `${heading}
+- ${items.length} added; list omitted to fit the size limit`;
+  return [heading, ...items.slice(0, keep), `- and ${items.length - keep} more`].join("\n");
+}
+var bySeverity = (rows) => ["HIGH", "MEDIUM", "LOW"].map((s) => [s, rows.filter((r) => r.severity === s).length]).filter(([, n]) => n).map(([s, n]) => `${n} ${s}`).join(", ");
+function composeSummary(input) {
+  const split2 = splitAtFindings(input.review.plain, input.review.findings);
+  const pre = sanitizeNarrative(split2.pre);
+  const post = sanitizeNarrative(split2.post);
+  const todoText = input.todoSection ? sanitizeNarrative(input.todoSection).text : "";
+  const removed = pre.removed + post.removed;
+  const open = [...input.threads].sort((a, b) => RANK2[b.severity] - RANK2[a.severity] || kOf(b.id) - kOf(a.id));
+  const history = capHistory([...input.history, historyLine(input.state.n, input.head12, input.historyText)]);
+  const footer = inlineFooter(input.footer.identity, input.footer.model, input.state.n, input.head12, input.footer.build);
+  const stateLen = buildStateLine(input.state.n, input.state.commits, "0".repeat(16)).length;
+  const limit2 = COMMENT_BUDGET - 2 - stateLen;
+  let collapsed = 0;
+  const build = (p2, cut) => {
+    collapsed = 0;
+    const full = open.slice(0, p2.openFull);
+    const rest = open.slice(p2.openFull).sort((a, b) => kOf(a.id) - kOf(b.id));
+    collapsed += rest.length;
+    const findings = [];
+    if (full.length || rest.length) {
+      findings.push("**Open threads: resolve when fixed**");
+      const lines = full.map((r) => threadRow(r));
+      if (rest.length) {
+        const ids = rest.map((r) => r.id);
+        lines.push(p2.overflowCount || p2.openFull === 0 ? `Also open: ${ids.length} more threads` : overflowLine(ids, OVERFLOW_IDS_MAX));
+      }
+      findings.push(lines.join("\n"));
+    }
+    if (input.summaryOnly.length) {
+      const shown = input.summaryOnly.slice(0, p2.soKeep);
+      const hidden = input.summaryOnly.length - shown.length;
+      collapsed += hidden;
+      const lines = shown.map((r) => summaryOnlyRow(r, p2.titlesOnly));
+      if (hidden) lines.push(`and ${hidden} more ${input.summaryOnly.every((r) => r.severity === "LOW") ? "low-severity" : "summary-only"} findings`);
+      findings.push("**Not posted as threads**\n" + lines.join("\n"));
+    }
+    if (!findings.length) findings.push("No findings.");
+    let preText = pre.text;
+    let postText = post.text;
+    if (cut > 0) {
+      const postCut = Math.min(cut, postText.length);
+      if (postCut > 0) postText = closeFence(postText.slice(0, postText.length - postCut).trimEnd()) + "\n\n(truncated)";
+      const left = cut - postCut;
+      if (left > 0 && preText.length > PRE_FLOOR) {
+        preText = closeFence(preText.slice(0, Math.max(PRE_FLOOR, preText.length - left)).trimEnd()) + (postCut > 0 ? "" : "\n\n(truncated)");
+      }
+    }
+    const parts = [
+      SUMMARY_HEADER,
+      preText,
+      `### Findings
+${findings.join("\n\n")}`,
+      postText,
+      trimTodos(todoText, p2.todoKeep),
+      p2.resolved && input.resolved.length ? `### Resolved by developers
+${input.resolved.map((r) => resolvedRow(r)).join("\n")}` : "",
+      `### Review History
+${history.slice(-p2.history).join("\n")}`,
+      footer
+    ].map((s) => s.trim()).filter(Boolean);
+    return parts.join("\n\n");
+  };
+  const fits = (s) => s.length <= limit2;
+  const render = (p2) => {
+    const first = build(p2, 0);
+    if (fits(first) || !p2.cutAuto) return first;
+    return build(p2, first.length - limit2 + TRUNC_MARGIN);
+  };
+  const p = { history: MAX_HISTORY, resolved: true, titlesOnly: false, soKeep: Infinity, openFull: MAX_OPEN_ROWS, overflowCount: false, cutAuto: false, todoKeep: Infinity };
+  const steps = [
+    (x) => {
+      x.history = MIN_HISTORY;
+    },
+    (x) => {
+      x.resolved = false;
+    },
+    (x) => {
+      x.titlesOnly = true;
+    },
+    (x) => {
+      x.todoKeep = MIN_TODO_ITEMS;
+    },
+    (x) => {
+      x.cutAuto = true;
+    },
+    (x) => {
+      x.todoKeep = 0;
+    },
+    (x) => {
+      x.soKeep = KEEP_SUMMARY_ONLY;
+    },
+    (x) => {
+      x.soKeep = 0;
+    },
+    (x) => {
+      x.openFull = Math.min(x.openFull, MIN_OPEN_ROWS);
+    },
+    (x) => {
+      x.overflowCount = true;
+    },
+    (x) => {
+      x.openFull = 0;
+    }
+  ];
+  let body = render(p);
+  for (const step of steps) {
+    if (fits(body)) break;
+    step(p);
+    body = render(p);
+  }
+  if (!fits(body)) {
+    const so = input.summaryOnly;
+    const important = so.filter((r) => r.severity !== "LOW").sort((x, y) => RANK2[y.severity] - RANK2[x.severity]);
+    const fallback = (n2) => {
+      const kept = important.slice(0, n2);
+      const hidden = so.filter((r) => !kept.includes(r));
+      collapsed = open.length + hidden.length;
+      const parts = [SUMMARY_HEADER];
+      if (open.length) parts.push(`Also open: ${open.length} more threads
+(${bySeverity(open)})`);
+      if (so.length) parts.push(["**Not posted as threads**", ...kept.map((r) => summaryOnlyRow(r, true)), ...hidden.length ? [`and ${hidden.length} more summary-only findings (${bySeverity(hidden)})`] : []].join("\n"));
+      if (!open.length && !so.length) parts.push("No findings.");
+      return [...parts, footer].join("\n\n");
+    };
+    let n = 0;
+    while (n < important.length && fits(fallback(n + 1))) n++;
+    body = fallback(n);
+  }
+  return { body: withState(body, input.state, input.agentId), removed, collapsed };
+}
+
+// src/inline/identity.ts
+init_define_STACK_PROMPTS();
+var norm = (id) => id.trim().replace(/[{}]/g, "");
+function resolveIdentity(api, setting) {
+  const configured = norm(setting);
+  const ids = (api?.ids ?? []).map(norm).filter(Boolean);
+  if (ids.length > 0) {
+    if (configured && !ids.includes(configured)) {
+      return { status: "identity_mismatch", reason: "AGENT_ACCOUNT_ID does not match the adapter identity" };
+    }
+    return { status: "api", ids, names: api?.names ?? [], agentId: ids[0] };
+  }
+  if (configured) return { status: "setting_only", ids: [configured], names: [], agentId: configured };
+  return { status: "unavailable" };
+}
+var isTrusted = (ids, authorIds) => {
+  const trusted = new Set(ids);
+  return authorIds.some((a) => trusted.has(norm(a)));
+};
+
+// src/inline/match.ts
+init_define_STACK_PROMPTS();
+var MAX_BASES = 5;
+var NEAR = 10;
+var STOP = /* @__PURE__ */ new Set(["the", "an", "is", "are", "in", "on", "of", "to", "for", "and", "or", "with", "be", "it", "this", "that"]);
+function tokens2(title) {
+  const out = /* @__PURE__ */ new Set();
+  for (const t of title.toLowerCase().match(/[\p{L}\p{N}_]+/gu) ?? []) if (t.length > 1 && !STOP.has(t)) out.add(t);
+  return out;
+}
+function titleSimilarity(a, b) {
+  const x = tokens2(a);
+  const y = tokens2(b);
+  if (x.size === 0 || y.size === 0) return 0;
+  let both = 0;
+  for (const t of x) if (y.has(t)) both++;
+  return both / (x.size + y.size - both);
+}
+var HUNK_RE = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;
+function parseDeltaMap(diff) {
+  const out = /* @__PURE__ */ new Map();
+  for (const section of diff.split(/(?=^diff --git )/m)) {
+    const header2 = section.match(/^diff --git a\/(.+?) b\/(.+)$/m);
+    if (!header2) continue;
+    const meta = section.split(/^@@/m)[0];
+    const renameFrom = meta.match(/^rename from (.+)$/m)?.[1];
+    const renameTo = meta.match(/^rename to (.+)$/m)?.[1];
+    const deleted = /^deleted file mode /m.test(meta);
+    const oldPath = (renameFrom ?? header2[1]).replace(/\t.*$/, "");
+    const newPath = (renameTo ?? header2[2]).replace(/\t.*$/, "");
+    const hunks = [];
+    let cur;
+    let o = 0;
+    let n = 0;
+    let inHunks = false;
+    for (const raw of section.split("\n")) {
+      const m = HUNK_RE.exec(raw);
+      if (m) {
+        inHunks = true;
+        const oldStart = Number(m[1]);
+        const oldLen = m[2] === void 0 ? 1 : Number(m[2]);
+        const newLen = m[4] === void 0 ? 1 : Number(m[4]);
+        const firstOld = oldLen === 0 ? oldStart + 1 : oldStart;
+        cur = { firstOld, lastOld: firstOld + oldLen - 1, delta: newLen - oldLen, lineMap: /* @__PURE__ */ new Map(), removed: /* @__PURE__ */ new Set(), insertAfter: [] };
+        hunks.push(cur);
+        o = firstOld;
+        n = Number(m[3]);
+        continue;
+      }
+      if (!inHunks || !cur) continue;
+      if (raw.startsWith("\\")) continue;
+      if (raw.startsWith("-")) {
+        cur.removed.add(o);
+        cur.lineMap.set(o, n);
+        o++;
+      } else if (raw.startsWith("+")) {
+        cur.insertAfter.push(o - 1);
+        n++;
+      } else if (raw.startsWith(" ")) {
+        cur.lineMap.set(o, n);
+        o++;
+        n++;
+      }
+    }
+    out.set(oldPath, { newPath, deleted, hunks });
+  }
+  return out;
+}
+function mapOne(f, line) {
+  let offset = 0;
+  for (const h of f.hunks) {
+    if (line < h.firstOld) return { line: line + offset, g: 0 };
+    if (line <= h.lastOld) return { line: h.lineMap.get(line) ?? line + offset, g: Math.max(0, h.delta) };
+    offset += h.delta;
+  }
+  return { line: line + offset, g: 0 };
+}
+function mapLine(map, file, lines) {
+  const f = map.get(file);
+  if (!f) {
+    const r2 = parseLineRange(lines);
+    return { file, ...r2 ? { line: r2.start, end: r2.end } : {}, g: 0, changed: false };
+  }
+  if (f.deleted) return null;
+  const r = parseLineRange(lines);
+  if (!r) return { file: f.newPath, g: 0, changed: false };
+  const a = mapOne(f, r.start);
+  const b = mapOne(f, r.end);
+  const changed = f.hunks.some((h) => [...h.removed].some((x) => x >= r.start && x <= r.end) || h.insertAfter.some((p) => p >= r.start && p < r.end));
+  return { file: f.newPath, line: a.line, end: b.line, g: Math.max(a.g, b.g), changed };
+}
+function createDeltaMapper(fetchDelta, head, maxBases = MAX_BASES) {
+  const cache = /* @__PURE__ */ new Map();
+  const load = (base) => {
+    const hit = cache.get(base);
+    if (hit) return hit;
+    if (cache.size >= maxBases) return Promise.resolve(null);
+    const p = fetchDelta(base, head).then(parseDeltaMap, () => null);
+    cache.set(base, p);
+    return p;
+  };
+  return {
+    async map(file, lines, base) {
+      if (base === head) {
+        const r = parseLineRange(lines);
+        return { file, ...r ? { line: r.start, end: r.end } : {}, g: 0, changed: false };
+      }
+      const dm = await load(base);
+      return dm ? mapLine(dm, file, lines) : null;
+    }
+  };
+}
+async function mapEntries(entries, mapper) {
+  const out = new Array(entries.length);
+  const order = entries.map((_, i) => i).sort((a, b) => Number(entries[a].resolved) - Number(entries[b].resolved) || a - b);
+  for (const i of order) {
+    const entry = entries[i];
+    const m = entry.file ? await mapper.map(entry.file, entry.lines, entry.openedAt) : null;
+    if (m) out[i] = { entry, loc: { file: m.file, ...m.line !== void 0 ? { line: m.line } : {}, g: m.g, mapped: true }, changed: m.changed };
+    else out[i] = { entry, loc: { file: entry.file, ...parseLineRange(entry.lines) ? { line: parseLineRange(entry.lines).start } : {}, g: 0, mapped: false }, changed: false };
+  }
+  return out;
+}
+function matches(m, c, kind) {
+  if (!c.file || !m.loc.file || c.file !== m.loc.file) return false;
+  const sim = titleSimilarity(sanitizeTitle(m.entry.title), sanitizeTitle(c.title));
+  const cl = parseLineRange(c.lines)?.start;
+  if (kind === "resolved") {
+    if (!m.loc.mapped || m.loc.line === void 0 || cl === void 0) return false;
+    return sim >= 0.8 && Math.abs(cl - m.loc.line) <= NEAR + m.loc.g;
+  }
+  if (!m.loc.mapped) return sim >= 0.8;
+  if (m.loc.line === void 0 || cl === void 0) return sim >= 0.6;
+  return sim >= 0.8 || sim >= 0.5 && Math.abs(cl - m.loc.line) <= NEAR + m.loc.g;
+}
+
+// src/inline/plan.ts
+init_define_STACK_PROMPTS();
+
+// src/inline/anchor.ts
+init_define_STACK_PROMPTS();
+var ADDED_LINES_ONLY = false;
+function indexDiff(diff) {
+  const out = /* @__PURE__ */ new Map();
+  for (const section of diff.split(/(?=^diff --git )/m)) {
+    const header2 = section.match(/^diff --git a\/(.+?) b\/(.+)$/m);
+    if (!header2) continue;
+    const meta = section.split(/^@@/m)[0];
+    const deleted = /^deleted file mode /m.test(meta) || /^\+\+\+ \/dev\/null$/m.test(meta);
+    const path4 = (meta.match(/^rename to (.+)$/m)?.[1] ?? meta.match(/^\+\+\+ b\/(.+)$/m)?.[1] ?? header2[2]).replace(/\t.*$/, "");
+    const lines = /* @__PURE__ */ new Map();
+    let n = 0;
+    let inHunk = false;
+    for (const raw of section.split("\n")) {
+      const h = /^@@ -\d+(?:,\d+)? \+(\d+)/.exec(raw);
+      if (h) {
+        n = Number(h[1]);
+        inHunk = true;
+        continue;
+      }
+      if (!inHunk || raw.startsWith("\\") || raw.startsWith("-")) continue;
+      if (raw.startsWith("+")) {
+        lines.set(n, "added");
+        n++;
+      } else if (raw.startsWith(" ")) {
+        lines.set(n, "context");
+        n++;
+      }
+    }
+    out.set(path4, { deleted, lines });
+  }
+  return out;
+}
+function createAnchorer(diff) {
+  const idx = indexDiff(diff);
+  return (file, lines) => {
+    const range = parseLineRange(lines);
+    if (!file || !range) return { ok: false, reason: "no_line" };
+    const f = idx.get(file);
+    if (!f) return { ok: false, reason: "out_of_hunk" };
+    if (f.deleted) return { ok: false, reason: "old_side" };
+    const kind = f.lines.get(range.start);
+    if (!kind || ADDED_LINES_ONLY && kind !== "added") return { ok: false, reason: "out_of_hunk" };
+    return { ok: true, path: file, line: range.start };
+  };
+}
+
+// src/inline/plan.ts
+var MAX_NEW_ROOTS_PER_RUN = 20;
+var RANK3 = { LOW: 0, MEDIUM: 1, HIGH: 2 };
+function planRun(input) {
+  const cap = input.maxNewRoots ?? MAX_NEW_ROOTS_PER_RUN;
+  const anchorOf = createAnchorer(input.diff);
+  const open = input.entries.filter((m) => !m.entry.resolved);
+  const planned = [];
+  const resolved2 = input.entries.filter((m) => m.entry.resolved);
+  const plan = {
+    create: [],
+    summaryOnly: [],
+    suppressed: { open: [], sameRun: [], resolved: [] },
+    changedInPush: new Set(open.filter((m) => m.changed).map((m) => m.entry.id))
+  };
+  let k = input.nextK;
+  const ordered = [...input.findings].sort((a, b) => RANK3[b.severity] - RANK3[a.severity]);
+  for (const f of ordered) {
+    const dup = open.find((m) => matches(m, f, "open"));
+    if (dup) {
+      plan.suppressed.open.push({ finding: f, id: dup.entry.id });
+      continue;
+    }
+    const twin = planned.find((m) => matches(m, f, "resolved"));
+    if (twin) {
+      plan.suppressed.sameRun.push({ finding: f, id: twin.entry.id });
+      plan.summaryOnly.push({ finding: f, reason: "duplicate" });
+      continue;
+    }
+    let was;
+    const hits = resolved2.filter((m) => matches(m, f, "resolved"));
+    if (hits.length) {
+      const strongest = hits.reduce((a2, b) => RANK3[b.entry.severity] > RANK3[a2.entry.severity] ? b : a2);
+      if (RANK3[f.severity] <= RANK3[strongest.entry.severity]) {
+        plan.suppressed.resolved.push({ finding: f, id: strongest.entry.id });
+        continue;
+      }
+      was = strongest.entry.id;
+    }
+    if (f.severity === "LOW" && !input.lowThreads) {
+      plan.summaryOnly.push({ finding: f, reason: "low" });
+      continue;
+    }
+    const a = anchorOf(f.file, f.lines);
+    if (!a.ok) {
+      plan.summaryOnly.push({ finding: f, reason: a.reason });
+      continue;
+    }
+    if (plan.create.length >= cap) {
+      plan.summaryOnly.push({ finding: f, reason: "over_cap" });
+      continue;
+    }
+    const root = { id: `F${k++}`, finding: f, path: a.path, line: a.line, ...was ? { was } : {} };
+    plan.create.push(root);
+    planned.push({ entry: { id: root.id, k: 0, severity: f.severity, title: f.title, gist: "", file: f.file ?? a.path, lines: f.lines, openedAt: "", rootId: "", url: "", resolved: false, humanComments: 0 }, loc: { file: f.file ?? a.path, ...parseLineRange(f.lines) ? { line: parseLineRange(f.lines).start } : {}, g: 0, mapped: true }, changed: false });
+  }
+  return plan;
+}
+
+// src/inline/registry.ts
+init_define_STACK_PROMPTS();
+var STATE_PREFIX = "*inline-state v1 |";
+var firstLine = (body) => body.replace(/\r\n/g, "\n").split("\n", 1)[0].trimEnd();
+function isSummaryShaped(body) {
+  return firstLine(body) === SUMMARY_HEADER_LINE || lastNonEmptyLine(body).startsWith(STATE_PREFIX);
+}
+var isInlineMarked = (body) => parseRootMarker(body) !== null || isSummaryShaped(body);
+function strictlyValid(body, agentId) {
+  const lines = body.replace(/\r\n/g, "\n").split("\n");
+  if (lines[0] !== SUMMARY_HEADER_LINE || lines[1]?.trimEnd() !== SUMMARY_HEADER_TAG) return null;
+  return verify(body, agentId);
+}
+function selectSummary(threads, identity) {
+  const candidates = threads.map((t) => t.root).filter((r) => !r.inline && isTrusted(identity.ids, r.authorIds) && isSummaryShaped(r.body)).sort((a, b) => a.seq - b.seq);
+  if (candidates.length === 0) return { kind: "none" };
+  const comment = candidates[0];
+  const state = strictlyValid(comment.body, identity.agentId);
+  return state ? { kind: "found", comment, check: "valid", state, extras: candidates.length - 1 } : { kind: "found", comment, check: "tampered", extras: candidates.length - 1 };
+}
+var FIRST_LINE_RE = /^\*\*(HIGH|MEDIUM|LOW) – (.+?)\*\*(?: \(was (F[1-9][0-9]{0,5}), dismissed\))?$/;
+var GIST_MAX = 200;
+function parseRootText(body) {
+  const lines = body.replace(/\r\n/g, "\n").trimEnd().split("\n");
+  const m = FIRST_LINE_RE.exec(lines[0].trimEnd());
+  const gist = lines.slice(1, -1).join(" ").replace(/\s+/g, " ").trim().slice(0, GIST_MAX);
+  return m ? { severity: m[1], title: m[2], ...m[3] ? { was: m[3] } : {}, gist } : { severity: "MEDIUM", title: lines[0].replace(/\s+/g, " ").trim().slice(0, 100), gist };
+}
+function buildRegistry(threads, identity) {
+  let untrusted = 0;
+  let untrustedStructural = 0;
+  for (const t of threads) {
+    const trustedRoot = isTrusted(identity.ids, t.root.authorIds);
+    if (!trustedRoot && (parseRootMarker(t.root.body) || !t.root.inline && isSummaryShaped(t.root.body))) {
+      untrusted++;
+      untrustedStructural++;
+    }
+    for (const c of t.comments) {
+      if (!isTrusted(identity.ids, c.authorIds) && (parseAnswerMarker(c.body) || parseNoteMarker(c.body))) untrusted++;
+    }
+  }
+  if (identity.status === "setting_only" && untrustedStructural > 0) {
+    return { status: "identity_mismatch", reason: "marker comments by an author outside AGENT_ACCOUNT_ID", untrusted };
+  }
+  const summary = selectSummary(threads, identity);
+  const rows = summary.kind === "found" && summary.check === "valid" ? parseRows(summary.comment.body) : null;
+  const rowById = new Map(rows?.threads.map((r) => [r.id, r]) ?? []);
+  const entries = [];
+  let maxK = 0;
+  const bump = (id) => {
+    maxK = Math.max(maxK, Number(id.slice(1)));
+  };
+  for (const r of rows?.threads ?? []) bump(r.id);
+  for (const r of rows?.resolved ?? []) bump(r.id);
+  for (const id of rows?.overflow && "ids" in rows.overflow ? rows.overflow.ids : []) bump(id);
+  for (const t of threads) {
+    const marker = parseRootMarker(t.root.body);
+    if (!marker || !isTrusted(identity.ids, t.root.authorIds)) continue;
+    bump(marker.id);
+    const text = parseRootText(t.root.body);
+    const row = rowById.get(marker.id);
+    const line = t.root.inline?.line;
+    entries.push({
+      id: marker.id,
+      k: Number(marker.id.slice(1)),
+      severity: text.severity,
+      title: text.title,
+      gist: text.gist,
+      // The row's path, lines and base were saved together; the thread's own path may be a different revision's.
+      file: row?.file ?? t.root.inline?.path ?? "",
+      ...row ? row.lines ? { lines: row.lines } : {} : line !== void 0 ? { lines: String(line) } : {},
+      openedAt: row ? row.base : marker.openedAt,
+      ...text.was ? { was: text.was } : {},
+      rootId: t.root.id,
+      url: t.root.url,
+      resolved: t.resolved,
+      humanComments: t.comments.filter((c) => !isTrusted(identity.ids, c.authorIds)).length
+    });
+  }
+  entries.sort((a, b) => a.k - b.k);
+  return { status: "ok", summary, entries, nextK: maxK + 1, untrusted };
+}
+
+// src/inline/replies.ts
+init_define_STACK_PROMPTS();
+var MAX_BATCH_THREADS = 8;
+function targetOf(thread, summaryRootId) {
+  if (summaryRootId !== void 0 && thread.root.id === summaryRootId) return "summary";
+  return parseRootMarker(thread.root.body)?.id ?? null;
+}
+function threadView(thread, target, who, skipDirected = false) {
+  const comments = [...thread.comments].sort((a, b) => a.seq - b.seq);
+  const trusted = (c) => isTrusted(who.ids, c.authorIds);
+  const byId = new Map([[thread.root.id, thread.root], ...comments.map((c) => [c.id, c])]);
+  let covered = -1;
+  let used = 0;
+  let noted = false;
+  for (const c of comments) {
+    if (!trusted(c)) continue;
+    const a = parseAnswerMarker(c.body);
+    if (a && a.target === target) {
+      used++;
+      const through = Number(a.through);
+      if (Number.isFinite(through)) covered = Math.max(covered, through);
+    }
+    const n = parseNoteMarker(c.body);
+    if (n && n.target === target) noted = true;
+  }
+  const ids = new Set(who.ids);
+  const names = new Set(who.names);
+  const questions = [];
+  for (const c of comments) {
+    if (trusted(c)) continue;
+    if (skipDirected && decideDirectedElsewhere(c.body, ids, names).drop) continue;
+    const parent = c.parentId ? byId.get(c.parentId) : void 0;
+    const toAgent = parent ? trusted(parent) : false;
+    if (toAgent || mentionsAgent(c.body, ids, names)) questions.push({ id: c.id, seq: c.seq, author: c.author, body: c.body, createdOn: c.createdOn });
+  }
+  return { target, rootId: thread.root.id, rootBody: thread.root.body, comments, questions, pending: questions.filter((q) => q.seq > covered), used, noted };
+}
+function decide(view, max) {
+  if (view.pending.length === 0) return "none";
+  if (max === 0 || view.used < max) return "answer";
+  return view.noted ? "none" : "note";
+}
+function selectBatch(views, cap = MAX_BATCH_THREADS) {
+  const ordered = views.filter((v) => v.pending.length > 0).sort((a, b) => a.pending[0].seq - b.pending[0].seq);
+  return { batch: ordered.slice(0, cap), deferred: Math.max(0, ordered.length - cap) };
+}
+function answerBody(target, through, text) {
+  return `${stripGeneratedFooters(text).text}
+
+${buildAnswerMarker(target, through)}`;
+}
+function noteBody(target, max) {
+  const where2 = target === "summary" ? "this summary" : target;
+  return `Reply limit of ${max} reached on ${where2}. Further questions here are not answered; new questions are answered under a later review.
+
+${buildNoteMarker(target)}`;
+}
+var dropLastLine = (body) => {
+  const lines = body.replace(/\r\n/g, "\n").trimEnd().split("\n");
+  lines.pop();
+  return lines.join("\n").trimEnd();
+};
+function contextReplies(threads, who, summaryRootId) {
+  const out = [];
+  for (const t of threads) {
+    const target = targetOf(t, summaryRootId);
+    if (!target || !isTrusted(who.ids, t.root.authorIds)) continue;
+    for (const c of [...t.comments].sort((a, b) => a.seq - b.seq)) {
+      const base = { id: c.id, parentId: c.parentId ?? t.root.id, createdOn: c.createdOn, ...target !== "summary" ? { findingId: target } : {} };
+      if (isTrusted(who.ids, c.authorIds)) {
+        if (parseAnswerMarker(c.body)) out.push({ ...base, author: AGENT_REPLY_AUTHOR, body: dropLastLine(c.body) });
+        continue;
+      }
+      out.push({ ...base, author: c.author, ...c.authorIds[0] ? { authorId: c.authorIds[0] } : {}, body: c.body });
+    }
+  }
+  return out.sort((a, b) => a.createdOn.localeCompare(b.createdOn));
+}
+
+// src/inline/reply-flow.ts
+init_define_STACK_PROMPTS();
+
+// src/inline/replies-call.ts
+init_define_STACK_PROMPTS();
+var REPLY_MAX_TOKENS2 = 8e3;
+var OVERLAY = `
+
+INLINE THREAD REPLIES: each thread below is one finding you posted as an inline comment (or the review summary). Answer only the questions listed as pending, in the thread they belong to.
+- Return structured JSON only. For each thread answer once, and set "through" to the id of the newest pending question that answer covers.
+- Name the question you answer in the first sentence. Do not write footers, signatures, or marker lines.`;
+var quote = (s) => s.replace(/\r\n/g, "\n").split("\n").map((l) => `> ${l}`).join("\n");
+function threadBlock(v) {
+  const rootText = v.rootBody.replace(/\r\n/g, "\n").trimEnd().split("\n").slice(0, -1).join("\n");
+  const lines = [`## Thread ${v.target} (root comment ${v.rootId})`, `Original comment:
+${quote(rootText)}`, "Discussion:"];
+  for (const c of v.comments) lines.push(`**${c.author}** (comment ${c.id}, ${c.createdOn}):
+${quote(c.body)}`);
+  lines.push(`Pending question ids: ${v.pending.map((q) => q.id).join(", ")}`);
+  return lines.join("\n");
+}
+var clean = (text) => typeof text === "string" ? stripGeneratedFooters(text).text.trim() : "";
+function validateAnswers(raw, threads) {
+  const list = Array.isArray(raw?.answers) ? raw.answers : [];
+  const byTarget = new Map(threads.map((t) => [t.target, t]));
+  const best = /* @__PURE__ */ new Map();
+  let dropped = 0;
+  for (const item of list) {
+    const a = item;
+    const view = typeof a.id === "string" ? byTarget.get(a.id) : void 0;
+    const q = view?.pending.find((p) => p.id === a.through);
+    const text = clean(a.text);
+    if (!view || !q || !text) {
+      dropped++;
+      continue;
+    }
+    const prev = best.get(view.target);
+    if (prev) {
+      dropped++;
+      if (prev.seq >= q.seq) continue;
+    }
+    best.set(view.target, { target: view.target, rootId: view.rootId, through: q.id, text, seq: q.seq });
+  }
+  return { answers: [...best.values()].map(({ seq: _s, ...a }) => a), dropped };
+}
+async function runFindingReplies(args) {
+  const targets = args.threads.map((t) => t.target);
+  const pendingIds = [...new Set(args.threads.flatMap((t) => t.pending.map((q) => q.id)))];
+  const schema = {
+    type: "object",
+    properties: {
+      answers: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: { id: { type: "string", enum: targets }, through: { type: "string", enum: pendingIds }, text: { type: "string" } },
+          required: ["id", "through", "text"],
+          additionalProperties: false
+        }
+      }
+    },
+    required: ["answers"],
+    additionalProperties: false
+  };
+  const user = [`## Diff:
+\`\`\`diff
+${args.diff}
+\`\`\``, ...args.threads.map(threadBlock)].join("\n\n");
+  const { object, usage } = await createProvider(args.apiKey).completeStructured(
+    getReplyPrompt() + OVERLAY,
+    user,
+    schema,
+    { model: args.model, maxTokens: REPLY_MAX_TOKENS2, maxRetries: args.maxRetries }
+  );
+  return { ...validateAnswers(object, args.threads), usage };
+}
+async function runSummaryReplies(args) {
+  const pendingIds = args.view.pending.map((q) => q.id);
+  const schema = {
+    type: "object",
+    properties: { through: { type: "string", enum: pendingIds }, text: { type: "string" } },
+    required: ["through", "text"],
+    additionalProperties: false
+  };
+  const user = [`## Diff:
+\`\`\`diff
+${args.diff}
+\`\`\``, threadBlock(args.view)].join("\n\n");
+  const { object, usage } = await createProvider(args.apiKey).completeStructured(
+    getReplyPrompt() + OVERLAY,
+    user,
+    schema,
+    { model: args.model, maxTokens: REPLY_MAX_TOKENS2, maxRetries: args.maxRetries }
+  );
+  const { answers, dropped } = validateAnswers({ answers: [{ id: args.view.target, through: object?.through, text: object?.text }] }, [args.view]);
+  return { answer: answers[0] ?? null, dropped, usage };
+}
+
+// src/inline/reply-flow.ts
+var usageOf = (err) => err?.usage;
+async function planReplies(input) {
+  const plan = { answers: [], notes: [], threads: 0, deferredCap: 0, summaryAnswered: false, callFailed: false };
+  const views = [];
+  const open = /* @__PURE__ */ new Set();
+  for (const t of input.threads) {
+    const target = targetOf(t, input.summaryRootId);
+    if (!target) continue;
+    if (target !== "summary" && !isTrusted(input.who.ids, t.root.authorIds)) continue;
+    if (target !== "summary" && !parseRootMarker(t.root.body)) continue;
+    const view = threadView(t, target, input.who, input.skipDirected);
+    views.push(view);
+    if (!t.resolved) open.add(target);
+  }
+  const answerable = [];
+  let summaryView;
+  for (const v of views) {
+    if (!open.has(v.target)) continue;
+    const isSummary = v.target === "summary";
+    const decision = isSummary ? decide(v, input.maxSummary) : decide(v, input.maxFinding);
+    if (decision === "note") plan.notes.push({ target: v.target, rootId: v.rootId, max: isSummary ? input.maxSummary : input.maxFinding });
+    if (decision !== "answer") continue;
+    if (isSummary) summaryView = v;
+    else answerable.push(v);
+  }
+  const { batch, deferred } = selectBatch(answerable);
+  plan.deferredCap = deferred;
+  plan.threads = batch.length + (summaryView ? 1 : 0);
+  const usages = [];
+  if (batch.length > 0) {
+    try {
+      const r = await runFindingReplies({ ...input.call, threads: batch });
+      usages.push(r.usage);
+      plan.answers.push(...r.answers);
+    } catch (err) {
+      plan.callFailed = true;
+      plan.error = err instanceof Error ? err : new Error(String(err));
+      const u = usageOf(err);
+      if (u) usages.push(u);
+      console.warn(`  Finding replies failed (${err?.message}) - the questions stay pending`);
+    }
+  }
+  if (summaryView) {
+    try {
+      const r = await runSummaryReplies({ ...input.call, view: summaryView });
+      usages.push(r.usage);
+      if (r.answer) {
+        plan.answers.push(r.answer);
+        plan.summaryAnswered = true;
+      }
+    } catch (err) {
+      plan.callFailed = true;
+      plan.error ??= err instanceof Error ? err : new Error(String(err));
+      const u = usageOf(err);
+      if (u) usages.push(u);
+      console.warn(`  Summary reply failed (${err?.message}) - the question stays pending`);
+    }
+  }
+  if (usages.length > 0) plan.usage = sumAttempts(...usages);
+  return plan;
+}
+
+// src/inline/reviewer-list.ts
+init_define_STACK_PROMPTS();
+var MAX_LIST_ROWS = 40;
+var MAX_GIST = 160;
+var RANK4 = { HIGH: 2, MEDIUM: 1, LOW: 0 };
+var rank = (s) => RANK4[s] ?? 0;
+var where = (file, lines) => file ? `${file}${lines ? `:${lines}` : ""} \xB7 ` : "";
+var oneLine = (t) => t.replace(/\s+/g, " ").trim();
+function gistOf(l) {
+  const g = oneLine(l.gist);
+  const text = g.length > MAX_GIST ? g.slice(0, MAX_GIST - 1).trimEnd() + "\u2026" : g;
+  return text ? `${sanitizeTitle(l.title)}: ${text}` : sanitizeTitle(l.title);
+}
+function buildPrior(items, files) {
+  const keep = (file) => !files || file !== void 0 && files.includes(file);
+  const entries = items.entries.filter((e) => keep(e.file));
+  const open = entries.filter((e) => !e.resolved).sort((a, b) => rank(b.severity) - rank(a.severity) || b.k - a.k);
+  const resolved2 = entries.filter((e) => e.resolved).sort((a, b) => rank(b.severity) - rank(a.severity) || b.k - a.k);
+  const noted = items.summaryOnly.filter((l) => keep(l.file));
+  const room = (used) => Math.max(0, MAX_LIST_ROWS - used);
+  const openKept = open.slice(0, MAX_LIST_ROWS);
+  const notedKept = noted.slice(0, room(openKept.length));
+  const resolvedKept = resolved2.slice(0, room(openKept.length + notedKept.length));
+  if (openKept.length + notedKept.length + resolvedKept.length === 0) return void 0;
+  const out = [`## Already Reported on This PR (Review #${items.n}, commit ${items.commit}):`];
+  const threadLine = (e) => `[${e.id}] ${e.severity} \xB7 ${where(e.file, e.lines)}${sanitizeTitle(e.title)}`;
+  if (openKept.length) {
+    out.push("These findings already have threads; do not report them again, even if still present:", ...openKept.map(threadLine));
+  }
+  if (notedKept.length) {
+    out.push(
+      "Noted earlier without a thread; report each again in findings if it is still present:",
+      ...notedKept.map((l) => `- ${l.severity} \xB7 ${where(l.file, l.lines)}${gistOf(l)}`)
+    );
+  }
+  if (resolvedKept.length) {
+    out.push("Resolved by a developer; report one again only if it is now more severe than listed:", ...resolvedKept.map(threadLine));
+  }
+  return { block: out.join("\n") };
+}
+
+// src/inline/writer.ts
+init_define_STACK_PROMPTS();
+var InlineWriteError = class extends Error {
+  constructor(message, result) {
+    super(message);
+    this.result = result;
+    this.name = "InlineWriteError";
+  }
+  result;
+};
+var statusOf = (err) => err?.response?.status;
+var refused = (err) => {
+  const s = statusOf(err);
+  return s !== void 0 && s >= 400 && s < 500;
+};
+var msg = (err) => {
+  try {
+    return String(err?.message ?? err);
+  } catch {
+    return "unknown error";
+  }
+};
+async function writeInline(input) {
+  const { adapter: adapter2, prId, identity } = input;
+  const head12 = input.head.slice(0, 12);
+  const res = {
+    outcome: "written",
+    posted: [],
+    failed: [],
+    cancelled: [],
+    entries: [...input.entries],
+    answers: { posted: 0, failed: 0, uncertain: 0, skipped: 0, summaryPosted: 0 },
+    notesPosted: 0,
+    summary: "not_written",
+    headRecorded: false,
+    reconciled: 0
+  };
+  const loaded = input.summary.kind === "found" && input.summary.check === "valid" && input.summary.state ? input.summary.state : { n: 0, commits: [] };
+  const trusted = (authorIds) => isTrusted(identity.ids, authorIds);
+  const known = new Set(input.entries.map((e) => e.id));
+  const takenIds = new Set(known);
+  let touched = false;
+  let uncertain = false;
+  let invalidated = false;
+  let headInSummary = false;
+  let expectedBody = input.summary.kind === "found" ? input.summary.comment.body : "";
+  const stop = (outcome) => {
+    res.outcome = outcome;
+    return res;
+  };
+  let headCheckFailed = false;
+  const moved = () => headCheckFailed ? "head_check_failed" : touched ? "head_moved_partial" : "head_moved_skip";
+  if (input.dryRun) return dryRun(input, res, loaded, head12);
+  async function headMoved() {
+    try {
+      const now = (await adapter2.getPullRequestInfo(prId)).sourceCommit.slice(0, 12);
+      if (now === head12) return false;
+      res.headMovedAt = now;
+    } catch (err) {
+      console.warn(`  Head check failed (${msg(err)}) - no further writes`);
+      headCheckFailed = true;
+    }
+    return true;
+  }
+  async function relist() {
+    let threads;
+    try {
+      threads = await adapter2.listMarkedThreads(prId, isInlineMarked);
+    } catch (err) {
+      console.warn(`  Re-list failed (${msg(err)}) - no further writes`);
+      if (!touched) throw new InlineWriteError(`Re-list failed before any write (${msg(err)})`, { ...res, outcome: "write_failed" });
+      uncertain = true;
+      return { ok: false, outcome: "write_uncertain" };
+    }
+    const reg = buildRegistry(threads, identity);
+    if (reg.status === "identity_mismatch") return { ok: false, outcome: "identity_mismatch" };
+    if (reg.entries.some((e) => !known.has(e.id))) return { ok: false, outcome: "concurrent_run" };
+    const s = reg.summary;
+    const same = input.summary.kind === "none" ? s.kind === "none" : s.kind === "found" && s.comment.id === input.summary.comment.id && canonical(s.comment.body) === canonical(expectedBody);
+    if (!same) return { ok: false, outcome: "concurrent_run" };
+    res.entries = reg.entries;
+    return { ok: true, threads, reg };
+  }
+  if (input.mode === "review" && input.forced && input.summary.kind === "found" && input.summary.check === "valid" && loaded.commits.includes(head12)) {
+    if (await headMoved()) return stop(moved());
+    const comment = input.summary.comment;
+    const split2 = splitState(comment.body);
+    if (!trusted(comment.authorIds) || !split2) return stop("identity_mismatch");
+    const body = withState(split2.above, { n: loaded.n, commits: loaded.commits.filter((c) => c !== head12) }, identity.agentId);
+    try {
+      await adapter2.editComment(prId, comment.id, body);
+    } catch (err) {
+      console.warn(`  Forced-run checkpoint edit failed (${msg(err)}) - nothing written`);
+      return stop("force_invalidate_failed");
+    }
+    touched = true;
+    invalidated = true;
+    expectedBody = body;
+  }
+  if (input.roots.length > 0) {
+    if (await headMoved()) return stop(moved());
+    const listed = await relist();
+    if (!listed.ok) return stop(listed.outcome);
+    const open = new Set(listed.reg.entries.filter((e) => !e.resolved).map((e) => e.id));
+    const plan = input.roots.filter((r) => {
+      if (r.was && open.has(r.was) || input.coveredByOpen?.(r, open)) {
+        res.cancelled.push(r);
+        return false;
+      }
+      return true;
+    });
+    for (const root of plan) {
+      if (await headMoved()) return stop(moved());
+      if (takenIds.has(root.id)) return stop("concurrent_run");
+      try {
+        const posted = await adapter2.postInlineComment(prId, { path: root.path, line: root.line }, input.rootText(root));
+        touched = true;
+        if (!trusted(posted.authorIds)) return stop("identity_mismatch");
+        takenIds.add(root.id);
+        known.add(root.id);
+        res.posted.push({ root, commentId: posted.id, url: posted.url });
+      } catch (err) {
+        if (refused(err)) {
+          res.failed.push({ root, reason: "post_failed" });
+          console.warn(`  Root ${root.id} refused (${msg(err)})`);
+          continue;
+        }
+        touched = true;
+        uncertain = true;
+        takenIds.add(root.id);
+        known.add(root.id);
+        res.failed.push({ root, reason: "post_uncertain" });
+        console.warn(`  Root ${root.id} outcome unknown (${msg(err)}) - not resent`);
+      }
+    }
+  }
+  if (input.answers.length > 0 || input.notes.length > 0) {
+    if (await headMoved()) return stop(moved());
+    const listed = await relist();
+    if (!listed.ok) return stop(listed.outcome);
+    if (await headMoved()) return stop(moved());
+    const summaryId = listed.reg.summary.kind === "found" ? listed.reg.summary.comment.id : void 0;
+    const byTarget = /* @__PURE__ */ new Map();
+    for (const t of listed.threads) {
+      const target = targetOf(t, summaryId);
+      if (target && trusted(t.root.authorIds)) byTarget.set(target, t);
+    }
+    const uncertainTargets = /* @__PURE__ */ new Set();
+    const post = async (t, body, target) => {
+      try {
+        const posted = await adapter2.postThreadComment(prId, t.root.id, body);
+        touched = true;
+        return trusted(posted.authorIds) ? "ok" : "identity_mismatch";
+      } catch (err) {
+        console.warn(`  Reply on ${target} ${refused(err) ? "refused" : "outcome unknown, not resent"} (${msg(err)})`);
+        if (refused(err)) return "refused";
+        touched = true;
+        uncertain = true;
+        uncertainTargets.add(target);
+        return "uncertain";
+      }
+    };
+    const owns = (t, target) => {
+      let covered = -1;
+      let noted = false;
+      for (const c of t.comments) {
+        if (!trusted(c.authorIds)) continue;
+        const a = parseAnswerMarker(c.body);
+        if (a && a.target === target && Number.isFinite(Number(a.through))) covered = Math.max(covered, Number(a.through));
+        const n = parseNoteMarker(c.body);
+        if (n && n.target === target) noted = true;
+      }
+      return { covered, noted };
+    };
+    for (const a of input.answers) {
+      const t = byTarget.get(a.target);
+      if (!t || t.root.id !== a.rootId || t.resolved || !t.comments.some((c) => c.id === a.through && !trusted(c.authorIds)) || owns(t, a.target).covered >= Number(a.through) || uncertainTargets.has(a.target)) {
+        res.answers.skipped++;
+        continue;
+      }
+      const r = await post(t, answerBody(a.target, a.through, a.text), a.target);
+      if (r === "identity_mismatch") return stop(r);
+      if (r === "ok") {
+        res.answers.posted++;
+        if (a.target === "summary") res.answers.summaryPosted++;
+      } else if (r === "refused") res.answers.failed++;
+    }
+    for (const n of input.notes) {
+      const t = byTarget.get(n.target);
+      if (!t || t.root.id !== n.rootId || t.resolved || owns(t, n.target).noted || uncertainTargets.has(n.target)) continue;
+      const r = await post(t, noteBody(n.target, n.max), n.target);
+      if (r === "identity_mismatch") return stop(r);
+      if (r === "ok") res.notesPosted++;
+    }
+    res.answers.uncertain = uncertainTargets.size;
+  }
+  if (input.mode === "review" && input.buildSummary) {
+    if (await headMoved()) return stop(moved());
+    const listed = await relist();
+    if (!listed.ok) return stop(listed.outcome);
+    if (await headMoved()) return stop(moved());
+    const present = new Set(listed.reg.entries.map((e) => e.id));
+    const settled = res.failed.filter((f) => f.reason === "post_uncertain" && present.has(f.root.id));
+    res.failed = res.failed.filter((f) => !settled.includes(f));
+    res.reconciled = settled.length;
+    const base = invalidated ? loaded.commits.filter((c) => c !== head12) : loaded.commits;
+    const recordHead = !uncertain;
+    const stateFor = (withHead) => ({ n: input.nextN, commits: withHead ? addCommit({ n: input.nextN, commits: base }, head12).commits : base });
+    const bodyFor = (withHead) => input.buildSummary(res, stateFor(withHead));
+    headInSummary = recordHead;
+    const written = await writeSummary(bodyFor, listed.reg.summary, recordHead);
+    if (written === "identity_mismatch") return stop("identity_mismatch");
+    if (written === "concurrent_run") return stop("concurrent_run");
+    if (written === "head_moved") return stop(moved());
+    res.newState = stateFor(headInSummary);
+    if (written === "uncertain") uncertain = true;
+    else if (headInSummary) {
+      res.headRecorded = true;
+      input.markHeadChecked();
+    }
+  }
+  res.outcome = uncertain ? "write_uncertain" : input.mode === "review" ? "written" : "replies_only";
+  return res;
+  async function writeSummary(bodyFor, current, withHead) {
+    const fail = (why) => {
+      throw new InlineWriteError(why, { ...res, outcome: uncertain ? "write_uncertain" : "write_failed" });
+    };
+    const create2 = async () => {
+      let posted;
+      try {
+        posted = await adapter2.postTopLevelComment(prId, bodyFor(false));
+      } catch (err) {
+        if (refused(err)) return fail(`Summary create refused (${msg(err)})`);
+        touched = true;
+        headInSummary = false;
+        console.warn(`  Summary create outcome unknown (${msg(err)}) - not resent`);
+        return "uncertain";
+      }
+      touched = true;
+      if (!trusted(posted.authorIds)) return "identity_mismatch";
+      res.summary = "created";
+      if (!withHead) return "ok";
+      try {
+        await adapter2.editComment(prId, posted.id, bodyFor(true));
+        return "ok";
+      } catch (err) {
+        headInSummary = false;
+        console.warn(`  Head checkpoint edit ${refused(err) ? "refused" : "outcome unknown"} (${msg(err)}) - head not recorded`);
+        return refused(err) ? "ok" : "uncertain";
+      }
+    };
+    if (current.kind === "none") return create2();
+    if (!trusted(current.comment.authorIds)) return "identity_mismatch";
+    try {
+      await adapter2.editComment(prId, current.comment.id, bodyFor(withHead));
+      touched = true;
+      res.summary = "edited";
+      return "ok";
+    } catch (err) {
+      const status = statusOf(err);
+      if (status === 403) return fail("Summary edit refused (403): the agent needs edit permission on its own comments");
+      if (status === 404) {
+        let threads;
+        try {
+          threads = await adapter2.listMarkedThreads(prId, isInlineMarked);
+        } catch (e) {
+          return fail(`Summary edit returned 404 and the re-list failed (${msg(e)})`);
+        }
+        const reg = buildRegistry(threads, identity);
+        if (reg.status === "identity_mismatch") return "identity_mismatch";
+        if (reg.summary.kind === "none") {
+          if (await headMoved()) return "head_moved";
+          return create2();
+        }
+        return fail("Summary edit returned 404 but the summary still exists");
+      }
+      if (refused(err)) return fail(`Summary edit refused (${msg(err)})`);
+      touched = true;
+      console.warn(`  Summary edit outcome unknown (${msg(err)}) - not resent`);
+      return "uncertain";
+    }
+  }
+}
+function dryRun(input, res, loaded, head12) {
+  console.log("\n=== DRY RUN - Inline writes (not posted) ===\n");
+  for (const r of input.roots) console.log(`--- root ${r.id} at ${r.path}:${r.line}
+${input.rootText(r)}
+`);
+  for (const a of input.answers) console.log(`--- answer on ${a.target}
+${answerBody(a.target, a.through, a.text)}
+`);
+  for (const n of input.notes) console.log(`--- note on ${n.target}
+${noteBody(n.target, n.max)}
+`);
+  if (input.mode === "review" && input.buildSummary) {
+    const synthetic = { posted: input.roots.map((root) => ({ root, commentId: "dry-run", url: "(dry run)" })), failed: [], cancelled: [], entries: res.entries };
+    const state = { n: input.nextN, commits: addCommit({ n: input.nextN, commits: loaded.commits }, head12).commits };
+    console.log(`--- summary
+${input.buildSummary(synthetic, state)}
+`);
+  }
+  console.log("=== End of inline writes ===\n");
+  res.outcome = "dry_run";
+  return res;
+}
+
+// src/inline/engine.ts
+var isCapable = (a) => typeof a.listMarkedThreads === "function" && typeof a.postInlineComment === "function" && typeof a.postTopLevelComment === "function" && typeof a.postThreadComment === "function" && typeof a.editComment === "function";
+var STOPPED = ["concurrent_run", "head_moved_skip", "head_moved_partial", "head_check_failed", "identity_mismatch", "force_invalidate_failed"];
+var forced = (ctx) => ctx.force === "clean" || ctx.force === "re-review";
+var SEVERITY_ORDER = { HIGH: 0, MEDIUM: 1, LOW: 2 };
+var NO_CHANGE_PLAIN = "### Summary\nNo reviewable changes since the last review; the earlier review stands.";
+var QUIET_PLAIN = "### Summary\nNo new findings.";
+function selectInlineEngine(adapter2, outcomeSink) {
+  if (!config.review.inlineReviews) return void 0;
+  if (outcomeSink) {
+    console.log("Inline reviews are on, but this is a benchmark run - using the legacy flow");
+    return void 0;
+  }
+  if (!isCapable(adapter2)) {
+    console.log("Inline reviews are on, but this VCS does not support them (Bitbucket only) - using the legacy review flow");
+    return void 0;
+  }
+  return new Engine(adapter2);
+}
+var emptyRecord = () => ({
+  active: true,
+  completed: false,
+  identity: "unavailable",
+  summary_check: "missing",
+  summary: "not_written",
+  roots: { posted: 0, failed: 0, summary_only: { low: 0, no_line: 0, out_of_hunk: 0, old_side: 0, over_cap: 0, duplicate: 0 } },
+  suppressed: { open_duplicate: 0, resolved: 0, in_run_duplicate: 0 },
+  raised_over_resolved: 0,
+  answers: { threads: 0, posted: 0, failed: 0, deferred_cap: 0, limit_notes: 0, summary: 0 },
+  reply_usage: null,
+  untrusted_markers: 0,
+  writes_reconciled: 0,
+  rows_collapsed: 0,
+  footer_lines_removed: 0
+});
+var lineString = (m) => m.line === void 0 ? void 0 : m.end !== void 0 && m.end > m.line ? `${m.line}-${m.end}` : String(m.line);
+function rangeString(lines) {
+  const r = parseLineRange(lines);
+  return r ? r.end > r.start ? `${r.start}-${r.end}` : String(r.start) : void 0;
+}
+var toPlanFinding = (f, paths) => {
+  const fix = config.judge.suggestedFixes ? fixPart(f) : void 0;
+  return {
+    severity: f.severity,
+    title: f.title,
+    body: f.body,
+    ...f.file ? { file: normalizeFindingPath(f.file, paths) } : {},
+    ...f.lines ? { lines: f.lines } : {},
+    ...fix ? { fix } : {}
+  };
+};
+var Engine = class {
+  constructor(adapter2) {
+    this.adapter = adapter2;
+  }
+  adapter;
+  prior;
+  replyUsage;
+  rec = emptyRecord();
+  s;
+  priorBase;
+  finished = false;
+  record() {
+    return this.rec;
+  }
+  priorFor(files) {
+    return this.priorBase ? buildPrior(this.priorBase, files) : void 0;
+  }
+  async step(state, ctx, deps) {
+    if (this.finished) return deps.transition(state, ctx);
+    if (!this.s && state !== 5 /* CHECK_PREVIOUS_REVIEWS */) return deps.transition(state, ctx);
+    switch (state) {
+      case 5 /* CHECK_PREVIOUS_REVIEWS */:
+        return this.load(ctx, deps);
+      case 13 /* CHECK_NO_CHANGE */:
+        return this.checkNoChange(ctx, deps);
+      case 17 /* JUDGE_REVIEW */:
+        return this.judge(ctx, deps);
+      case 19 /* POST_REVIEW */:
+        return this.compose(ctx, deps, false);
+      case 20 /* SKIP */:
+        return ctx.action === "NO_NEW_FINDINGS" ? this.compose(ctx, deps, true) : this.repliesOnly(ctx, deps, "skip");
+      case 6 /* CHECK_REPLIES */:
+      case 7 /* RESPOND_TO_REPLIES */:
+      case 8 /* POST_REPLY_LIMIT_NOTE */:
+        return this.repliesOnly(ctx, deps, "skip");
+      default:
+        return deps.transition(state, ctx);
+    }
+  }
+  halt(ctx, outcome, reason) {
+    this.rec.outcome = outcome;
+    this.finished = true;
+    ctx.action = "SKIP";
+    ctx.skipReason = reason;
+    return 20 /* SKIP */;
+  }
+  async identify() {
+    let api = null;
+    try {
+      api = this.adapter.getAgentIdentity ? await this.adapter.getAgentIdentity() : null;
+    } catch (err) {
+      console.warn(`  Agent identity lookup failed (${err?.message})`);
+    }
+    return resolveIdentity(api, config.review.inlineAgentAccountId);
+  }
+  async load(ctx, deps) {
+    const head = ctx.prInfo.sourceCommit;
+    const head12 = head.slice(0, 12);
+    console.log("Loading inline review state...");
+    const identity = await this.identify();
+    if (identity.status === "unavailable") return this.halt(ctx, "identity_unavailable", "the agent identity is unavailable (no adapter lookup and no AGENT_ACCOUNT_ID); nothing was posted");
+    if (identity.status === "identity_mismatch") return this.halt(ctx, "identity_mismatch", identity.reason);
+    this.rec.identity = identity.status === "api" ? "api" : "setting";
+    const threads = await this.adapter.listMarkedThreads(ctx.prId, isInlineMarked);
+    const reg = buildRegistry(threads, identity);
+    this.rec.untrusted_markers = reg.untrusted;
+    if (reg.status === "identity_mismatch") return this.halt(ctx, "identity_mismatch", reg.reason);
+    const sel = reg.summary;
+    this.rec.summary_check = sel.kind === "none" ? "missing" : sel.check;
+    const valid = sel.kind === "found" && sel.check === "valid" && sel.state ? sel : void 0;
+    const state = valid?.state ?? { n: 0, commits: [] };
+    const rows = valid ? parseRows(valid.comment.body) : void 0;
+    const summaryOnly = (rows?.summaryOnly ?? []).map((r) => ({ severity: r.severity, title: r.title, gist: r.body ?? "", ...r.file ? { file: r.file } : {}, ...r.lines ? { lines: r.lines } : {} }));
+    this.s = {
+      identity,
+      reg,
+      threads,
+      state,
+      head,
+      head12,
+      who: { ids: identity.ids, names: identity.names },
+      ...sel.kind === "found" ? { summaryRootId: sel.comment.id } : {},
+      history: valid ? parseHistory(valid.comment.body) : [],
+      carry: { ...valid ? { plain: carryNarrative(valid.comment.body) ?? void 0 } : {}, summaryOnly: rows?.summaryOnly ?? [] }
+    };
+    console.log(`  Summary ${this.rec.summary_check}, ${reg.entries.length} finding thread(s), review ${state.n} completed`);
+    if (!forced(ctx) && state.commits.includes(head12)) {
+      console.log(`  Head ${head12} was already reviewed - checking for unanswered questions...`);
+      if (ctx.checkedCommit && headMatches(ctx.checkedCommit, head)) ctx.dedupHit = "checked_commit";
+      deps.markHeadChecked(ctx);
+      this.rec.completed = true;
+      ctx.reviewNumber = state.n;
+      ctx.previousReviews = [];
+      return this.repliesOnly(ctx, deps, "dedup");
+    }
+    let unchanged = false;
+    if (!forced(ctx) && state.commits.length > 0) {
+      const base = state.commits[state.commits.length - 1];
+      try {
+        console.log(`  Fetching delta diff (${base}..${head12})...`);
+        const { filtered } = filterDiff(await ctx.adapter.getCommitDiff(base, head), config.diffExcludePatterns);
+        if (countChangedLines(filtered) === 0) {
+          unchanged = true;
+        } else {
+          const delta = await deps.narrowTargetMergeDelta(ctx, base, head, filtered);
+          if (delta === null) {
+            unchanged = true;
+            ctx.dedupHit = "target_merge";
+          } else ctx.deltaDiff = delta;
+        }
+      } catch (err) {
+        console.log(`  Delta diff fetch failed (${err?.message}) - reviewing the full PR diff`);
+        ctx.deltaFetchFailed = true;
+      }
+    }
+    ctx.previousReviews = [];
+    ctx.reviewNumber = state.n + 1;
+    if (unchanged) {
+      console.log("  No reviewable changes since the last review - refreshing the summary");
+      return this.writeRun(ctx, deps, this.noChangeSource());
+    }
+    const discussion = contextReplies(threads, this.s.who, this.s.summaryRootId);
+    if (discussion.length > 0) {
+      ctx.replies = discussion;
+      console.log(`  Found ${discussion.length} discussion comment(s) - will include in review context`);
+    }
+    if (ctx.force !== "clean") {
+      this.priorBase = { n: state.n, commit: state.commits[state.commits.length - 1] ?? reg.entries[reg.entries.length - 1]?.openedAt ?? head12, entries: reg.entries, summaryOnly };
+      this.prior = buildPrior(this.priorBase);
+    }
+    return 9 /* LOAD_PROMPT */;
+  }
+  async checkNoChange(ctx, deps) {
+    if (!isNoChange(ctx.reviewText ?? "")) return deps.transition(13 /* CHECK_NO_CHANGE */, ctx);
+    if (this.s.state.n === 0) throw new Error("Reviewer returned NO_CHANGE on a first review - refusing to silently skip");
+    console.log("  Reviewer: NO_CHANGE");
+    const coherent = ctx.reviewObject ? ctx.reviewObject.no_change === true && ctx.reviewObject.findings?.length === 0 : ctx.reviewText === "NO_CHANGE";
+    if (!coherent) return this.repliesOnly(ctx, deps, "incoherent", "NO_CHANGE reported together with findings; not recorded as checked");
+    return this.writeRun(ctx, deps, this.noChangeSource());
+  }
+  // Nothing new was reviewed, so the last verified narrative and its summary-only rows must outlive the refresh.
+  noChangeSource() {
+    const { plain, summaryOnly } = this.s.carry;
+    return { plain: plain ?? NO_CHANGE_PLAIN, findings: [], carriedSummaryOnly: summaryOnly, todoSection: "", historyText: () => "no change" };
+  }
+  // The legacy quiet gate runs before extra-pass candidates reach the judge, so one review number 1 call keeps it open for them.
+  async judge(ctx, deps) {
+    const own2 = ctx.reviewObject && Array.isArray(ctx.reviewObject.findings) ? countFindings(ctx.reviewObject) : { high: 0, medium: 0, low: 0 };
+    const extra = (ctx.breadthFindings?.length ?? 0) + (ctx.secondLookFindings?.length ?? 0) + (ctx.lensRuns ?? []).reduce((n, r) => n + r.findings.length, 0);
+    if (own2.high + own2.medium + own2.low > 0 || extra === 0) return deps.transition(17 /* JUDGE_REVIEW */, ctx);
+    const saved = ctx.reviewNumber;
+    ctx.reviewNumber = 1;
+    try {
+      return await deps.transition(17 /* JUDGE_REVIEW */, ctx);
+    } finally {
+      ctx.reviewNumber = saved;
+    }
+  }
+  async compose(ctx, deps, quiet) {
+    ctx.headChecked = void 0;
+    ctx.action = "ERROR";
+    ctx.skipReason = void 0;
+    let guard;
+    try {
+      guard = cleanAndGuard(ctx.reviewText ?? "", { judged: ctx.judgeUsage !== void 0, diff: ctx.filteredDiff ?? "", todoScan: config.review.todoScan });
+    } catch (err) {
+      if (!quiet) throw err;
+    }
+    if (!quiet && guard && !guard.ok) {
+      console.log("  Review text empty or NO_CHANGE after cleanup - not writing a review");
+      return this.repliesOnly(ctx, deps, "incoherent", "Review text empty or NO_CHANGE after cleanup");
+    }
+    const paths = (ctx.changedFiles ?? []).map((f) => f.path);
+    const found = quiet ? [] : (ctx.judgedFindings ?? ctx.reviewObject?.findings ?? []).map((f) => toPlanFinding(f, paths));
+    const n = found.length;
+    const carry = this.s.carry;
+    return this.writeRun(ctx, deps, {
+      plain: guard?.ok ? guard.cleaned : quiet ? carry.plain ?? QUIET_PLAIN : QUIET_PLAIN,
+      findings: found,
+      ...quiet ? { carriedSummaryOnly: carry.summaryOnly } : {},
+      todoSection: guard?.ok ? guard.todoSection : "",
+      historyText: (r) => n === 0 ? "no findings" : `${n} finding${n === 1 ? "" : "s"}, ${r.posted.length} new thread${r.posted.length === 1 ? "" : "s"}`
+    });
+  }
+  async geoOf(e, mapper, head12) {
+    const kept = { file: e.file || "(unknown)", ...e.lines ? { lines: e.lines } : {}, base: e.openedAt };
+    if (!e.file) return kept;
+    const m = await mapper.map(e.file, e.lines, e.openedAt);
+    if (!m) return kept;
+    const lines = lineString(m);
+    return { file: m.file, ...lines ? { lines } : {}, base: head12 };
+  }
+  async writeRun(ctx, deps, src) {
+    const s = this.s;
+    const mapper = createDeltaMapper((base) => ctx.adapter.getCommitDiff(base, s.head), s.head12);
+    const mapped = await mapEntries(s.reg.entries, mapper);
+    const geo = /* @__PURE__ */ new Map();
+    for (const m of mapped) geo.set(m.entry.id, await this.geoOf(m.entry, mapper, s.head12));
+    const plan = planRun({ findings: src.findings, entries: mapped, diff: ctx.diff ?? "", nextK: s.reg.nextK, lowThreads: config.review.inlineLowThreads });
+    for (const x of plan.summaryOnly) this.rec.roots.summary_only[x.reason]++;
+    this.rec.suppressed = { open_duplicate: plan.suppressed.open.length, resolved: plan.suppressed.resolved.length, in_run_duplicate: plan.suppressed.sameRun.length };
+    const replies = await this.replyPlan(ctx);
+    const footer = { identity: config.agentIdentity, model: config.anthropic.model, build: getBuildCommit() };
+    const carried = (src.carriedSummaryOnly ?? []).filter((c) => !mapped.some((m) => !m.entry.resolved && matches(m, c, "open")));
+    const buildSummary = (roots, state) => {
+      const { threads, resolved: resolved2, summaryOnly } = this.rows(roots, plan, geo, carried);
+      const composed = composeSummary({
+        review: { plain: src.plain, findings: src.findings },
+        threads,
+        summaryOnly,
+        resolved: resolved2,
+        history: s.history,
+        historyText: src.historyText(roots),
+        todoSection: src.todoSection,
+        footer,
+        head12: s.head12,
+        state,
+        agentId: s.identity.agentId
+      });
+      this.rec.footer_lines_removed = composed.removed;
+      this.rec.rows_collapsed = composed.collapsed;
+      return composed.body;
+    };
+    const res = await this.write(ctx, deps, {
+      mode: "review",
+      nextN: s.state.n + 1,
+      roots: plan.create,
+      rootText: (r) => rootBody({ severity: r.finding.severity, title: r.finding.title, body: r.finding.fix?.body ?? r.finding.body, ...r.finding.fix ? { fixBlock: r.finding.fix.block } : {}, id: r.id, c12: s.head12, ...r.was ? { was: r.was } : {} }),
+      answers: replies.answers,
+      notes: replies.notes,
+      buildSummary,
+      coveredByOpen: (r, ids) => mapped.some((m) => ids.has(m.entry.id) && matches(m, r.finding, "open"))
+    });
+    this.rec.raised_over_resolved = res.posted.filter((p) => p.root.was).length;
+    return this.settle(ctx, res);
+  }
+  rows(roots, plan, geo, carried) {
+    const head12 = this.s.head12;
+    const threads = [];
+    const resolved2 = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (const e of roots.entries) {
+      seen.add(e.id);
+      if (e.resolved) {
+        resolved2.push({ kind: "resolved", id: e.id, severity: e.severity, title: e.title });
+        continue;
+      }
+      const g = geo.get(e.id) ?? { file: e.file || "(unknown)", ...e.lines ? { lines: e.lines } : {}, base: e.openedAt };
+      threads.push({
+        kind: "thread",
+        severity: e.severity,
+        title: e.title,
+        file: g.file,
+        ...g.lines ? { lines: g.lines } : {},
+        base: g.base,
+        id: e.id,
+        ...e.was ? { was: e.was } : {},
+        url: e.url,
+        ...plan.changedInPush.has(e.id) ? { changed: true } : {}
+      });
+    }
+    for (const p of roots.posted) {
+      if (seen.has(p.root.id)) continue;
+      const lines = rangeString(p.root.finding.lines) ?? String(p.root.line);
+      threads.push({ kind: "thread", severity: p.root.finding.severity, title: p.root.finding.title, file: p.root.path, lines, base: head12, id: p.root.id, ...p.root.was ? { was: p.root.was } : {}, url: p.url });
+    }
+    const notThreads = [...plan.summaryOnly.map((x) => x.finding), ...roots.failed.map((f) => f.root.finding)].sort((a, b) => (SEVERITY_ORDER[a.severity] ?? 3) - (SEVERITY_ORDER[b.severity] ?? 3));
+    const summaryOnly = notThreads.map((f) => ({
+      kind: "summary_only",
+      severity: f.severity,
+      title: f.title,
+      body: f.body,
+      ...f.file ? { file: f.file } : {},
+      ...rangeString(f.lines) ? { lines: rangeString(f.lines) } : {}
+    }));
+    return { threads, resolved: resolved2, summaryOnly: [...summaryOnly, ...carried] };
+  }
+  async replyPlan(ctx) {
+    const s = this.s;
+    const model = config.reply.model || config.anthropic.model;
+    const plan = await planReplies({
+      threads: s.threads,
+      who: s.who,
+      summaryRootId: s.summaryRootId,
+      maxFinding: config.reply.maxFindingReplies,
+      maxSummary: config.reply.maxComments,
+      skipDirected: config.reply.skipDirectedElsewhere,
+      call: { apiKey: config.llmApiKey, model, maxRetries: config.anthropic.maxRetries, diff: ctx.filteredDiff ?? ctx.diff ?? "" }
+    });
+    this.rec.answers.threads = plan.threads;
+    this.rec.answers.deferred_cap = plan.deferredCap;
+    if (plan.usage) {
+      const u = plan.usage;
+      this.replyUsage = { ...u, cost_usd: void 0 };
+      addUsage(ctx, this.replyUsage);
+      this.rec.reply_usage = {
+        model,
+        input_tokens: u.input_tokens,
+        output_tokens: u.output_tokens,
+        cost_usd: u.cost_usd ?? (u.attempts ? estimateAttemptsCost(u.attempts, model) : estimateCost({ input: u.input_tokens, output: u.output_tokens, cache_read: u.cache_read_input_tokens ?? 0, cache_write: u.cache_creation_input_tokens ?? 0 }, model))
+      };
+    }
+    return plan;
+  }
+  async write(ctx, deps, parts) {
+    const s = this.s;
+    try {
+      return await writeInline({
+        adapter: this.adapter,
+        prId: ctx.prId,
+        head: s.head,
+        identity: s.identity,
+        dryRun: ctx.dryRun,
+        forced: forced(ctx),
+        summary: s.reg.summary,
+        entries: s.reg.entries,
+        markHeadChecked: () => deps.markHeadChecked(ctx),
+        ...parts
+      });
+    } catch (err) {
+      if (err instanceof InlineWriteError) {
+        this.noteWrite(err.result, parts.mode === "replies");
+        this.rec.outcome = err.result.outcome;
+        this.finished = true;
+      }
+      throw err;
+    }
+  }
+  noteWrite(res, keepCompleted = false) {
+    const r = this.rec;
+    r.summary = res.summary;
+    r.roots.posted = res.posted.length;
+    r.roots.failed = res.failed.length;
+    r.writes_reconciled = res.reconciled;
+    r.answers.posted = res.answers.posted;
+    r.answers.summary = res.answers.summaryPosted;
+    r.answers.failed = res.answers.failed + res.answers.uncertain;
+    r.answers.limit_notes = res.notesPosted;
+    if (res.headMovedAt) r.head_moved_at = res.headMovedAt;
+    if (!keepCompleted) r.completed = res.headRecorded;
+  }
+  async repliesOnly(ctx, deps, kind, reason) {
+    const plan = await this.replyPlan(ctx);
+    let res;
+    if (plan.answers.length > 0 || plan.notes.length > 0) {
+      try {
+        res = await this.write(ctx, deps, { mode: "replies", nextN: this.s.state.n + 1, roots: [], rootText: () => "", answers: plan.answers, notes: plan.notes });
+      } catch (err) {
+        if (kind === "dedup" || !(err instanceof InlineWriteError) || err.result.outcome !== "write_failed") throw err;
+      }
+    }
+    if (res) {
+      this.noteWrite(res);
+      this.rec.completed = kind === "dedup";
+    }
+    this.finished = true;
+    if (res && STOPPED.includes(res.outcome)) return this.skipFor(ctx, res.outcome, res);
+    const posted = res ? res.answers.posted + res.notesPosted : 0;
+    if (plan.callFailed && posted === 0 && kind === "dedup") {
+      this.rec.outcome = "dedup";
+      const err = plan.error ?? new Error("Reply model call failed");
+      Reflect.deleteProperty(err, "usage");
+      throw err;
+    }
+    this.rec.outcome = kind === "incoherent" ? "incoherent_no_change" : res && res.outcome !== "replies_only" ? res.outcome : posted > 0 ? "replies_only" : kind === "dedup" ? "dedup" : "skipped";
+    if (kind === "incoherent") {
+      ctx.action = "NO_CHANGE";
+      ctx.skipReason = reason;
+      return 20 /* SKIP */;
+    }
+    if (posted > 0 || res?.outcome === "dry_run" && plan.answers.length > 0) {
+      ctx.action = "REPLY";
+      ctx.skipReason = void 0;
+      return 21 /* DONE */;
+    }
+    if (kind === "dedup") {
+      ctx.action = "DEDUP_SKIP";
+      ctx.skipReason = "head already reviewed and no unanswered questions";
+    }
+    return 20 /* SKIP */;
+  }
+  settle(ctx, res) {
+    this.noteWrite(res);
+    this.rec.outcome = res.outcome;
+    this.finished = true;
+    if (STOPPED.includes(res.outcome)) return this.skipFor(ctx, res.outcome, res);
+    ctx.action = this.s.state.n === 0 ? "REVIEW" : "RE_REVIEW";
+    ctx.skipReason = void 0;
+    return 21 /* DONE */;
+  }
+  skipFor(ctx, outcome, res) {
+    this.rec.outcome = outcome;
+    this.finished = true;
+    switch (outcome) {
+      case "concurrent_run":
+        ctx.action = "DEDUP_SKIP";
+        ctx.skipReason = "another run is writing to this PR; nothing more was written";
+        break;
+      case "head_moved_skip":
+        ctx.action = "SKIP";
+        ctx.skipReason = `the PR head moved to ${res.headMovedAt ?? "a newer commit"} before anything was written; nothing was posted`;
+        break;
+      case "head_moved_partial":
+        ctx.action = "SKIP";
+        ctx.skipReason = `the PR head moved to ${res.headMovedAt ?? "a newer commit"} after some writes; the next run reviews the new head`;
+        break;
+      case "head_check_failed":
+        ctx.action = "SKIP";
+        ctx.skipReason = "the PR head could not be confirmed; no further writes were made and the head was not recorded";
+        break;
+      case "identity_mismatch":
+        ctx.action = "SKIP";
+        ctx.skipReason = "a posted comment came back under a different author; no further writes";
+        break;
+      case "force_invalidate_failed":
+        ctx.action = "SKIP";
+        ctx.skipReason = "the forced run could not invalidate the completed head in the summary; nothing was written";
+        break;
+      default:
+        ctx.action = "SKIP";
+        ctx.skipReason = `inline write ended with ${outcome}`;
+    }
+    return 20 /* SKIP */;
+  }
+};
+
 // src/review/index.ts
 function supersedeBoundary(reviews) {
   const unresolved = reviews.filter((r) => !r.resolved);
@@ -47855,10 +49848,10 @@ function questionsForAgent(replies) {
   return questions;
 }
 var agentRepliesAfter = (replies, after) => replies.filter((r) => hasReplyFooter(r.body) && r.createdOn > after).length;
-var forced = (ctx) => ctx.force === "clean" || ctx.force === "re-review";
+var forced2 = (ctx) => ctx.force === "clean" || ctx.force === "re-review";
 var promptLabel = (p) => p.lookupFailed ? `${p.source} (lookup failed)` : p.source;
 function markHeadChecked(ctx) {
-  if (forced(ctx) || ctx.dryRun || ctx.outcomeSink || ctx.bundleUncertain || ctx.deltaFetchFailed) return;
+  if (forced2(ctx) || ctx.dryRun || ctx.outcomeSink || ctx.bundleUncertain || ctx.deltaFetchFailed) return;
   ctx.headChecked = true;
 }
 function errorText(err) {
@@ -48012,7 +50005,7 @@ function planPromptCache(ctx) {
     return log;
   }
   log.reviewer_marked = true;
-  if (config.llmProvider === "openrouter") log.session_id = (0, import_crypto4.createHash)("sha256").update(`${ctx.repoSlug}:${ctx.prId}:${ctx.startTime}`).digest("hex").slice(0, 32);
+  if (config.llmProvider === "openrouter") log.session_id = (0, import_crypto5.createHash)("sha256").update(`${ctx.repoSlug}:${ctx.prId}:${ctx.startTime}`).digest("hex").slice(0, 32);
   return log;
 }
 function planPassEffort(log) {
@@ -48076,7 +50069,7 @@ async function cachedOrUncached(ctx, stage, limitMs, cached, uncached) {
     return withEffort ? carryPrior(failed.usage, uncached) : uncached();
   }
 }
-var cachedEstimate = (prefix, overlay, briefing) => Math.ceil((prefix.system.length + prefix.block.length + overlay.length + briefing.length) / 4);
+var cachedEstimate = (prefix, overlay, briefing) => defaultTokenEstimator.estimate(prefix.system.length + prefix.block.length + overlay.length + briefing.length);
 function stageAfterSecondLook() {
   if (!config.lenses.enabled) return 17 /* JUDGE_REVIEW */;
   const { lenses, unknown } = parseLensList(config.lenses.list);
@@ -48092,7 +50085,7 @@ async function transition(state, ctx) {
       console.log(`Trigger: ${event || "unknown event"}${commentAuthor ? ` by ${commentAuthor}` : ""}${kind ? ` (event kind: ${kind})` : ""}`);
       if (commentAuthor && !event && !kind && ignoreList.length) console.warn("  Comment author given without an event - IGNORE_COMMENT_AUTHORS not applied (every PR event carries an actor)");
       if (!ignoredCommentAuthor(ctx.trigger, ignoreList)) return 1 /* FETCH_PR_INFO */;
-      if (forced(ctx)) {
+      if (forced2(ctx)) {
         console.log(`  ${commentAuthor} matches IGNORE_COMMENT_AUTHORS - running anyway (--force)`);
         return 1 /* FETCH_PR_INFO */;
       }
@@ -48364,11 +50357,11 @@ async function transition(state, ctx) {
       return 11 /* ESTIMATE_TOKENS */;
     }
     case 11 /* ESTIMATE_TOKENS */: {
-      const tok = (chars) => Math.ceil(chars / 4);
+      const tok = (chars) => defaultTokenEstimator.estimate(chars);
       const shown = (s2) => shownLength(s2, config.review.lineNumbers);
       const sizes = () => {
         const files = ctx.fileContexts.reduce((sum2, f) => sum2 + shown(f.content), 0);
-        const reviews = (ctx.previousReviews ?? []).reduce((sum2, r) => sum2 + r.body.length, 0);
+        const reviews = (ctx.previousReviews ?? []).reduce((sum2, r) => sum2 + r.body.length, 0) + (ctx.inline?.prior?.block.length ?? 0);
         const replies = (ctx.replies ?? []).reduce((sum2, r) => sum2 + r.body.length, 0);
         const prompt = ctx.prompt.content.length;
         const diff = shown(ctx.filteredDiff);
@@ -48442,7 +50435,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
       if (config.review.promptCache) ctx.promptCache = planPromptCache(ctx);
       if (ctx.promptCache && config.review.cachedPassEffort) ctx.promptCache.pass_effort = planPassEffort(ctx.promptCache);
       const cache = ctx.promptCache?.reviewer_marked ? { schema: sharedOutputSchema({ lensRecommendation: recommend, alsoAffects: hiBench(ctx), scenario: !!config.review.highImpact, firstPassSites: fpSites(ctx) }), ...ctx.promptCache.session_id ? { sessionId: ctx.promptCache.session_id } : {} } : void 0;
-      const reviewTail = cache ? [recommend, cache] : recommendTail;
+      const reviewTail = ctx.inline?.prior ? [recommend, cache, ctx.inline.prior] : cache ? [recommend, cache] : recommendTail;
       const call = () => runReview(
         config.llmApiKey,
         config.anthropic.model,
@@ -48542,7 +50535,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
       const briefing = ids ? breadthBriefing(firstPass, coverage.untouched, ctx.breadthPlan, ids.tags) : breadthBriefing(firstPass, coverage.untouched, ctx.breadthPlan);
       const prefix = sharedPrefix(ctx, "breadth");
       const overlay = prefix ? breadthOverlay(remaining, config.judge.shownAnchors, fp) : "";
-      const estimate = prefix ? cachedEstimate(prefix, overlay, briefing) : ctx.estimatedInputTokens + Math.ceil((system.length - ctx.prompt.content.length + briefing.length) / 4);
+      const estimate = prefix ? cachedEstimate(prefix, overlay, briefing) : ctx.estimatedInputTokens + defaultTokenEstimator.estimate(system.length - ctx.prompt.content.length + briefing.length);
       const limits = [config.anthropic.maxInputTokens, contextWindowFor(model) - extraPassMaxTokens(ctx)].filter((n) => n > 0);
       const budget = limits.length ? Math.min(...limits) : Infinity;
       if (estimate > budget) {
@@ -48652,7 +50645,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
       const overlay = prefix ? secondLookOverlay(remaining, config.judge.shownAnchors, hi, fp) : "";
       const sharedBriefing = prefix ? secondLookFilesBriefing(flagged, briefing) : "";
       const shownSL = (s) => shownLength(s, config.review.lineNumbers);
-      const estimate = prefix ? cachedEstimate(prefix, overlay, sharedBriefing) : Math.ceil((system.length + shownSL(restrictedDiff) + briefing.length + contexts.reduce((n, c) => n + shownSL(c.content), 0)) / 4);
+      const estimate = prefix ? cachedEstimate(prefix, overlay, sharedBriefing) : defaultTokenEstimator.estimate(system.length + shownSL(restrictedDiff) + briefing.length + contexts.reduce((n, c) => n + shownSL(c.content), 0));
       const limits = [config.anthropic.maxInputTokens, contextWindowFor(model) - extraPassMaxTokens(ctx)].filter((n) => n > 0);
       const budget = limits.length ? Math.min(...limits) : Infinity;
       if (estimate > budget) {
@@ -48756,7 +50749,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
         const briefing = lensBriefing(known);
         const prefix = sharedPrefix(ctx, `lens:${lens.name}`);
         const overlay = prefix ? lensOverlay(lens, remaining, config.judge.shownAnchors) : "";
-        const estimate = prefix ? cachedEstimate(prefix, overlay, briefing) : ctx.estimatedInputTokens + Math.ceil((system.length - ctx.prompt.content.length + briefing.length) / 4);
+        const estimate = prefix ? cachedEstimate(prefix, overlay, briefing) : ctx.estimatedInputTokens + defaultTokenEstimator.estimate(system.length - ctx.prompt.content.length + briefing.length);
         if (estimate > budget) {
           run.status = "skipped_budget";
           console.log(`  Lens ${lens.name} skipped: ~${estimate.toLocaleString()} tokens exceeds the ${model} budget (${budget.toLocaleString()})`);
@@ -49082,14 +51075,14 @@ Skipping: ${ctx.skipReason}`);
       return 21 /* DONE */;
   }
 }
-async function review(adapter2, prId, dryRun = false, promptPath, force = "off", logUsage = false, repoSlug = "", outcomeSink, trigger, checkedCommit) {
+async function review(adapter2, prId, dryRun2 = false, promptPath, force = "off", logUsage = false, repoSlug = "", outcomeSink, trigger, checkedCommit) {
   console.log(`
 Starting review for PR #${prId}`);
   const startTime = Date.now();
   const ctx = {
     adapter: adapter2,
     prId,
-    dryRun,
+    dryRun: dryRun2,
     promptPath,
     force,
     logUsage,
@@ -49098,6 +51091,7 @@ Starting review for PR #${prId}`);
     trigger,
     checkedCommit,
     startTime,
+    inline: selectInlineEngine(adapter2, outcomeSink),
     usage: { input_tokens: 0, output_tokens: 0, cache_read: 0, cache_write: 0 },
     estimatedInputTokens: 0,
     action: "ERROR",
@@ -49107,7 +51101,7 @@ Starting review for PR #${prId}`);
   try {
     let state = 0 /* CHECK_TRIGGER */;
     while (state !== 21 /* DONE */) {
-      state = await transition(state, ctx);
+      state = ctx.inline ? await ctx.inline.step(state, ctx, { transition, markHeadChecked, narrowTargetMergeDelta }) : await transition(state, ctx);
     }
   } catch (err) {
     ctx.action = "ERROR";
@@ -49115,10 +51109,10 @@ Starting review for PR #${prId}`);
     if (e.usage) {
       addUsage(ctx, e.usage);
     }
-    const where = describeHttpError(err);
+    const where2 = describeHttpError(err);
     error = {
       type: e.constructor.name,
-      message: where ? `${e.message} [${where}]` : e.message,
+      message: where2 ? `${e.message} [${where2}]` : e.message,
       status: e.status ?? null
     };
   }
@@ -49539,7 +51533,7 @@ async function main() {
     const diff = await adapter2.getDiff(opts.prId);
     const result = await loadPrompt(adapter2, prInfo, void 0, changedFiles, diff);
     console.log(`
-Filled prompt length: ${result.content.length} chars (~${Math.ceil(result.content.length / 4).toLocaleString()} tokens)`);
+Filled prompt length: ${result.content.length} chars (~${defaultTokenEstimator.estimate(result.content.length).toLocaleString()} tokens)`);
     return;
   }
   if (opts.model) config.anthropic.model = opts.model;
