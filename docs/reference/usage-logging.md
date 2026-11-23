@@ -121,7 +121,7 @@ Every finding array (`review_candidates`, `judge_decisions`, `finding_scores`, `
 | `prompt_lookup` | `"failed"` \| absent | Present, right after `prompt_source`, only when the `.agent-review-instructions.md` lookup failed (e.g. rate limits past the retry budget), so the run used `prompt_source` without checking for the repo's file; the footer then reads `Prompt: <source> (lookup failed)`. Never written with `ENABLE_INSTRUCTIONS_LOOKUP_RETRY=false` |
 | `agent_commit` | `string` | Deploy commit of the agent (`getBuildCommit()`) — config attribution |
 | `prompt_hash` | `string \| null` | sha256-12 of the resolved reviewer prompt; null if no prompt loaded |
-| `judge_prompt_hash` | `string \| null` | sha256-12 of the judge prompt actually used; null when the judge didn't run |
+| `judge_prompt_hash` | `string \| null` | sha256-12 of the judge prompt actually used; null when the judge didn't run. Differs on inline re-reviews with open threads (the open-findings addendum is part of the prompt); same field, same meaning |
 | `judge_status` | `string \| null` | `disabled` \| `skipped_no_findings` \| `succeeded` \| `failed`; null when the judge stage wasn't reached |
 | `verdict_score` | `number \| null` | Merge Confidence percentage (0–100) parsed from final output (judge if used, reviewer otherwise) |
 | `computed_score` | `number \| null` | Code-computed score: `max(0, 100 − HIGHs×12 − MEDIUMs×4)` from final findings |

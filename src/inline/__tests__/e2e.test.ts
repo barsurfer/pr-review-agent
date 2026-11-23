@@ -591,3 +591,36 @@ describe('--force on a completed head', () => {
     neverClosed()
   })
 })
+
+describe('finding status in replies', () => {
+  const LINE5 = ['diff --git a/src/one.ts b/src/one.ts', 'index 1111111..2222222 100644', '--- a/src/one.ts', '+++ b/src/one.ts', '@@ -5,1 +5,1 @@', '-x', '+y', ''].join('\n')
+  const replyUser = (): string => completeStructured.mock.calls.map(c => c).find(c => String(c[0]).includes('INLINE THREAD REPLIES'))![1] as string
+
+  it('tells the reply model that a later commit changed the anchored line, on a push run', async () => {
+    reviewerFinds([POOL])
+    await run()
+    const poolId = rootOf('Pool leaks')[0].id
+    const q = ask(poolId, 'Is this still an issue?')
+    push(HEAD_B)
+    fake.hooks.commitDiff = () => LINE5
+    answerTo('F1', q)
+    const deltas = fake.calls.filter(c => c === 'delta').length
+    await run()
+    expect(replyUser()).toContain(`Finding status: opened at commit ${HEAD12}; the PR head is now ${B12}. Later commits changed the line this thread is anchored to (src/one.ts, line 5 as of ${HEAD12}).`)
+    expect(fake.calls.filter(c => c === 'delta').length).toBeGreaterThan(deltas)
+  })
+
+  it('looks the status up on a comment-triggered run at an already reviewed head', async () => {
+    reviewerFinds([POOL])
+    await run()
+    const poolId = rootOf('Pool leaks')[0].id
+    push(HEAD_B)
+    fake.hooks.commitDiff = () => LINE5
+    await run()
+    completeStructured.mockClear()
+    const q = ask(poolId, 'Was this fixed?')
+    answerTo('F1', q)
+    await run()
+    expect(replyUser()).toContain('Later commits changed the line this thread is anchored to (src/one.ts, line 5 as of')
+  })
+})

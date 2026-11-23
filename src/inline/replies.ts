@@ -3,6 +3,7 @@ import { AGENT_REPLY_AUTHOR } from '../vcs/adapter.js'
 import { decideDirectedElsewhere, mentionsAgent } from '../vcs/mention-filter.js'
 import { parseRootMarker, parseAnswerMarker, parseNoteMarker, buildAnswerMarker, buildNoteMarker, stripGeneratedFooters } from './markers.js'
 import { isTrusted } from './identity.js'
+import type { CodeSince } from './match.js'
 
 export const MAX_BATCH_THREADS = 8
 
@@ -17,6 +18,9 @@ export interface ThreadView {
   pending: Question[]
   used: number
   noted: boolean
+  anchor?: { path: string; line?: number }
+  openedAt?: string
+  status?: CodeSince
 }
 
 export interface ReplyIdentity { ids: readonly string[]; names: readonly string[] }
@@ -58,7 +62,13 @@ export function threadView(thread: MarkedThread, target: string, who: ReplyIdent
     const toAgent = parent ? trusted(parent) : false
     if (toAgent || mentionsAgent(c.body, ids, names)) questions.push({ id: c.id, seq: c.seq, author: c.author, body: c.body, createdOn: c.createdOn })
   }
-  return { target, rootId: thread.root.id, rootBody: thread.root.body, comments, questions, pending: questions.filter(q => q.seq > covered), used, noted }
+  const anchor = thread.root.inline
+  const openedAt = parseRootMarker(thread.root.body)?.openedAt
+  return {
+    target, rootId: thread.root.id, rootBody: thread.root.body, comments, questions, pending: questions.filter(q => q.seq > covered), used, noted,
+    ...(anchor ? { anchor: { path: anchor.path, ...(anchor.line !== undefined ? { line: anchor.line } : {}) } } : {}),
+    ...(openedAt ? { openedAt } : {}),
+  }
 }
 
 export function decide(view: ThreadView, max: number): Decision {

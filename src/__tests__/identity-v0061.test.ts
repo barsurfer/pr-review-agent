@@ -48,6 +48,7 @@ import { runBenchmark } from '../benchmark.js'
 import { review } from '../review/index.js'
 import { getAgentVersion, getBuildCommit } from '../review/usage.js'
 import { config } from '../config.js'
+import { getReplyPrompt } from '../review/client.js'
 import { renderReview, buildReviewFooter, buildReplyFooter } from '../review/formatter.js'
 import type { ReviewObject, ReviewFinding } from '../review/formatter.js'
 
@@ -140,7 +141,11 @@ const calls = () => completeStructured.mock.calls.map(([system, user, schema, op
   stage: stageOf(system, schema, opts), system: sha(system), user: sha(typeof user === 'string' ? user : JSON.stringify(user)), schema: sha(JSON.stringify(schema)),
   systemAfter: opts?.systemAfter === undefined ? '<undefined>' : sha(opts.systemAfter), opts: JSON.parse(JSON.stringify(opts, visible)),
 }))
-const completes = () => complete.mock.calls.map(([system, user, opts]) => ({ system: sha(system), user: sha(user), opts: JSON.parse(JSON.stringify(opts, visible)) }))
+const REPLY_V0061 = readFileSync(new URL('./__fixtures__/identity-v0061/reply-prompt-v0061.txt', import.meta.url), 'utf-8').replace(/\r\n/g, '\n')
+const REPLY_NOW = '60897d33c4f82c34'
+// The reply prompt is the one deliberate change since v0.0.61, so only its pinned new text maps back to the recorded hash.
+const pinSystem = (s: string) => (sha(s) === REPLY_NOW ? sha(REPLY_V0061) : sha(s))
+const completes = () => complete.mock.calls.map(([system, user, opts]) => ({ system: pinSystem(system), user: sha(user), opts: JSON.parse(JSON.stringify(opts, visible)) }))
 const promptDirs: string[] = []
 // The prompt path is the footer's prompt label, so its random directory and per-OS separator must not reach a fixture.
 const scrubPromptPath = (s: string) => promptDirs.reduce((out, d) => out.split(JSON.stringify(d).slice(1, -1)).join('<prompt-dir>').split(d).join('<prompt-dir>'), s).replace(/<prompt-dir>(?:\\\\|\\|\/)prompt\.txt/g, '<prompt-dir>/prompt.txt')
@@ -328,6 +333,13 @@ const SCENARIOS: Array<[string, string, () => Promise<unknown>]> = [
   T('15 prompt cache and lens recommendation on', 'REVIEW', () => { cfg.review.promptCache = true; cfg.lenses.recommend = true; return legacy() }),
 ]
 const fixtureOf = (name: string) => `./__fixtures__/identity-v0061/${name.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}.json`
+
+describe('v0.0.61 reply-prompt exception', () => {
+  it('the frozen copy is the recorded text and the live prompt is the pinned new text', () => {
+    expect(sha(REPLY_V0061)).toBe('44a8c4ec4aafb7c5')
+    expect(sha(getReplyPrompt())).toBe(REPLY_NOW)
+  })
+})
 
 describe('v0.0.61 identity (every setting off but the one a scenario names)', () => {
   it.each(SCENARIOS)('%s', async (name, action, run) => {

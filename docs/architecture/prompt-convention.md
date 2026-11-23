@@ -256,7 +256,7 @@ Key rules in the reply prompt:
 
 - Answer questions concisely based on the diff and original analysis
 - Acknowledge when developer context changes the assessment
-- Give definitive recommendations — no open-ended questions (automated agent, not chat partner)
+- Give definitive recommendations, no open-ended questions back (automated agent, not chat partner); the one exception is a dispute that hinges on developer-only knowledge, where one specific question is allowed
 - No review structure (no Summary, Findings, etc.)
 - No footer — the system adds one automatically
 

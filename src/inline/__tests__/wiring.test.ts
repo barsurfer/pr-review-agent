@@ -37,7 +37,7 @@ vi.mock('../engine.js', async importOriginal => {
 })
 
 import { review } from '../../review/index.js'
-import { runReview } from '../../review/client.js'
+import { runReview, runJudge } from '../../review/client.js'
 import { loadPrompt } from '../../prompt/loader.js'
 import { fetchContext } from '../../context/fetcher.js'
 import { logUsageRecord } from '../../review/usage.js'
@@ -306,5 +306,33 @@ describe('reply usage', () => {
     expect(record!.model).toBe('claude-haiku-5-5')
     expect(record!.cost_usd).toBeCloseTo(0.0002, 6)
     expect(record!.inline).toMatchObject({ outcome: 'replies_only', answers: { posted: 1 } })
+  })
+})
+
+describe('judge open findings through review()', () => {
+  const finding = { severity: 'MEDIUM' as const, title: 'New problem', file: 'src/two.ts', lines: '4', body: 'Bad.' }
+  beforeEach(() => {
+    const text = '### Summary\nA change.\n\n### Findings\n\nNone.\n\n### Merge Confidence: 80%'
+    vi.mocked(runJudge).mockResolvedValue({ text, usage, notes: '', scores: [], promptHash: 'h', decisions: [], kept: [] } as never)
+  })
+
+  it('passes the still-open block as argument 13 on a re-review with an open thread', async () => {
+    cfg.judge.model = 'claude-haiku-5-5'
+    seedSummary({ n: 1, commits: [A] })
+    seedThread('F1', 'Unbounded pool growth', 5)
+    mockRunReview.mockImplementation(async () => answerWith(object([finding], { delta_stats: { resolved: 0, still_open: 1, new_findings: 1 } })))
+    await review(fake.adapter, '7', false)
+    const args = vi.mocked(runJudge).mock.calls[0]
+    expect(args).toHaveLength(13)
+    expect(args[11]).toBeUndefined()
+    expect(args[12]).toEqual({ block: expect.stringContaining(`diff above is at ${HEAD12}`) })
+    expect((args[12] as { block: string }).block).toContain('- F1 · MEDIUM · src/one.ts:5 · Unbounded pool growth')
+  })
+
+  it('keeps the legacy argument list with nothing open', async () => {
+    cfg.judge.model = 'claude-haiku-5-5'
+    mockRunReview.mockImplementation(async () => answerWith(object([finding])))
+    await review(fake.adapter, '7', false)
+    expect(vi.mocked(runJudge).mock.calls[0]).toHaveLength(11)
   })
 })

@@ -11,12 +11,12 @@ import { estimateAttemptsCost, estimateCost, getBuildCommit } from '../review/us
 import type { AgentIdentity, MarkedThread, VCSAdapter } from '../vcs/adapter.js'
 import { carryNarrative, cleanAndGuard, composeSummary, fixPart, rootBody, type Guarded } from './compose.js'
 import { resolveIdentity, type IdentityResult } from './identity.js'
-import { createDeltaMapper, mapEntries, matches, type DeltaMapper, type Mapped } from './match.js'
+import { codeSince, createDeltaMapper, mapEntries, matches, type DeltaMapper, type Mapped } from './match.js'
 import { planRun, type PlanFinding, type RunPlan } from './plan.js'
 import { buildRegistry, isInlineMarked, type Registry } from './registry.js'
 import { contextReplies } from './replies.js'
 import { planReplies, type ReplyPlan } from './reply-flow.js'
-import { buildPrior, type PriorItems } from './reviewer-list.js'
+import { buildPrior, buildOpenList, type PriorItems } from './reviewer-list.js'
 import type { ResolvedRow, SummaryOnlyRow, ThreadRow } from './rows.js'
 import { parseHistory, parseRows } from './rows.js'
 import type { InlineDeps, InlineEngine, InlineOutcome, InlineRecord, Listed, SummaryState, ThreadEntry } from './types.js'
@@ -99,6 +99,7 @@ const toPlanFinding = (f: { severity: 'HIGH' | 'MEDIUM' | 'LOW'; title: string; 
 
 class Engine implements InlineEngine {
   prior?: { block: string }
+  judgeOpen?: { block: string }
   replyUsage?: LLMUsage
   private rec: InlineRecord = emptyRecord()
   private s?: Session
@@ -111,6 +112,10 @@ class Engine implements InlineEngine {
 
   priorFor(files: string[]): { block: string } | undefined {
     return this.priorBase ? buildPrior(this.priorBase, files) : undefined
+  }
+
+  judgeOpenFor(files: string[]): { block: string } | undefined {
+    return this.priorBase && this.s ? buildOpenList(this.priorBase, this.s.head12, files) : undefined
   }
 
   async step(state: State, ctx: ReviewContext, deps: InlineDeps): Promise<State> {
@@ -219,6 +224,7 @@ class Engine implements InlineEngine {
     if (ctx.force !== 'clean') {
       this.priorBase = { n: state.n, commit: state.commits[state.commits.length - 1] ?? reg.entries[reg.entries.length - 1]?.openedAt ?? head12, entries: reg.entries, summaryOnly }
       this.prior = buildPrior(this.priorBase)
+      this.judgeOpen = buildOpenList(this.priorBase, head12)
     }
     return State.LOAD_PROMPT
   }
@@ -300,7 +306,7 @@ class Engine implements InlineEngine {
     for (const x of plan.summaryOnly) this.rec.roots!.summary_only[x.reason]++
     this.rec.suppressed = { open_duplicate: plan.suppressed.open.length, resolved: plan.suppressed.resolved.length, in_run_duplicate: plan.suppressed.sameRun.length }
 
-    const replies = await this.replyPlan(ctx)
+    const replies = await this.replyPlan(ctx, mapper)
     const footer = { identity: config.agentIdentity, model: config.anthropic.model, build: getBuildCommit() }
     // A thread that landed after an uncertain POST already carries the finding, so its stale summary-only row would list it twice.
     const carried = (src.carriedSummaryOnly ?? []).filter(c => !mapped.some(m => !m.entry.resolved && matches(m, c, 'open')))
@@ -355,13 +361,18 @@ class Engine implements InlineEngine {
     return { threads, resolved, summaryOnly: [...summaryOnly, ...carried] }
   }
 
-  private async replyPlan(ctx: ReviewContext): Promise<ReplyPlan> {
+  private async replyPlan(ctx: ReviewContext, mapper: DeltaMapper): Promise<ReplyPlan> {
     const s = this.s!
     const model = config.reply.model || config.anthropic.model
     const plan = await planReplies({
       threads: s.threads, who: s.who, summaryRootId: s.summaryRootId,
       maxFinding: config.reply.maxFindingReplies, maxSummary: config.reply.maxComments, skipDirected: config.reply.skipDirectedElsewhere,
-      call: { apiKey: config.llmApiKey, model, maxRetries: config.anthropic.maxRetries, diff: ctx.filteredDiff ?? ctx.diff ?? '' },
+      call: { apiKey: config.llmApiKey, model, maxRetries: config.anthropic.maxRetries, diff: ctx.filteredDiff ?? ctx.diff ?? '', head12: s.head12 },
+      status: async v => {
+        const status = await codeSince(mapper, v.anchor, v.openedAt, s.head12)
+        console.log(`  Finding status ${v.target}: ${status}${v.openedAt ? ` (base ${v.openedAt})` : ''}`)
+        return status
+      },
     })
     this.rec.answers!.threads = plan.threads
     this.rec.answers!.deferred_cap = plan.deferredCap
@@ -410,7 +421,7 @@ class Engine implements InlineEngine {
   }
 
   private async repliesOnly(ctx: ReviewContext, deps: InlineDeps, kind: 'dedup' | 'skip' | 'incoherent', reason?: string): Promise<State> {
-    const plan = await this.replyPlan(ctx)
+    const plan = await this.replyPlan(ctx, createDeltaMapper(base => ctx.adapter.getCommitDiff(base, this.s!.head), this.s!.head12))
     let res: WriteResult | undefined
     if (plan.answers.length > 0 || plan.notes.length > 0) {
       try {

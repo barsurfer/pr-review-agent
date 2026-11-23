@@ -3,6 +3,7 @@ import type { MarkedThread } from '../vcs/adapter.js'
 import { isTrusted } from './identity.js'
 import { parseRootMarker } from './markers.js'
 import { decide, selectBatch, targetOf, threadView, type ThreadView } from './replies.js'
+import type { CodeSince } from './match.js'
 import { runFindingReplies, runSummaryReplies, type CallArgs } from './replies-call.js'
 import type { PlannedAnswer, PlannedNote } from './writer.js'
 
@@ -13,6 +14,7 @@ export interface ReplyPlanInput {
   maxFinding: number
   maxSummary: number
   skipDirected?: boolean
+  status?: (v: ThreadView) => Promise<CodeSince>
   call: CallArgs
 }
 
@@ -61,6 +63,10 @@ export async function planReplies(input: ReplyPlanInput): Promise<ReplyPlan> {
   plan.deferredCap = deferred
   plan.threads = batch.length + (summaryView ? 1 : 0)
   const usages: LLMUsage[] = []
+
+  if (input.status) {
+    for (const v of batch) v.status = await input.status(v).catch((): CodeSince => 'unknown')
+  }
 
   if (batch.length > 0) {
     try {

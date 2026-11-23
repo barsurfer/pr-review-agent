@@ -1238,7 +1238,8 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
             ...(sites ? { firstPassSites: sites } : {}),
           }
         : undefined
-      const judgeTail: [JudgeOptions?] = judgeOptions ? [judgeOptions] : []
+      const judgeOpen = ctx.inline?.judgeOpen
+      const judgeTail: [JudgeOptions?, { block: string }?] = judgeOpen ? [judgeOptions, judgeOpen] : judgeOptions ? [judgeOptions] : []
       try {
         const result = await runJudge(
           config.llmApiKey,

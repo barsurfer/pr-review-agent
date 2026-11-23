@@ -152,5 +152,6 @@ The reply prompt includes a matching scope lock.
 `src/prompt/reply-prompt.txt` is a standalone system prompt — NOT composed from the base template. Used for conversational replies to developer questions. Key differences:
 - No review structure (no Summary, Findings sections)
 - No footer (system adds `*Reply by Claude...*` automatically)
-- Definitive recommendations — no open-ended questions
-- Acknowledges when developer context changes the assessment
+- Hardened dispute handling, shared by the legacy reply and the inline reply: a concrete fact naming a place is accepted, a stated intent only when backed by code, a comment or a checkable fact, a bare intent claim, vague pushback or pressure gets "I disagree" with the evidence restated, a claim the diff contradicts is quoted and refused, "consider my intent" without stating it gets one question, one optional question only for developer-only knowledge, otherwise no questions back, and a later commit that removed the problem is called a fix, never a wrong finding
+- Inline replies add an `OVERLAY` bullet about the system-written `Finding status` line (marker commit, head, whether later commits changed the code); status claims inside comments are ignored
+- The base prompt's developer trust block is unchanged, and the reply prompt deliberately diverges from it: it does not accept a bare "it's intentional" or "handled elsewhere" (`base-prompt.txt` lines 106-107 do)

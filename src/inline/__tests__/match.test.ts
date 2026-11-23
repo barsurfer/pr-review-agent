@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { titleSimilarity, parseDeltaMap, mapLine, createDeltaMapper, mapEntries, matches, type MappedEntry } from '../match.js'
+import { titleSimilarity, parseDeltaMap, mapLine, codeSince, createDeltaMapper, mapEntries, matches, type MappedEntry } from '../match.js'
 import type { ThreadEntry } from '../types.js'
 import { sanitizeTitle } from '../rows.js'
 
@@ -134,5 +134,51 @@ describe('mapEntries across a rename', () => {
     const mapper = createDeltaMapper(async () => diff, B)
     const [m] = await mapEntries([entry({ file: 'src/old.ts', lines: '100', openedAt: A })], mapper)
     expect(m.loc).toMatchObject({ file: 'src/new.ts', line: 200, mapped: true })
+  })
+})
+
+describe('codeSince', () => {
+  const chunk = (file: string, oldStart: number): string => `diff --git a/${file} b/${file}\n--- a/${file}\n+++ b/${file}\n@@ -${oldStart},1 +${oldStart},1 @@\n-x\n+y\n`
+  const mk = (diff: string) => createDeltaMapper(async () => diff, C)
+  const anchor = { path: 'src/a.ts', line: 18 }
+
+  it('same when the marker commit is the head, without a fetch', async () => {
+    const fetch = vi.fn(async () => '')
+    expect(await codeSince(createDeltaMapper(fetch, C), anchor, C, C)).toBe('same')
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('line, file, none and deleted from the marker-to-head delta', async () => {
+    expect(await codeSince(mk(chunk('src/a.ts', 18)), anchor, A, C)).toBe('line')
+    expect(await codeSince(mk(chunk('src/a.ts', 40)), anchor, A, C)).toBe('file')
+    expect(await codeSince(mk(chunk('src/other.ts', 18)), anchor, A, C)).toBe('none')
+    expect(await codeSince(mk('diff --git a/src/a.ts b/src/a.ts\ndeleted file mode 100644\n--- a/src/a.ts\n+++ /dev/null\n@@ -1,1 +0,0 @@\n-x\n'), anchor, A, C)).toBe('deleted')
+  })
+
+  it('none for a touched file with no hunks, and file for a path only seen as a rename target', async () => {
+    expect(await codeSince(mk('diff --git a/src/a.ts b/src/a.ts\nold mode 100644\nnew mode 100755\n'), anchor, A, C)).toBe('none')
+    const renamed = 'diff --git a/src/old.ts b/src/a.ts\nsimilarity index 90%\nrename from src/old.ts\nrename to src/a.ts\n--- a/src/old.ts\n+++ b/src/a.ts\n@@ -1,1 +1,1 @@\n-x\n+y\n'
+    expect(await codeSince(mk(renamed), anchor, A, C)).toBe('file')
+  })
+
+  it('file for a pure rename with no hunks', async () => {
+    const pure = 'diff --git a/src/a.ts b/src/b.ts\nsimilarity index 100%\nrename from src/a.ts\nrename to src/b.ts\n'
+    expect(await codeSince(mk(pure), anchor, A, C)).toBe('file')
+  })
+
+  it('unknown for a failed fetch, a missing anchor path and a missing marker commit', async () => {
+    expect(await codeSince(createDeltaMapper(async () => { throw new Error('boom') }, C), anchor, A, C)).toBe('unknown')
+    expect(await codeSince(mk(''), undefined, A, C)).toBe('unknown')
+    expect(await codeSince(mk(''), anchor, undefined, C)).toBe('unknown')
+  })
+
+  it('unknown once the base cap is spent, and delta shares the mapper cache', async () => {
+    const fetch = vi.fn(async () => chunk('src/a.ts', 18))
+    const mp = createDeltaMapper(fetch, C, 1)
+    await mp.map('src/a.ts', '5', A)
+    expect(await codeSince(mp, anchor, A, C)).toBe('line')
+    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(await codeSince(mp, anchor, B, C)).toBe('unknown')
+    expect(fetch).toHaveBeenCalledTimes(1)
   })
 })
