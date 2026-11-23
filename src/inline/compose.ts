@@ -140,8 +140,22 @@ export interface ComposeInput {
 export interface ComposedSummary { body: string; removed: number; collapsed: number }
 
 interface Params {
-  history: number; resolved: boolean; titlesOnly: boolean; soKeep: number; openFull: number; overflowCount: boolean; cutAuto: boolean
+  history: number; resolved: boolean; titlesOnly: boolean; soKeep: number; openFull: number; overflowCount: boolean; cutAuto: boolean; todoKeep: number
 }
+
+const MIN_TODO_ITEMS = 10
+
+// Added-line scans are unbounded, so the section gives way to a capped list and then to one count line.
+function trimTodos(text: string, keep: number): string {
+  if (!text) return text
+  const [heading, ...items] = text.trim().split('\n')
+  if (keep >= items.length) return text
+  if (keep <= 0) return `${heading}\n- ${items.length} added; list omitted to fit the size limit`
+  return [heading, ...items.slice(0, keep), `- and ${items.length - keep} more`].join('\n')
+}
+
+const bySeverity = (rows: ReadonlyArray<{ severity: Severity }>): string =>
+  (['HIGH', 'MEDIUM', 'LOW'] as const).map(s => [s, rows.filter(r => r.severity === s).length] as const).filter(([, n]) => n).map(([s, n]) => `${n} ${s}`).join(', ')
 
 export function composeSummary(input: ComposeInput): ComposedSummary {
   const split = splitAtFindings(input.review.plain, input.review.findings)
@@ -198,7 +212,7 @@ export function composeSummary(input: ComposeInput): ComposedSummary {
       preText,
       `### Findings\n${findings.join('\n\n')}`,
       postText,
-      todoText,
+      trimTodos(todoText, p.todoKeep),
       p.resolved && input.resolved.length ? `### Resolved by developers\n${input.resolved.map(r => resolvedRow(r)).join('\n')}` : '',
       `### Review History\n${history.slice(-p.history).join('\n')}`,
       footer,
@@ -213,12 +227,14 @@ export function composeSummary(input: ComposeInput): ComposedSummary {
     return build(p, first.length - limit + TRUNC_MARGIN)
   }
 
-  const p: Params = { history: MAX_HISTORY, resolved: true, titlesOnly: false, soKeep: Infinity, openFull: MAX_OPEN_ROWS, overflowCount: false, cutAuto: false }
+  const p: Params = { history: MAX_HISTORY, resolved: true, titlesOnly: false, soKeep: Infinity, openFull: MAX_OPEN_ROWS, overflowCount: false, cutAuto: false, todoKeep: Infinity }
   const steps: Array<(x: Params) => void> = [
     x => { x.history = MIN_HISTORY },
     x => { x.resolved = false },
     x => { x.titlesOnly = true },
+    x => { x.todoKeep = MIN_TODO_ITEMS },
     x => { x.cutAuto = true },
+    x => { x.todoKeep = 0 },
     x => { x.soKeep = KEEP_SUMMARY_ONLY },
     x => { x.soKeep = 0 },
     x => { x.openFull = Math.min(x.openFull, MIN_OPEN_ROWS) },
@@ -232,8 +248,22 @@ export function composeSummary(input: ComposeInput): ComposedSummary {
     body = render(p)
   }
   if (!fits(body)) {
-    collapsed = open.length
-    body = [SUMMARY_HEADER, open.length ? `Also open: ${open.length} more threads` : 'No findings.', footer].join('\n\n')
+    const so = input.summaryOnly
+    const important = so.filter(r => r.severity !== 'LOW').sort((x, y) => RANK[y.severity] - RANK[x.severity])
+    // Rows kept here are the only way a summary-only finding reaches the next run, so HIGH/MEDIUM go first and a count never replaces them while they fit.
+    const fallback = (n: number): string => {
+      const kept = important.slice(0, n)
+      const hidden = so.filter(r => !kept.includes(r))
+      collapsed = open.length + hidden.length
+      const parts = [SUMMARY_HEADER]
+      if (open.length) parts.push(`Also open: ${open.length} more threads\n(${bySeverity(open)})`)
+      if (so.length) parts.push(['**Not posted as threads**', ...kept.map(r => summaryOnlyRow(r, true)), ...(hidden.length ? [`and ${hidden.length} more summary-only findings (${bySeverity(hidden)})`] : [])].join('\n'))
+      if (!open.length && !so.length) parts.push('No findings.')
+      return [...parts, footer].join('\n\n')
+    }
+    let n = 0
+    while (n < important.length && fits(fallback(n + 1))) n++
+    body = fallback(n)
   }
   return { body: withState(body, input.state, input.agentId), removed, collapsed }
 }

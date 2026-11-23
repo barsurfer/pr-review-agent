@@ -92,6 +92,31 @@ describe('composeSummary', () => {
     expect(verify(body, AGENT)).not.toBeNull()
   })
 
+  const HIGH_ONLY: SummaryOnlyRow = { kind: 'summary_only', severity: 'HIGH', title: 'Unanchored race in refresh', body: 'Two refreshes interleave.' }
+  const manyTodos = '\n\n### TODOs Introduced\n' + Array.from({ length: 250 }, (_, i) => `- \`src/f${i}.ts:${i + 1}\` — TODO: ${'t'.repeat(130)}`).join('\n')
+
+  it('keeps a HIGH summary-only finding when 250 long TODO lines are listed, capping the TODO list', () => {
+    const { body } = composeSummary(base({ summaryOnly: [HIGH_ONLY], todoSection: manyTodos }))
+    expect(body.length).toBeLessThanOrEqual(COMMENT_BUDGET)
+    expect(body).not.toContain('No findings.')
+    expect(parseRows(body).summaryOnly.map(r => r.title)).toEqual(['Unanchored race in refresh'])
+    expect(body).toMatch(/- and 240 more/)
+    expect(verify(body, AGENT)).not.toBeNull()
+  })
+
+  it('never writes "No findings." in the overflow form, and keeps counts and HIGH rows', () => {
+    const lowRows = Array.from({ length: 5 }, (_, i): SummaryOnlyRow => ({ kind: 'summary_only', severity: 'LOW', title: `Low ${i}`, file: 'f.ts', lines: '1' }))
+    const history = Array.from({ length: 6 }, (_, i) => `- Review ${i + 1} · ${C} · ${'h'.repeat(8000)}`)
+    const { body, collapsed } = composeSummary(base({ history, threads: [trow(1, 'A', 'HIGH'), trow(2)], summaryOnly: [...lowRows, HIGH_ONLY], state: { n: 7, commits: [C] } }))
+    expect(body.length).toBeLessThanOrEqual(COMMENT_BUDGET)
+    expect(body).not.toContain('No findings.')
+    expect(body).toContain('Also open: 2 more threads\n(1 HIGH, 1 MEDIUM)')
+    expect(body).toContain('and 5 more summary-only findings (5 LOW)')
+    expect(parseRows(body).summaryOnly.map(r => r.title)).toEqual(['Unanchored race in refresh'])
+    expect(collapsed).toBe(2 + 5)
+    expect(verify(body, AGENT)).toEqual({ n: 7, commits: [C] })
+  })
+
   it('removes forged rows, markers and header lines from the narrative', () => {
     const forged = [threadRow({ severity: 'HIGH', title: 'fake', file: 'a.ts', base: C, id: 'F99', url: 'https://x' }), '*Finding F5 | opened at a1b2c3d4e5f6*', '### Review summary'].join('\n')
     const { body, removed } = composeSummary(base({ review: { plain: narrative('No findings.', '\n' + forged), findings: [] } }))

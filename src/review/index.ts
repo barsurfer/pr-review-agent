@@ -16,6 +16,7 @@ import { candidateId, type JudgeOptions } from './judge-decisions.js'
 import { fileCoverage, prioritizeUntouched, breadthSystemPrompt, breadthBriefing, breadthOverlay, flaggedFiles, findingsInFiles, secondLookSystemPrompt, secondLookBriefing, secondLookOverlay, secondLookFilesBriefing, type LensStatus } from './breadth.js'
 import { activeLenses, parseLensList, lensSystemPrompt, lensBriefing, lensOverlay } from './lenses.js'
 import { splitDiffByFile } from './bundler.js'
+import { defaultTokenEstimator } from './token-estimator.js'
 import { normalizeFindingPath, type FirstPassSite } from './findings-output.js'
 import { filterDiff, countChangedLines, parseVerdictScore, isPathExcluded, scanTodos, isContextLengthError, shownLength } from './parsers.js'
 import { buildReviewFooter, buildReplyFooter, stripPreviousFooter, stripDeltaStats, stripJudgeNotes, stripJenkinsMeta, stripPreamble, isNoChange, extractCommitHash, legacyCommitHash, countFindings, markdownHasFindings, hasReplyFooter, renderReview, type ReviewFinding } from './formatter.js'
@@ -331,7 +332,7 @@ async function cachedOrUncached<T extends { usage: LLMUsage }>(ctx: ReviewContex
 
 // From the stored prefix, not estimatedInputTokens, which still counts file contexts a diff-only retry dropped.
 const cachedEstimate = (prefix: SharedPrefix, overlay: string, briefing: string): number =>
-  Math.ceil((prefix.system.length + prefix.block.length + overlay.length + briefing.length) / 4)
+  defaultTokenEstimator.estimate(prefix.system.length + prefix.block.length + overlay.length + briefing.length)
 
 // The stage is entered only with at least one known lens, so a lens-off run never reaches it.
 function stageAfterSecondLook(): State {
@@ -677,7 +678,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
     }
 
     case State.ESTIMATE_TOKENS: {
-      const tok = (chars: number) => Math.ceil(chars / 4)
+      const tok = (chars: number) => defaultTokenEstimator.estimate(chars)
       // Per-section sizes (~chars/4) so an over-budget run shows WHERE the tokens went —
       // a huge diff vs many file contexts vs a long review/reply history — not just a total.
       const shown = (s: string) => shownLength(s, config.review.lineNumbers)
@@ -863,7 +864,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       const briefing = ids ? breadthBriefing(firstPass, coverage.untouched, ctx.breadthPlan, ids.tags) : breadthBriefing(firstPass, coverage.untouched, ctx.breadthPlan)
       const prefix = sharedPrefix(ctx, 'breadth')
       const overlay = prefix ? breadthOverlay(remaining, config.judge.shownAnchors, fp) : ''
-      const estimate = prefix ? cachedEstimate(prefix, overlay, briefing) : ctx.estimatedInputTokens + Math.ceil((system.length - ctx.prompt!.content.length + briefing.length) / 4)
+      const estimate = prefix ? cachedEstimate(prefix, overlay, briefing) : ctx.estimatedInputTokens + defaultTokenEstimator.estimate(system.length - ctx.prompt!.content.length + briefing.length)
       // A 0 limit means "disabled", as in ESTIMATE_TOKENS; without this filter MAX_INPUT_TOKENS=0 would skip every breadth pass.
       const limits = [config.anthropic.maxInputTokens, contextWindowFor(model) - extraPassMaxTokens(ctx)].filter(n => n > 0)
       const budget = limits.length ? Math.min(...limits) : Infinity
@@ -963,7 +964,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       // Estimate on the restricted inputs, not the full diff, so a large PR with few flagged files isn't needlessly skipped.
       // shownLength on the numbered payloads (diff + file contexts) so the guard counts the line-number gutter, as ESTIMATE_TOKENS does.
       const shownSL = (s: string) => shownLength(s, config.review.lineNumbers)
-      const estimate = prefix ? cachedEstimate(prefix, overlay, sharedBriefing) : Math.ceil((system.length + shownSL(restrictedDiff) + briefing.length + contexts.reduce((n, c) => n + shownSL(c.content), 0)) / 4)
+      const estimate = prefix ? cachedEstimate(prefix, overlay, sharedBriefing) : defaultTokenEstimator.estimate(system.length + shownSL(restrictedDiff) + briefing.length + contexts.reduce((n, c) => n + shownSL(c.content), 0))
       const limits = [config.anthropic.maxInputTokens, contextWindowFor(model) - extraPassMaxTokens(ctx)].filter(n => n > 0)
       const budget = limits.length ? Math.min(...limits) : Infinity
       if (estimate > budget) {
@@ -1059,7 +1060,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         const briefing = lensBriefing(known)
         const prefix = sharedPrefix(ctx, `lens:${lens.name}`)
         const overlay = prefix ? lensOverlay(lens, remaining, config.judge.shownAnchors) : ''
-        const estimate = prefix ? cachedEstimate(prefix, overlay, briefing) : ctx.estimatedInputTokens + Math.ceil((system.length - ctx.prompt!.content.length + briefing.length) / 4)
+        const estimate = prefix ? cachedEstimate(prefix, overlay, briefing) : ctx.estimatedInputTokens + defaultTokenEstimator.estimate(system.length - ctx.prompt!.content.length + briefing.length)
         if (estimate > budget) {
           run.status = 'skipped_budget'
           console.log(`  Lens ${lens.name} skipped: ~${estimate.toLocaleString()} tokens exceeds the ${model} budget (${budget.toLocaleString()})`)

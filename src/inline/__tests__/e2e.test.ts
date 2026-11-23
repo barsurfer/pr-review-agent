@@ -99,7 +99,7 @@ beforeEach(() => {
   fake.hooks.diff = DIFF
   fake.hooks.files = FILES
   fake.hooks.commitDiff = () => DELTA
-  Object.assign(cfg.review, { inlineReviews: true, inlineLowThreads: false, inlineAgentAccountId: '', promptCache: false, secondLook: false, bundledReview: false, effort: '' })
+  Object.assign(cfg.review, { inlineReviews: true, inlineLowThreads: false, inlineAgentAccountId: '', promptCache: false, secondLook: false, bundledReview: false, effort: '', todoScan: false })
   Object.assign(cfg.reply, { maxComments: 5, maxFindingReplies: 5 })
   vi.mocked(loadPrompt).mockResolvedValue({ content: 'System prompt here', source: 'repo' } as never)
   vi.mocked(fetchContext).mockResolvedValue([])
@@ -510,6 +510,27 @@ describe('thread cap', () => {
     const section = summaries()[0].body.split('**Not posted as threads**')[1].split(/\n### /)[0]
     expect(section.match(/ · no thread/g)).toHaveLength(2)
     expect(section).not.toMatch(/\bF\d+\b/)
+  })
+})
+
+describe('a huge TODO scan', () => {
+  it('lists the summary-only HIGH finding and a capped TODO list instead of "No findings."', async () => {
+    cfg.review.todoScan = true
+    const path = 'src/todos.ts'
+    fake.hooks.diff = DIFF + [
+      `diff --git a/${path} b/${path}`, 'new file mode 100644', 'index 0000000..1111111', '--- /dev/null', `+++ b/${path}`, '@@ -0,0 +1,250 @@',
+      ...Array.from({ length: 250 }, (_, i) => `+// TODO: ${'t'.repeat(120)} ${i}`), '',
+    ].join('\n')
+    fake.hooks.files = [...FILES, { path, status: 'added' }]
+    reviewerFinds([{ severity: 'HIGH', title: 'Stale cache key', file: 'src/one.ts', lines: '100', body: 'The key ignores the tenant.' }])
+    const record = await run()
+    const body = summaries()[0].body
+    expect(body).not.toContain('No findings.')
+    expect(body).toContain('- **HIGH – Stale cache key** (`src/one.ts:100`) · no thread')
+    expect(body).toContain('### TODOs Introduced')
+    expect(body).toMatch(/- and 240 more/)
+    expect(verify(body, ME)).toEqual({ n: 1, commits: [HEAD12] })
+    expect(record!.checked_commit).toBe(HEAD)
   })
 })
 

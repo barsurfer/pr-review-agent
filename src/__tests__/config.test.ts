@@ -341,7 +341,11 @@ describe('inline review settings', () => {
   }
 
   it('defaults to off, empty account id and 5 finding replies', async () => {
-    const c = await load({})
+    // Keys must be unset (an empty string bypasses the default), and a missing dotenv file stops a developer .env refilling them.
+    vi.stubEnv('DOTENV_CONFIG_PATH', 'D:/nonexistent/.env')
+    for (const k of ['ENABLE_INLINE_REVIEWS', 'ENABLE_INLINE_LOW_THREADS', 'AGENT_ACCOUNT_ID', 'MAX_FINDING_REPLIES']) vi.stubEnv(k, undefined)
+    vi.resetModules()
+    const c = (await import('../config.js')).config
     expect(c.review).toMatchObject({ inlineReviews: false, inlineLowThreads: false, inlineAgentAccountId: '' })
     expect(c.reply.maxFindingReplies).toBe(5)
   })

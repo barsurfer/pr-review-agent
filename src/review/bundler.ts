@@ -1,6 +1,7 @@
 // ---------------------------------------------------------------------------
 // Split a too-large diff into token-bounded bundles — pure, no I/O
 // ---------------------------------------------------------------------------
+import { defaultTokenEstimator } from './token-estimator.js'
 
 export interface FileUnit {
   path: string
@@ -18,7 +19,7 @@ export interface BundlePlan {
   oversized: FileUnit[]
 }
 
-export const estimateTokens = (chars: number): number => Math.ceil(chars / 4)
+export const estimateTokens = (chars: number): number => defaultTokenEstimator.estimate(chars)
 
 /** Per-file diff sections keyed by new path. */
 export function splitDiffByFile(diff: string): Map<string, string> {

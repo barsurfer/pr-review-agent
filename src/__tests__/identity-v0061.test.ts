@@ -414,7 +414,9 @@ describe('v0.0.61 identity: each scenario reached its intended path', () => {
 describe('v0.0.61 identity at the real config.ts defaults', () => {
   it('the inline settings read off, and that default matches every fixture', async () => {
     const saved = { ...process.env }
+    // Keys must be unset (an empty string bypasses the default), and a missing dotenv file stops a developer .env refilling them.
     for (const k of ['ENABLE_INLINE_REVIEWS', 'ENABLE_INLINE_LOW_THREADS', 'AGENT_ACCOUNT_ID', 'MAX_FINDING_REPLIES']) delete process.env[k]
+    process.env.DOTENV_CONFIG_PATH = 'D:/nonexistent/.env'
     process.env.ANTHROPIC_API_KEY ||= 'test-key'
     const { config: real } = await vi.importActual<typeof import('../config.js')>('../config.js')
     // Restored in place: replacing process.env leaves vitest's stubEnv restoring a stale object, which leaks stubs into later files in the worker.
