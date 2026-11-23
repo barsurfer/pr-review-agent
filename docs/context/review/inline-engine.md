@@ -6,7 +6,7 @@ Opt-in, Bitbucket only. Findings are posted as inline threads on the diff, with 
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `ENABLE_INLINE_REVIEWS` | `false` | Turns the inline engine on. Off: the legacy flow runs exactly as before. |
+| `ENABLE_INLINE_REVIEWS` | `false` | Turns the inline engine on. Off: the legacy flow runs as before; replies use the shared reply prompt, which is not flag-gated. |
 | `ENABLE_INLINE_LOW_THREADS` | `false` | Also open threads for LOW findings. Off: LOW findings are listed in the summary only. |
 | `AGENT_ACCOUNT_ID` | empty | The agent's Bitbucket account id. Optional only when `GET /2.0/user` works. In the PR 112 pilot the Jenkins credentials got 200 from it and matched the setting (`identity: "api"`); the 403 seen earlier came from local credentials without account read scope. Without an identity the engine stops with "agent identity is unavailable" and posts nothing, so set this to the bot's `account_id` (`712020:...` form). The `{uuid}` form also works (braces are stripped; both forms are compared against the author's `account_id` and `uuid`); a value that disagrees with the adapter stops the run (`identity_mismatch`). |
 | `MAX_FINDING_REPLIES` | `5` | Agent answers per finding thread (0 = unlimited). At the limit the agent posts one "Replies paused" note, then stays silent. |

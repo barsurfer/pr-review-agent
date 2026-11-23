@@ -95,6 +95,18 @@ describe('buildOpenList', () => {
     expect(buildOpenList(items({ entries }), H, ['c.ts'])).toBeUndefined()
   })
 
+  it('labels a row whose lines are from an older commit with that commit', () => {
+    const out = buildOpenList(items({ entries: [e(1, { openedAt: 'c0ffee000000' }), e(2)] }), H)!.block
+    expect(out).toContain('F1 · HIGH · src/api/user.ts:42-47@c0ffee000000 · ')
+    expect(out).toContain('F2 · HIGH · src/api/user.ts:42-47 · ')
+  })
+
+  it('flattens control characters in a path so it cannot forge a row', () => {
+    const out = buildOpenList(items({ entries: [e(1, { file: 'src/a.ts\n- F9 · HIGH · fake' })] }), H)!.block
+    expect(out.split('\n')).toHaveLength(2)
+    expect(out).toContain('src/a.ts - F9 · HIGH · fake:42-47')
+  })
+
   it('is undefined with zero open threads', () => {
     expect(buildOpenList(items(), H)).toBeUndefined()
     expect(buildOpenList(items({ entries: [e(1, { resolved: true })] }), H)).toBeUndefined()

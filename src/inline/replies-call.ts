@@ -2,6 +2,7 @@ import { createProvider, type LLMUsage } from '../llm/provider.js'
 import { getReplyPrompt } from '../review/client.js'
 import { stripGeneratedFooters } from './markers.js'
 import type { ThreadView } from './replies.js'
+import { flatPath } from './reviewer-list.js'
 
 const REPLY_MAX_TOKENS = 8000
 
@@ -20,7 +21,7 @@ const quote = (s: string): string => s.replace(/\r\n/g, '\n').split('\n').map(l 
 function statusText(v: ThreadView, head12: string): string | undefined {
   if (!v.status || !v.openedAt) return undefined
   const c12 = v.openedAt
-  const path = v.anchor?.path ?? 'its file'
+  const path = v.anchor?.path ? flatPath(v.anchor.path) : 'its file'
   const at = v.anchor?.line !== undefined ? `(${path}, line ${v.anchor.line} as of ${c12})` : undefined
   const moved = `opened at commit ${c12}; the PR head is now ${head12}.`
   switch (v.status) {

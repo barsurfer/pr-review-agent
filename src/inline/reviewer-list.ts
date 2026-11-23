@@ -9,7 +9,9 @@ const rank = (s: string): number => RANK[s as Severity] ?? 0
 
 export interface PriorItems { n: number; commit: string; entries: readonly ThreadEntry[]; summaryOnly: readonly Listed[] }
 
-const where = (file?: string, lines?: string): string => (file ? `${file}${lines ? `:${lines}` : ''} · ` : '')
+// A path comes from the PR, and a newline in it would forge a row the model reads as listed.
+export const flatPath = (p: string): string => p.replace(/[\u0000-\u001f\u007f]+/g, ' ')
+const where = (file?: string, lines?: string, at?: string): string => (file ? `${flatPath(file)}${lines ? `:${lines}${at ? `@${at}` : ''}` : ''} · ` : '')
 const oneLine = (t: string): string => t.replace(/\s+/g, ' ').trim()
 
 function gistOf(l: Listed): string {
@@ -24,7 +26,7 @@ export function buildOpenList(items: PriorItems, head12: string, files?: readonl
     .sort((a, b) => rank(b.severity) - rank(a.severity) || b.k - a.k)
     .slice(0, MAX_LIST_ROWS)
   if (open.length === 0) return undefined
-  const rows = open.map(e => `- ${e.id} · ${e.severity} · ${where(e.file, e.lines)}${gistOf(e)}`)
+  const rows = open.map(e => `- ${e.id} · ${e.severity} · ${where(e.file, e.lines, e.openedAt !== items.commit ? e.openedAt : undefined)}${gistOf(e)}`)
   return { block: [`## Still Open on This PR (Review #${items.n}; lines as of commit ${items.commit}, the diff above is at ${head12}, so lines may have moved):`, ...rows].join('\n') }
 }
 
