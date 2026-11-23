@@ -19,7 +19,7 @@ import { MAX_UNTOUCHED_LISTED, type BreadthStatus, type SecondLookStatus, type L
 import { activeLenses, type LensRecommendation } from './lenses.js'
 import { isCheckedCommitHash } from './checked-commit.js'
 import type { SuggestedFixStats } from './suggested-fix.js'
-import type { ReviewContext, LensRun, EventKind, PassCall, PromptCacheLog, StageUsage } from './types.js'
+import type { ReviewContext, LensRun, EventKind, PassCall, PromptCacheLog, StageUsage, TokenMetrics } from './types.js'
 import { isAgentReply } from '../vcs/adapter.js'
 import { inlineRecord } from '../inline/record.js'
 import type { InlineRecord } from '../inline/types.js'
@@ -128,6 +128,7 @@ export interface UsageRecord {
   touch_rate: number | null
   delta: { developer_replies: number; human_replies: number; agent_replies: number; resolved: number; still_open: number; new_findings: number } | null
   reply_authors?: string[]
+  token_metrics?: TokenMetrics
   checked_commit?: string
   dedup_source?: 'checked_commit' | 'target_merge'
   reply_limit_note?: true
@@ -164,8 +165,13 @@ const MODEL_PRICING: Record<string, { input: number; output: number }> = {
 }
 
 // Haiku 5.5 is the one model priced by prompt length — 5x higher once the input prompt passes 100k tokens.
-function haiku55Pricing(inputTokens: number): { input: number; output: number } {
-  return inputTokens > 100_000 ? { input: 0.5, output: 2.5 } : { input: 0.1, output: 0.5 }
+function haiku55Pricing(tier: boolean): { input: number; output: number } {
+  return tier ? { input: 0.5, output: 2.5 } : { input: 0.1, output: 0.5 }
+}
+
+// Haiku 5.5's tier counts the whole prompt, cached tokens included.
+export function billedAtTier(tokens: StageTokens, model: string): boolean {
+  return baseModelId(model) === 'claude-haiku-5-5' && tokens.input + (tokens.cache_read ?? 0) + (tokens.cache_write ?? 0) > 100_000
 }
 
 // A cache read bills at this fraction of the input rate; a 5-minute cache write at 1.25x.
@@ -175,29 +181,113 @@ function cacheReadRate(base: string): number {
   return 0.1
 }
 
-export function estimateCost(tokens: StageTokens, model: string): number {
-  return Math.round(unroundedCost(tokens, model) * 10000) / 10000 // 4 decimal places
+export function estimateCost(tokens: StageTokens, model: string, quiet = false): number {
+  return Math.round(unroundedCost(tokens, model, { quiet }) * 10000) / 10000 // 4 decimal places
 }
 
 // Haiku 5.5's tier is per request, so each attempt is priced alone; one that reported a cost keeps it.
-export function estimateAttemptsCost(attempts: readonly LLMUsage[], model: string): number {
-  const cost = attempts.reduce((sum, a) => sum + (a.cost_usd ?? unroundedCost({ input: a.input_tokens, output: a.output_tokens, cache_read: a.cache_read_input_tokens ?? 0, cache_write: a.cache_creation_input_tokens ?? 0 }, model)), 0)
+export function estimateAttemptsCost(attempts: readonly LLMUsage[], model: string, quiet = false): number {
+  const cost = attempts.reduce((sum, a) => sum + (a.cost_usd ?? unroundedCost(attemptTokens(a), model, { quiet })), 0)
   return Math.round(cost * 10000) / 10000
 }
 
-function unroundedCost(tokens: StageTokens, model: string): number {
+function attemptTokens(a: Pick<LLMUsage, 'input_tokens' | 'output_tokens' | 'cache_read_input_tokens' | 'cache_creation_input_tokens'>): StageTokens {
+  return { input: a.input_tokens, output: a.output_tokens, cache_read: a.cache_read_input_tokens ?? 0, cache_write: a.cache_creation_input_tokens ?? 0 }
+}
+
+// baseRates prices Haiku 5.5 below the tier so a caller can take the difference; quiet keeps metrics callers from adding console output.
+function unroundedCost(tokens: StageTokens, model: string, opts: { baseRates?: boolean; quiet?: boolean } = {}): number {
   const base = baseModelId(model)
   const read = tokens.cache_read ?? 0
   const write = tokens.cache_write ?? 0
-  // Haiku 5.5's tier counts the whole prompt, cached tokens included.
-  let p = base === 'claude-haiku-5-5' ? haiku55Pricing(tokens.input + read + write) : (MODEL_PRICING[model] ?? MODEL_PRICING[base])
+  let p = base === 'claude-haiku-5-5' ? haiku55Pricing(!opts.baseRates && billedAtTier(tokens, model)) : (MODEL_PRICING[model] ?? MODEL_PRICING[base])
   if (!p) {
-    console.warn(`No pricing entry for model "${model}" — estimating with claude-sonnet-4-6 rates`)
+    if (!opts.quiet) console.warn(`No pricing entry for model "${model}" — estimating with claude-sonnet-4-6 rates`)
     p = MODEL_PRICING['claude-sonnet-4-6']
   }
   return read || write
     ? (tokens.input / 1_000_000) * p.input + (write / 1_000_000) * p.input * 1.25 + (read / 1_000_000) * p.input * cacheReadRate(base) + (tokens.output / 1_000_000) * p.output
     : (tokens.input / 1_000_000) * p.input + (tokens.output / 1_000_000) * p.output
+}
+
+// Quiet, and one summed price per model and tier, so warnings and single-group values match the old whole-bucket estimate exactly.
+export function priceRequests(requests: ReadonlyArray<{ usage: StageUsage; model: string }>, cache: boolean): number {
+  let reported = 0
+  const groups = new Map<string, { model: string; tier: boolean; tokens: StageTokens }>()
+  for (const { usage, model } of requests) {
+    if (usage.cost_usd !== undefined) {
+      reported += usage.cost_usd
+      continue
+    }
+    for (const a of usage.attempts ?? [usage]) {
+      if (a.cost_usd !== undefined) {
+        reported += a.cost_usd
+        continue
+      }
+      const t = attemptTokens(a)
+      const tokens: StageTokens = cache ? t : { input: t.input, output: t.output }
+      const tier = billedAtTier(tokens, model)
+      const key = `${model}|${tier}`
+      const g = groups.get(key) ?? { model, tier, tokens: { input: 0, output: 0, ...(cache ? { cache_read: 0, cache_write: 0 } : {}) } }
+      g.tokens.input += tokens.input
+      g.tokens.output += tokens.output
+      if (cache) {
+        g.tokens.cache_read = (g.tokens.cache_read ?? 0) + (tokens.cache_read ?? 0)
+        g.tokens.cache_write = (g.tokens.cache_write ?? 0) + (tokens.cache_write ?? 0)
+      }
+      groups.set(key, g)
+    }
+  }
+  if (!groups.size) return reported
+  let table = 0
+  for (const g of groups.values()) table += unroundedCost(g.tokens, g.model, { baseRates: !g.tier, quiet: true })
+  return reported + Math.round(table * 10000) / 10000
+}
+
+const requestTokens = (u: StageUsage, cache: boolean): StageTokens => ({
+  input: u.input_tokens, output: u.output_tokens, ...(cache ? { cache_read: u.cache_read_input_tokens ?? 0, cache_write: u.cache_creation_input_tokens ?? 0 } : {}),
+})
+
+// Falls back to the caller's old whole-bucket price whenever the listed requests do not account for every remainder token, so it is never worse than before.
+export function remainderCost(ctx: ReviewContext, reviewerTokens: StageTokens, today: () => number, cache: boolean): { cost: number; fallback: boolean } {
+  const listed = ctx.remainderRequests
+  if (!listed) return { cost: today(), fallback: true }
+  if (ctx.usage.cost_usd !== undefined && listed.every(r => r.usage.cost_usd !== undefined)) return { cost: today(), fallback: false }
+  const left = { ...reviewerTokens }
+  for (const r of listed) {
+    const t = requestTokens(r.usage, cache)
+    left.input -= t.input
+    left.output -= t.output
+    left.cache_read = (left.cache_read ?? 0) - (t.cache_read ?? 0)
+    left.cache_write = (left.cache_write ?? 0) - (t.cache_write ?? 0)
+  }
+  if (left.input || left.output || (cache && (left.cache_read || left.cache_write))) return { cost: today(), fallback: true }
+  // One resent request keeps the per-attempt rounding of the old reviewer path, so a half-step cannot flip the fourth decimal.
+  if (listed.length === 1 && listed[0].usage.attempts && listed[0].usage.cost_usd === undefined) return { cost: estimateAttemptsCost(listed[0].usage.attempts, listed[0].model, true), fallback: false }
+  return { cost: priceRequests(listed, cache), fallback: false }
+}
+
+// Tests read this to see whether a real review() run fell back to the whole-bucket price; it is not part of any record.
+export const remainderProbe = { fallbacks: 0 }
+
+export interface CallPricing { tier: boolean; tier_cost_usd: number; cost_usd: number; cost_reported: boolean; prompt_tokens: number; attempts?: number }
+
+// Tier is decided from token counts and priced from our table even when the provider reported a cost, so a provider that skips the premium shows as cost below tier_cost_usd.
+export function callPricing(u: LLMUsage, model: string, cache: boolean): CallPricing {
+  const requests: StageTokens[] = u.attempts?.length
+    ? u.attempts.map(attemptTokens)
+    : [{ input: u.input_tokens, output: u.output_tokens, ...(cache ? { cache_read: u.cache_read_input_tokens ?? 0, cache_write: u.cache_creation_input_tokens ?? 0 } : {}) }]
+  let extra = 0
+  let tier = false
+  let prompt = 0
+  for (const t of requests) {
+    prompt = Math.max(prompt, t.input + (t.cache_read ?? 0) + (t.cache_write ?? 0))
+    if (!billedAtTier(t, model)) continue
+    tier = true
+    extra += unroundedCost(t, model, { quiet: true }) - unroundedCost(t, model, { baseRates: true, quiet: true })
+  }
+  const cost = u.cost_usd ?? (u.attempts ? estimateAttemptsCost(u.attempts, model, true) : estimateCost(requests[0], model, true))
+  return { tier, tier_cost_usd: Math.round(extra * 10000) / 10000, cost_usd: cost, cost_reported: u.cost_usd !== undefined, prompt_tokens: prompt, ...(requests.length > 1 ? { attempts: requests.length } : {}) }
 }
 
 // ---------------------------------------------------------------------------
@@ -250,6 +340,47 @@ export function getJobUrl(): string | undefined {
   return getJenkinsMeta()?.url || undefined
 }
 
+const MAX_TOKEN_CALLS = 50
+
+const round = (n: number, dp: number): number => Math.round(n * 10 ** dp) / 10 ** dp
+
+// Runs outside review()'s try, so a failure here must drop only the block, never the record.
+function tokenMetricsOf(ctx: ReviewContext): TokenMetrics | undefined {
+  try {
+    const all = ctx.tokenCalls ?? []
+    const estimate = ctx.estimateBreakdown ?? null
+    if (!estimate && !all.length) return undefined
+    const reviewRows = all.filter(r => r.stage === 'review' && r.prompt_tokens !== null && r.estimated_input_tokens !== null)
+    const retried = all.some(r => r.stage === 'review' && r.contexts_dropped && r.estimated_input_tokens === null)
+    const estSum = reviewRows.reduce((n, r) => n + r.estimated_input_tokens!, 0)
+    const promptSum = reviewRows.reduce((n, r) => n + r.prompt_tokens!, 0)
+    const reviewer = !retried && reviewRows.length && estSum > 0
+      ? { estimated_input_tokens: estSum, prompt_tokens: promptSum, ratio: round(promptSum / estSum, 3), calls: reviewRows.length }
+      : null
+    let kept = all
+    if (all.length > MAX_TOKEN_CALLS) {
+      const order = all.map((_, i) => i).sort((a, b) =>
+        Number(all[b].tier) - Number(all[a].tier) || (all[b].prompt_tokens ?? -1) - (all[a].prompt_tokens ?? -1) || a - b)
+      kept = order.slice(0, MAX_TOKEN_CALLS).sort((a, b) => a - b).map(i => all[i])
+    }
+    const prompts = all.map(r => r.prompt_tokens).filter((n): n is number => n !== null)
+    return {
+      estimate,
+      ...(ctx.estimateBreakdownInitial ? { estimate_initial: ctx.estimateBreakdownInitial } : {}),
+      reviewer,
+      calls: kept,
+      ...(kept.length < all.length ? { calls_dropped: all.length - kept.length } : {}),
+      tier_calls: all.filter(r => r.tier).length,
+      tier_cost_usd: round(all.reduce((n, r) => n + (r.tier_cost_usd ?? 0), 0), 4),
+      calls_cost_usd: round(all.reduce((n, r) => n + (r.cost_usd ?? 0), 0), 4),
+      max_prompt_tokens: prompts.length ? Math.max(...prompts) : null,
+    }
+  } catch (e) {
+    console.warn(`Token metrics skipped: ${e instanceof Error ? e.message : String(e)}`)
+    return undefined
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Record builder
 // ---------------------------------------------------------------------------
@@ -276,7 +407,9 @@ export function buildUsageRecord(
   const priced = (u: StageUsage, tokens: StageTokens, model: string): number => (u.attempts ? estimateAttemptsCost(u.attempts, model) : estimateCost(tokens, model))
   const judgeTokensRaw = ctx.judgeUsage ?? null
   const judgeTokens = judgeTokensRaw ? tok(judgeTokensRaw) : null
-  const judgeCost = ctx.judgeUsage?.cost_usd ?? (judgeTokensRaw && judgeTokens && judgeModel ? priced(judgeTokensRaw, judgeTokens, judgeModel) : null)
+  const judgeCostOld = ctx.judgeUsage?.cost_usd ?? (judgeTokensRaw && judgeTokens && judgeModel ? priced(judgeTokensRaw, judgeTokens, judgeModel) : null)
+  // The bundled judge_tokens carry no cache fields, so its cache tokens stay in the remainder and are priced there only.
+  const judgeCost = ctx.judgeRequests && judgeModel ? priceRequests(ctx.judgeRequests.map(usage => ({ usage, model: judgeModel })), false) : judgeCostOld
   const breadthTokens = ctx.breadthUsage ? tok(ctx.breadthUsage) : null
   const breadthCost = ctx.breadthUsage?.cost_usd ?? (ctx.breadthUsage && breadthTokens && ctx.breadthModel ? priced(ctx.breadthUsage, breadthTokens, ctx.breadthModel) : null)
   // Second-look runs on the reviewer model, so its missing-actual cost is estimated at that model.
@@ -313,7 +446,7 @@ export function buildUsageRecord(
         } : {}),
       }
   const reviewCall = cache ? ctx.reviewUsage : undefined
-  const reviewerCost = ctx.usage.cost_usd !== undefined
+  const wholeBucketCost = (): number => ctx.usage.cost_usd !== undefined
     ? ctx.usage.cost_usd - (ctx.judgeUsage?.cost_usd ?? 0) - (ctx.breadthUsage?.cost_usd ?? 0) - (ctx.secondLookUsage?.cost_usd ?? 0) - lensUsage.cost - (inlineReply?.cost_usd ?? 0)
     : reviewCall?.attempts
       ? estimateAttemptsCost(reviewCall.attempts, recordModel) + estimateCost({
@@ -321,6 +454,10 @@ export function buildUsageRecord(
           cache_read: (reviewerTokens.cache_read ?? 0) - (reviewCall.cache_read_input_tokens ?? 0), cache_write: (reviewerTokens.cache_write ?? 0) - (reviewCall.cache_creation_input_tokens ?? 0),
         }, recordModel)
       : estimateCost(reviewerTokens, recordModel)
+  const oldReviewerCost = wholeBucketCost()
+  const remainder = remainderCost(ctx, reviewerTokens, () => oldReviewerCost, cache)
+  if (remainder.fallback) remainderProbe.fallbacks++
+  const reviewerCost = remainder.cost
   // The bundled path never enters BREADTH_REVIEW, so its status is inferred here.
   const breadthStatus = ctx.breadthStatus ?? (ctx.bundleCount ? (config.breadth.enabled ? 'skipped_bundled' : 'disabled') : null)
   const secondLookStatus = ctx.secondLookStatus ?? (ctx.bundleCount ? (config.review.secondLook ? 'skipped_bundled' : 'disabled') : null)
@@ -457,6 +594,7 @@ export function buildUsageRecord(
     } : null,
     // Absent when no human replied, so records without discussion keep their current shape.
     ...(replyAuthors.length ? { reply_authors: replyAuthors } : {}),
+    ...(config.tokenMetrics ? (m => m ? { token_metrics: m } : {})(tokenMetricsOf(ctx)) : {}),
     // Present only when the head was really checked and the run did not fail afterwards; CI stores exactly this value, so it must pass the LAST_CHECKED_COMMIT rule too, whatever head the adapter reported.
     ...(ctx.headChecked && !error && isCheckedCommitHash(ctx.prInfo!.sourceCommit) ? { checked_commit: ctx.prInfo!.sourceCommit } : {}),
     ...(ctx.dedupHit ? { dedup_source: ctx.dedupHit } : {}),

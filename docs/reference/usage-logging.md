@@ -109,11 +109,11 @@ Every finding array (`review_candidates`, `judge_decisions`, `finding_scores`, `
 | `tokens.reasoning` | `number` | absent | Reasoning tokens summed like `tokens.output`, of which they are a subset (output and `cost_usd` are unchanged). Present only when above 0, so records of runs without reasoning keep their shape. OpenRouter reports it today (`usage.completion_tokens_details.reasoning_tokens`); the Anthropic provider maps `usage.output_tokens_details.thinking_tokens` when the API returns it (unverified live). Run total only, no per-stage breakdown |
 | `tokens.cache_read` | `number` | Cache read tokens summed over all calls; populated by `ENABLE_PROMPT_CACHE` (0 otherwise). `tokens.input` excludes them on both providers under the flag |
 | `tokens.cache_write` | `number` | Cache write tokens (5-minute TTL) summed over all calls; populated by `ENABLE_PROMPT_CACHE` |
-| `cost_usd` | `number` | Total cost (reviewer + breadth + second-look + lenses + judge): the provider-reported cost where there is one (OpenRouter), else estimated from the per-model pricing table |
+| `cost_usd` | `number` | Total cost (reviewer + breadth + second-look + lenses + judge): the provider-reported cost where there is one (OpenRouter), else estimated from the per-model pricing table. From 0.0.64 each request is priced alone (see Cost Estimation). It already contains `judge_cost_usd`, `breadth_cost_usd`, `second_look_cost_usd` and `lens_runs[].cost_usd`: chart it alone and never add them to it |
 | `judge_model` | `string \| null` | Judge model ID, or null if no judge pass |
 | `judge_effort` | `string \| null` | Judge thinking effort (`JUDGE_EFFORT`); null = model default |
 | `judge_tokens` | `object \| null` | `{ input, output }`, or null if no judge pass. With `ENABLE_PROMPT_CACHE` this and `breadth_tokens`, `second_look_tokens` and `lens_runs[].tokens` add `cache_read` / `cache_write` |
-| `judge_cost_usd` | `number \| null` | Judge call cost, or null if no judge |
+| `judge_cost_usd` | `number \| null` | Judge call cost, or null if no judge. A bundled run sums its judge calls, each priced alone from 0.0.64 |
 | `duration_ms` | `number` | Wall-clock time for the full run |
 | `dry_run` | `boolean` | Whether `--dry-run` was used |
 | `force` | `string` | Force mode: `"off"`, `"clean"` (no prior context), or `"re-review"` (bypass dedup, keep context). An empty or whitespace `--force` value is recorded as `"off"`; any other value is recorded as given |
@@ -158,6 +158,7 @@ Every finding array (`review_candidates`, `judge_decisions`, `finding_scores`, `
 | `touch_rate` | `number \| null` | Re-review only: `resolved / (resolved + still_open) × 100` — percentage of previous findings addressed by the developer |
 | `delta` | `object \| null` | Re-review only: `{ developer_replies, human_replies, agent_replies, resolved, still_open, new_findings }`. `developer_replies` is every reply in the discussion handed to the run and keeps its meaning from earlier versions (on a re-review it includes the agent's own earlier replies); `human_replies` + `agent_replies` always equal it. An agent reply is one the adapter labelled `Agent (prior reply)` (its reply footer matched), the same rule on Bitbucket, Azure and GitHub |
 | `reply_authors` | `string[]` \| absent | Distinct authors of the human replies this run answered (a `REPLY` run) or took into account (a re-review), first-seen order, agent replies excluded. Each entry is the platform's stable account id when the payload had one (Bitbucket `user.uuid`, else `user.account_id`; Azure the comment author `id`), else the display name; on GitHub the entry is the `login` (a handle, not an opaque id). Absent when there is no human reply. Sits right after `delta`. Personal data: ids, logins and names identify people, so apply your log retention and access rules to the index. Not sent to any model |
+| `token_metrics` | `object` \| absent | From 0.0.64, only with `ENABLE_TOKEN_METRICS=true` (default off; off = no key). Per-call input size against the estimate and the Haiku 5.5 100k tier. Present whenever `ESTIMATE_TOKENS` made an estimate (`calls: []` on a budget SKIP or "bundled review not possible") or any call was recorded (reply-only runs have no estimate); absent on early SKIP/DEDUP_SKIP runs with neither. Sits right after `reply_authors`, before `checked_commit`. Fields: `estimate` (the final `ESTIMATE_TOKENS` breakdown, `total === tokens.estimated_input`; `null` when none was made), `estimate_initial` (only when it re-estimated after dropping the delta or file contexts), `reviewer` (`{ estimated_input_tokens, prompt_tokens, ratio, calls }`, ratio to 3 dp, pooled over bundles; `null` after a context-length retry or when no review row has both numbers), `calls[]`, `calls_dropped` (only when the cap cut rows) and the run roll-ups `tier_calls`, `tier_cost_usd`, `calls_cost_usd` (Σ row `cost_usd`, `null` as 0) and `max_prompt_tokens` (`null` with no tokens), all computed over every call including dropped rows. A row: `stage` (`review`, `breadth`, `second_look`, `lens:<name>`, `judge`, `reply`), `bundle` (bundled runs, 1-based), `model`, `end` (`ok`, `truncated`, `aborted_time`, `error`), `input_tokens`/`cache_read_tokens`/`cache_write_tokens` as the provider reported them, `prompt_tokens` (the tier basis: input + cache read + cache write of the largest single request; on OpenRouter without the cache flag `input_tokens` already includes the cache read), `output_tokens`, `reasoning_tokens`, `estimated_input_tokens`, `estimate_parts` (bundled `review` rows: packer `overhead`/`diff`/`files`/`file_count`), `contexts_dropped` (`review` rows sent without the fetched file contexts: budget drop, context-length retry, bundle retry), `tier`, `cost_usd`, `cost_reported` (true when the provider reported the cost), `tier_cost_usd` (always table-derived, full price minus base price, so it stays comparable when `cost_usd` is provider-reported) and `attempts` (more than one known request). `null` means unknown: an error without usage has null tokens and costs; an `aborted_time` row keeps input but has null output and reasoning. A `DeadlineAbortError` with completed attempts adds one `error` row per completed attempt before the aborted row (OpenRouter resend only). At most 50 rows: tier rows first, then the largest `prompt_tokens`, written in call order. Inline reply calls are not included yet (with `ENABLE_INLINE_REVIEWS`, Σ `calls_cost_usd` is below `cost_usd` by their cost). Known limit: an OpenRouter missing-field resend without `ENABLE_PROMPT_CACHE` reports one summed usage with no `attempts`, so that row can overstate `prompt_tokens`. From 0.0.64 `cost_usd` prices every request on its own, so it equals `calls_cost_usd` within $0.00005 × the number of rows (each row rounds to 4 decimals on its own, so the gap can grow with the row count; a 16-row bundled run can differ by up to $0.0008), minus the cost of a failed judge whose error was swallowed (known gap P11 below) and plus inline reply cost, neither of which is in the rows: use `calls_cost_usd` for share-of-spend. The run also prints a `Token metrics:` line after the usage dump and a `Long-context tier:` line per crossing. Example (PR 101, Haiku 5.5 reviewer and judge, no cache): `{"estimate":{"total":69720,"prompt":3104,"diff":21388,"delta":0,"files":45230,"file_count":14,"prev_reviews":0,"prev_review_count":0,"replies":0,"reply_count":0},"reviewer":{"estimated_input_tokens":69720,"prompt_tokens":119054,"ratio":1.708,"calls":1},"calls":[{"stage":"review","model":"claude-haiku-5-5","end":"ok","input_tokens":119054,"cache_read_tokens":0,"cache_write_tokens":0,"prompt_tokens":119054,"output_tokens":1792,"reasoning_tokens":null,"estimated_input_tokens":69720,"tier":true,"cost_usd":0.064,"cost_reported":false,"tier_cost_usd":0.0512},{"stage":"judge","model":"claude-haiku-5-5","end":"ok","input_tokens":76211,"cache_read_tokens":0,"cache_write_tokens":0,"prompt_tokens":76211,"output_tokens":1286,"reasoning_tokens":null,"estimated_input_tokens":null,"tier":false,"cost_usd":0.0083,"cost_reported":false,"tier_cost_usd":0}],"tier_calls":1,"tier_cost_usd":0.0512,"calls_cost_usd":0.0723,"max_prompt_tokens":119054}` |
 | `reply_limit_note` | `true` \| absent | Present only with `ENABLE_REPLY_LIMIT_PER_REVIEW` when this run posted the one-time reply-limit note (or would have, under `--dry-run`). Sits before `jenkins`, after `dedup_source` |
 | `inline` | `object` | absent | Only with `ENABLE_INLINE_REVIEWS`. `{ active: false, reason: "unsupported_vcs" | "benchmark" }` when the flag is on but the legacy flow ran; otherwise `{ active, completed, outcome, identity, summary_check, summary, roots, suppressed, raised_over_resolved, answers, reply_usage, untrusted_markers, writes_reconciled, rows_collapsed, footer_lines_removed, head_moved_at? }`. `outcome`: `written`, `write_failed` (a refused summary write, or a re-list failure before any write; the run errors), `replies_only`, `dedup` (also set when a dedup run errors on a failed reply call), `skipped` (a budget, context-window or bundling skip after the load, nothing posted, even if the reply attempt failed), `incoherent_no_change`, `write_uncertain`, `force_invalidate_failed`, `head_moved_skip`, `head_moved_partial`, `head_check_failed` (the head lookup threw so the head could not be confirmed: no further writes, head not recorded, earlier writes stay), `concurrent_run`, `identity_unavailable`, `identity_mismatch`, `dry_run`. `completed` is true when the head is recorded in the summary state, including a dedup run that errors on a head completed earlier. Reply-model usage (`reply_usage`) is priced at `REPLY_MODEL`, summed into `cost_usd` and taken out of the reviewer stage. `suppressed` is `{ open_duplicate, resolved, in_run_duplicate }`: findings matching an existing open thread, a developer-resolved thread, or a root already planned earlier in the same run (strict match only). `roots.summary_only` counts `no thread` findings by reason (`low`, `no_line`, `out_of_hunk`, `old_side`, `over_cap`, `duplicate`); each `in_run_duplicate` is also a `duplicate` summary-only row, never dropped. See `docs/context/review/inline-engine.md` |
 | `checked_commit` | `string` \| absent | The full `source_commit`, present only when this run genuinely checked that head (posted review, pre-post race, footer or checked-commit match, zero-reviewable delta, coherent structured `NO_CHANGE`, `NO_NEW_FINDINGS`, a quiet reply) and did not fail afterwards. Never on `SKIP`/`ERROR`, dry-run, `--benchmark`, `--force clean`/`re-review`, after a failed delta fetch or on an uncertain bundle, and, from 0.0.46, never for a head that fails the `LAST_CHECKED_COMMIT` rule (12–64 hex), so a provider that reports an empty head yields no value. CI stores exactly this value per PR and passes it back as `LAST_CHECKED_COMMIT`. See [review/skip-logic.md §8](../context/review/skip-logic.md) |
@@ -243,6 +244,18 @@ Cache tokens (only present with `ENABLE_PROMPT_CACHE`): cost = input × rate + w
 
 OpenRouter's Anthropic slugs price as their table entry: the lookup strips an `anthropic/` prefix and a `:variant` suffix, turns dots into dashes and drops a `-YYYYMMDD` date, so `anthropic/claude-sonnet-5.5[:beta]` prices as `claude-sonnet-5-5` and `anthropic/claude-haiku-5.5` gets the Haiku 5.5 tier. Ids that already resolved price exactly as before. Non-Anthropic slugs (`openai/…`), version-first names (`anthropic/claude-3.7-sonnet`) and models absent from the table still fall back and warn. This touches only the estimate path, i.e. calls without a provider-reported cost, and only five logged fields: `cost_usd`, `judge_cost_usd`, `breadth_cost_usd`, `second_look_cost_usd` and `lens_runs[].cost_usd`. No code path reads them (the FSM never reads a cost). For a slug that used to fall back, those estimates move from Sonnet 4.6 rates to the model's own rates (e.g. an unreported `anthropic/claude-haiku-5.5` judge call is now ~30× lower). A zero-call run stays at `cost_usd: 0` and just loses the warning line.
 
+From 0.0.64 with `ENABLE_TOKEN_METRICS`, `token_metrics` records the 100k tier per request: it is decided from the request's tokens (input + cache read + cache write) and priced from `MODEL_PRICING`, for `claude-haiku-5-5` only (other models have no tier, `tier_cost_usd: 0`). Metrics pricing is quiet: an unknown model prices at the Sonnet 4.6 fallback without a warning. `tier_cost_usd` is what the tier added over base rates.
+
+From 0.0.64, every cost field is priced per request at the model that served it, against Haiku 5.5's 100k tier per request. Earlier records over-price bundled reviews and judges, re-reviews answered by a reply and failed judges, misprice `REPLY_MODEL` runs and failed replies, and under-price OpenRouter runs where some call reported no cost. Annotate dashboards at this version; older documents keep their old values. A request whose provider reported a cost keeps that cost. If the requests of a run do not account for every counted token, `cost_usd` keeps the older whole-bucket price. The corrected fields are `cost_usd` and `judge_cost_usd`; `breadth_cost_usd`, `second_look_cost_usd` and `lens_runs[].cost_usd` were already per request. Setting `ENABLE_TOKEN_METRICS` does not change any cost field.
+
+`cost_usd` is the total of the reviewer requests (every bundle), the legacy reply, a failed call whose error ended the run, `judge_cost_usd`, `breadth_cost_usd`, `second_look_cost_usd`, `lens_runs[].cost_usd` and inline reply cost. The stage fields are parts of it, so a panel must chart `cost_usd` alone.
+
+Remaining gaps:
+- An OpenRouter missing-field resend without `ENABLE_PROMPT_CACHE` and without a reported cost has one summed usage and no `attempts`, so its two requests price as one and can cross the tier.
+- Inline reply cost prices each call with cache fields added, so on OpenRouter without the cache flag cached reads can count twice when no cost was reported.
+- An OpenRouter missing-field resend without `ENABLE_PROMPT_CACHE` where only one attempt reported a cost sums to a total that counts the unreported attempt as $0, and every downstream step treats the request as fully reported, so `cost_usd` is under-counted.
+- A failed judge whose error is swallowed (benchmark, or a clean reviewer judged only for extra-pass candidates) is not counted in `tokens.*` or `cost_usd`.
+
 ### Useful Queries
 
 ```bash
@@ -268,8 +281,29 @@ jq -s '{total: length, errors: [.[] | select(.action=="ERROR")] | length}' resul
 # Reasoning share of output (runs that report it)
 jq -s '[.[] | select(.tokens.reasoning) | {pr: .pr_id, reasoning: .tokens.reasoning, output: .tokens.output, share: (.tokens.reasoning / .tokens.output * 100 | round)}]' results.jsonl
 
-# Estimate vs actual tokens (accuracy check)
+# Estimate vs actual tokens (accuracy check; tokens.input sums every call, so prefer token_metrics.reviewer.ratio below)
 jq -s '[.[] | select(.action=="REVIEW") | {pr: .pr_id, estimated: .tokens.estimated_input, actual: .tokens.input, ratio: (if .tokens.estimated_input > 0 then (.tokens.input / .tokens.estimated_input * 100 | round | tostring + "%") else "n/a" end)}]' results.jsonl
+
+# token_metrics (ENABLE_TOKEN_METRICS): measured reviews vs reviews with a call over 100k
+jq -s '{measured: map(select(.token_metrics)) | length, crossed: map(select(.token_metrics.tier_calls > 0)) | length}' results.jsonl
+
+# Tier premium by repo
+jq -s '[.[] | select(.token_metrics.tier_calls > 0)] | group_by(.repo_slug) | map({repo: .[0].repo_slug, runs: length, tier_usd: (map(.token_metrics.tier_cost_usd) | add)})' results.jsonl
+
+# Share of spend that is tier premium (denominator is calls_cost_usd, never cost_usd)
+jq -s '{calls_usd: (map(.token_metrics.calls_cost_usd // 0) | add), tier_usd: (map(.token_metrics.tier_cost_usd // 0) | add)} | .share_pct = (if .calls_usd > 0 then (.tier_usd / .calls_usd * 100 | round) else 0 end)' results.jsonl
+
+# Reviewer real/estimate ratio distribution
+jq -s '[.[] | .token_metrics.reviewer.ratio // empty] | sort | {n: length, min: .[0], median: .[(length / 2) | floor], p90: .[(length * 0.9) | floor], max: .[-1]}' results.jsonl
+
+# Which stage crosses the line, with its estimate
+jq -c '.token_metrics.calls[]? | select(.tier) | {stage, model, prompt_tokens, estimated_input_tokens, tier_cost_usd, cost_reported}' results.jsonl
+
+# Largest reviewer estimate under the line vs smallest over it
+jq -s '[.[] | .token_metrics.calls[]? | select(.stage == "review" and .estimated_input_tokens != null) | {e: .estimated_input_tokens, t: .tier}] | {max_under: (map(select(.t | not).e) | max), min_over: (map(select(.t).e) | min)}' results.jsonl
+
+# What fills a crossing or a skip (files vs diff)
+jq -c 'select(.token_metrics.tier_calls > 0 or (.token_metrics and (.token_metrics.calls | length) == 0)) | {repo: .repo_slug, pr: .pr_id, action, est: .token_metrics.estimate, bundles: [.token_metrics.calls[]? | select(.estimate_parts) | .estimate_parts]}' results.jsonl
 
 # Average computed score
 jq -s '[.[] | select(.computed_score != null) | .computed_score] | add/length | round' results.jsonl
@@ -295,6 +329,42 @@ jq -s '[.[] | select(.touch_rate != null) | .touch_rate] | if length > 0 then (a
 # Largest PRs reviewed (by changed lines)
 jq -s '[.[] | select(.changed_lines != null)] | sort_by(-.changed_lines) | .[:10] | map({repo: .repo_slug, pr: .pr_id, files: .changed_files, lines: .changed_lines})' results.jsonl
 ```
+
+### Analysing token_metrics
+
+- From `results.jsonl`: concatenate the archived per-build files (`cat */results.jsonl > all.jsonl`) and run the queries above on it.
+- From Jenkins console logs alone: the full record is printed after `=== Usage ===` on every run (ERROR, dry-run and benchmark too). Fetch plain text (`curl -s -u "$USER:$TOKEN" "$BUILD_URL/consoleText" > logs/<build>.txt`) and extract one record per run. The slice runs from the first `{` after the marker to the first `\n}`, which assumes no timestamper prefix on each line.
+
+```bash
+node -e '
+const fs = require("fs");
+for (const f of process.argv.slice(1)) {
+  const t = fs.readFileSync(f, "utf8").replace(/\r/g, "");
+  for (let i = t.indexOf("=== Usage ===\n"); i >= 0; i = t.indexOf("=== Usage ===\n", i + 1)) {
+    const s = t.indexOf("{", i), e = t.indexOf("\n}", s);
+    if (s < 0 || e < 0) break;
+    try { console.log(JSON.stringify(JSON.parse(t.slice(s, e + 2)))) } catch {}
+  }
+}' logs/*.txt > all.jsonl
+```
+
+- Quick triage without extraction: `grep -h "Token metrics:" logs/*.txt` gives one line per run: `repo#PR | reviewer input N vs estimate ~M (ratio R) | n call(s), max input X, T over the 100k tier, tier +$Y | cost $C, per-call $P`. A budget SKIP reads `reviewer ratio n/a, estimate ~M`. Each crossing also logs `  Long-context tier: <stage> on <model>: N input tokens (estimate ~M), +$Y over base rates`.
+
+### Elasticsearch
+
+The `pr-review-runs` index template uses `"dynamic": false`, so `token_metrics` is accepted and kept in `_source` but is not searchable or chartable until the template maps it (new indices) and `PUT pr-review-runs-<YYYY.MM>/_mapping` is applied (live index). Map under `mappings.properties`, next to `tokens`:
+
+| Property under `token_metrics` | Type |
+|---|---|
+| `estimate.total`, `.prompt`, `.diff`, `.delta`, `.files`, `.prev_reviews`, `.replies` | `long` |
+| `estimate.file_count`, `.prev_review_count`, `.reply_count` | `integer` |
+| `reviewer.estimated_input_tokens`, `reviewer.prompt_tokens` | `long` |
+| `reviewer.ratio` | `float` |
+| `reviewer.calls`, `tier_calls`, `calls_dropped` | `integer` |
+| `tier_cost_usd`, `calls_cost_usd` | `double` |
+| `max_prompt_tokens` | `long` |
+
+Leave `calls` and `estimate_initial` unmapped: they stay in `_source` and can be mapped later (a `nested` mapping of `calls` is possible, but Grafana's Elasticsearch data source has little nested support). The writer must forward `token_metrics`, and the job must set `ENABLE_TOKEN_METRICS=true`. Share of spend is `sum(token_metrics.tier_cost_usd) / sum(token_metrics.calls_cost_usd)`, not `cost_usd`: the two differ by per-row rounding, a swallowed failed judge and inline replies.
 
 ### Jenkins Archiving
 

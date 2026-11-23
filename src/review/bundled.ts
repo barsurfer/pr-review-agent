@@ -11,9 +11,10 @@ import { planBundles, splitDiffByFile, estimateTokens as tok } from './bundler.j
 import { parseReviewMarkdown, mergeReviews, type BundleReview } from './aggregate.js'
 import { countFindings, isNoChange } from './formatter.js'
 import { isContextLengthError, shownLength } from './parsers.js'
-import type { ReviewContext, PassCall } from './types.js'
-import { DeadlineAbortError, TruncatedResponseError, type LLMUsage } from '../llm/shared.js'
+import type { ReviewContext, PassCall, StageUsage } from './types.js'
+import type { LLMUsage } from '../llm/shared.js'
 import { estimateCost, estimateAttemptsCost } from './usage.js'
+import { callEnd, recordTokenCall } from './token-metrics.js'
 
 // The chars/4 estimate under-counts code-heavy diffs; packing to 85% keeps real usage under the cap.
 const FIT_RATIO = 0.85
@@ -52,6 +53,7 @@ export async function runBundledReview(ctx: ReviewContext, maxInputTokens: numbe
   let incoherent = false
   const judgeScores: NonNullable<ReviewContext['judgeScores']> = []
   const judgeUsage: { input_tokens: number; output_tokens: number; cost_usd?: number } = { input_tokens: 0, output_tokens: 0 }
+  const judgeRequests: StageUsage[] = []
   let judged = false
   const deltaStats = { resolved: 0, still_open: 0, new_findings: 0 }
   let sawDelta = false
@@ -73,6 +75,9 @@ export async function runBundledReview(ctx: ReviewContext, maxInputTokens: numbe
         room -= t
       }
     }
+
+    ctx.stageEstimates = { ...ctx.stageEstimates, review: { tokens: target - room, parts: { overhead: fixed, diff: bundle.tokens, files: target - fixed - bundle.tokens - room, file_count: contexts.length } } }
+    ctx.bundleIndex = i + 1
 
     let content = ctx.prompt!.content
     if (config.review.maxFindings > 0) {
@@ -104,6 +109,7 @@ export async function runBundledReview(ctx: ReviewContext, maxInputTokens: numbe
           if (bundleContexts.length === 0) return null
           console.warn(`  Bundle ${i + 1} exceeded the model context — dropping file contexts, retrying diff-only`)
           bundleContexts = []
+          ctx.stageEstimates = { ...ctx.stageEstimates, review: { tokens: null, contexts_dropped: true } }
         }
       }
     })()
@@ -114,6 +120,7 @@ export async function runBundledReview(ctx: ReviewContext, maxInputTokens: numbe
       continue
     }
     addUsage(ctx, result.usage)
+    ;(ctx.remainderRequests ??= []).push({ usage: result.usage, model: config.anthropic.model })
     if (result.review?.no_change || isNoChange(result.text)) {
       if (result.review?.no_change !== true || (result.review?.findings?.length ?? 0) > 0) incoherent = true
       console.log('  Reviewer: NO_CHANGE for this bundle')
@@ -139,6 +146,9 @@ export async function runBundledReview(ctx: ReviewContext, maxInputTokens: numbe
           ...judgeTail,
         )
         addUsage(ctx, verdict.usage)
+        judgeRequests.push(verdict.usage)
+        // An error exit never sets ctx.judgeUsage, so until the loop completes the judge call stays in the remainder.
+        ;(ctx.remainderRequests ??= []).push({ usage: verdict.usage, model: config.judge.model })
         judgeUsage.input_tokens += verdict.usage.input_tokens
         judgeUsage.output_tokens += verdict.usage.output_tokens
         if (verdict.usage.cost_usd !== undefined) judgeUsage.cost_usd = (judgeUsage.cost_usd ?? 0) + verdict.usage.cost_usd
@@ -158,6 +168,8 @@ export async function runBundledReview(ctx: ReviewContext, maxInputTokens: numbe
     }
     reviews.push({ label: bundle.label, parsed: parseReviewMarkdown(text) })
   }
+  ctx.bundleIndex = undefined
+  ctx.remainderRequests = ctx.remainderRequests?.filter(r => !judgeRequests.includes(r.usage))
 
   if (!reviews.length) {
     // An overflowed bundle was never reviewed — that is not NO_CHANGE; skip honestly rather than emit a false sentinel a first review would throw on.
@@ -173,6 +185,7 @@ export async function runBundledReview(ctx: ReviewContext, maxInputTokens: numbe
   ctx.bundleCount = plan.bundles.length
   if (judged) {
     ctx.judgeUsage = judgeUsage
+    ctx.judgeRequests = judgeRequests
     ctx.judgeScores = judgeScores
   }
   console.log(`\nMerged ${reviews.length} bundle review(s): ${merged.object.findings.length} finding(s) after dedupe`)
@@ -181,7 +194,8 @@ export async function runBundledReview(ctx: ReviewContext, maxInputTokens: numbe
 }
 
 export function recordPassCall(ctx: ReviewContext, stage: string, maxTokens: number, limitMs: number | undefined, usage?: Partial<LLMUsage>, err?: unknown, passEffort?: string): void {
-  const end: PassCall['end'] = err === undefined ? 'ok' : err instanceof DeadlineAbortError ? 'aborted_time' : err instanceof TruncatedResponseError ? 'truncated' : 'error'
+  const end = callEnd(err)
+  if (err !== undefined) ctx.failedModel = passModel(ctx, stage)
   // An aborted stream's usage is a start-of-message snapshot, so its output count would read as a real ~1-token answer.
   const counted = end === 'aborted_time' ? undefined : usage
   ;(ctx.passCalls ??= []).push({
@@ -189,6 +203,7 @@ export function recordPassCall(ctx: ReviewContext, stage: string, maxTokens: num
     ...(config.review.promptCache ? cacheCallFields(ctx, stage, counted) : {}),
     ...(passEffort !== undefined ? { pass_effort: passEffort, final_reasoning_tokens: counted?.final_reasoning_tokens ?? null } : {}),
   })
+  recordTokenCall(ctx, stage, passModel(ctx, stage), usage, err)
 }
 
 function passModel(ctx: ReviewContext, stage: string): string {

@@ -211,3 +211,19 @@ describe('v0.0.59 identity at the real config.ts defaults', () => {
     }
   })
 })
+
+describe('v0.0.59 identity with ENABLE_TOKEN_METRICS on (the key and the two console lines removed)', () => {
+  it.each(SCENARIOS)('%s', async (name, run) => {
+    cfg.tokenMetrics = true
+    const captured = await run() as any
+    const rows = captured.record.token_metrics?.calls
+    const made = (captured.calls?.length ?? 0) + (captured.completes?.length ?? 0)
+    expect(captured.record.token_metrics, 'the setting must add the key').toBeDefined()
+    expect(rows.length).toBe(made)
+    const lines = logSpy.mock.calls.map(c => c.join(' '))
+    expect(lines.filter(l => l.startsWith('Token metrics:'))).toHaveLength(1)
+    delete captured.record.token_metrics
+    // Read-only compare: unlike toMatchFileSnapshot it can never write or rewrite a fixture.
+    expect(scrub(JSON.stringify(captured, visible, 2))).toBe(readFileSync(new URL(fixtureOf(name), import.meta.url), 'utf-8').replace(/\r\n/g, '\n'))
+  })
+})

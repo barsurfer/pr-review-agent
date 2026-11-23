@@ -108,6 +108,56 @@ export interface PassCall {
   final_reasoning_tokens?: number | null
 }
 
+export interface EstimateBreakdown {
+  total: number
+  prompt: number
+  diff: number
+  delta: number
+  files: number
+  file_count: number
+  prev_reviews: number
+  prev_review_count: number
+  replies: number
+  reply_count: number
+}
+
+export interface EstimateParts { overhead: number; diff: number; files: number; file_count: number }
+
+export interface StageEstimate { tokens: number | null; parts?: EstimateParts; contexts_dropped?: true }
+
+export interface TokenCall {
+  stage: string
+  bundle?: number
+  model: string
+  end: PassCall['end']
+  input_tokens: number | null
+  cache_read_tokens: number | null
+  cache_write_tokens: number | null
+  prompt_tokens: number | null
+  output_tokens: number | null
+  reasoning_tokens: number | null
+  estimated_input_tokens: number | null
+  estimate_parts?: EstimateParts
+  contexts_dropped?: true
+  tier: boolean
+  cost_usd: number | null
+  cost_reported: boolean
+  tier_cost_usd: number | null
+  attempts?: number
+}
+
+export interface TokenMetrics {
+  estimate: EstimateBreakdown | null
+  estimate_initial?: EstimateBreakdown
+  reviewer: { estimated_input_tokens: number; prompt_tokens: number; ratio: number; calls: number } | null
+  calls: TokenCall[]
+  calls_dropped?: number
+  tier_calls: number
+  tier_cost_usd: number
+  calls_cost_usd: number
+  max_prompt_tokens: number | null
+}
+
 export type OutcomeSink = (outcome: ReviewOutcome) => void | SinkResult | Promise<void | SinkResult>
 
 export type EventKind = 'comment' | 'other'
@@ -167,9 +217,18 @@ export interface ReviewContext {
   alsoAffectsRows?: number
   alsoAffectsLog?: AlsoAffectsLog[]
   passCalls?: PassCall[]
+  tokenCalls?: TokenCall[]
+  stageEstimates?: Record<string, StageEstimate>
+  bundleIndex?: number
+  estimateBreakdown?: EstimateBreakdown
+  estimateBreakdownInitial?: EstimateBreakdown
   promptCache?: PromptCacheLog
   cachePrefix?: SharedPrefix
   reviewUsage?: StageUsage
+  // Kept outside the gated per-call rows so cost pricing never depends on ENABLE_TOKEN_METRICS.
+  remainderRequests?: Array<{ usage: StageUsage; model: string }>
+  judgeRequests?: StageUsage[]
+  failedModel?: string
   // Keyed by first-pass candidate index; every site also carries its own cN, so nothing downstream derives the id from a position.
   firstPassSites?: Map<number, FirstPassSite[]>
   firstPassSitesNamed?: FirstPassSite[]

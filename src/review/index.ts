@@ -25,6 +25,7 @@ import { runBundledReview, addUsage, recordPassCall } from './bundled.js'
 import { composeSuggestedFixes, COMMENT_BUDGET } from './suggested-fix.js'
 import { orderPosted } from './posted-order.js'
 import { buildUsageRecord, logUsageRecord, getBuildCommit, getJobUrl } from './usage.js'
+import { recordTokenCall, tokenSummaryLine } from './token-metrics.js'
 import { ignoredCommentAuthor } from './trigger.js'
 import { headMatches } from './checked-commit.js'
 import { outsideSections, changedPrFiles, narrowDelta, readableDiff, sameHead, diffPaths } from './target-merge.js'
@@ -38,7 +39,7 @@ function supersedeBoundary<T extends { resolved?: boolean }>(reviews: T[]): T | 
   return pool[pool.length - 1]
 }
 
-import type { ReviewContext, OutcomeSink, LensRun, TriggerInfo, PromptCacheLog, UncachedReason, StageUsage } from './types.js'
+import type { EstimateBreakdown, ReviewContext, OutcomeSink, LensRun, TriggerInfo, PromptCacheLog, UncachedReason, StageUsage } from './types.js'
 import { PrTooLargeError } from '../vcs/adapter.js'
 import type { VCSAdapter, CommentReply } from '../vcs/adapter.js'
 
@@ -631,15 +632,24 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
     case State.RESPOND_TO_REPLIES: {
       const lastReview = ctx.previousReviews![ctx.previousReviews!.length - 1]
       const replyModel = config.reply.model || config.anthropic.model
-      const result = await runCommentResponse(
-        config.llmApiKey,
-        replyModel,
-        config.anthropic.maxRetries,
-        ctx.filteredDiff!,
-        lastReview.body,
-        ctx.replies!
-      )
+      let result: Awaited<ReturnType<typeof runCommentResponse>>
+      try {
+        result = await runCommentResponse(
+          config.llmApiKey,
+          replyModel,
+          config.anthropic.maxRetries,
+          ctx.filteredDiff!,
+          lastReview.body,
+          ctx.replies!
+        )
+      } catch (err: unknown) {
+        ctx.failedModel = replyModel
+        recordTokenCall(ctx, 'reply', replyModel, (err as { usage?: LLMUsage } | null | undefined)?.usage, err)
+        throw err
+      }
+      recordTokenCall(ctx, 'reply', replyModel, result.usage)
       addUsage(ctx, result.usage)
+      ;(ctx.remainderRequests ??= []).push({ usage: result.usage, model: replyModel })
 
       const replyBody = result.text.trimEnd() + buildReplyFooter(config.agentIdentity, replyModel, getJobUrl())
 
@@ -702,6 +712,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         `prompt ${s.prompt.toLocaleString()} | diff ${s.diff.toLocaleString()} | delta ${s.delta.toLocaleString()} | files ${s.files.toLocaleString()} (${s.filesN}) | prev_reviews ${s.reviews.toLocaleString()} (${s.reviewsN}) | replies ${s.replies.toLocaleString()} (${s.repliesN})`
 
       let s = sizes()
+      const firstSizes = s
       // Input budget: MAX_INPUT_TOKENS and the context window (minus output reserve), whichever is smaller, so a big diff degrades/skips instead of hitting a 400.
       // The diff goes to both reviewer and judge, so cap by the smaller window.
       const reviewerWindow = contextWindowFor(config.anthropic.model, true)
@@ -733,6 +744,10 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       }
 
       ctx.estimatedInputTokens = s.total
+      const breakdown = (z: typeof s): EstimateBreakdown => ({ total: z.total, prompt: z.prompt, diff: z.diff, delta: z.delta, files: z.files, file_count: z.filesN, prev_reviews: z.reviews, prev_review_count: z.reviewsN, replies: z.replies, reply_count: z.repliesN })
+      ctx.estimateBreakdown = breakdown(s)
+      ctx.estimateBreakdownInitial = s !== firstSizes ? breakdown(firstSizes) : undefined
+      ctx.stageEstimates = { ...ctx.stageEstimates, review: { tokens: s.total, ...(ctx.degraded ? { contexts_dropped: true as const } : {}) } }
 
       if (max > 0 && s.total > max && config.review.bundledReview) {
         console.log('  Still over budget — switching to bundled review')
@@ -800,6 +815,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
             console.warn('  Prompt exceeded the model context — dropping file contexts, retrying diff-only')
             ctx.fileContexts = []
             ctx.degraded = true
+            ctx.stageEstimates = { ...ctx.stageEstimates, review: { tokens: null, contexts_dropped: true } }
           }
         }
       })()
@@ -819,6 +835,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         console.log(`  Lens recommendations: ${recs ? recs.map(r => `${r.lens} (${r.reason})`).join(', ') || 'none' : 'unavailable'}`)
       }
       addUsage(ctx, result.usage)
+      ;(ctx.remainderRequests ??= []).push({ usage: result.usage, model: config.anthropic.model })
       return State.CHECK_NO_CHANGE
     }
 
@@ -864,6 +881,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       const prefix = sharedPrefix(ctx, 'breadth')
       const overlay = prefix ? breadthOverlay(remaining, config.judge.shownAnchors, fp) : ''
       const estimate = prefix ? cachedEstimate(prefix, overlay, briefing) : ctx.estimatedInputTokens + defaultTokenEstimator.estimate(system.length - ctx.prompt!.content.length + briefing.length)
+      ctx.stageEstimates = { ...ctx.stageEstimates, breadth: { tokens: estimate } }
       // A 0 limit means "disabled", as in ESTIMATE_TOKENS; without this filter MAX_INPUT_TOKENS=0 would skip every breadth pass.
       const limits = [config.anthropic.maxInputTokens, contextWindowFor(model) - extraPassMaxTokens(ctx)].filter(n => n > 0)
       const budget = limits.length ? Math.min(...limits) : Infinity
@@ -964,6 +982,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       // shownLength on the numbered payloads (diff + file contexts) so the guard counts the line-number gutter, as ESTIMATE_TOKENS does.
       const shownSL = (s: string) => shownLength(s, config.review.lineNumbers)
       const estimate = prefix ? cachedEstimate(prefix, overlay, sharedBriefing) : defaultTokenEstimator.estimate(system.length + shownSL(restrictedDiff) + briefing.length + contexts.reduce((n, c) => n + shownSL(c.content), 0))
+      ctx.stageEstimates = { ...ctx.stageEstimates, second_look: { tokens: estimate } }
       const limits = [config.anthropic.maxInputTokens, contextWindowFor(model) - extraPassMaxTokens(ctx)].filter(n => n > 0)
       const budget = limits.length ? Math.min(...limits) : Infinity
       if (estimate > budget) {
@@ -1060,6 +1079,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         const prefix = sharedPrefix(ctx, `lens:${lens.name}`)
         const overlay = prefix ? lensOverlay(lens, remaining, config.judge.shownAnchors) : ''
         const estimate = prefix ? cachedEstimate(prefix, overlay, briefing) : ctx.estimatedInputTokens + defaultTokenEstimator.estimate(system.length - ctx.prompt!.content.length + briefing.length)
+        ctx.stageEstimates = { ...ctx.stageEstimates, [`lens:${lens.name}`]: { tokens: estimate } }
         if (estimate > budget) {
           run.status = 'skipped_budget'
           console.log(`  Lens ${lens.name} skipped: ~${estimate.toLocaleString()} tokens exceeds the ${model} budget (${budget.toLocaleString()})`)
@@ -1432,6 +1452,7 @@ export async function review(adapter: VCSAdapter, prId: string, dryRun = false, 
     adapter, prId, dryRun, promptPath, force, logUsage, repoSlug, outcomeSink, trigger, checkedCommit, startTime,
     inline: selectInlineEngine(adapter, outcomeSink),
     usage: { input_tokens: 0, output_tokens: 0, cache_read: 0, cache_write: 0 },
+    remainderRequests: [],
     estimatedInputTokens: 0,
     action: 'ERROR',
     reviewNumber: 0,
@@ -1451,6 +1472,7 @@ export async function review(adapter: VCSAdapter, prId: string, dryRun = false, 
     // (often large: that is why it truncated) instead of zeros.
     if (e.usage) {
       addUsage(ctx, e.usage)
+      ;(ctx.remainderRequests ??= []).push({ usage: e.usage, model: ctx.failedModel ?? config.anthropic.model })
     }
     const where = describeHttpError(err)
     error = {
@@ -1462,6 +1484,8 @@ export async function review(adapter: VCSAdapter, prId: string, dryRun = false, 
 
   const record = buildUsageRecord(ctx, Date.now() - startTime, error)
   console.log(`\n=== Usage ===\n${JSON.stringify(record, null, 2)}`)
+  const tokenLine = tokenSummaryLine(record)
+  if (tokenLine) console.log(tokenLine)
 
   if (logUsage) {
     logUsageRecord(record)

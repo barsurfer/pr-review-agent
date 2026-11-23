@@ -242,6 +242,9 @@ export const config = {
 
   usageRecordFile: optional('USAGE_RECORD_FILE', '').trim(),
 
+  // Logging-only opt-in: the usage record gains a token_metrics block only on the exact string true.
+  tokenMetrics: optional('ENABLE_TOKEN_METRICS', 'false') === 'true',
+
   benchmarkCounterpartRows: optional('ENABLE_BENCHMARK_COUNTERPART_ROWS', 'false') === 'true',
 
   diffExcludePatterns: optional('DIFF_EXCLUDE_PATTERNS', '*.lock,package-lock.json,yarn.lock,pnpm-lock.yaml,*.json,*.spec.ts')
