@@ -2,7 +2,6 @@ import type { Severity } from './types.js'
 
 export const MAX_TITLE = 100
 export const MAX_HISTORY = 20
-export const CHANGED_SUFFIX = ' · changed in this push'
 
 const SEV = 'HIGH|MEDIUM|LOW'
 const FID = 'F[1-9][0-9]{0,5}'
@@ -15,17 +14,20 @@ export function sanitizeTitle(t: string): string {
 
 export interface ThreadRow {
   kind: 'thread'; severity: Severity; title: string; file: string; lines?: string; base: string
-  id: string; was?: string; url: string; changed?: boolean
+  id: string; was?: string; url: string; note?: CodeNote
 }
+export interface CodeNote { kind: 'line' | 'file' | 'deleted'; since: string }
 export interface SummaryOnlyRow { kind: 'summary_only'; severity: Severity; title: string; file?: string; lines?: string; body?: string }
 export interface ResolvedRow { kind: 'resolved'; id: string; severity: Severity; title: string }
 export type OverflowRow = { kind: 'overflow'; ids: string[] } | { kind: 'overflow'; count: number }
+
+const NOTE_WORD: Record<CodeNote['kind'], string> = { line: 'line changed', file: 'file changed', deleted: 'file deleted' }
 
 const loc = (file: string, lines?: string): string => (lines ? `${file}:${lines}` : file)
 
 export function threadRow(r: Omit<ThreadRow, 'kind'>): string {
   const was = r.was ? ` · was ${r.was} (dismissed)` : ''
-  return `- **${r.severity} – ${sanitizeTitle(r.title)}** (\`${loc(r.file, r.lines)}@${r.base}\`) · ${r.id}${was} · [thread](${r.url})${r.changed ? CHANGED_SUFFIX : ''}`
+  return `- **${r.severity} – ${sanitizeTitle(r.title)}** (\`${loc(r.file, r.lines)}@${r.base}\`) · ${r.id}${was} · [thread](${r.url})${r.note ? ` · ${NOTE_WORD[r.note.kind]} since ${r.note.since}` : ''}`
 }
 
 export function summaryOnlyRow(r: Omit<SummaryOnlyRow, 'kind'>, titleOnly = false): string {
@@ -42,7 +44,7 @@ export function overflowLine(ids: readonly string[], maxChars = Infinity): strin
   return list.length <= maxChars ? list : `Also open: ${ids.length} more threads`
 }
 
-const THREAD_RE = new RegExp(String.raw`^- \*\*(${SEV}) – (.+?)\*\* \(\`(.+)\`\) · (${FID})(?: · was (${FID}) \(dismissed\))? · \[thread\]\(([^)\s]+)\)( · changed in this push)?$`)
+const THREAD_RE = new RegExp(String.raw`^- \*\*(${SEV}) – (.+?)\*\* \(\`(.+)\`\) · (${FID})(?: · was (${FID}) \(dismissed\))? · \[thread\]\(([^)\s]+)\)(?: · (?:(line|file) changed since ([0-9a-f]{7})|file (deleted) since ([0-9a-f]{7})|changed in this push))?$`)
 const LOC_RE = /^(.+?)(?::([0-9]+(?:-[0-9]+)?))?@([0-9a-f]{12})$/
 const SUMMARY_ONLY_RE = new RegExp(String.raw`^- \*\*(${SEV}) – (.+?)\*\*(?: \(\`(.+?)\`\))? · no thread$`)
 const PLAIN_LOC_RE = /^(.+?)(?::([0-9]+(?:-[0-9]+)?))?$/
@@ -56,7 +58,8 @@ export function parseThreadRow(line: string): ThreadRow | null {
   if (!l) return null
   return {
     kind: 'thread', severity: m[1] as Severity, title: m[2], file: l[1], ...(l[2] ? { lines: l[2] } : {}), base: l[3],
-    id: m[4], ...(m[5] ? { was: m[5] } : {}), url: m[6], ...(m[7] ? { changed: true } : {}),
+    id: m[4], ...(m[5] ? { was: m[5] } : {}), url: m[6],
+    ...(m[7] ? { note: { kind: m[7] as 'line' | 'file', since: m[8] } } : m[9] ? { note: { kind: 'deleted' as const, since: m[10] } } : {}),
   }
 }
 

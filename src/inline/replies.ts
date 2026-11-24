@@ -1,7 +1,7 @@
 import type { MarkedComment, MarkedThread, CommentReply } from '../vcs/adapter.js'
 import { AGENT_REPLY_AUTHOR } from '../vcs/adapter.js'
 import { decideDirectedElsewhere, mentionsAgent } from '../vcs/mention-filter.js'
-import { parseRootMarker, parseAnswerMarker, parseNoteMarker, buildAnswerMarker, buildNoteMarker, stripGeneratedFooters } from './markers.js'
+import { parseRootMarker, parseAnswerMarker, parseNoteMarker, buildAnswerMarker, buildNoteMarker, stripGeneratedFooters, type MarkerMeta } from './markers.js'
 import { isTrusted } from './identity.js'
 import type { CodeSince } from './match.js'
 
@@ -82,8 +82,8 @@ export function selectBatch(views: readonly ThreadView[], cap = MAX_BATCH_THREAD
   return { batch: ordered.slice(0, cap), deferred: Math.max(0, ordered.length - cap) }
 }
 
-export function answerBody(target: string, through: string, text: string): string {
-  return `${stripGeneratedFooters(text).text}\n\n${buildAnswerMarker(target, through)}`
+export function answerBody(target: string, through: string, text: string, meta?: MarkerMeta): string {
+  return `${stripGeneratedFooters(text).text}\n\n${buildAnswerMarker(target, through, meta)}`
 }
 
 export function noteBody(target: string, max: number): string {

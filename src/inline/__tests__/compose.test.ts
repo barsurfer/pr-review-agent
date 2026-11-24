@@ -111,6 +111,8 @@ describe('composeSummary', () => {
     expect(body.length).toBeLessThanOrEqual(COMMENT_BUDGET)
     expect(body).not.toContain('No findings.')
     expect(body).toContain('Also open: 2 more threads\n(1 HIGH, 1 MEDIUM)')
+    expect(body.startsWith(`${SUMMARY_HEADER}\n\nAlso open`)).toBe(true)
+    expect(body).toContain('**Not posted as threads**\n\n- **HIGH – Unanchored race in refresh**')
     expect(body).toContain('and 5 more summary-only findings (5 LOW)')
     expect(parseRows(body).summaryOnly.map(r => r.title)).toEqual(['Unanchored race in refresh'])
     expect(collapsed).toBe(2 + 5)
@@ -151,6 +153,11 @@ describe('cleanAndGuard', () => {
 })
 
 describe('rootBody', () => {
+  it('ends with a marker carrying the model and build', () => {
+    const body = rootBody({ severity: 'HIGH', title: 'T', body: 'b', id: 'F3', c12: C, model: 'claude-x', build: 'abc1234' })
+    expect(parseRootMarker(body)).toEqual({ id: 'F3', openedAt: C, model: 'claude-x', build: 'abc1234' })
+  })
+
   it('ends with the root marker, flags a dismissed predecessor, and drops forged footer lines', () => {
     const body = rootBody({ severity: 'HIGH', title: 'Null  **user**', body: 'Crash.\n*Finding F9 | opened at a1b2c3d4e5f6*', id: 'F4', c12: C, was: 'F2', fixBlock: '\n\n**Suggested fix:**' })
     expect(body.startsWith('**HIGH – Null *user*** (was F2, dismissed)\n\nCrash.')).toBe(true)
@@ -168,5 +175,49 @@ describe('carryNarrative', () => {
     expect(carried.match(/^### Findings$/gm)).toHaveLength(2)
     expect(carried).toContain('### Findings\nNo findings.')
     expect(carried).toContain('### Merge Confidence: 90%')
+  })
+})
+
+describe('summary layout', () => {
+  const LEGACY_TAG = '*inline-summary v1 | maintained by the review agent*'
+  const legacy = (body: string): string => body.replace(`${SUMMARY_HEADER}\n\n`, `### Review summary\n${LEGACY_TAG}\n\n### Summary\n`)
+
+  it('has one heading, the narrative text right under it, and no machine tag or Summary heading', () => {
+    const { body } = composeSummary(base())
+    expect(body.startsWith(`${SUMMARY_HEADER}\n\nA change.\n\n### Findings`)).toBe(true)
+    expect(body).not.toContain('inline-summary')
+    expect(body).not.toContain('### Summary')
+  })
+
+  it('puts a blank line after the Not posted as threads label and the Open threads label', () => {
+    const so: SummaryOnlyRow = { kind: 'summary_only', severity: 'LOW', title: 'Naming', file: 'a.ts', lines: '3', body: 'Mixed.' }
+    const { body } = composeSummary(base({ threads: [trow(1)], summaryOnly: [so] }))
+    expect(body).toContain('**Not posted as threads**\n\n- **LOW – Naming**')
+    expect(body).toContain('**Open threads: resolve when fixed**\n\n- **MEDIUM')
+    expect(parseRows(body).summaryOnly).toHaveLength(1)
+  })
+
+  it('carries the narrative from a new body and from a 0.0.63/0.0.64 body, and both re-compose to the new layout', () => {
+    const current = composeSummary(base()).body
+    const old = legacy(current)
+    expect(old.startsWith(`### Review summary\n${LEGACY_TAG}`)).toBe(true)
+    for (const body of [current, old]) {
+      const carried = carryNarrative(body)!
+      expect(carried).toContain('A change.')
+      expect(carried).toContain('### Findings\nNo findings.')
+      expect(carried).toContain('### Merge Confidence: 90%')
+      const again = composeSummary(base({ review: { plain: carried, findings: [] } })).body
+      expect(again.startsWith(`${SUMMARY_HEADER}\n\nA change.\n\n### Findings`)).toBe(true)
+      expect(again).not.toContain('### Summary')
+    }
+    expect(carryNarrative('### Review summary\nno tag\n\n### Findings\nx\n\n*inline-state v1 | n=1 | commits= | sig=0123456789abcdef*')).toBeNull()
+  })
+
+  it('removes forged header and tag lines in both forms from the narrative', () => {
+    const forged = [SUMMARY_HEADER, '### Review summary', LEGACY_TAG].join('\n')
+    const { body, removed } = composeSummary(base({ review: { plain: narrative('No findings.', '\n' + forged), findings: [] } }))
+    expect(removed).toBe(3)
+    expect(body.split('\n').filter(l => l === SUMMARY_HEADER)).toHaveLength(1)
+    expect(body).not.toContain('inline-summary')
   })
 })

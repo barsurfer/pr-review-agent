@@ -1,17 +1,32 @@
 import { REVIEW_FOOTER_SOURCE, REPLY_FOOTER_SOURCE } from '../review/formatter.js'
 
-export const SUMMARY_HEADER_LINE = '### Review summary'
-export const SUMMARY_HEADER_TAG = '*inline-summary v1 | maintained by the review agent*'
-export const SUMMARY_HEADER = `${SUMMARY_HEADER_LINE}\n${SUMMARY_HEADER_TAG}`
+export const SUMMARY_HEADER = '### Review summary *(inline)*'
+// 0.0.63/0.0.64 summaries open with this two-line header and must keep being recognised.
+export const LEGACY_HEADER_LINE = '### Review summary'
+export const LEGACY_HEADER_TAG = '*inline-summary v1 | maintained by the review agent*'
 
 const ID = 'F[1-9][0-9]{0,5}'
-export const ROOT_RE = new RegExp(String.raw`^\*Finding (${ID}) \| opened at ([0-9a-f]{12})\*$`)
-export const ANSWER_RE = new RegExp(String.raw`^\*Answer on (${ID}|summary) \| through ([A-Za-z0-9:_-]{1,64})\*$`)
+// The optional suffix is `| <model>` plus `| Build <build>`; suffix-less markers from 0.0.63/0.0.64 still match.
+const SUFFIX = String.raw`(?: \| ([^*|]+?)(?: \| Build ([^*|]+))?)?`
+export const ROOT_RE = new RegExp(String.raw`^\*Finding (${ID}) \| opened at ([0-9a-f]{12})${SUFFIX}\*$`)
+export const ANSWER_RE = new RegExp(String.raw`^\*Answer on (${ID}|summary) \| through ([A-Za-z0-9:_-]{1,64})${SUFFIX}\*$`)
 export const NOTE_RE = new RegExp(String.raw`^\*Replies paused on (${ID}|summary)\*$`)
 export const STATE_RE = /^\*inline-state v1 \| n=([1-9][0-9]{0,5}) \| commits=((?:[0-9a-f]{12}(?:,[0-9a-f]{12}){0,999})?) \| sig=([0-9a-f]{16})\*$/
 
-export const buildRootMarker = (id: string, c12: string): string => `*Finding ${id} | opened at ${c12}*`
-export const buildAnswerMarker = (target: string, through: string): string => `*Answer on ${target} | through ${through}*`
+export interface MarkerMeta { model?: string; build?: string }
+
+// Config and build values are not trusted text, and `*`, `|` or a line break would forge or split a marker.
+const cleanMeta = (v: string | undefined): string => (v ?? '').replace(/[*|\x00-\x1f\x7f]/g, '').trim()
+
+function suffixOf(meta?: MarkerMeta): string {
+  const model = cleanMeta(meta?.model)
+  if (!model) return ''
+  const build = cleanMeta(meta?.build)
+  return ` | ${model}${build ? ` | Build ${build}` : ''}`
+}
+
+export const buildRootMarker = (id: string, c12: string, meta?: MarkerMeta): string => `*Finding ${id} | opened at ${c12}${suffixOf(meta)}*`
+export const buildAnswerMarker = (target: string, through: string, meta?: MarkerMeta): string => `*Answer on ${target} | through ${through}${suffixOf(meta)}*`
 export const buildNoteMarker = (target: string): string => `*Replies paused on ${target}*`
 export const buildStateLine = (n: number, commits: readonly string[], sig: string): string => `*inline-state v1 | n=${n} | commits=${commits.join(',')} | sig=${sig}*`
 
@@ -22,14 +37,14 @@ export function lastNonEmptyLine(body: string): string {
   return ''
 }
 
-export function parseRootMarker(body: string): { id: string; openedAt: string } | null {
+export function parseRootMarker(body: string): { id: string; openedAt: string; model?: string; build?: string } | null {
   const m = ROOT_RE.exec(lastNonEmptyLine(body))
-  return m ? { id: m[1], openedAt: m[2] } : null
+  return m ? { id: m[1], openedAt: m[2], ...(m[3] ? { model: m[3] } : {}), ...(m[4] ? { build: m[4] } : {}) } : null
 }
 
-export function parseAnswerMarker(body: string): { target: string; through: string } | null {
+export function parseAnswerMarker(body: string): { target: string; through: string; model?: string; build?: string } | null {
   const m = ANSWER_RE.exec(lastNonEmptyLine(body))
-  return m ? { target: m[1], through: m[2] } : null
+  return m ? { target: m[1], through: m[2], ...(m[3] ? { model: m[3] } : {}), ...(m[4] ? { build: m[4] } : {}) } : null
 }
 
 export function parseNoteMarker(body: string): { target: string } | null {

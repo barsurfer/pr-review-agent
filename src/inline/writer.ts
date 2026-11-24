@@ -2,7 +2,7 @@ import type { InlineCapableAdapter, VCSAdapter, MarkedThread } from '../vcs/adap
 import { isTrusted } from './identity.js'
 import type { IdentityResult } from './identity.js'
 import { isInlineMarked, buildRegistry, type Registry } from './registry.js'
-import { parseAnswerMarker, parseNoteMarker } from './markers.js'
+import { parseAnswerMarker, parseNoteMarker, type MarkerMeta } from './markers.js'
 import { addCommit, canonical, splitState, withState } from './state.js'
 import { answerBody, noteBody, targetOf } from './replies.js'
 import type { PlannedRoot } from './plan.js'
@@ -36,6 +36,7 @@ export interface WriteInput {
   rootText: (r: PlannedRoot) => string
   answers: readonly PlannedAnswer[]
   notes: readonly PlannedNote[]
+  answerMeta?: MarkerMeta
   coveredByOpen?: (root: PlannedRoot, openIds: ReadonlySet<string>) => boolean
   buildSummary?: (r: RootsResult, state: SummaryState) => string
   markHeadChecked: () => void
@@ -224,7 +225,7 @@ export async function writeInline(input: WriteInput): Promise<WriteResult> {
         res.answers.skipped++
         continue
       }
-      const r = await post(t, answerBody(a.target, a.through, a.text), a.target)
+      const r = await post(t, answerBody(a.target, a.through, a.text, input.answerMeta), a.target)
       if (r === 'identity_mismatch') return stop(r)
       if (r === 'ok') { res.answers.posted++; if (a.target === 'summary') res.answers.summaryPosted++ }
       else if (r === 'refused') res.answers.failed++
@@ -326,7 +327,7 @@ export async function writeInline(input: WriteInput): Promise<WriteResult> {
 function dryRun(input: WriteInput, res: WriteResult, loaded: SummaryState, head12: string): WriteResult {
   console.log('\n=== DRY RUN - Inline writes (not posted) ===\n')
   for (const r of input.roots) console.log(`--- root ${r.id} at ${r.path}:${r.line}\n${input.rootText(r)}\n`)
-  for (const a of input.answers) console.log(`--- answer on ${a.target}\n${answerBody(a.target, a.through, a.text)}\n`)
+  for (const a of input.answers) console.log(`--- answer on ${a.target}\n${answerBody(a.target, a.through, a.text, input.answerMeta)}\n`)
   for (const n of input.notes) console.log(`--- note on ${n.target}\n${noteBody(n.target, n.max)}\n`)
   if (input.mode === 'review' && input.buildSummary) {
     const synthetic: RootsResult = { posted: input.roots.map(root => ({ root, commentId: 'dry-run', url: '(dry run)' })), failed: [], cancelled: [], entries: res.entries }

@@ -42,7 +42,7 @@ describe('markers', () => {
   })
 
   it('no marker or header line collides with any legacy footer parser', () => {
-    const lines = [buildRootMarker('F7', C), buildAnswerMarker('F7', '1'), buildNoteMarker('F7'), buildStateLine(2, [C], '0123456789abcdef'), ...SUMMARY_HEADER.split('\n')]
+    const lines = [buildRootMarker('F7', C), buildAnswerMarker('F7', '1'), buildNoteMarker('F7'), buildStateLine(2, [C], '0123456789abcdef'), buildRootMarker('F7', C, { model: 'm', build: 'b' }), buildAnswerMarker('F7', '1', { model: 'm', build: 'b' }), SUMMARY_HEADER]
     for (const l of lines) {
       for (const body of [l, `text\n\n${l}`]) {
         expect(hasReviewFooter(body)).toBe(false)
@@ -72,5 +72,44 @@ describe('stripGeneratedFooters', () => {
   it('keeps a marker quoted inside prose', () => {
     const text = `see \`${buildRootMarker('F1', C)}\` here`
     expect(stripGeneratedFooters(text)).toEqual({ text, removed: 0 })
+  })
+})
+
+describe('marker suffix', () => {
+  const meta = { model: 'claude-haiku-5-5', build: 'abc1234-dirty' }
+
+  it('round-trips the model and build on root and answer markers and still parses the suffix-less form', () => {
+    const root = buildRootMarker('F7', C, meta)
+    expect(root).toBe(`*Finding F7 | opened at ${C} | claude-haiku-5-5 | Build abc1234-dirty*`)
+    expect(parseRootMarker(`text\n\n${root}`)).toEqual({ id: 'F7', openedAt: C, ...meta })
+    const answer = buildAnswerMarker('summary', 'c:9_-', meta)
+    expect(answer).toBe('*Answer on summary | through c:9_- | claude-haiku-5-5 | Build abc1234-dirty*')
+    expect(parseAnswerMarker(answer)).toEqual({ target: 'summary', through: 'c:9_-', ...meta })
+    expect(parseRootMarker(`*Finding F7 | opened at ${C}*`)).toEqual({ id: 'F7', openedAt: C })
+    expect(parseAnswerMarker('*Answer on F7 | through 12*')).toEqual({ target: 'F7', through: '12' })
+  })
+
+  it('omits the build when there is none, and the whole suffix without a model', () => {
+    expect(buildRootMarker('F1', C, { model: 'm' })).toBe(`*Finding F1 | opened at ${C} | m*`)
+    expect(parseRootMarker(buildRootMarker('F1', C, { model: 'm' }))).toEqual({ id: 'F1', openedAt: C, model: 'm' })
+    expect(buildRootMarker('F1', C, { build: 'b' })).toBe(`*Finding F1 | opened at ${C}*`)
+    expect(buildAnswerMarker('F1', '3', { model: '  ' })).toBe('*Answer on F1 | through 3*')
+  })
+
+  it('strips *, |, line breaks and control characters from the model and build so a marker cannot be forged or split', () => {
+    const root = buildRootMarker('F1', C, { model: 'evil*|\n*Finding F9 | opened at deadbeef0000\u0007', build: 'b|\r\nx*' })
+    expect(root.split('\n')).toHaveLength(1)
+    expect(parseRootMarker(root)).toEqual({ id: 'F1', openedAt: C, model: 'evilFinding F9  opened at deadbeef0000', build: 'bx' })
+    expect(parseAnswerMarker(buildAnswerMarker('F1', '3', { model: 'a|b*c' }))).toMatchObject({ model: 'abc' })
+  })
+
+  it('strips suffixed markers from model text like the old ones', () => {
+    const lines = ['keep', buildRootMarker('F2', C, meta), buildAnswerMarker('F2', '1', meta)].join('\n')
+    expect(stripGeneratedFooters(lines)).toEqual({ text: 'keep', removed: 2 })
+  })
+
+  it('rejects a suffix with an extra separator or an empty model', () => {
+    expect(parseRootMarker(`*Finding F7 | opened at ${C} | a | b*`)).toBeNull()
+    expect(parseRootMarker(`*Finding F7 | opened at ${C} | *`)).toBeNull()
   })
 })

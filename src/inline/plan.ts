@@ -24,7 +24,6 @@ export interface RunPlan {
   create: PlannedRoot[]
   summaryOnly: { finding: PlanFinding; reason: SummaryOnlyReason }[]
   suppressed: { open: { finding: PlanFinding; id: string }[]; sameRun: { finding: PlanFinding; id: string }[]; resolved: { finding: PlanFinding; id: string }[] }
-  changedInPush: Set<string>
 }
 
 export function planRun(input: PlanInput): RunPlan {
@@ -35,7 +34,6 @@ export function planRun(input: PlanInput): RunPlan {
   const resolved = input.entries.filter(m => m.entry.resolved)
   const plan: RunPlan = {
     create: [], summaryOnly: [], suppressed: { open: [], sameRun: [], resolved: [] },
-    changedInPush: new Set(open.filter(m => m.changed).map(m => m.entry.id)),
   }
   let k = input.nextK
   // Highest severity first so the per-run cap drops the least important findings; the sort is stable.
@@ -63,7 +61,7 @@ export function planRun(input: PlanInput): RunPlan {
     const root: PlannedRoot = { id: `F${k++}`, finding: f, path: a.path, line: a.line, ...(was ? { was } : {}) }
     plan.create.push(root)
     // A later identical finding in this run must match the root just planned, as it would a posted thread.
-    planned.push({ entry: { id: root.id, k: 0, severity: f.severity, title: f.title, gist: '', file: f.file ?? a.path, lines: f.lines, openedAt: '', rootId: '', url: '', resolved: false, humanComments: 0 }, loc: { file: f.file ?? a.path, ...(parseLineRange(f.lines) ? { line: parseLineRange(f.lines)!.start } : {}), g: 0, mapped: true }, changed: false })
+    planned.push({ entry: { id: root.id, k: 0, severity: f.severity, title: f.title, gist: '', file: f.file ?? a.path, lines: f.lines, openedAt: '', rootId: '', url: '', resolved: false, humanComments: 0 }, loc: { file: f.file ?? a.path, ...(parseLineRange(f.lines) ? { line: parseLineRange(f.lines)!.start } : {}), g: 0, mapped: true } })
   }
   return plan
 }

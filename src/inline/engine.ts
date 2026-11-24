@@ -17,7 +17,7 @@ import { buildRegistry, isInlineMarked, type Registry } from './registry.js'
 import { contextReplies } from './replies.js'
 import { planReplies, type ReplyPlan } from './reply-flow.js'
 import { buildPrior, buildOpenList, type PriorItems } from './reviewer-list.js'
-import type { ResolvedRow, SummaryOnlyRow, ThreadRow } from './rows.js'
+import type { CodeNote, ResolvedRow, SummaryOnlyRow, ThreadRow } from './rows.js'
 import { parseHistory, parseRows } from './rows.js'
 import type { InlineDeps, InlineEngine, InlineOutcome, InlineRecord, Listed, SummaryState, ThreadEntry } from './types.js'
 import { InlineWriteError, writeInline, type RootsResult, type WriteInput, type WriteResult } from './writer.js'
@@ -105,10 +105,13 @@ class Engine implements InlineEngine {
   private s?: Session
   private priorBase?: PriorItems
   private finished = false
+  private build?: string
 
   constructor(private readonly adapter: Capable) {}
 
   record(): InlineRecord { return this.rec }
+
+  private buildId(): string { return (this.build ??= getBuildCommit()) }
 
   priorFor(files: string[]): { block: string } | undefined {
     return this.priorBase ? buildPrior(this.priorBase, files) : undefined
@@ -307,11 +310,12 @@ class Engine implements InlineEngine {
     this.rec.suppressed = { open_duplicate: plan.suppressed.open.length, resolved: plan.suppressed.resolved.length, in_run_duplicate: plan.suppressed.sameRun.length }
 
     const replies = await this.replyPlan(ctx, mapper)
-    const footer = { identity: config.agentIdentity, model: config.anthropic.model, build: getBuildCommit() }
+    const notes = await this.codeNotes(mapper, s.reg.entries)
+    const footer = { identity: config.agentIdentity, model: config.anthropic.model, build: this.buildId() }
     // A thread that landed after an uncertain POST already carries the finding, so its stale summary-only row would list it twice.
     const carried = (src.carriedSummaryOnly ?? []).filter(c => !mapped.some(m => !m.entry.resolved && matches(m, c, 'open')))
     const buildSummary = (roots: RootsResult, state: SummaryState): string => {
-      const { threads, resolved, summaryOnly } = this.rows(roots, plan, geo, carried)
+      const { threads, resolved, summaryOnly } = this.rows(roots, plan, geo, carried, notes)
       const composed = composeSummary({
         review: { plain: src.plain, findings: src.findings as RenderedFinding[] },
         threads, summaryOnly, resolved, history: s.history, historyText: src.historyText(roots), todoSection: src.todoSection,
@@ -324,7 +328,7 @@ class Engine implements InlineEngine {
 
     const res = await this.write(ctx, deps, {
       mode: 'review', nextN: s.state.n + 1, roots: plan.create,
-      rootText: r => rootBody({ severity: r.finding.severity, title: r.finding.title, body: r.finding.fix?.body ?? r.finding.body, ...(r.finding.fix ? { fixBlock: r.finding.fix.block } : {}), id: r.id, c12: s.head12, ...(r.was ? { was: r.was } : {}) }),
+      rootText: r => rootBody({ severity: r.finding.severity, title: r.finding.title, body: r.finding.fix?.body ?? r.finding.body, ...(r.finding.fix ? { fixBlock: r.finding.fix.block } : {}), id: r.id, c12: s.head12, model: footer.model, build: footer.build, ...(r.was ? { was: r.was } : {}) }),
       answers: replies.answers, notes: replies.notes, buildSummary,
       coveredByOpen: (r, ids) => mapped.some(m => ids.has(m.entry.id) && matches(m, r.finding, 'open')),
     })
@@ -332,7 +336,7 @@ class Engine implements InlineEngine {
     return this.settle(ctx, res)
   }
 
-  private rows(roots: RootsResult, plan: RunPlan, geo: ReadonlyMap<string, Geo>, carried: readonly SummaryOnlyRow[]): { threads: ThreadRow[]; resolved: ResolvedRow[]; summaryOnly: SummaryOnlyRow[] } {
+  private rows(roots: RootsResult, plan: RunPlan, geo: ReadonlyMap<string, Geo>, carried: readonly SummaryOnlyRow[], notes: ReadonlyMap<string, CodeNote>): { threads: ThreadRow[]; resolved: ResolvedRow[]; summaryOnly: SummaryOnlyRow[] } {
     const head12 = this.s!.head12
     const threads: ThreadRow[] = []
     const resolved: ResolvedRow[] = []
@@ -343,7 +347,7 @@ class Engine implements InlineEngine {
       const g = geo.get(e.id) ?? { file: e.file || '(unknown)', ...(e.lines ? { lines: e.lines } : {}), base: e.openedAt }
       threads.push({
         kind: 'thread', severity: e.severity, title: e.title, file: g.file, ...(g.lines ? { lines: g.lines } : {}), base: g.base,
-        id: e.id, ...(e.was ? { was: e.was } : {}), url: e.url, ...(plan.changedInPush.has(e.id) ? { changed: true } : {}),
+        id: e.id, ...(e.was ? { was: e.was } : {}), url: e.url, ...(notes.has(e.id) ? { note: notes.get(e.id) } : {}),
       })
     }
     // A POST the listing has not caught up with yet still needs its row.
@@ -359,6 +363,29 @@ class Engine implements InlineEngine {
       ...(f.file ? { file: f.file } : {}), ...(rangeString(f.lines) ? { lines: rangeString(f.lines) } : {}),
     }))
     return { threads, resolved, summaryOnly: [...summaryOnly, ...carried] }
+  }
+
+  // The note is measured from the marker's commit, not the row base, which moves with every re-map.
+  private async codeNotes(mapper: DeltaMapper, entries: readonly ThreadEntry[]): Promise<Map<string, CodeNote>> {
+    const out = new Map<string, CodeNote>()
+    const head12 = this.s!.head12
+    const count = { line: 0, file: 0, deleted: 0 }
+    let checked = 0
+    let unknown = 0
+    for (const e of entries) {
+      if (e.resolved) continue
+      const since = e.markerAt ?? e.openedAt
+      checked++
+      try {
+        const status = await codeSince(mapper, e.anchor, since, head12)
+        if (status === 'line' || status === 'file' || status === 'deleted') { out.set(e.id, { kind: status, since: since.slice(0, 7) }); count[status]++ }
+        else if (status === 'unknown') unknown++
+      } catch (err: unknown) {
+        console.warn(`  Code-change note for ${e.id} failed (${(err as Error)?.message}) - no note`)
+      }
+    }
+    console.log(`  Code-change notes: ${checked} open thread(s) checked, ${count.line} line, ${count.file} file, ${count.deleted} deleted, ${unknown} unknown`)
+    return out
   }
 
   private async replyPlan(ctx: ReviewContext, mapper: DeltaMapper): Promise<ReplyPlan> {
@@ -394,7 +421,7 @@ class Engine implements InlineEngine {
     try {
       return await writeInline({
         adapter: this.adapter, prId: ctx.prId, head: s.head, identity: s.identity, dryRun: ctx.dryRun, forced: forced(ctx),
-        summary: s.reg.summary, entries: s.reg.entries, markHeadChecked: () => deps.markHeadChecked(ctx), ...parts,
+        summary: s.reg.summary, entries: s.reg.entries, markHeadChecked: () => deps.markHeadChecked(ctx), answerMeta: { model: config.reply.model || config.anthropic.model, build: this.buildId() }, ...parts,
       })
     } catch (err: unknown) {
       if (err instanceof InlineWriteError) {

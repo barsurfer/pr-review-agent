@@ -31,9 +31,11 @@ function printChecks() {
 
 // Titles with unicode, tab and backslash exercise the P1 canonicalisation.
 const P1_SAMPLE = [
-  '### Review summary',
-  '*inline-summary v1 | maintained by the review agent*',
+  '### Review summary *(inline)*',
   '',
+  '- **HIGH – Row with note** (`src/d.ts:4@a1b2c3d4e5f6`) · F1 · [thread](https://example.com/t) · line changed since a1b2c3d',
+  '*Finding F1 | opened at a1b2c3d4e5f6 | claude-haiku-5-5 | Build abc1234*',
+  '*Answer on F1 | through 12 | claude-haiku-5-5 | Build abc1234*',
   '- **HIGH – Ünïcode “title” ✓** (`src/a.ts:1`) · no thread',
   '- **LOW – Tab\there** (`src/b.ts:2`) · no thread',
   '- **MEDIUM – Back\\slash C:\\dir\\file** (`src/c.ts:3`) · no thread',
