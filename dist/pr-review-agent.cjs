@@ -42252,6 +42252,22 @@ function stripJenkinsMeta(text) {
 function isNoChange(text) {
   return /^[ \t]*NO_CHANGE[ \t]*$/m.test(text);
 }
+function spaceLists(text) {
+  const out = [];
+  let fence = "";
+  let inList = false;
+  for (const line of text.split("\n")) {
+    const f = /^\s*(`{3,}|~{3,})/.exec(line);
+    if (f && (!fence || f[1][0] === fence[0])) fence = fence ? "" : f[1][0];
+    else if (!fence) {
+      const item = /^\s*([-*+]|\d+[.)])\s/.test(line);
+      if (item && !inList && out.length > 0 && out[out.length - 1].trim() !== "") out.push("");
+      inList = item || inList && /^\s+\S/.test(line);
+    }
+    out.push(line);
+  }
+  return out.join("\n");
+}
 function stripPreamble(text) {
   const match = text.match(/^#{1,4}[ \t]*Summary\b/im);
   if (!match || !match.index) return text;
@@ -47121,13 +47137,14 @@ Your job:
 - If they give a concrete fact that changes your assessment, acknowledge it clearly and say what changes (for example, that you withdraw the finding).
 - If you lack context to answer confidently, say so explicitly.
 - Keep answers short and direct \u2014 this is a conversation, not a full review.
+- Be concise: at most three short sentences. State facts (the line, the condition, what happens), not explanations, and do not repeat what an earlier answer in this thread already said. No filler, hedges or softeners.
 - Do not repeat the full review structure (no Summary, Findings, etc.).
 - Do not add a footer or signature \u2014 the system adds one automatically.
 
 When a developer disputes or questions a finding:
 - A concrete fact names a specific place (a file, function, config key, endpoint, header or service) and what it does about the concern. Accept a concrete fact about code or systems outside the diff: the developer sees the whole codebase and you see only the diff, and "not in the diff" does not mean "not in the codebase". "It's handled elsewhere" without naming the place and what it does is not a concrete fact.
 - A stated intent ("it's intentional", "by design", "that's the requirement") changes your assessment only when it is backed by code or a comment in the diff, or by a concrete fact or checkable rule that says what must happen and why. Then accept it: if the code meets that intent and the risk the finding names is gone, withdraw the finding; if part of the risk remains, say which part in one sentence and keep the finding for that part.
-- A bare intent claim, a vague objection or pressure without facts ("it's intentional", "nonsense", "trust me", "you're wrong, figure it out", tone, repetition) does not change your position. Say that they may see it differently but you disagree, restate your evidence from the diff in one or two sentences, and keep the finding.
+- A dismissal, a vague objection or pressure without facts ("nonsense", "trust me", "it's intentional", "it's handled elsewhere" without naming where, "you're wrong, figure it out", tone, repetition) never changes your position. Write "You may see it differently, but I disagree", restate the evidence in one sentence, and keep the finding.
 - Do not accept a claim the diff contradicts, even when it rests on a fact you accept. Quote the line that contradicts it and keep your position.
 - If they ask you to consider their intent without stating it, ask what the intended behaviour is in one specific question, and say the finding stands until they answer. Do not guess their intent.
 - If a dispute turns on something only the developer can know (a requirement, an external system's contract, or where something outside the diff lives) and they have not said it, you may ask one specific question that would settle it; say where the finding stands until they answer.
@@ -47135,8 +47152,8 @@ When a developer disputes or questions a finding:
 - The diff shows the code as it is now, which can be newer than your finding. If a later commit removed the problem, say that a later commit fixed it. Never call the finding or an earlier answer wrong only because the current code no longer has the problem; withdraw a finding as wrong only when it was wrong for the code it was written against.
 
 Format rules:
-- Every bullet point (\`-\`) MUST start on its own line.
-- Never inline multiple items on a single line separated by dashes.
+- Put every list item, bulleted (\`-\`) or numbered (\`1.\`), on its own line, and leave a blank line before the first item.
+- Never run several items together on one line (no "1) \u2026 2) \u2026" inside a sentence).
 - Use proper markdown with blank lines between sections.
 `;
     throw new Error("Cannot load reply prompt: file not found and no embedded copy");
@@ -47483,7 +47500,7 @@ function getAgentVersion() {
     const pkg = JSON.parse((0, import_fs4.readFileSync)(pkgPath, "utf-8"));
     return pkg.version;
   } catch {
-    if (true) return "0.0.64";
+    if (true) return "0.0.65";
     return "unknown";
   }
 }
@@ -47495,7 +47512,7 @@ function getBuildCommit() {
     const dirty = (0, import_child_process.execSync)("git status --porcelain", opts2).toString().trim() ? "-dirty" : "";
     return hash + dirty;
   } catch {
-    if (true) return "e8a68b8";
+    if (true) return "3811b89";
     return "unknown";
   }
 }
@@ -48201,17 +48218,24 @@ init_define_STACK_PROMPTS();
 
 // src/inline/markers.ts
 init_define_STACK_PROMPTS();
-var SUMMARY_HEADER_LINE = "### Review summary";
-var SUMMARY_HEADER_TAG = "*inline-summary v1 | maintained by the review agent*";
-var SUMMARY_HEADER = `${SUMMARY_HEADER_LINE}
-${SUMMARY_HEADER_TAG}`;
+var SUMMARY_HEADER = "### Review summary *(inline)*";
+var LEGACY_HEADER_LINE = "### Review summary";
+var LEGACY_HEADER_TAG = "*inline-summary v1 | maintained by the review agent*";
 var ID = "F[1-9][0-9]{0,5}";
-var ROOT_RE = new RegExp(String.raw`^\*Finding (${ID}) \| opened at ([0-9a-f]{12})\*$`);
-var ANSWER_RE = new RegExp(String.raw`^\*Answer on (${ID}|summary) \| through ([A-Za-z0-9:_-]{1,64})\*$`);
+var SUFFIX = String.raw`(?: \| ([^*|]+?)(?: \| Build ([^*|]+))?)?`;
+var ROOT_RE = new RegExp(String.raw`^\*Finding (${ID}) \| opened at ([0-9a-f]{12})${SUFFIX}\*$`);
+var ANSWER_RE = new RegExp(String.raw`^\*Answer on (${ID}|summary) \| through ([A-Za-z0-9:_-]{1,64})${SUFFIX}\*$`);
 var NOTE_RE = new RegExp(String.raw`^\*Replies paused on (${ID}|summary)\*$`);
 var STATE_RE = /^\*inline-state v1 \| n=([1-9][0-9]{0,5}) \| commits=((?:[0-9a-f]{12}(?:,[0-9a-f]{12}){0,999})?) \| sig=([0-9a-f]{16})\*$/;
-var buildRootMarker = (id, c12) => `*Finding ${id} | opened at ${c12}*`;
-var buildAnswerMarker = (target, through) => `*Answer on ${target} | through ${through}*`;
+var cleanMeta = (v) => (v ?? "").replace(/[*|\x00-\x1f\x7f]/g, "").trim();
+function suffixOf(meta) {
+  const model = cleanMeta(meta?.model);
+  if (!model) return "";
+  const build = cleanMeta(meta?.build);
+  return ` | ${model}${build ? ` | Build ${build}` : ""}`;
+}
+var buildRootMarker = (id, c12, meta) => `*Finding ${id} | opened at ${c12}${suffixOf(meta)}*`;
+var buildAnswerMarker = (target, through, meta) => `*Answer on ${target} | through ${through}${suffixOf(meta)}*`;
 var buildNoteMarker = (target) => `*Replies paused on ${target}*`;
 var buildStateLine = (n, commits, sig) => `*inline-state v1 | n=${n} | commits=${commits.join(",")} | sig=${sig}*`;
 function lastNonEmptyLine(body) {
@@ -48221,11 +48245,11 @@ function lastNonEmptyLine(body) {
 }
 function parseRootMarker(body) {
   const m = ROOT_RE.exec(lastNonEmptyLine(body));
-  return m ? { id: m[1], openedAt: m[2] } : null;
+  return m ? { id: m[1], openedAt: m[2], ...m[3] ? { model: m[3] } : {}, ...m[4] ? { build: m[4] } : {} } : null;
 }
 function parseAnswerMarker(body) {
   const m = ANSWER_RE.exec(lastNonEmptyLine(body));
-  return m ? { target: m[1], through: m[2] } : null;
+  return m ? { target: m[1], through: m[2], ...m[3] ? { model: m[3] } : {}, ...m[4] ? { build: m[4] } : {} } : null;
 }
 function parseNoteMarker(body) {
   const m = NOTE_RE.exec(lastNonEmptyLine(body));
@@ -48298,17 +48322,17 @@ function addCommit(s, c12) {
 init_define_STACK_PROMPTS();
 var MAX_TITLE = 100;
 var MAX_HISTORY = 20;
-var CHANGED_SUFFIX = " \xB7 changed in this push";
 var SEV = "HIGH|MEDIUM|LOW";
 var FID = "F[1-9][0-9]{0,5}";
 function sanitizeTitle(t) {
   const flat = t.replace(/\s+/g, " ").replace(/\*{2,}/g, "*").trim();
   return flat.length > MAX_TITLE ? flat.slice(0, MAX_TITLE - 1).trimEnd() + "\u2026" : flat;
 }
+var NOTE_WORD = { line: "line changed", file: "file changed", deleted: "file deleted" };
 var loc = (file, lines) => lines ? `${file}:${lines}` : file;
 function threadRow(r) {
   const was = r.was ? ` \xB7 was ${r.was} (dismissed)` : "";
-  return `- **${r.severity} \u2013 ${sanitizeTitle(r.title)}** (\`${loc(r.file, r.lines)}@${r.base}\`) \xB7 ${r.id}${was} \xB7 [thread](${r.url})${r.changed ? CHANGED_SUFFIX : ""}`;
+  return `- **${r.severity} \u2013 ${sanitizeTitle(r.title)}** (\`${loc(r.file, r.lines)}@${r.base}\`) \xB7 ${r.id}${was} \xB7 [thread](${r.url})${r.note ? ` \xB7 ${NOTE_WORD[r.note.kind]} since ${r.note.since}` : ""}`;
 }
 function summaryOnlyRow(r, titleOnly = false) {
   const where2 = r.file ? ` (\`${loc(r.file, r.lines)}\`)` : "";
@@ -48322,7 +48346,7 @@ function overflowLine(ids, maxChars = Infinity) {
   const list = `Also open: ${ids.join(", ")}`;
   return list.length <= maxChars ? list : `Also open: ${ids.length} more threads`;
 }
-var THREAD_RE = new RegExp(String.raw`^- \*\*(${SEV}) – (.+?)\*\* \(\`(.+)\`\) · (${FID})(?: · was (${FID}) \(dismissed\))? · \[thread\]\(([^)\s]+)\)( · changed in this push)?$`);
+var THREAD_RE = new RegExp(String.raw`^- \*\*(${SEV}) – (.+?)\*\* \(\`(.+)\`\) · (${FID})(?: · was (${FID}) \(dismissed\))? · \[thread\]\(([^)\s]+)\)(?: · (?:(line|file) changed since ([0-9a-f]{7})|file (deleted) since ([0-9a-f]{7})|changed in this push))?$`);
 var LOC_RE = /^(.+?)(?::([0-9]+(?:-[0-9]+)?))?@([0-9a-f]{12})$/;
 var SUMMARY_ONLY_RE = new RegExp(String.raw`^- \*\*(${SEV}) – (.+?)\*\*(?: \(\`(.+?)\`\))? · no thread$`);
 var PLAIN_LOC_RE = /^(.+?)(?::([0-9]+(?:-[0-9]+)?))?$/;
@@ -48343,7 +48367,7 @@ function parseThreadRow(line) {
     id: m[4],
     ...m[5] ? { was: m[5] } : {},
     url: m[6],
-    ...m[7] ? { changed: true } : {}
+    ...m[7] ? { note: { kind: m[7], since: m[8] } } : m[9] ? { note: { kind: "deleted", since: m[10] } } : {}
   };
 }
 function parseResolvedRow(line) {
@@ -48428,7 +48452,7 @@ function rootBody(r) {
 
 ${text}${r.fixBlock ?? ""}
 
-${buildRootMarker(r.id, r.c12)}`;
+${buildRootMarker(r.id, r.c12, { model: r.model, build: r.build })}`;
 }
 function fixPart(f) {
   if (!f.proposal || f.proposal.length > PROPOSAL_CAP) return void 0;
@@ -48445,7 +48469,7 @@ function sanitizeNarrative(text) {
   let removed = stripped.removed;
   const kept = stripped.text.split("\n").filter((line) => {
     const t = line.trimEnd();
-    const forged = t === SUMMARY_HEADER_LINE || t === SUMMARY_HEADER_TAG || parseThreadRow(t) || parseResolvedRow(t) || parseOverflow(t) || parseHistoryLine(t) || parseSummaryOnlyRow(t);
+    const forged = t === SUMMARY_HEADER || t === LEGACY_HEADER_LINE || t === LEGACY_HEADER_TAG || parseThreadRow(t) || parseResolvedRow(t) || parseOverflow(t) || parseHistoryLine(t) || parseSummaryOnlyRow(t);
     if (forged) removed++;
     return !forged;
   });
@@ -48465,7 +48489,10 @@ function carryNarrative(body) {
     return !fenced && l.trimEnd() === "### Findings";
   });
   if (at < 0) return null;
-  const pre = kept.slice(2, at).join("\n").trim();
+  const first = lines[0]?.trimEnd();
+  const headerLines = first === SUMMARY_HEADER ? 1 : first === LEGACY_HEADER_LINE && lines[1]?.trimEnd() === LEGACY_HEADER_TAG ? 2 : -1;
+  if (headerLines < 0) return null;
+  const pre = kept.slice(headerLines, at).join("\n").trim() || (headerLines === 1 ? "### Summary" : "");
   if (!pre) return null;
   let i = at + 1;
   while (i < kept.length && !kept[i].startsWith("### ")) i++;
@@ -48515,6 +48542,7 @@ var bySeverity = (rows) => ["HIGH", "MEDIUM", "LOW"].map((s) => [s, rows.filter(
 function composeSummary(input) {
   const split2 = splitAtFindings(input.review.plain, input.review.findings);
   const pre = sanitizeNarrative(split2.pre);
+  pre.text = pre.text.replace(/^\s*### Summary[ \t]*(?:\n|$)/, "").trim();
   const post = sanitizeNarrative(split2.post);
   const todoText = input.todoSection ? sanitizeNarrative(input.todoSection).text : "";
   const removed = pre.removed + post.removed;
@@ -48545,7 +48573,7 @@ function composeSummary(input) {
       collapsed += hidden;
       const lines = shown.map((r) => summaryOnlyRow(r, p2.titlesOnly));
       if (hidden) lines.push(`and ${hidden} more ${input.summaryOnly.every((r) => r.severity === "LOW") ? "low-severity" : "summary-only"} findings`);
-      findings.push("**Not posted as threads**\n" + lines.join("\n"));
+      findings.push("**Not posted as threads**\n\n" + lines.join("\n"));
     }
     if (!findings.length) findings.push("No findings.");
     let preText = pre.text;
@@ -48631,7 +48659,7 @@ ${history.slice(-p2.history).join("\n")}`,
       const parts = [SUMMARY_HEADER];
       if (open.length) parts.push(`Also open: ${open.length} more threads
 (${bySeverity(open)})`);
-      if (so.length) parts.push(["**Not posted as threads**", ...kept.map((r) => summaryOnlyRow(r, true)), ...hidden.length ? [`and ${hidden.length} more summary-only findings (${bySeverity(hidden)})`] : []].join("\n"));
+      if (so.length) parts.push(["**Not posted as threads**", "", ...kept.map((r) => summaryOnlyRow(r, true)), ...hidden.length ? [`and ${hidden.length} more summary-only findings (${bySeverity(hidden)})`] : []].join("\n"));
       if (!open.length && !so.length) parts.push("No findings.");
       return [...parts, footer].join("\n\n");
     };
@@ -48795,8 +48823,8 @@ async function mapEntries(entries, mapper) {
   for (const i of order) {
     const entry = entries[i];
     const m = entry.file ? await mapper.map(entry.file, entry.lines, entry.openedAt) : null;
-    if (m) out[i] = { entry, loc: { file: m.file, ...m.line !== void 0 ? { line: m.line } : {}, g: m.g, mapped: true }, changed: m.changed };
-    else out[i] = { entry, loc: { file: entry.file, ...parseLineRange(entry.lines) ? { line: parseLineRange(entry.lines).start } : {}, g: 0, mapped: false }, changed: false };
+    if (m) out[i] = { entry, loc: { file: m.file, ...m.line !== void 0 ? { line: m.line } : {}, g: m.g, mapped: true } };
+    else out[i] = { entry, loc: { file: entry.file, ...parseLineRange(entry.lines) ? { line: parseLineRange(entry.lines).start } : {}, g: 0, mapped: false } };
   }
   return out;
 }
@@ -48876,8 +48904,7 @@ function planRun(input) {
   const plan = {
     create: [],
     summaryOnly: [],
-    suppressed: { open: [], sameRun: [], resolved: [] },
-    changedInPush: new Set(open.filter((m) => m.changed).map((m) => m.entry.id))
+    suppressed: { open: [], sameRun: [], resolved: [] }
   };
   let k = input.nextK;
   const ordered = [...input.findings].sort((a, b) => RANK3[b.severity] - RANK3[a.severity]);
@@ -48918,7 +48945,7 @@ function planRun(input) {
     }
     const root = { id: `F${k++}`, finding: f, path: a.path, line: a.line, ...was ? { was } : {} };
     plan.create.push(root);
-    planned.push({ entry: { id: root.id, k: 0, severity: f.severity, title: f.title, gist: "", file: f.file ?? a.path, lines: f.lines, openedAt: "", rootId: "", url: "", resolved: false, humanComments: 0 }, loc: { file: f.file ?? a.path, ...parseLineRange(f.lines) ? { line: parseLineRange(f.lines).start } : {}, g: 0, mapped: true }, changed: false });
+    planned.push({ entry: { id: root.id, k: 0, severity: f.severity, title: f.title, gist: "", file: f.file ?? a.path, lines: f.lines, openedAt: "", rootId: "", url: "", resolved: false, humanComments: 0 }, loc: { file: f.file ?? a.path, ...parseLineRange(f.lines) ? { line: parseLineRange(f.lines).start } : {}, g: 0, mapped: true } });
   }
   return plan;
 }
@@ -48928,12 +48955,13 @@ init_define_STACK_PROMPTS();
 var STATE_PREFIX = "*inline-state v1 |";
 var firstLine = (body) => body.replace(/\r\n/g, "\n").split("\n", 1)[0].trimEnd();
 function isSummaryShaped(body) {
-  return firstLine(body) === SUMMARY_HEADER_LINE || lastNonEmptyLine(body).startsWith(STATE_PREFIX);
+  const first = firstLine(body);
+  return first === SUMMARY_HEADER || first === LEGACY_HEADER_LINE || lastNonEmptyLine(body).startsWith(STATE_PREFIX);
 }
 var isInlineMarked = (body) => parseRootMarker(body) !== null || isSummaryShaped(body);
 function strictlyValid(body, agentId) {
   const lines = body.replace(/\r\n/g, "\n").split("\n");
-  if (lines[0] !== SUMMARY_HEADER_LINE || lines[1]?.trimEnd() !== SUMMARY_HEADER_TAG) return null;
+  if (lines[0] !== SUMMARY_HEADER && (lines[0] !== LEGACY_HEADER_LINE || lines[1]?.trimEnd() !== LEGACY_HEADER_TAG)) return null;
   return verify(body, agentId);
 }
 function selectSummary(threads, identity) {
@@ -48995,6 +49023,8 @@ function buildRegistry(threads, identity) {
       file: row?.file ?? t.root.inline?.path ?? "",
       ...row ? row.lines ? { lines: row.lines } : {} : line !== void 0 ? { lines: String(line) } : {},
       openedAt: row ? row.base : marker.openedAt,
+      markerAt: marker.openedAt,
+      ...t.root.inline ? { anchor: { path: t.root.inline.path, ...line !== void 0 ? { line } : {} } } : {},
       ...text.was ? { was: text.was } : {},
       rootId: t.root.id,
       url: t.root.url,
@@ -49065,10 +49095,10 @@ function selectBatch(views, cap = MAX_BATCH_THREADS) {
   const ordered = views.filter((v) => v.pending.length > 0).sort((a, b) => a.pending[0].seq - b.pending[0].seq);
   return { batch: ordered.slice(0, cap), deferred: Math.max(0, ordered.length - cap) };
 }
-function answerBody(target, through, text) {
-  return `${stripGeneratedFooters(text).text}
+function answerBody(target, through, text, meta) {
+  return `${spaceLists(stripGeneratedFooters(text).text)}
 
-${buildAnswerMarker(target, through)}`;
+${buildAnswerMarker(target, through, meta)}`;
 }
 function noteBody(target, max) {
   const where2 = target === "summary" ? "this summary" : target;
@@ -49523,7 +49553,7 @@ async function writeInline(input) {
         res.answers.skipped++;
         continue;
       }
-      const r = await post(t, answerBody(a.target, a.through, a.text), a.target);
+      const r = await post(t, answerBody(a.target, a.through, a.text, input.answerMeta), a.target);
       if (r === "identity_mismatch") return stop(r);
       if (r === "ok") {
         res.answers.posted++;
@@ -49632,7 +49662,7 @@ function dryRun(input, res, loaded, head12) {
 ${input.rootText(r)}
 `);
   for (const a of input.answers) console.log(`--- answer on ${a.target}
-${answerBody(a.target, a.through, a.text)}
+${answerBody(a.target, a.through, a.text, input.answerMeta)}
 `);
   for (const n of input.notes) console.log(`--- note on ${n.target}
 ${noteBody(n.target, n.max)}
@@ -49712,8 +49742,12 @@ var Engine = class {
   s;
   priorBase;
   finished = false;
+  build;
   record() {
     return this.rec;
+  }
+  buildId() {
+    return this.build ??= getBuildCommit();
   }
   priorFor(files) {
     return this.priorBase ? buildPrior(this.priorBase, files) : void 0;
@@ -49907,10 +49941,11 @@ var Engine = class {
     for (const x of plan.summaryOnly) this.rec.roots.summary_only[x.reason]++;
     this.rec.suppressed = { open_duplicate: plan.suppressed.open.length, resolved: plan.suppressed.resolved.length, in_run_duplicate: plan.suppressed.sameRun.length };
     const replies = await this.replyPlan(ctx, mapper);
-    const footer = { identity: config.agentIdentity, model: config.anthropic.model, build: getBuildCommit() };
+    const notes = await this.codeNotes(mapper, s.reg.entries);
+    const footer = { identity: config.agentIdentity, model: config.anthropic.model, build: this.buildId() };
     const carried = (src.carriedSummaryOnly ?? []).filter((c) => !mapped.some((m) => !m.entry.resolved && matches(m, c, "open")));
     const buildSummary = (roots, state) => {
-      const { threads, resolved: resolved2, summaryOnly } = this.rows(roots, plan, geo, carried);
+      const { threads, resolved: resolved2, summaryOnly } = this.rows(roots, plan, geo, carried, notes);
       const composed = composeSummary({
         review: { plain: src.plain, findings: src.findings },
         threads,
@@ -49932,7 +49967,7 @@ var Engine = class {
       mode: "review",
       nextN: s.state.n + 1,
       roots: plan.create,
-      rootText: (r) => rootBody({ severity: r.finding.severity, title: r.finding.title, body: r.finding.fix?.body ?? r.finding.body, ...r.finding.fix ? { fixBlock: r.finding.fix.block } : {}, id: r.id, c12: s.head12, ...r.was ? { was: r.was } : {} }),
+      rootText: (r) => rootBody({ severity: r.finding.severity, title: r.finding.title, body: r.finding.fix?.body ?? r.finding.body, ...r.finding.fix ? { fixBlock: r.finding.fix.block } : {}, id: r.id, c12: s.head12, model: footer.model, build: footer.build, ...r.was ? { was: r.was } : {} }),
       answers: replies.answers,
       notes: replies.notes,
       buildSummary,
@@ -49941,7 +49976,7 @@ var Engine = class {
     this.rec.raised_over_resolved = res.posted.filter((p) => p.root.was).length;
     return this.settle(ctx, res);
   }
-  rows(roots, plan, geo, carried) {
+  rows(roots, plan, geo, carried, notes) {
     const head12 = this.s.head12;
     const threads = [];
     const resolved2 = [];
@@ -49963,7 +49998,7 @@ var Engine = class {
         id: e.id,
         ...e.was ? { was: e.was } : {},
         url: e.url,
-        ...plan.changedInPush.has(e.id) ? { changed: true } : {}
+        ...notes.has(e.id) ? { note: notes.get(e.id) } : {}
       });
     }
     for (const p of roots.posted) {
@@ -49981,6 +50016,30 @@ var Engine = class {
       ...rangeString(f.lines) ? { lines: rangeString(f.lines) } : {}
     }));
     return { threads, resolved: resolved2, summaryOnly: [...summaryOnly, ...carried] };
+  }
+  // The note is measured from the marker's commit, not the row base, which moves with every re-map.
+  async codeNotes(mapper, entries) {
+    const out = /* @__PURE__ */ new Map();
+    const head12 = this.s.head12;
+    const count2 = { line: 0, file: 0, deleted: 0 };
+    let checked = 0;
+    let unknown = 0;
+    for (const e of entries) {
+      if (e.resolved) continue;
+      const since = e.markerAt ?? e.openedAt;
+      checked++;
+      try {
+        const status = await codeSince(mapper, e.anchor, since, head12);
+        if (status === "line" || status === "file" || status === "deleted") {
+          out.set(e.id, { kind: status, since: since.slice(0, 7) });
+          count2[status]++;
+        } else if (status === "unknown") unknown++;
+      } catch (err) {
+        console.warn(`  Code-change note for ${e.id} failed (${err?.message}) - no note`);
+      }
+    }
+    console.log(`  Code-change notes: ${checked} open thread(s) checked, ${count2.line} line, ${count2.file} file, ${count2.deleted} deleted, ${unknown} unknown`);
+    return out;
   }
   async replyPlan(ctx, mapper) {
     const s = this.s;
@@ -50027,6 +50086,7 @@ var Engine = class {
         summary: s.reg.summary,
         entries: s.reg.entries,
         markHeadChecked: () => deps.markHeadChecked(ctx),
+        answerMeta: { model: config.reply.model || config.anthropic.model, build: this.buildId() },
         ...parts
       });
     } catch (err) {
@@ -50644,7 +50704,7 @@ async function transition(state, ctx) {
       recordTokenCall(ctx, "reply", replyModel, result.usage);
       addUsage(ctx, result.usage);
       (ctx.remainderRequests ??= []).push({ usage: result.usage, model: replyModel });
-      const replyBody = result.text.trimEnd() + buildReplyFooter(config.agentIdentity, replyModel, getJobUrl());
+      const replyBody = spaceLists(result.text.trimEnd()) + buildReplyFooter(config.agentIdentity, replyModel, getJobUrl());
       if (ctx.dryRun) {
         console.log("\n=== DRY RUN \u2014 Reply output (not posted) ===\n");
         console.log(replyBody);
