@@ -153,3 +153,28 @@ describe('buildRegistry', () => {
     expect(reg.entries[0].lines).toBeUndefined()
   })
 })
+
+describe('summary layouts', () => {
+  const legacyBody = withState(['### Review summary', '*inline-summary v1 | maintained by the review agent*', '', '### Summary', 'old', '', '### Findings', 'No findings.'].join('\n'), { n: 2, commits: [C] }, ME)
+
+  it('recognises a 0.0.63/0.0.64 summary as valid and the single-heading layout as valid', () => {
+    expect(isInlineMarked(legacyBody)).toBe(true)
+    expect(selectSummary([summaryThread(5, legacyBody)], api)).toMatchObject({ kind: 'found', check: 'valid', state: { n: 2, commits: [C] } })
+    expect(selectSummary([summaryThread(5, validSummary())], api)).toMatchObject({ kind: 'found', check: 'valid' })
+  })
+
+  it('keeps one summary when an old and a new one exist, and a header without the old tag is tampered', () => {
+    const sel = selectSummary([summaryThread(9, validSummary()), summaryThread(5, legacyBody)], api)
+    expect(sel).toMatchObject({ kind: 'found', check: 'valid', extras: 1 })
+    expect(sel.kind === 'found' && sel.comment.id).toBe('5')
+    const noTag = withState('### Review summary\n\nbody', { n: 1, commits: [C] }, ME)
+    expect(selectSummary([summaryThread(5, noTag)], api)).toMatchObject({ kind: 'found', check: 'tampered' })
+  })
+
+  it('reads the marker commit from a suffixed root and from the old suffix-less root', () => {
+    const suffixed = findingThread(10, 1)
+    suffixed.root.body = suffixed.root.body.replace(buildRootMarker('F1', C), buildRootMarker('F1', C, { model: 'm', build: 'b' }))
+    const reg = buildRegistry([suffixed, findingThread(11, 2)], api)
+    expect(reg.status === 'ok' && reg.entries.map(e => [e.id, e.markerAt])).toEqual([['F1', C], ['F2', C]])
+  })
+})

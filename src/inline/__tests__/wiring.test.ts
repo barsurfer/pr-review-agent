@@ -44,7 +44,7 @@ import { logUsageRecord } from '../../review/usage.js'
 import { renderReview, type ReviewObject } from '../../review/formatter.js'
 import { State, type ReviewContext } from '../../review/types.js'
 import { selectInlineEngine } from '../engine.js'
-import { buildAnswerMarker, SUMMARY_HEADER } from '../markers.js'
+import { parseAnswerMarker, SUMMARY_HEADER } from '../markers.js'
 import { rootBody } from '../compose.js'
 import { verify, withState } from '../state.js'
 import type { InlineDeps } from '../types.js'
@@ -264,7 +264,7 @@ describe('reply usage', () => {
     mockRunReview.mockImplementation(async () => answerWith(object([{ severity: 'MEDIUM', title: 'New problem', file: 'src/two.ts', lines: '4', body: 'Bad.' }], { delta_stats: { resolved: 0, still_open: 1, new_findings: 1 } })))
     const record = await review(fake.adapter, '7', false)
     const reply = fake.comments.find(c => c.parentId === rootId && c.authorIds[0] === ME)!
-    expect(reply.body).toContain(buildAnswerMarker('F1', String(q)))
+    expect(parseAnswerMarker(reply.body)).toMatchObject({ target: 'F1', through: String(q), model: expect.any(String) })
     // Sonnet 5.5: 1000 in at $2/M plus 500 out at $10/M; Haiku 5.5: 1000 in at $0.1/M plus 200 out at $0.5/M.
     expect(record!.cost_usd).toBeCloseTo(0.007 + 0.0002, 6)
     expect(record!.tokens).toMatchObject({ input: 2000, output: 700 })

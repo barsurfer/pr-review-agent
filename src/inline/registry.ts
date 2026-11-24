@@ -1,5 +1,5 @@
 import type { MarkedThread } from '../vcs/adapter.js'
-import { SUMMARY_HEADER_LINE, SUMMARY_HEADER_TAG, parseRootMarker, parseAnswerMarker, parseNoteMarker, lastNonEmptyLine } from './markers.js'
+import { SUMMARY_HEADER, LEGACY_HEADER_LINE, LEGACY_HEADER_TAG, parseRootMarker, parseAnswerMarker, parseNoteMarker, lastNonEmptyLine } from './markers.js'
 import { verify } from './state.js'
 import { parseRows } from './rows.js'
 import { isTrusted } from './identity.js'
@@ -14,7 +14,8 @@ const firstLine = (body: string): string => body.replace(/\r\n/g, '\n').split('\
 
 // Structural only: a quoted or substring marker never qualifies.
 function isSummaryShaped(body: string): boolean {
-  return firstLine(body) === SUMMARY_HEADER_LINE || lastNonEmptyLine(body).startsWith(STATE_PREFIX)
+  const first = firstLine(body)
+  return first === SUMMARY_HEADER || first === LEGACY_HEADER_LINE || lastNonEmptyLine(body).startsWith(STATE_PREFIX)
 }
 
 // Narrow net for listMarkedThreads: roots with a finding marker and summary candidates; answers and notes come as descendants.
@@ -26,7 +27,7 @@ export type SummarySelection =
 
 function strictlyValid(body: string, agentId: string): SummaryState | null {
   const lines = body.replace(/\r\n/g, '\n').split('\n')
-  if (lines[0] !== SUMMARY_HEADER_LINE || lines[1]?.trimEnd() !== SUMMARY_HEADER_TAG) return null
+  if (lines[0] !== SUMMARY_HEADER && (lines[0] !== LEGACY_HEADER_LINE || lines[1]?.trimEnd() !== LEGACY_HEADER_TAG)) return null
   return verify(body, agentId)
 }
 
@@ -107,6 +108,8 @@ export function buildRegistry(threads: readonly MarkedThread[], identity: OkIden
       file: row?.file ?? t.root.inline?.path ?? '',
       ...(row ? (row.lines ? { lines: row.lines } : {}) : line !== undefined ? { lines: String(line) } : {}),
       openedAt: row ? row.base : marker.openedAt,
+      markerAt: marker.openedAt,
+      ...(t.root.inline ? { anchor: { path: t.root.inline.path, ...(line !== undefined ? { line } : {}) } } : {}),
       ...(text.was ? { was: text.was } : {}),
       rootId: t.root.id,
       url: t.root.url,

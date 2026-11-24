@@ -1,19 +1,27 @@
 import { describe, it, expect } from 'vitest'
 import {
   sanitizeTitle, threadRow, summaryOnlyRow, resolvedRow, overflowLine, parseRows, parseThreadRow, parseResolvedRow, parseOverflow,
-  historyLine, parseHistoryLine, parseHistory, capHistory, MAX_TITLE, CHANGED_SUFFIX,
+  historyLine, parseHistoryLine, parseHistory, capHistory, MAX_TITLE,
 } from '../rows.js'
 
 const base = { severity: 'HIGH' as const, file: 'src/a.ts', lines: '42-47', base: 'a1b2c3d4e5f6', id: 'F9', url: 'https://bitbucket.org/ws/r/pull-requests/1#comment-5' }
 
 describe('thread rows', () => {
-  it('round-trips with the @<c12> base, was and the changed suffix', () => {
+  it('round-trips with the @<c12> base, was and each code note, and still parses the old push suffix', () => {
     const plain = threadRow({ ...base, title: 'Null user' })
     expect(plain).toBe('- **HIGH – Null user** (`src/a.ts:42-47@a1b2c3d4e5f6`) · F9 · [thread](https://bitbucket.org/ws/r/pull-requests/1#comment-5)')
     expect(parseThreadRow(plain)).toEqual({ kind: 'thread', ...base, title: 'Null user' })
-    const full = threadRow({ ...base, title: 'Null user', was: 'F3', changed: true })
-    expect(full.endsWith(CHANGED_SUFFIX)).toBe(true)
-    expect(parseThreadRow(full)).toEqual({ kind: 'thread', ...base, title: 'Null user', was: 'F3', changed: true })
+    const full = threadRow({ ...base, title: 'Null user', was: 'F3', note: { kind: 'line', since: 'abc1234' } })
+    expect(full.endsWith(' · line changed since abc1234')).toBe(true)
+    expect(parseThreadRow(full)).toEqual({ kind: 'thread', ...base, title: 'Null user', was: 'F3', note: { kind: 'line', since: 'abc1234' } })
+    for (const [kind, text] of [['file', 'file changed'], ['deleted', 'file deleted']] as const) {
+      const row = threadRow({ ...base, title: 'T', note: { kind, since: '1234567' } })
+      expect(row.endsWith(` · ${text} since 1234567`)).toBe(true)
+      expect(parseThreadRow(row)).toEqual({ kind: 'thread', ...base, title: 'T', note: { kind, since: '1234567' } })
+    }
+    const old = parseThreadRow(plain + ' · changed in this push')
+    expect(old).toEqual({ kind: 'thread', ...base, title: 'Null user' })
+    expect(parseRows(`${plain} · changed in this push\n${full}`).threads.map(t => t.id)).toEqual(['F9', 'F9'])
   })
 
   it('round-trips a row without lines and a path containing a colon', () => {

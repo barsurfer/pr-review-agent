@@ -89,7 +89,7 @@ describe('createDeltaMapper', () => {
 })
 
 describe('matches', () => {
-  const mapped = (e: ThreadEntry, line = 100, g = 0, mappedOk = true): MappedEntry => ({ entry: e, loc: { file: e.file, line, g, mapped: mappedOk }, changed: false })
+  const mapped = (e: ThreadEntry, line = 100, g = 0, mappedOk = true): MappedEntry => ({ entry: e, loc: { file: e.file, line, g, mapped: mappedOk } })
   const repeat = { title: 'Null user crashes profile page', file: 'src/a.ts', lines: '100' }
 
   it('open: similarity 0.65 plus a nearby line matches; far line does not', () => {

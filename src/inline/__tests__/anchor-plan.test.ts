@@ -109,12 +109,6 @@ describe('planRun', () => {
     expect(low.create).toHaveLength(1)
   })
 
-  it('reports open threads whose lines changed in the push', async () => {
-    const e = entry({ lines: '10', openedAt: A })
-    const d = 'diff --git a/src/a.ts b/src/a.ts\n--- a/src/a.ts\n+++ b/src/a.ts\n@@ -10,1 +10,1 @@\n-old\n+new\n'
-    const p = await run([e], [], async () => d)
-    expect([...p.changedInPush]).toEqual(['F1'])
-  })
   it('plans an identical finding of the same run once, without a second id, and keeps the twin as a duplicate summary-only row', async () => {
     const f = find({ lines: '10' })
     const p = await run([], [f, { ...f, body: 'same finding again' }], noDelta)

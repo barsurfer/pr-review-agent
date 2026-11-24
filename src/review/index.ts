@@ -20,7 +20,7 @@ import { splitDiffByFile } from './bundler.js'
 import { defaultTokenEstimator } from './token-estimator.js'
 import { normalizeFindingPath, type FirstPassSite } from './findings-output.js'
 import { filterDiff, countChangedLines, parseVerdictScore, isPathExcluded, scanTodos, isContextLengthError, shownLength } from './parsers.js'
-import { buildReviewFooter, buildReplyFooter, stripPreviousFooter, stripDeltaStats, stripJudgeNotes, stripJenkinsMeta, stripPreamble, isNoChange, extractCommitHash, legacyCommitHash, countFindings, markdownHasFindings, hasReplyFooter, renderReview, type ReviewFinding } from './formatter.js'
+import { spaceLists, buildReviewFooter, buildReplyFooter, stripPreviousFooter, stripDeltaStats, stripJudgeNotes, stripJenkinsMeta, stripPreamble, isNoChange, extractCommitHash, legacyCommitHash, countFindings, markdownHasFindings, hasReplyFooter, renderReview, type ReviewFinding } from './formatter.js'
 import { runBundledReview, addUsage, recordPassCall } from './bundled.js'
 import { composeSuggestedFixes, COMMENT_BUDGET } from './suggested-fix.js'
 import { orderPosted } from './posted-order.js'
@@ -651,7 +651,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       addUsage(ctx, result.usage)
       ;(ctx.remainderRequests ??= []).push({ usage: result.usage, model: replyModel })
 
-      const replyBody = result.text.trimEnd() + buildReplyFooter(config.agentIdentity, replyModel, getJobUrl())
+      const replyBody = spaceLists(result.text.trimEnd()) + buildReplyFooter(config.agentIdentity, replyModel, getJobUrl())
 
       if (ctx.dryRun) {
         console.log('\n=== DRY RUN — Reply output (not posted) ===\n')

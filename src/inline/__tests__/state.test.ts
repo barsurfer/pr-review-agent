@@ -20,7 +20,7 @@ describe('state signature', () => {
 
   it('a one-character edit anywhere, header included, is a mismatch', () => {
     const body = withState(above, { n: 1, commits: [c(1)] }, AGENT)
-    for (const i of [0, 5, body.indexOf('All'), body.indexOf('inline-summary') + 3]) {
+    for (const i of [0, 5, body.indexOf('All'), body.indexOf('(inline)') + 3]) {
       const edited = body.slice(0, i) + (body[i] === 'x' ? 'y' : 'x') + body.slice(i + 1)
       expect(verify(edited, AGENT)).toBeNull()
     }

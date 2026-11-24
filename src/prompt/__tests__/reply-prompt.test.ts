@@ -17,7 +17,7 @@ describe('reply prompt', () => {
     expect(bullets).toHaveLength(8)
     expect(bullets[0]).toContain('A concrete fact names a specific place')
     expect(bullets[1]).toContain('A stated intent')
-    expect(bullets[2]).toContain('A bare intent claim')
+    expect(bullets[2]).toContain('A dismissal, a vague objection')
     expect(bullets[3]).toContain('Do not accept a claim the diff contradicts')
     expect(bullets[4]).toContain('without stating it')
     expect(bullets[5]).toContain('only the developer can know')
@@ -30,12 +30,28 @@ describe('reply prompt', () => {
     expect(now).not.toContain('A stated intent or requirement is also a fact')
   })
 
-  it('keeps SCOPE LOCK and the Format rules byte-equal to v0.0.61', () => {
+  it('keeps SCOPE LOCK byte-equal to v0.0.61 and has the list format rules', () => {
     expect(section(now, 'SCOPE LOCK:', 'Your job:')).toBe(section(frozen, 'SCOPE LOCK:', 'Your job:'))
-    expect(section(now, 'Format rules:')).toBe(section(frozen, 'Format rules:'))
+    expect(section(now, 'Format rules:')).toContain('- Put every list item, bulleted (`-`) or numbered (`1.`), on its own line, and leave a blank line before the first item.\n- Never run several items together on one line (no "1) … 2) …" inside a sentence).\n- Use proper markdown with blank lines between sections.')
   })
 
   it('is LF only', () => {
     expect(getReplyPrompt()).not.toContain('\r')
+  })
+})
+
+describe('reply prompt concision and dismissal wording', () => {
+  it('adds the concise bullet right after the short-and-direct bullet', () => {
+    const job = section(now, 'Your job:', 'When a developer disputes')
+    const bullets = job.split('\n').filter(l => l.startsWith('- '))
+    const at = bullets.findIndex(l => l.startsWith('- Keep answers short and direct'))
+    expect(bullets[at + 1]).toBe('- Be concise: at most three short sentences. State facts (the line, the condition, what happens), not explanations, and do not repeat what an earlier answer in this thread already said. No filler, hedges or softeners.')
+  })
+
+  it('uses the corrected disagreement phrase in a single dismissal bullet', () => {
+    expect(now).toContain('Write "You may see it differently, but I disagree", restate the evidence in one sentence, and keep the finding.')
+    expect(now).not.toContain('Say that they may see it differently')
+    expect(now).toContain('"it\'s handled elsewhere" without naming where')
+    expect(now.split('\n').filter(l => l.includes('"nonsense"'))).toHaveLength(1)
   })
 })

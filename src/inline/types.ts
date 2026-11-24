@@ -28,6 +28,8 @@ export interface ThreadEntry {
   file: string
   lines?: string
   openedAt: string
+  markerAt?: string
+  anchor?: { path: string; line?: number }
   was?: string
   rootId: string
   url: string

@@ -363,7 +363,7 @@ describe('writeInline: answers stay in their own thread', () => {
 describe('writeInline: uncertain creates', () => {
   const entryFor = (id: string, title: string, line: number): MappedEntry => ({
     entry: { id, k: Number(id.slice(1)), severity: 'HIGH', title, gist: '', file: 'src/a.ts', lines: String(line), openedAt: A, rootId: '1', url: 'u', resolved: false, humanComments: 0 },
-    loc: { file: 'src/a.ts', line, g: 0, mapped: true }, changed: false,
+    loc: { file: 'src/a.ts', line, g: 0, mapped: true },
   })
   const diff = 'diff --git a/src/a.ts b/src/a.ts\n--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1,3 +1,4 @@\n a\n+b\n c\n d\n'
 

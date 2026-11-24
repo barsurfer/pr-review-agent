@@ -18,7 +18,7 @@ import { State, type ReviewContext } from '../../review/types.js'
 import { renderReview, type ReviewFinding } from '../../review/formatter.js'
 import { rootBody } from '../compose.js'
 import { withState, verify } from '../state.js'
-import { SUMMARY_HEADER, buildAnswerMarker } from '../markers.js'
+import { SUMMARY_HEADER, buildAnswerMarker, parseAnswerMarker } from '../markers.js'
 import { makeFake, httpErr, ME, HEAD, HEAD12, type Fake } from './fake-bitbucket.js'
 import type { InlineDeps, InlineOutcome } from '../types.js'
 
@@ -692,7 +692,7 @@ describe('replies', () => {
     expect(await e.step(State.CHECK_PREVIOUS_REVIEWS, ctx, depsOf())).toBe(State.DONE)
     expect(ctx.action).toBe('REPLY')
     const reply = fake.comments.find(c => c.parentId === rootId && c.authorIds[0] === ME)!
-    expect(reply.body).toContain(buildAnswerMarker('F1', String(q)))
+    expect(parseAnswerMarker(reply.body)).toMatchObject({ target: 'F1', through: String(q), model: expect.any(String) })
     expect(e.replyUsage).toEqual(expect.objectContaining(usage))
     expect(ctx.usage.input_tokens).toBe(100)
     expect(e.record()).toMatchObject({ outcome: 'replies_only', answers: { threads: 1, posted: 1 }, reply_usage: { model: 'claude-haiku-5-5', input_tokens: 100, output_tokens: 50 } })
@@ -740,7 +740,7 @@ ${buildAnswerMarker(target, '0')}`, authorIds: [ME] })
     expect(runSummaryReplies).not.toHaveBeenCalled()
     expect(summaryNote(summaryId)).toBeDefined()
     expect(e.record().answers!.limit_notes).toBe(1)
-    expect(fake.comments.some(c => c.parentId === rootId && c.authorIds[0] === ME && c.body.includes(buildAnswerMarker('F1', String(fq))))).toBe(true)
+    expect(fake.comments.some(c => c.parentId === rootId && c.authorIds[0] === ME && parseAnswerMarker(c.body)?.through === String(fq))).toBe(true)
   })
 
   it('keeps the review when the reply call fails', async () => {

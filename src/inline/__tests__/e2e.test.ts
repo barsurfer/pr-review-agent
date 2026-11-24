@@ -37,7 +37,7 @@ import { runReview } from '../../review/client.js'
 import { loadPrompt } from '../../prompt/loader.js'
 import { fetchContext } from '../../context/fetcher.js'
 import { renderReview, hasReviewFooter, type ReviewObject } from '../../review/formatter.js'
-import { buildAnswerMarker, parseRootMarker, SUMMARY_HEADER } from '../markers.js'
+import { buildAnswerMarker, parseAnswerMarker, parseRootMarker, SUMMARY_HEADER } from '../markers.js'
 import { verify, withState } from '../state.js'
 import { rootBody } from '../compose.js'
 import { makeFake, httpErr, ME, HEAD, HEAD12, type Fake } from './fake-bitbucket.js'
@@ -113,6 +113,7 @@ describe('first review', () => {
     expect(idsOf()).toEqual(['F1', 'F2'])
     expect(roots().map(r => r.inline!.path).sort()).toEqual(['src/one.ts', 'src/two.ts'])
     expect(summaries()).toHaveLength(1)
+    expect(parseRootMarker(rootOf('Pool leaks')[0].body)).toMatchObject({ id: 'F1', model: 'claude-sonnet-5-5', build: expect.any(String) })
     expect(verify(summaries()[0].body, ME)).toEqual({ n: 1, commits: [HEAD12] })
     expect(summaries()[0].body).toContain('Inconsistent naming')
     expect(summaries()[0].body).toContain('no thread')
@@ -287,7 +288,7 @@ describe('developer replies', () => {
     const record = await run()
     expect(record!.action).toBe('REPLY')
     expect(agentReplies(poolId)).toHaveLength(1)
-    expect(agentReplies(poolId)[0].body).toContain(buildAnswerMarker('F1', String(q)))
+    expect(parseAnswerMarker(agentReplies(poolId)[0].body)).toMatchObject({ target: 'F1', through: String(q) })
     expect(agentReplies(nullsId)).toHaveLength(0)
     expect(summaries()[0].body).not.toContain('Because it leaks.')
     expect(fake.comments.filter(c => c.authorIds[0] === ME && c.parentId)).toHaveLength(1)
@@ -622,5 +623,103 @@ describe('finding status in replies', () => {
     answerTo('F1', q)
     await run()
     expect(replyUser()).toContain('Later commits changed the line this thread is anchored to (src/one.ts, line 5 as of')
+  })
+})
+
+describe('artifacts written by 0.0.63/0.0.64', () => {
+  const OLD = 'f'.repeat(12)
+  const legacySummary = [
+    '### Review summary', '*inline-summary v1 | maintained by the review agent*', '',
+    '### Summary', 'Legacy narrative text.', '',
+    '### Findings', '**Open threads: resolve when fixed**',
+    `- **HIGH – Pool leaks connections** (\`src/one.ts:5@${OLD}\`) · F1 · [thread](https://bitbucket.org/x/y/pull-requests/7#comment-1) · changed in this push`, '',
+    '**Not posted as threads**', '- **LOW – Inconsistent naming** (`src/two.ts:20`) · no thread', '  Mixed naming styles.', '',
+    '### Review History', `- Review 1 · ${OLD} · 2 findings, 1 new thread`, '',
+    '---', '*Inline review by review-bot (claude-sonnet-5-5) | Review 1 | Commit ffffffffffff | Build abc1234*',
+  ].join('\n')
+  const topLevel = () => fake.comments.filter(c => !c.parentId && !c.inline)
+  let poolId: number
+  let q1: number
+
+  beforeEach(() => {
+    fake.add({ body: withState(legacySummary, { n: 1, commits: [OLD] }, ME), authorIds: [ME] })
+    poolId = fake.add({ body: `**HIGH – Pool leaks connections**\n\nConnections are never released.\n\n*Finding F1 | opened at ${OLD}*`, authorIds: [ME], inline: { path: 'src/one.ts', line: 5 } })
+    q1 = ask(poolId, 'Why?')
+    fake.add({ parentId: poolId, body: `It leaks.\n\n*Answer on F1 | through ${q1}*`, authorIds: [ME] })
+  })
+
+  it('edits the one old summary in place into the new layout, keeps the thread, and answers only the new question', async () => {
+    const summaryId = topLevel()[0].id
+    fake.hooks.commitDiff = () => ''
+    await run()
+    expect(mockRunReview).not.toHaveBeenCalled()
+    expect(topLevel()).toHaveLength(1)
+    expect(topLevel()[0].id).toBe(summaryId)
+    let body = topLevel()[0].body
+    expect(body.startsWith('### Review summary *(inline)*\n')).toBe(true)
+    expect(body).not.toContain('inline-summary')
+    expect(body).not.toContain('### Summary')
+    expect(body).toContain('Legacy narrative text.')
+    expect(body).toContain('**Not posted as threads**\n\n- **LOW – Inconsistent naming**')
+    expect(body).toContain('Mixed naming styles.')
+    expect(body).not.toContain('changed in this push')
+    expect(verify(body, ME)).toEqual({ n: 2, commits: [OLD, HEAD12] })
+    expect(roots()).toHaveLength(1)
+
+    push(HEAD_B)
+    fake.hooks.commitDiff = () => DELTA
+    reviewerFinds([POOL])
+    const q2 = ask(poolId, 'Still broken?')
+    answerTo('F1', q2)
+    await run()
+    expect(topLevel()).toHaveLength(1)
+    expect(topLevel()[0].id).toBe(summaryId)
+    expect(roots()).toHaveLength(1)
+    expect(parseRootMarker(roots()[0].body)).toEqual({ id: 'F1', openedAt: OLD })
+    const answers = agentReplies(poolId)
+    expect(answers).toHaveLength(2)
+    expect(parseAnswerMarker(answers[1].body)).toMatchObject({ target: 'F1', through: String(q2), model: 'claude-haiku-5-5' })
+    expect(completeStructured.mock.calls[0][1]).toMatch(new RegExp(`Pending question ids: ${q2}$`))
+    body = topLevel()[0].body
+    expect(body).toMatch(/\(`src\/one\.ts:5@[0-9a-f]{12}`\) · F1 · \[thread\]\([^)]*\) · file changed since fffffff/)
+    expect(verify(body, ME)).toEqual({ n: 3, commits: [OLD, HEAD12, B12] })
+
+    completeStructured.mockClear()
+    const q3 = ask(poolId, 'And now?')
+    answerTo('F1', q3)
+    await run()
+    expect(topLevel()).toHaveLength(1)
+    expect(roots()).toHaveLength(1)
+    expect(agentReplies(poolId).map(c => parseAnswerMarker(c.body)?.through)).toEqual([String(q1), String(q2), String(q3)])
+    expect(completeStructured).toHaveBeenCalledTimes(1)
+    expect(completeStructured.mock.calls[0][1]).toContain(`Pending question ids: ${q3}`)
+  })
+})
+
+describe('code-change note on open threads', () => {
+  const seedMany = (n: number): void => {
+    for (let i = 1; i <= n; i++) {
+      fake.add({ body: rootBody({ severity: 'MEDIUM', title: `Distinct problem ${i}`, body: 'Details.', id: `F${i}`, c12: String(i).repeat(12) }), authorIds: [ME], inline: { path: 'src/one.ts', line: 5 } })
+    }
+  }
+  const noted = (): number => (topSummary().match(/ · (?:line|file) changed since /g) ?? []).length
+  const topSummary = (): string => fake.comments.find(c => !c.parentId && !c.inline && c.body.startsWith(SUMMARY_HEADER))!.body
+
+  it('fetches at most five opening commits and shows no note past the cap', async () => {
+    seedMany(7)
+    fake.hooks.commitDiff = () => DELTA
+    await run()
+    expect(fake.calls.filter(c => c === 'delta')).toHaveLength(5)
+    expect(noted()).toBe(5)
+    expect(topSummary()).toContain('file changed since 1111111')
+  })
+
+  it('writes the rows without notes when every delta lookup fails', async () => {
+    seedMany(2)
+    fake.hooks.commitDiff = () => new Error('boom')
+    const record = await run()
+    expect(record!.action).not.toBe('ERROR')
+    expect(noted()).toBe(0)
+    expect(topSummary()).toContain('Distinct problem 2')
   })
 })

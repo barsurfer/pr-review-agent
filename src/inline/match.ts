@@ -147,7 +147,7 @@ export async function codeSince(mapper: DeltaMapper, anchor: { path: string; lin
 }
 
 export interface Loc { file: string; line?: number; g: number; mapped: boolean }
-export interface MappedEntry { entry: ThreadEntry; loc: Loc; changed: boolean }
+export interface MappedEntry { entry: ThreadEntry; loc: Loc }
 
 export async function mapEntries(entries: readonly ThreadEntry[], mapper: DeltaMapper): Promise<MappedEntry[]> {
   const out: MappedEntry[] = new Array(entries.length)
@@ -156,8 +156,8 @@ export async function mapEntries(entries: readonly ThreadEntry[], mapper: DeltaM
   for (const i of order) {
     const entry = entries[i]
     const m = entry.file ? await mapper.map(entry.file, entry.lines, entry.openedAt) : null
-    if (m) out[i] = { entry, loc: { file: m.file, ...(m.line !== undefined ? { line: m.line } : {}), g: m.g, mapped: true }, changed: m.changed }
-    else out[i] = { entry, loc: { file: entry.file, ...(parseLineRange(entry.lines) ? { line: parseLineRange(entry.lines)!.start } : {}), g: 0, mapped: false }, changed: false }
+    if (m) out[i] = { entry, loc: { file: m.file, ...(m.line !== undefined ? { line: m.line } : {}), g: m.g, mapped: true } }
+    else out[i] = { entry, loc: { file: entry.file, ...(parseLineRange(entry.lines) ? { line: parseLineRange(entry.lines)!.start } : {}), g: 0, mapped: false } }
   }
   return out
 }

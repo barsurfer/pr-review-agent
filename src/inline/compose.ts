@@ -2,7 +2,7 @@ import { stripPreviousFooter, stripDeltaStats, stripJudgeNotes, stripPreamble, s
 import { parseVerdictScore, scanTodos } from '../review/parsers.js'
 import { PROPOSAL_CAP } from '../review/judge-decisions.js'
 import { COMMENT_BUDGET, MAX_FENCE, fenceFor, fixCodeContent, fixFreeContent, renderFixBlock } from '../review/suggested-fix.js'
-import { SUMMARY_HEADER, SUMMARY_HEADER_LINE, SUMMARY_HEADER_TAG, buildRootMarker, buildStateLine, stripGeneratedFooters } from './markers.js'
+import { SUMMARY_HEADER, LEGACY_HEADER_LINE, LEGACY_HEADER_TAG, buildRootMarker, buildStateLine, stripGeneratedFooters } from './markers.js'
 import { splitState, withState } from './state.js'
 import {
   sanitizeTitle, MAX_HISTORY, threadRow, summaryOnlyRow, resolvedRow, overflowLine, historyLine, capHistory, parseThreadRow, parseResolvedRow, parseOverflow, parseHistoryLine, parseSummaryOnlyRow,
@@ -37,12 +37,12 @@ export function cleanAndGuard(raw: string, opts: { judged: boolean; diff: string
   return { ok: true, cleaned, todoSection }
 }
 
-export interface RootInput { severity: Severity; title: string; body: string; id: string; c12: string; was?: string; fixBlock?: string }
+export interface RootInput { severity: Severity; title: string; body: string; id: string; c12: string; was?: string; fixBlock?: string; model?: string; build?: string }
 
 export function rootBody(r: RootInput): string {
   const first = `**${r.severity} – ${sanitizeTitle(r.title)}**${r.was ? ` (was ${r.was}, dismissed)` : ''}`
   const text = stripGeneratedFooters(r.body).text
-  return `${first}\n\n${text}${r.fixBlock ?? ''}\n\n${buildRootMarker(r.id, r.c12)}`
+  return `${first}\n\n${text}${r.fixBlock ?? ''}\n\n${buildRootMarker(r.id, r.c12, { model: r.model, build: r.build })}`
 }
 
 export interface FixPart { block: string; body: string }
@@ -66,7 +66,7 @@ function sanitizeNarrative(text: string): { text: string; removed: number } {
   let removed = stripped.removed
   const kept = stripped.text.split('\n').filter(line => {
     const t = line.trimEnd()
-    const forged = t === SUMMARY_HEADER_LINE || t === SUMMARY_HEADER_TAG || parseThreadRow(t) || parseResolvedRow(t) || parseOverflow(t) || parseHistoryLine(t) || parseSummaryOnlyRow(t)
+    const forged = t === SUMMARY_HEADER || t === LEGACY_HEADER_LINE || t === LEGACY_HEADER_TAG || parseThreadRow(t) || parseResolvedRow(t) || parseOverflow(t) || parseHistoryLine(t) || parseSummaryOnlyRow(t)
     if (forged) removed++
     return !forged
   })
@@ -89,7 +89,12 @@ export function carryNarrative(body: string): string | null {
     return !fenced && l.trimEnd() === '### Findings'
   })
   if (at < 0) return null
-  const pre = kept.slice(2, at).join('\n').trim()
+  // 0.0.63/0.0.64 bodies carry a second header line (the tag); the current layout has one heading only.
+  const first = lines[0]?.trimEnd()
+  const headerLines = first === SUMMARY_HEADER ? 1 : first === LEGACY_HEADER_LINE && lines[1]?.trimEnd() === LEGACY_HEADER_TAG ? 2 : -1
+  if (headerLines < 0) return null
+  // An empty summary text is still a narrative: the old layout carried its heading, so the current one does too.
+  const pre = kept.slice(headerLines, at).join('\n').trim() || (headerLines === 1 ? '### Summary' : '')
   if (!pre) return null
   let i = at + 1
   while (i < kept.length && !kept[i].startsWith('### ')) i++
@@ -160,6 +165,7 @@ const bySeverity = (rows: ReadonlyArray<{ severity: Severity }>): string =>
 export function composeSummary(input: ComposeInput): ComposedSummary {
   const split = splitAtFindings(input.review.plain, input.review.findings)
   const pre = sanitizeNarrative(split.pre)
+  pre.text = pre.text.replace(/^\s*### Summary[ \t]*(?:\n|$)/, '').trim()
   const post = sanitizeNarrative(split.post)
   const todoText = input.todoSection ? sanitizeNarrative(input.todoSection).text : ''
   const removed = pre.removed + post.removed
@@ -192,7 +198,8 @@ export function composeSummary(input: ComposeInput): ComposedSummary {
       collapsed += hidden
       const lines = shown.map(r => summaryOnlyRow(r, p.titlesOnly))
       if (hidden) lines.push(`and ${hidden} more ${input.summaryOnly.every(r => r.severity === 'LOW') ? 'low-severity' : 'summary-only'} findings`)
-      findings.push('**Not posted as threads**\n' + lines.join('\n'))
+      // Without the blank line Bitbucket renders the rows as plain text, not a list.
+      findings.push('**Not posted as threads**\n\n' + lines.join('\n'))
     }
     if (!findings.length) findings.push('No findings.')
 
@@ -257,7 +264,7 @@ export function composeSummary(input: ComposeInput): ComposedSummary {
       collapsed = open.length + hidden.length
       const parts = [SUMMARY_HEADER]
       if (open.length) parts.push(`Also open: ${open.length} more threads\n(${bySeverity(open)})`)
-      if (so.length) parts.push(['**Not posted as threads**', ...kept.map(r => summaryOnlyRow(r, true)), ...(hidden.length ? [`and ${hidden.length} more summary-only findings (${bySeverity(hidden)})`] : [])].join('\n'))
+      if (so.length) parts.push(['**Not posted as threads**', '', ...kept.map(r => summaryOnlyRow(r, true)), ...(hidden.length ? [`and ${hidden.length} more summary-only findings (${bySeverity(hidden)})`] : [])].join('\n'))
       if (!open.length && !so.length) parts.push('No findings.')
       return [...parts, footer].join('\n\n')
     }

@@ -52,6 +52,24 @@ export function isNoChange(text: string): boolean {
   return /^[ \t]*NO_CHANGE[ \t]*$/m.test(text)
 }
 
+// Bitbucket renders a list right after a sentence as running text, so a blank line must precede it.
+export function spaceLists(text: string): string {
+  const out: string[] = []
+  let fence = ''
+  let inList = false
+  for (const line of text.split('\n')) {
+    const f = /^\s*(`{3,}|~{3,})/.exec(line)
+    if (f && (!fence || f[1][0] === fence[0])) fence = fence ? '' : f[1][0]
+    else if (!fence) {
+      const item = /^\s*([-*+]|\d+[.)])\s/.test(line)
+      if (item && !inList && out.length > 0 && out[out.length - 1].trim() !== '') out.push('')
+      inList = item || (inList && /^\s+\S/.test(line))
+    }
+    out.push(line)
+  }
+  return out.join('\n')
+}
+
 /** Drop leaked model reasoning before the first "Summary" heading — reviewer and judge
  *  are both instructed to start there, but models sometimes think out loud first. */
 export function stripPreamble(text: string): string {

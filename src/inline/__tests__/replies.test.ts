@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import type { MarkedComment, MarkedThread } from '../../vcs/adapter.js'
 import { AGENT_REPLY_AUTHOR } from '../../vcs/adapter.js'
-import { buildRootMarker } from '../markers.js'
+import { buildRootMarker, buildAnswerMarker } from '../markers.js'
 import { threadView, decide, selectBatch, answerBody, noteBody, contextReplies, targetOf, type ThreadView } from '../replies.js'
 import { planReplies } from '../reply-flow.js'
 import type { CodeSince } from '../match.js'
@@ -246,5 +246,28 @@ describe('planReplies status lookup', () => {
     const plan = await planReplies(input([thread(1, [human(10, 'Q?', 1)])], async () => { throw new Error('boom') }))
     expect(plan.answers).toHaveLength(1)
     expect(completeStructured.mock.calls.at(-1)![1]).toContain('Whether later commits changed its code is unknown.')
+  })
+})
+
+describe('thread block with the suffixed root marker', () => {
+  it('drops the root marker line from the original comment and reads openedAt from it', () => {
+    const t = thread(1, [human(10, 'Q?', 1)])
+    t.root.body = `**HIGH – Null user**\n\nBody.\n\n${buildRootMarker('F1', C, { model: 'm', build: 'b' })}`
+    const v = threadView(t, 'F1', who)
+    expect(v.openedAt).toBe(C)
+    const user = findingRepliesRequest({ apiKey: 'k', model: 'm', maxRetries: 0, diff: 'D', head12: 'b2c3d4e5f6a7', threads: [v] }).user
+    expect(user).toContain('> Body.')
+    expect(user).not.toContain('opened at')
+    expect(user).not.toContain('*Finding F1')
+  })
+})
+
+describe('suffixed answer markers', () => {
+  it('cover their question and count against the limit like suffix-less ones', () => {
+    const t = thread(1, [human(10, 'Q?', 1), c(11, `A.\n\n${buildAnswerMarker('F1', '10', { model: 'claude-haiku-5-5', build: 'abc' })}`, { parent: 1 }), human(12, 'Again?', 1)])
+    const v = threadView(t, 'F1', who)
+    expect(v.used).toBe(1)
+    expect(v.pending.map(q => q.id)).toEqual(['12'])
+    expect(answerBody('F1', '12', 'Text', { model: 'm' }).endsWith('*Answer on F1 | through 12 | m*')).toBe(true)
   })
 })
