@@ -210,6 +210,10 @@ describe('summary layout', () => {
       expect(again.startsWith(`${SUMMARY_HEADER}\n\nA change.\n\n### Findings`)).toBe(true)
       expect(again).not.toContain('### Summary')
     }
+    for (const body of [current, old]) {
+      const padded = body.replace(/^(### Review summary[^\n]*)/, '$1  ')
+      expect(carryNarrative(padded)).toContain('A change.')
+    }
     expect(carryNarrative('### Review summary\nno tag\n\n### Findings\nx\n\n*inline-state v1 | n=1 | commits= | sig=0123456789abcdef*')).toBeNull()
   })
 

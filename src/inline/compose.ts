@@ -90,7 +90,8 @@ export function carryNarrative(body: string): string | null {
   })
   if (at < 0) return null
   // 0.0.63/0.0.64 bodies carry a second header line (the tag); the current layout has one heading only.
-  const headerLines = lines[0] === SUMMARY_HEADER ? 1 : lines[0] === LEGACY_HEADER_LINE && lines[1]?.trimEnd() === LEGACY_HEADER_TAG ? 2 : -1
+  const first = lines[0]?.trimEnd()
+  const headerLines = first === SUMMARY_HEADER ? 1 : first === LEGACY_HEADER_LINE && lines[1]?.trimEnd() === LEGACY_HEADER_TAG ? 2 : -1
   if (headerLines < 0) return null
   // An empty summary text is still a narrative: the old layout carried its heading, so the current one does too.
   const pre = kept.slice(headerLines, at).join('\n').trim() || (headerLines === 1 ? '### Summary' : '')
