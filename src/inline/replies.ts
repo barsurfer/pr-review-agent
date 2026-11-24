@@ -2,6 +2,7 @@ import type { MarkedComment, MarkedThread, CommentReply } from '../vcs/adapter.j
 import { AGENT_REPLY_AUTHOR } from '../vcs/adapter.js'
 import { decideDirectedElsewhere, mentionsAgent } from '../vcs/mention-filter.js'
 import { parseRootMarker, parseAnswerMarker, parseNoteMarker, buildAnswerMarker, buildNoteMarker, stripGeneratedFooters, type MarkerMeta } from './markers.js'
+import { spaceLists } from '../review/formatter.js'
 import { isTrusted } from './identity.js'
 import type { CodeSince } from './match.js'
 
@@ -83,7 +84,7 @@ export function selectBatch(views: readonly ThreadView[], cap = MAX_BATCH_THREAD
 }
 
 export function answerBody(target: string, through: string, text: string, meta?: MarkerMeta): string {
-  return `${stripGeneratedFooters(text).text}\n\n${buildAnswerMarker(target, through, meta)}`
+  return `${spaceLists(stripGeneratedFooters(text).text)}\n\n${buildAnswerMarker(target, through, meta)}`
 }
 
 export function noteBody(target: string, max: number): string {

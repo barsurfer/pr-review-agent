@@ -30,9 +30,9 @@ describe('reply prompt', () => {
     expect(now).not.toContain('A stated intent or requirement is also a fact')
   })
 
-  it('keeps SCOPE LOCK and the Format rules byte-equal to v0.0.61', () => {
+  it('keeps SCOPE LOCK byte-equal to v0.0.61 and has the list format rules', () => {
     expect(section(now, 'SCOPE LOCK:', 'Your job:')).toBe(section(frozen, 'SCOPE LOCK:', 'Your job:'))
-    expect(section(now, 'Format rules:')).toBe(section(frozen, 'Format rules:'))
+    expect(section(now, 'Format rules:')).toContain('- Put every list item, bulleted (`-`) or numbered (`1.`), on its own line, and leave a blank line before the first item.\n- Never run several items together on one line (no "1) … 2) …" inside a sentence).\n- Use proper markdown with blank lines between sections.')
   })
 
   it('is LF only', () => {

@@ -142,7 +142,7 @@ const calls = () => completeStructured.mock.calls.map(([system, user, schema, op
   systemAfter: opts?.systemAfter === undefined ? '<undefined>' : sha(opts.systemAfter), opts: JSON.parse(JSON.stringify(opts, visible)),
 }))
 const REPLY_V0061 = readFileSync(new URL('./__fixtures__/identity-v0061/reply-prompt-v0061.txt', import.meta.url), 'utf-8').replace(/\r\n/g, '\n')
-const REPLY_NOW = 'c4a5b1fc47e3b79f'
+const REPLY_NOW = '8f6342cabbb21e0d'
 // The reply prompt is the one deliberate change since v0.0.61, so only its pinned new text maps back to the recorded hash.
 const pinSystem = (s: string) => (sha(s) === REPLY_NOW ? sha(REPLY_V0061) : sha(s))
 const completes = () => complete.mock.calls.map(([system, user, opts]) => ({ system: pinSystem(system), user: sha(user), opts: JSON.parse(JSON.stringify(opts, visible)) }))
