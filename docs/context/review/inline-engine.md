@@ -93,6 +93,7 @@ With the flag on, the record has an `inline` key (outcome, identity source, summ
 - Fixed findings stay open until a developer resolves them (stage 2 would close them).
 - In bundled mode an open finding on a since-renamed file is left out of that bundle's judge block (same limit as the reviewer prior list).
 - Without a fresh judge pass the narrative can lag open threads: a bundle with no findings, files outside every bundle, a re-review with zero candidates, and quiet or unchanged runs that carry an older narrative.
+- The history line's section count (` · N cleanup`) is recomposed once with the first render's shown rows; if that second render trims further, the count can exceed the rows actually posted (very large summaries only).
 
 ## Before enabling in production
 
