@@ -323,16 +323,20 @@ describe('judge open findings through review()', () => {
     mockRunReview.mockImplementation(async () => answerWith(object([finding], { delta_stats: { resolved: 0, still_open: 1, new_findings: 1 } })))
     await review(fake.adapter, '7', false)
     const args = vi.mocked(runJudge).mock.calls[0]
-    expect(args).toHaveLength(13)
+    expect(args).toHaveLength(14)
+    expect(args[13]).toBe(true)
     expect(args[11]).toBeUndefined()
     expect(args[12]).toEqual({ block: expect.stringContaining(`diff above is at ${HEAD12}`) })
     expect((args[12] as { block: string }).block).toContain('- F1 · MEDIUM · src/one.ts:5 · Unbounded pool growth')
   })
 
-  it('keeps the legacy argument list with nothing open', async () => {
+  it('keeps the open slot empty with nothing open and still enables the sanity check', async () => {
     cfg.judge.model = 'claude-haiku-5-5'
     mockRunReview.mockImplementation(async () => answerWith(object([finding])))
     await review(fake.adapter, '7', false)
-    expect(vi.mocked(runJudge).mock.calls[0]).toHaveLength(11)
+    const args = vi.mocked(runJudge).mock.calls[0]
+    expect(args).toHaveLength(14)
+    expect(args[12]).toBeUndefined()
+    expect(args[13]).toBe(true)
   })
 })

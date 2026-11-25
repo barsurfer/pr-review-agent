@@ -86,4 +86,12 @@ describe('history', () => {
     expect(capHistory(lines, 5)).toHaveLength(5)
     expect(parseHistory(['x', ...lines.slice(0, 2), 'y'].join('\n'))).toEqual(lines.slice(0, 2))
   })
+
+  it('parses the old form and every combination of the appended parts', () => {
+    const texts = ['2 findings, 1 new thread', '1 finding, 1 new thread · 15 reported fixed · 2 open', 'no findings · 1 resolved by developers', 'no change · 3 reported fixed · 2 resolved by developers · 4 open']
+    for (const text of texts) expect(parseHistoryLine(historyLine(2, 'a1b2c3d4e5f6', text))).toEqual({ n: 2, c12: 'a1b2c3d4e5f6', text })
+    const old = '- Review 1 · 00ecb650c68d · 1 finding, 1 new thread'
+    const next = historyLine(2, 'a1b2c3d4e5f6', texts[1])
+    expect(parseHistory([old, next].join('\n'))).toEqual([old, next])
+  })
 })

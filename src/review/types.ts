@@ -219,6 +219,7 @@ export interface ReviewContext {
   judgePromptHash?: string   // sha256-12 of the judge prompt, set only when the judge actually ran
   judgeDecisions?: AppliedDecision[]
   judgeAnomalies?: JudgeAnomalies
+  judgeSanity?: { retried: boolean; degenerate_after_retry: boolean; reasons: string[] }
   judgedFindings?: KeptFinding[]
   // A render closure, so POST_REVIEW orders findings and splices blocks into the posted comment while reviewText stays plain.
   renderJudged?: RenderJudged

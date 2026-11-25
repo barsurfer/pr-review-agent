@@ -80,6 +80,8 @@ interface Session {
   carry: { plain?: string; summaryOnly: SummaryOnlyRow[] }
   afterNotice: boolean
   completed: number
+  // Undefined when the previous summary gave no resolved rows to compare against.
+  prevResolved?: ReadonlySet<string>
 }
 
 interface Geo { file: string; lines?: string; base: string }
@@ -207,7 +209,7 @@ class Engine implements InlineEngine {
       ...(sel.kind === 'found' ? { summaryRootId: sel.comment.id } : {}),
       history: valid ? parseHistory(valid.comment.body) : [],
       carry: { ...(valid && !afterNotice ? { plain: carryNarrative(valid.comment.body) ?? undefined } : {}), summaryOnly: rows?.summaryOnly ?? [] },
-      afterNotice, completed,
+      afterNotice, completed, ...(rows ? { prevResolved: new Set(rows.resolved.map(r => r.id)) } : {}),
     }
     console.log(`  Summary ${this.rec.summary_check}, ${reg.entries.length} finding thread(s), review ${state.n} completed`)
 
@@ -314,8 +316,19 @@ class Engine implements InlineEngine {
       findings: found,
       ...(quiet ? { carriedSummaryOnly: carry.summaryOnly } : {}),
       todoSection: guard?.ok ? guard.todoSection : '',
-      historyText: r => (n === 0 ? 'no findings' : `${n} finding${n === 1 ? '' : 's'}, ${r.posted.length} new thread${r.posted.length === 1 ? '' : 's'}`),
+      historyText: r => this.historyText(n === 0 ? 'no findings' : `${n} finding${n === 1 ? '' : 's'}, ${r.posted.length} new thread${r.posted.length === 1 ? '' : 's'}`, ctx, r),
     })
+  }
+
+  // Parts only append after the original text so old lines keep parsing; a zero part is omitted.
+  private historyText(base: string, ctx: ReviewContext, roots: RootsResult): string {
+    const prev = this.s!.prevResolved
+    const reported = ctx.reviewObject?.delta_stats?.resolved ?? 0
+    // Without a readable previous summary every resolved thread would look new, so the part is left out.
+    const byDevelopers = prev ? roots.entries.filter(e => e.resolved && !prev.has(e.id)).length : 0
+    const listed = new Set(roots.entries.map(e => e.id))
+    const open = roots.entries.filter(e => !e.resolved).length + roots.posted.filter(p => !listed.has(p.root.id)).length
+    return [base, reported > 0 ? `${reported} reported fixed` : '', byDevelopers > 0 ? `${byDevelopers} resolved by developers` : '', open > 0 ? `${open} open` : ''].filter(Boolean).join(' · ')
   }
 
   private async filterNotice(ctx: ReviewContext, deps: InlineDeps): Promise<State> {

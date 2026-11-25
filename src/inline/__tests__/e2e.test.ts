@@ -988,3 +988,33 @@ describe('code-change note on open threads', () => {
     expect(topSummary()).toContain('Distinct problem 2')
   })
 })
+
+describe('Review History line', () => {
+  const historyOf = (): string[] => summaries()[0].body.split('\n').filter(l => l.startsWith('- Review '))
+  const reviewerFindsWithStats = (findings: F[], resolved: number): void => {
+    mockRunReview.mockImplementation(async () => {
+      const o = { ...object(findings), delta_stats: { resolved, still_open: findings.length, new_findings: 0 } }
+      return { text: renderReview(o), usage, review: o }
+    })
+  }
+
+  it('appends reported fixed, resolved by developers and open, omits zero parts, and keeps the summary valid', async () => {
+    reviewerFinds([POOL, NULLS, RACE])
+    await run()
+    expect(historyOf()[0]).toBe(`- Review 1 · ${HEAD12} · 3 findings, 3 new threads · 3 open`)
+
+    rootOf('Missing null check')[0].resolved = true
+    push(HEAD_B)
+    reviewerFindsWithStats([POOL, RACE], 2)
+    const second = await run()
+    expect(second!.inline).toMatchObject({ summary_check: 'valid' })
+    expect(historyOf()[1]).toBe(`- Review 2 · ${B12} · 2 findings, 0 new threads · 2 reported fixed · 1 resolved by developers · 2 open`)
+    expect(historyOf()[0]).toBe(`- Review 1 · ${HEAD12} · 3 findings, 3 new threads · 3 open`)
+
+    push(HEAD_C)
+    reviewerFinds([POOL, RACE])
+    const third = await run()
+    expect(third!.inline).toMatchObject({ summary_check: 'valid' })
+    expect(historyOf()[2]).toBe(`- Review 3 · ${C12} · 2 findings, 0 new threads · 2 open`)
+  })
+})
