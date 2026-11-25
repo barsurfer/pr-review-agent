@@ -36267,6 +36267,20 @@ function cachedPassEffort() {
   }
   return value;
 }
+var INLINE_HIDE_VALUES = ["model", "confidence"];
+function trueUnlessFalse(name) {
+  const value = optional(name, "").trim();
+  if (value === "" || value === "true") return true;
+  if (value === "false") return false;
+  console.warn(`${name}=${value} is not true or false - using the default (true)`);
+  return true;
+}
+function parseInlineHide(value) {
+  const wanted = [...new Set(value.split(",").map((p) => p.trim().toLowerCase()).filter(Boolean))];
+  const unknown = wanted.filter((v) => !INLINE_HIDE_VALUES.includes(v));
+  if (unknown.length) console.warn(`INLINE_HIDE: ignoring unknown value(s) ${unknown.join(", ")} (known: ${INLINE_HIDE_VALUES.join(", ")})`);
+  return wanted.filter((v) => !unknown.includes(v));
+}
 function finiteOr(value, fallback) {
   return Number.isFinite(value) ? value : fallback;
 }
@@ -36413,9 +36427,10 @@ var config = {
     // Off by default: findings become inline threads plus one signed summary (Bitbucket only) instead of the legacy review comment.
     inlineReviews: optional("ENABLE_INLINE_REVIEWS", "false") === "true",
     // Off by default: LOW findings also get inline threads instead of summary-only rows.
-    inlineLowThreads: optional("ENABLE_INLINE_LOW_THREADS", "false") === "true",
+    inlineLowThreads: trueUnlessFalse("ENABLE_INLINE_LOW_THREADS"),
     // Overrides the adapter's identity lookup; empty = use the lookup.
     inlineAgentAccountId: optional("AGENT_ACCOUNT_ID", "").trim(),
+    inlineHide: parseInlineHide(optional("INLINE_HIDE", "")),
     maxFindings: parseInt(optional("MAX_FINDINGS", "0"), 10),
     // 0 = unlimited
     splitCheck: optional("ENABLE_SPLIT_CHECK", "true") !== "false",
@@ -43645,6 +43660,54 @@ function buildUnifiedFilePatch(oldPath, newPath, oldContent, newContent) {
 
 // src/vcs/github.ts
 init_define_STACK_PROMPTS();
+
+// src/review/content-filter.ts
+init_define_STACK_PROMPTS();
+var CONTENT_FILTER_MARKER = "*Review not completed: content filter*";
+var CONTENT_FILTER_NOTICE_TEXT = `**Automated review not completed**
+
+The review model's safety filters declined to process this pull request, so no review was produced. This usually happens when a change includes code that resembles security-sensitive behaviour, for example collecting credentials from browser storage or replaying authentication headers.
+
+Please take a look at those areas and consider a different approach, such as authenticating through the API layer or test fixtures. The next push will be reviewed again.`;
+var CONTENT_FILTER_NOTICE = `${CONTENT_FILTER_NOTICE_TEXT}
+
+${CONTENT_FILTER_MARKER}`;
+var CONTENT_FILTER_SKIP_REASON = "The model's safety filters declined the review; a notice was posted";
+var PARTIAL_FILTER_LINE = "Some files were not reviewed because the model's safety filters declined them.";
+var REPLY_DECLINED_TEXT = "I can't answer this one: the review model's safety filters declined it.";
+var NOTICE_HISTORY_TEXT = "review not completed (content filter)";
+var NOTICE_START = "**Automated review not completed**";
+function isContentFilterNotice(body) {
+  const text = body.replace(/\r\n/g, "\n");
+  return text.startsWith(`${NOTICE_START}
+`) && text.includes(`
+${CONTENT_FILTER_MARKER}
+
+---
+*Reviewed by `);
+}
+function isNoticeSummary(body) {
+  const lines = body.replace(/\r\n/g, "\n").split("\n").filter((l) => l.trim() !== "");
+  return lines[1]?.trimEnd() === CONTENT_FILTER_MARKER;
+}
+function filterRecord(stage, err, bundle) {
+  return {
+    stage,
+    signal: err.signal,
+    ...err.nativeFinishReason ? { native_finish_reason: err.nativeFinishReason } : {},
+    ...err.category ? { category: err.category } : {},
+    ...err.reasons?.length ? { reasons: err.reasons } : {},
+    ...err.httpStatus !== void 0 ? { http_status: err.httpStatus } : {},
+    ...bundle !== void 0 ? { bundle } : {}
+  };
+}
+function noteContentFilter(ctx, stage, err, bundle) {
+  ;
+  (ctx.contentFilters ??= []).push(filterRecord(stage, err, bundle));
+  console.warn(`  Content filter on ${stage}${bundle !== void 0 ? ` (bundle ${bundle})` : ""}: ${err.signal}${err.category ? ` / ${err.category}` : ""}${err.reasons?.length ? ` [${err.reasons.join(", ")}]` : ""}`);
+}
+
+// src/vcs/github.ts
 var REQUEST_TIMEOUT_MS2 = 3e4;
 var DIFF_ACCEPT = "application/vnd.github.diff";
 var RAW_ACCEPT = "application/vnd.github.raw";
@@ -43759,6 +43822,7 @@ var GitHubAdapter = class {
     let latestReview = null;
     for (const c of comments) {
       const body = c.body ?? "";
+      if (isContentFilterNotice(body)) continue;
       if (hasReviewFooter(body)) {
         if (!latestReview || c.created_at > latestReview.createdOn) latestReview = { id: String(c.id), createdOn: c.created_at };
         if (c.created_at > latestAgentComment) latestAgentComment = c.created_at;
@@ -44071,6 +44135,24 @@ var TruncatedResponseError = class extends Error {
   }
   usage;
 };
+var ContentFilterError = class extends Error {
+  signal;
+  nativeFinishReason;
+  category;
+  reasons;
+  httpStatus;
+  usage;
+  constructor(d) {
+    super(`The model's safety filters declined the request (${d.signal}${d.category ? `, ${d.category}` : ""})`);
+    this.name = "ContentFilterError";
+    this.signal = d.signal;
+    if (d.nativeFinishReason !== void 0) this.nativeFinishReason = d.nativeFinishReason;
+    if (d.category !== void 0) this.category = d.category;
+    if (d.reasons?.length) this.reasons = d.reasons;
+    if (d.httpStatus !== void 0) this.httpStatus = d.httpStatus;
+    if (d.usage) this.usage = d.usage;
+  }
+};
 var DeadlineAbortError = class extends Error {
   constructor(message, usage) {
     super(message);
@@ -44097,6 +44179,10 @@ function missingRequired(object, schema, deep = false, tolerate = []) {
     });
   }
   return missing;
+}
+function requireText(text, usage) {
+  if (text.trim() === "") throw Object.assign(new Error("Model returned empty text"), { usage });
+  return text;
 }
 
 // src/prompt/loader.ts
@@ -44856,7 +44942,8 @@ var AnthropicProvider = class {
   }
   async complete(system, user, opts2) {
     const response = await this.streamFinal({ model: opts2.model, max_tokens: opts2.maxTokens, system, messages: [{ role: "user", content: user }] }, opts2);
-    return { text: textOf(response, opts2.maxTokens), usage: mapUsage(response.usage) };
+    const usage = mapUsage(response.usage);
+    return { text: requireText(textOf(response, opts2.maxTokens), usage), usage };
   }
   async completeStructured(system, user, schema, opts2) {
     const response = await this.streamFinal({ model: opts2.model, max_tokens: opts2.maxTokens, system, output_config: { format: { type: "json_schema", schema } }, messages: anthropicMessages(user, opts2.systemAfter, opts2.effortAfter) }, opts2);
@@ -44899,6 +44986,7 @@ var AnthropicProvider = class {
     });
   }
 };
+var BILLED_REFUSAL_CATEGORIES = /* @__PURE__ */ new Set(["bio", "frontier_llm", "reasoning_extraction"]);
 var EFFORT_AFTER_BETA = "mid-conversation-output-config-2026-07-01";
 function anthropicMessages(user, systemAfter, effortAfter) {
   const content = typeof user === "string" ? user : user.map((p) => ({ type: "text", text: p.text, ...p.cache ? { cache_control: { type: "ephemeral" } } : {} }));
@@ -44910,6 +44998,13 @@ function finalReasoning(response, opts2) {
   return (opts2.effortAfter !== void 0 || opts2.keepEffort) && typeof thinking === "number" ? { final_reasoning_tokens: thinking } : {};
 }
 function textOf(response, maxTokens) {
+  console.log(`  finish: ${response.stop_reason ?? "unknown"}`);
+  if (response.stop_reason === "refusal") {
+    const category = response.stop_details?.category;
+    const usage = mapUsage(response.usage);
+    const free = usage.output_tokens === 0 && !(category && BILLED_REFUSAL_CATEGORIES.has(category));
+    throw new ContentFilterError({ signal: "native_refusal", nativeFinishReason: "refusal", ...category ? { category } : {}, usage: free ? { ...usage, cost_usd: 0 } : usage });
+  }
   if (response.stop_reason === "max_tokens") {
     throw new TruncatedResponseError(`Model response truncated at ${maxTokens} output tokens \u2014 refusing to post a cut-off response`, mapUsage(response.usage));
   }
@@ -44950,7 +45045,8 @@ var OpenRouterProvider = class {
   async complete(system, user, opts2) {
     const data = await this.request({ model: opts2.model, max_tokens: opts2.maxTokens, messages: openRouterMessages(system, user) }, opts2);
     const choice = firstChoice(data, opts2.maxTokens, cacheAware());
-    return { text: contentOf(choice), usage: mapOpenRouterUsage(data.usage, cacheAware()) };
+    const usage = mapOpenRouterUsage(data.usage, cacheAware());
+    return { text: requireText(contentOf(choice), usage), usage };
   }
   async completeStructured(system, user, schema, opts2) {
     const response_format = { type: "json_schema", json_schema: { name: "result", schema, strict: false } };
@@ -45005,10 +45101,17 @@ var OpenRouterProvider = class {
       try {
         const resp = await axios_default.post(url2, body, opts2.signal ? { headers, timeout: OPENROUTER_TIMEOUT_MS, signal: opts2.signal } : { headers, timeout: OPENROUTER_TIMEOUT_MS });
         const data = resp.data;
-        if (data?.error) throw openRouterError(typeof data.error.code === "number" ? data.error.code : void 0, data.error.message ?? "OpenRouter returned an error", data.error.code);
+        if (data?.error) {
+          const filtered = data.choices?.length ? void 0 : moderationOf(data.error, 200, data.usage ? mapOpenRouterUsage(data.usage, cacheAware()) : void 0);
+          if (filtered) throw filtered;
+          throw openRouterError(typeof data.error.code === "number" ? data.error.code : void 0, data.error.message ?? "OpenRouter returned an error", data.error.code);
+        }
         return data;
       } catch (err) {
-        if (isOpenRouterError(err)) throw err;
+        if (isOpenRouterError(err) || err instanceof ContentFilterError) throw err;
+        const ax = err;
+        const filtered = ax.response?.status === 403 ? moderationOf(ax.response.data?.error, 403) : void 0;
+        if (filtered) throw filtered;
         if (opts2.signal?.aborted) throw deadlineAbort(opts2);
         lastErr = err;
         if (attempt < opts2.maxRetries && isRetryable2(err)) {
@@ -45030,10 +45133,32 @@ function openRouterMessages(system, user, systemAfter, effortAfter) {
 function firstChoice(data, maxTokens, cached = false) {
   const choice = data.choices?.[0];
   if (!choice) throw new Error("OpenRouter returned no choices");
+  console.log(`  finish: ${choice.finish_reason ?? "unknown"} (native: ${choice.native_finish_reason ?? "unknown"})`);
+  const signal = refusalSignal(choice);
+  if (signal) {
+    throw new ContentFilterError({ signal, ...choice.native_finish_reason ? { nativeFinishReason: choice.native_finish_reason } : {}, usage: mapOpenRouterUsage(data.usage, cached) });
+  }
+  const content = choice.message?.content;
+  if ((content === null || content === void 0 || content === "") && (data.usage?.completion_tokens ?? 0) === 0) {
+    console.warn("  Empty response with zero completion tokens - not treated as a content filter");
+  }
   if (choice.finish_reason === "length") {
     throw new TruncatedResponseError(`Model response truncated at ${maxTokens} output tokens \u2014 refusing to post a cut-off response`, mapOpenRouterUsage(data.usage, cached));
   }
   return choice;
+}
+function refusalSignal(choice) {
+  if (choice.native_finish_reason === "refusal") return "native_refusal";
+  if (choice.finish_reason === "content_filter") return "content_filter";
+  const refusal = choice.message?.refusal;
+  if (typeof refusal === "string" && refusal.trim() !== "") return "message_refusal";
+  return void 0;
+}
+function moderationOf(error, httpStatus, usage) {
+  const meta = error?.metadata;
+  if (!meta || meta.reasons === void 0 && meta.flagged_input === void 0) return void 0;
+  const reasons = Array.isArray(meta.reasons) ? meta.reasons.filter((r) => typeof r === "string").slice(0, 10).map((r) => r.slice(0, 100)) : [];
+  return new ContentFilterError({ signal: "moderation", httpStatus, ...reasons.length ? { reasons } : {}, ...usage ? { usage } : {} });
 }
 function contentOf(choice) {
   const content = choice.message?.content;
@@ -47083,7 +47208,20 @@ This is a re-review. The message ends with "Still Open on This PR": findings fro
 - Step 5 changes: write \`summary\`, \`production_risk\` and \`merge_confidence\` for the PR as a whole, weighing these open findings at their listed severity together with the candidates that survive. Under NARRATIVE FIELDS, open findings count as surviving findings.
 - Treat an open finding as still present unless the diff plainly shows its problem is gone; then say in \`summary\` that it appears fixed and its thread awaits resolution, and leave it out of \`production_risk\`.
 - F ids (e.g. F2) are thread ids, not candidate ids: you may name an open finding by its F id in \`summary\` and \`production_risk\`.`;
-async function runJudge(apiKey, model, maxRetries, maxTokens, effort, diff, review2, fileContexts = [], policy = DEFAULT_JUDGE_POLICY, lineNumbers = false, breadthFrom, options, open) {
+var STUB_SUMMARY_CHARS = 20;
+var summaryStub = (o) => (typeof o.summary === "string" ? o.summary.trim().length : 0) < STUB_SUMMARY_CHARS;
+var validScore = (o) => typeof o.merge_confidence === "number" && Number.isFinite(o.merge_confidence) && o.merge_confidence >= 0 && o.merge_confidence <= 100;
+function mergeAttempts(first, second, undecidedFirst, undecidedSecond) {
+  const base = undecidedSecond <= undecidedFirst ? second : first;
+  const other = base === second ? first : second;
+  const narrative = !summaryStub(base) ? base : !summaryStub(other) ? other : void 0;
+  if (!narrative) return { ...base, merge_confidence: validScore(base) ? base.merge_confidence : other.merge_confidence };
+  return { ...base, summary: narrative.summary, behavioral_diff: narrative.behavioral_diff, production_risk: narrative.production_risk, unresolved_questions: narrative.unresolved_questions, merge_confidence: validScore(narrative) ? narrative.merge_confidence : base.merge_confidence };
+}
+function degenerateReasons(o, a) {
+  return [...summaryStub(o) ? ["summary stub"] : [], ...a.undecided > 0 ? [`${a.undecided} undecided`] : []];
+}
+async function runJudge(apiKey, model, maxRetries, maxTokens, effort, diff, review2, fileContexts = [], policy = DEFAULT_JUDGE_POLICY, lineNumbers = false, breadthFrom, options, open, sanityCheck = false) {
   const parts = [];
   parts.push(renderDiff(diff, lineNumbers));
   if (fileContexts.length > 0) parts.push(renderFileContexts(fileContexts, lineNumbers));
@@ -47103,9 +47241,49 @@ ${JUDGE_OPEN_FINDINGS}
   const schema = judgeOutputSchema(quality, shownAnchors, proposals, codeProposals);
   const callOpts = { model, maxTokens, maxRetries, effort: effort || void 0 };
   console.log(`Sending to judge (${model}, maxRetries: ${maxRetries}${fileContexts.length ? `, ${fileContexts.length} context file(s)` : ""})...`);
-  const { object, usage } = await createProvider(apiKey).completeStructured(judgePrompt, userMessage, schema, callOpts);
+  const attempt = () => createProvider(apiKey).completeStructured(judgePrompt, userMessage, schema, callOpts);
+  const judge = (o) => applyJudgeDecisions(review2.findings, o, policy, review2.can_be_split, diff, breadthFrom, options);
+  let { object, usage } = await attempt();
   console.log(`Judge received (${usage.input_tokens} in / ${usage.output_tokens} out tokens)`);
-  const judged = applyJudgeDecisions(review2.findings, object, policy, review2.can_be_split, diff, breadthFrom, options);
+  let judged = judge(object);
+  let sanity;
+  let retryRefusal;
+  if (sanityCheck) {
+    const reasons = degenerateReasons(object, judged.anomalies);
+    if (reasons.length) {
+      console.log(`  Judge output degenerate (${reasons.join(", ")}) - retrying once`);
+      sanity = { retried: true, degenerate_after_retry: true, reasons };
+      try {
+        const second = await attempt();
+        usage = sumAttempts(usage, second.usage);
+        console.log(`Judge received (${second.usage.input_tokens} in / ${second.usage.output_tokens} out tokens)`);
+        const retried = judge(second.object);
+        const again = degenerateReasons(second.object, retried.anomalies);
+        if (again.length === 0) {
+          object = second.object;
+          judged = retried;
+        } else {
+          object = mergeAttempts(object, second.object, judged.anomalies.undecided, retried.anomalies.undecided);
+          judged = judge(object);
+        }
+        sanity.degenerate_after_retry = again.length > 0;
+        console.log(sanity.degenerate_after_retry ? `  Judge retry still degenerate (${again.join(", ")})` : "  Judge retry fine");
+      } catch (err) {
+        const spent = err.usage;
+        if (spent) usage = sumAttempts(usage, spent);
+        if (err instanceof ContentFilterError) retryRefusal = err;
+        console.warn(`  Judge retry failed (${err?.message}) - using the first output`);
+      }
+      if (sanity.degenerate_after_retry && summaryStub(object)) {
+        if (!validScore(object)) {
+          throw Object.assign(new Error("Judge output has no usable summary or Merge Confidence after one retry"), { usage });
+        }
+        object = { ...object, summary: review2.summary, behavioral_diff: review2.behavioral_diff, production_risk: review2.production_risk, unresolved_questions: review2.unresolved_questions };
+        judged = judge(object);
+        console.log("  Judge summary replaced by the reviewer's narrative");
+      }
+    }
+  }
   const promptHash = (0, import_crypto2.createHash)("sha256").update(judgePrompt).digest("hex").slice(0, 12);
   return {
     text: judged.markdown,
@@ -47117,7 +47295,9 @@ ${JUDGE_OPEN_FINDINGS}
     anomalies: judged.anomalies,
     kept: judged.kept,
     render: judged.render,
-    ...judged.renderWith ? { renderWith: judged.renderWith, proposalsDropped: judged.proposalsDropped } : {}
+    ...judged.renderWith ? { renderWith: judged.renderWith, proposalsDropped: judged.proposalsDropped } : {},
+    ...sanity ? { sanity } : {},
+    ...retryRefusal ? { retryRefusal } : {}
   };
 }
 function getReplyPrompt() {
@@ -47268,7 +47448,7 @@ function dedupeStrings(items) {
   return kept;
 }
 var bullets2 = (items) => items.length ? items.map((i) => `- ${i}`).join("\n") : "None.";
-function mergeReviews(reviews, unreviewed = []) {
+function mergeReviews(reviews, unreviewed = [], declined = false) {
   const findings = dedupeFindings(reviews.flatMap((r) => r.parsed.findings));
   const behavioral = dedupeStrings(reviews.flatMap((r) => r.parsed.behavioral));
   const risk = dedupeStrings(reviews.flatMap((r) => r.parsed.risk));
@@ -47285,11 +47465,14 @@ function mergeReviews(reviews, unreviewed = []) {
     return `- **${f.severity} \u2013 ${f.title}**${loc2}
   ${f.body}`;
   }).join("\n\n") : "No findings.";
+  const findingsSection2 = declined ? `${findingsMd}
+
+${PARTIAL_FILTER_LINE}` : findingsMd;
   let markdown = [
     `### Summary
 ${summary}`,
     `### Findings
-${findingsMd}`,
+${findingsSection2}`,
     `### Behavioral Diff
 ${bullets2(behavioral)}`,
     `### Production Risk
@@ -47500,7 +47683,7 @@ function getAgentVersion() {
     const pkg = JSON.parse((0, import_fs4.readFileSync)(pkgPath, "utf-8"));
     return pkg.version;
   } catch {
-    if (true) return "0.0.65";
+    if (true) return "0.0.66";
     return "unknown";
   }
 }
@@ -47512,7 +47695,7 @@ function getBuildCommit() {
     const dirty = (0, import_child_process.execSync)("git status --porcelain", opts2).toString().trim() ? "-dirty" : "";
     return hash + dirty;
   } catch {
-    if (true) return "3811b89";
+    if (true) return "b45e495";
     return "unknown";
   }
 }
@@ -47703,6 +47886,7 @@ function buildUsageRecord(ctx, durationMs, error) {
     ...error && ctx.judgeStatus === "failed" && ctx.judgeCandidates ? { unjudged_candidates: candidateRows(ctx.judgeCandidates, !!ctx.outcomeSink, withHi) } : {},
     judge_decisions: ctx.judgeDecisions ?? null,
     judge_anomalies: ctx.judgeAnomalies ?? null,
+    ...ctx.judgeSanity ? { judge_sanity: ctx.judgeSanity } : {},
     judge_policy: judgeModel && judgeTokens ? { keep_minor: config.judge.policy.keepMinor, keep_unverified: config.judge.policy.keepUnverified, file_context: config.judge.fileContext, ...config.judge.policy.keepTestGaps ? { keep_test_gaps: true } : {} } : null,
     breadth_status: breadthStatus,
     breadth_model: ctx.breadthModel ?? null,
@@ -47747,6 +47931,7 @@ function buildUsageRecord(ctx, durationMs, error) {
     ...ctx.headChecked && !error && isCheckedCommitHash(ctx.prInfo.sourceCommit) ? { checked_commit: ctx.prInfo.sourceCommit } : {},
     ...ctx.dedupHit ? { dedup_source: ctx.dedupHit } : {},
     ...ctx.replyLimitNote ? { reply_limit_note: true } : {},
+    ...ctx.contentFilters?.length ? { content_filter: ctx.contentFilters } : {},
     ...config.review.inlineReviews ? { inline: inlineRecord(ctx) } : {},
     jenkins: getJenkinsMeta(),
     // Absent when CI passed no trigger, so those records serialize exactly as before.
@@ -47842,6 +48027,14 @@ function tokenSummaryLine(record) {
 var FIT_RATIO = 0.85;
 var MIN_DIFF_SHARE = 0.1;
 var BUNDLE_NOTE_RESERVE_CHARS = 1500;
+var inlineActive = (ctx) => ctx.inline?.record?.().active === true;
+function refuseCall(ctx, stage, err, model, bundle) {
+  if (err.usage) {
+    addUsage(ctx, err.usage);
+    (ctx.remainderRequests ??= []).push({ usage: err.usage, model });
+  }
+  noteContentFilter(ctx, stage, err, bundle);
+}
 async function runBundledReview(ctx, maxInputTokens) {
   const prInfo = ctx.prInfo;
   const hist = [...ctx.previousReviews ?? [], ...ctx.replies ?? []].reduce((n, r) => n + r.body.length, 0) + (ctx.inline?.prior?.block.length ?? 0);
@@ -47866,10 +48059,12 @@ async function runBundledReview(ctx, maxInputTokens) {
   const unreviewed = plan.oversized.map((u) => u.path);
   let anyOverflow = false;
   let incoherent = false;
+  let declined = 0;
   const judgeScores = [];
   const judgeUsage = { input_tokens: 0, output_tokens: 0 };
   const judgeRequests = [];
   let judged = false;
+  const sanity = { retried: false, degenerate_after_retry: false, reasons: [] };
   const deltaStats = { resolved: 0, still_open: 0, new_findings: 0 };
   let sawDelta = false;
   for (const [i, bundle] of plan.bundles.entries()) {
@@ -47905,6 +48100,7 @@ This PR is too large for one pass. You are reviewing bundle ${i + 1} of ${plan.b
     const prior = ctx.inline?.priorFor(bundle.files);
     const inlineTail = prior ? [false, void 0, prior] : [];
     let bundleContexts = contexts;
+    let refusal;
     const result = await (async () => {
       for (; ; ) {
         try {
@@ -47928,6 +48124,10 @@ This PR is too large for one pass. You are reviewing bundle ${i + 1} of ${plan.b
           return answer;
         } catch (err) {
           recordPassCall(ctx, "review", config.anthropic.maxTokens, void 0, err.usage, err);
+          if (err instanceof ContentFilterError && !ctx.outcomeSink) {
+            refusal = err;
+            return null;
+          }
           if (!isContextLengthError(err)) throw err;
           if (bundleContexts.length === 0) return null;
           console.warn(`  Bundle ${i + 1} exceeded the model context \u2014 dropping file contexts, retrying diff-only`);
@@ -47936,6 +48136,11 @@ This PR is too large for one pass. You are reviewing bundle ${i + 1} of ${plan.b
         }
       }
     })();
+    if (refusal) {
+      refuseCall(ctx, "review", refusal, config.anthropic.model, i + 1);
+      declined++;
+      continue;
+    }
     if (!result) {
       console.warn(`  Bundle ${i + 1} (${bundle.label}) could not be reviewed within the model context \u2014 leaving its files unreviewed`);
       unreviewed.push(...bundle.files);
@@ -47960,7 +48165,9 @@ This PR is too large for one pass. You are reviewing bundle ${i + 1} of ${plan.b
     console.log(`  Reviewer findings: ${found.high}H / ${found.medium}M / ${found.low}L`);
     if (config.judge.model && result.review && found.high + found.medium + found.low > 0) {
       const open = ctx.inline?.judgeOpenFor?.(bundle.files);
-      const judgeTail = open ? [void 0, config.judge.quality ? { quality: true } : void 0, open] : config.judge.quality ? [void 0, { quality: true }] : [];
+      const quality = config.judge.quality ? { quality: true } : void 0;
+      const judgeTail = inlineActive(ctx) ? [void 0, quality, open, true] : open ? [void 0, quality, open] : quality ? [void 0, quality] : [];
+      let judgeRefused = false;
       try {
         const verdict = await runJudge(
           config.llmApiKey,
@@ -47982,6 +48189,12 @@ This PR is too large for one pass. You are reviewing bundle ${i + 1} of ${plan.b
         judgeUsage.output_tokens += verdict.usage.output_tokens;
         if (verdict.usage.cost_usd !== void 0) judgeUsage.cost_usd = (judgeUsage.cost_usd ?? 0) + verdict.usage.cost_usd;
         judgeScores.push(...verdict.scores ?? []);
+        if (verdict.retryRefusal) noteContentFilter(ctx, "judge", verdict.retryRefusal, i + 1);
+        if (verdict.sanity) {
+          sanity.retried ||= verdict.sanity.retried;
+          sanity.degenerate_after_retry ||= verdict.sanity.degenerate_after_retry;
+          sanity.reasons.push(...verdict.sanity.reasons.filter((r) => !sanity.reasons.includes(r)));
+        }
         text = verdict.text;
         judged = true;
         ctx.judgeStatus = "succeeded";
@@ -47990,32 +48203,40 @@ This PR is too large for one pass. You are reviewing bundle ${i + 1} of ${plan.b
       } catch (err) {
         ctx.judgeStatus = "failed";
         recordPassCall(ctx, "judge", config.anthropic.maxTokens, void 0, err.usage, err);
-        if (!ctx.outcomeSink) throw err;
-        console.warn(`  Bundle ${i + 1} judge failed (${err.message}) \u2014 proceeding with unjudged reviewer findings`);
+        if (err instanceof ContentFilterError && !ctx.outcomeSink) {
+          refuseCall(ctx, "judge", err, config.judge.model, i + 1);
+          declined++;
+          judgeRefused = true;
+        } else if (!ctx.outcomeSink) throw err;
+        if (!judgeRefused) console.warn(`  Bundle ${i + 1} judge failed (${err.message}) \u2014 proceeding with unjudged reviewer findings`);
       }
+      if (judgeRefused) continue;
     }
     reviews.push({ label: bundle.label, parsed: parseReviewMarkdown(text) });
   }
   ctx.bundleIndex = void 0;
   ctx.remainderRequests = ctx.remainderRequests?.filter((r) => !judgeRequests.includes(r.usage));
+  ctx.declinedBundles = declined || void 0;
   if (!reviews.length) {
+    if (declined > 0) return { ok: false, reason: "every bundle was declined by the content filter", filtered: true };
     if (anyOverflow) return { ok: false, reason: `A bundle exceeded the model context \u2014 ${unreviewed.length} file(s) left unreviewed` };
     ctx.reviewText = "NO_CHANGE";
     ctx.bundleUncertain = unreviewed.length > 0 || incoherent;
     return { ok: true };
   }
-  const merged = mergeReviews(reviews, unreviewed);
+  const merged = mergeReviews(reviews, unreviewed, declined > 0);
   ctx.reviewText = merged.markdown;
   ctx.reviewObject = sawDelta ? { ...merged.object, delta_stats: deltaStats } : merged.object;
   ctx.bundleCount = plan.bundles.length;
   if (judged) {
     ctx.judgeUsage = judgeUsage;
     ctx.judgeRequests = judgeRequests;
+    if (sanity.retried) ctx.judgeSanity = sanity;
     ctx.judgeScores = judgeScores;
   }
   console.log(`
 Merged ${reviews.length} bundle review(s): ${merged.object.findings.length} finding(s) after dedupe`);
-  ctx.bundleUncertain = unreviewed.length > 0 || incoherent;
+  ctx.bundleUncertain = unreviewed.length > 0 || incoherent || declined > 0;
   return { ok: true };
 }
 function recordPassCall(ctx, stage, maxTokens, limitMs, usage, err, passEffort) {
@@ -48222,7 +48443,7 @@ var SUMMARY_HEADER = "### Review summary *(inline)*";
 var LEGACY_HEADER_LINE = "### Review summary";
 var LEGACY_HEADER_TAG = "*inline-summary v1 | maintained by the review agent*";
 var ID = "F[1-9][0-9]{0,5}";
-var SUFFIX = String.raw`(?: \| ([^*|]+?)(?: \| Build ([^*|]+))?)?`;
+var SUFFIX = String.raw`(?: \| (?:Build ([^*|]+)|([^*|]+?)(?: \| Build ([^*|]+))?))?`;
 var ROOT_RE = new RegExp(String.raw`^\*Finding (${ID}) \| opened at ([0-9a-f]{12})${SUFFIX}\*$`);
 var ANSWER_RE = new RegExp(String.raw`^\*Answer on (${ID}|summary) \| through ([A-Za-z0-9:_-]{1,64})${SUFFIX}\*$`);
 var NOTE_RE = new RegExp(String.raw`^\*Replies paused on (${ID}|summary)\*$`);
@@ -48230,10 +48451,14 @@ var STATE_RE = /^\*inline-state v1 \| n=([1-9][0-9]{0,5}) \| commits=((?:[0-9a-f
 var cleanMeta = (v) => (v ?? "").replace(/[*|\x00-\x1f\x7f]/g, "").trim();
 function suffixOf(meta) {
   const model = cleanMeta(meta?.model);
-  if (!model) return "";
   const build = cleanMeta(meta?.build);
+  if (!model) return build ? ` | Build ${build}` : "";
   return ` | ${model}${build ? ` | Build ${build}` : ""}`;
 }
+var metaOf = (m, at) => {
+  const build = m[at] ?? m[at + 2];
+  return { ...m[at + 1] ? { model: m[at + 1] } : {}, ...build ? { build } : {} };
+};
 var buildRootMarker = (id, c12, meta) => `*Finding ${id} | opened at ${c12}${suffixOf(meta)}*`;
 var buildAnswerMarker = (target, through, meta) => `*Answer on ${target} | through ${through}${suffixOf(meta)}*`;
 var buildNoteMarker = (target) => `*Replies paused on ${target}*`;
@@ -48245,11 +48470,11 @@ function lastNonEmptyLine(body) {
 }
 function parseRootMarker(body) {
   const m = ROOT_RE.exec(lastNonEmptyLine(body));
-  return m ? { id: m[1], openedAt: m[2], ...m[3] ? { model: m[3] } : {}, ...m[4] ? { build: m[4] } : {} } : null;
+  return m ? { id: m[1], openedAt: m[2], ...metaOf(m, 3) } : null;
 }
 function parseAnswerMarker(body) {
   const m = ANSWER_RE.exec(lastNonEmptyLine(body));
-  return m ? { target: m[1], through: m[2], ...m[3] ? { model: m[3] } : {}, ...m[4] ? { build: m[4] } : {} } : null;
+  return m ? { target: m[1], through: m[2], ...metaOf(m, 3) } : null;
 }
 function parseNoteMarker(body) {
   const m = NOTE_RE.exec(lastNonEmptyLine(body));
@@ -48386,6 +48611,9 @@ function parseSummaryOnlyRow(line, bodyLine) {
   const body = bodyLine?.startsWith("  ") ? bodyLine.trim() : "";
   return { kind: "summary_only", severity: m[1], title: m[2], ...l ? { file: l[1], ...l[2] ? { lines: l[2] } : {} } : {}, ...body ? { body } : {} };
 }
+function resolvedBaseline(rows) {
+  return rows.overflow ? void 0 : new Set(rows.resolved.map((r) => r.id));
+}
 function parseRows(body) {
   const lines = body.replace(/\r\n/g, "\n").split("\n");
   const out = { threads: [], summaryOnly: [], resolved: [] };
@@ -48463,12 +48691,26 @@ function fixPart(f) {
   return fence.length > MAX_FENCE ? void 0 : { block: renderFixBlock(code, fence), body };
 }
 var inlineFooter = (identity, model, n, c12, build) => `---
-*Inline review by ${identity} (${model}) | Review ${n} | Commit ${c12}${build ? ` | Build ${build}` : ""}*`;
+*Inline review by ${identity}${model ? ` (${model})` : ""} | Review ${n} | Commit ${c12}${build ? ` | Build ${build}` : ""}*`;
+var CONFIDENCE_LINE = /^#{1,4}\s*Merge Confidence:\s*\d+%\s*$/;
+function stripMergeConfidence(plain) {
+  const lines = plain.split("\n");
+  const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (!CONFIDENCE_LINE.test(lines[i].trimEnd())) {
+      out.push(lines[i]);
+      continue;
+    }
+    out.push("---");
+  }
+  return out.join("\n").trimEnd();
+}
 function sanitizeNarrative(text) {
   const stripped = stripGeneratedFooters(text);
   let removed = stripped.removed;
   const kept = stripped.text.split("\n").filter((line) => {
     const t = line.trimEnd();
+    if (t === PARTIAL_FILTER_LINE || t === CONTENT_FILTER_MARKER) return false;
     const forged = t === SUMMARY_HEADER || t === LEGACY_HEADER_LINE || t === LEGACY_HEADER_TAG || parseThreadRow(t) || parseResolvedRow(t) || parseOverflow(t) || parseHistoryLine(t) || parseSummaryOnlyRow(t);
     if (forged) removed++;
     return !forged;
@@ -48544,6 +48786,7 @@ function composeSummary(input) {
   const pre = sanitizeNarrative(split2.pre);
   pre.text = pre.text.replace(/^\s*### Summary[ \t]*(?:\n|$)/, "").trim();
   const post = sanitizeNarrative(split2.post);
+  if (input.hideConfidence) post.text = stripMergeConfidence(post.text);
   const todoText = input.todoSection ? sanitizeNarrative(input.todoSection).text : "";
   const removed = pre.removed + post.removed;
   const open = [...input.threads].sort((a, b) => RANK2[b.severity] - RANK2[a.severity] || kOf(b.id) - kOf(a.id));
@@ -48569,13 +48812,14 @@ function composeSummary(input) {
     }
     if (input.summaryOnly.length) {
       const shown = input.summaryOnly.slice(0, p2.soKeep);
-      const hidden = input.summaryOnly.length - shown.length;
-      collapsed += hidden;
+      const hidden2 = input.summaryOnly.length - shown.length;
+      collapsed += hidden2;
       const lines = shown.map((r) => summaryOnlyRow(r, p2.titlesOnly));
-      if (hidden) lines.push(`and ${hidden} more ${input.summaryOnly.every((r) => r.severity === "LOW") ? "low-severity" : "summary-only"} findings`);
+      if (hidden2) lines.push(`and ${hidden2} more ${input.summaryOnly.every((r) => r.severity === "LOW") ? "low-severity" : "summary-only"} findings`);
       findings.push("**Not posted as threads**\n\n" + lines.join("\n"));
     }
-    if (!findings.length) findings.push("No findings.");
+    if (!findings.length && !input.notice) findings.push("No findings.");
+    if (input.declined) findings.push(PARTIAL_FILTER_LINE);
     let preText = pre.text;
     let postText = post.text;
     if (cut > 0) {
@@ -48588,9 +48832,10 @@ function composeSummary(input) {
     }
     const parts = [
       SUMMARY_HEADER,
+      input.notice ? CONTENT_FILTER_MARKER : "",
       preText,
-      `### Findings
-${findings.join("\n\n")}`,
+      findings.length ? `### Findings
+${findings.join("\n\n")}` : "",
       postText,
       trimTodos(todoText, p2.todoKeep),
       p2.resolved && input.resolved.length ? `### Resolved by developers
@@ -48654,12 +48899,12 @@ ${history.slice(-p2.history).join("\n")}`,
     const important = so.filter((r) => r.severity !== "LOW").sort((x, y) => RANK2[y.severity] - RANK2[x.severity]);
     const fallback = (n2) => {
       const kept = important.slice(0, n2);
-      const hidden = so.filter((r) => !kept.includes(r));
-      collapsed = open.length + hidden.length;
+      const hidden2 = so.filter((r) => !kept.includes(r));
+      collapsed = open.length + hidden2.length;
       const parts = [SUMMARY_HEADER];
       if (open.length) parts.push(`Also open: ${open.length} more threads
 (${bySeverity(open)})`);
-      if (so.length) parts.push(["**Not posted as threads**", "", ...kept.map((r) => summaryOnlyRow(r, true)), ...hidden.length ? [`and ${hidden.length} more summary-only findings (${bySeverity(hidden)})`] : []].join("\n"));
+      if (so.length) parts.push(["**Not posted as threads**", "", ...kept.map((r) => summaryOnlyRow(r, true)), ...hidden2.length ? [`and ${hidden2.length} more summary-only findings (${bySeverity(hidden2)})`] : []].join("\n"));
       if (!open.length && !so.length) parts.push("No findings.");
       return [...parts, footer].join("\n\n");
     };
@@ -49308,9 +49553,10 @@ async function runSummaryReplies(args) {
 }
 
 // src/inline/reply-flow.ts
+var declineAnswer = (v) => ({ target: v.target, rootId: v.rootId, through: v.pending.reduce((a, q) => q.seq > a.seq ? q : a).id, text: REPLY_DECLINED_TEXT });
 var usageOf = (err) => err?.usage;
 async function planReplies(input) {
-  const plan = { answers: [], notes: [], threads: 0, deferredCap: 0, summaryAnswered: false, callFailed: false };
+  const plan = { answers: [], notes: [], threads: 0, deferredCap: 0, summaryAnswered: false, callFailed: false, declined: [] };
   const views = [];
   const open = /* @__PURE__ */ new Set();
   for (const t of input.threads) {
@@ -49346,11 +49592,39 @@ async function planReplies(input) {
       usages.push(r.usage);
       plan.answers.push(...r.answers);
     } catch (err) {
-      plan.callFailed = true;
-      plan.error = err instanceof Error ? err : new Error(String(err));
       const u = usageOf(err);
       if (u) usages.push(u);
-      console.warn(`  Finding replies failed (${err?.message}) - the questions stay pending`);
+      if (err instanceof ContentFilterError) {
+        plan.declined.push(err);
+        if (batch.length === 1) {
+          plan.answers.push(declineAnswer(batch[0]));
+          console.warn("  Finding reply declined by the content filter - posting a decline answer");
+        } else {
+          console.warn("  Finding replies declined by the content filter - asking each thread once on its own");
+          for (const v of batch) {
+            try {
+              const r = await runFindingReplies({ ...input.call, threads: [v] });
+              usages.push(r.usage);
+              plan.answers.push(...r.answers);
+            } catch (splitErr) {
+              const su = usageOf(splitErr);
+              if (su) usages.push(su);
+              if (splitErr instanceof ContentFilterError) {
+                plan.declined.push(splitErr);
+                plan.answers.push(declineAnswer(v));
+              } else {
+                plan.callFailed = true;
+                plan.error ??= splitErr instanceof Error ? splitErr : new Error(String(splitErr));
+                console.warn(`  Finding reply for ${v.target} failed (${splitErr?.message}) - the question stays pending`);
+              }
+            }
+          }
+        }
+      } else {
+        plan.callFailed = true;
+        plan.error = err instanceof Error ? err : new Error(String(err));
+        console.warn(`  Finding replies failed (${err?.message}) - the questions stay pending`);
+      }
     }
   }
   if (summaryView) {
@@ -49362,11 +49636,17 @@ async function planReplies(input) {
         plan.summaryAnswered = true;
       }
     } catch (err) {
-      plan.callFailed = true;
-      plan.error ??= err instanceof Error ? err : new Error(String(err));
       const u = usageOf(err);
       if (u) usages.push(u);
-      console.warn(`  Summary reply failed (${err?.message}) - the question stays pending`);
+      if (err instanceof ContentFilterError) {
+        plan.declined.push(err);
+        plan.answers.push(declineAnswer(summaryView));
+        console.warn("  Summary reply declined by the content filter - posting a decline answer");
+      } else {
+        plan.callFailed = true;
+        plan.error ??= err instanceof Error ? err : new Error(String(err));
+        console.warn(`  Summary reply failed (${err?.message}) - the question stays pending`);
+      }
     }
   }
   if (usages.length > 0) plan.usage = sumAttempts(...usages);
@@ -49682,6 +49962,9 @@ ${input.buildSummary(synthetic, state)}
 // src/inline/engine.ts
 var isCapable = (a) => typeof a.listMarkedThreads === "function" && typeof a.postInlineComment === "function" && typeof a.postTopLevelComment === "function" && typeof a.postThreadComment === "function" && typeof a.editComment === "function";
 var STOPPED = ["concurrent_run", "head_moved_skip", "head_moved_partial", "head_check_failed", "identity_mismatch", "force_invalidate_failed"];
+var hasLegacyFooter = (body, ids, authorIds) => isTrusted(ids, authorIds) && (hasReviewFooter(body) || hasReplyFooter(body));
+var isInlineOrLegacyMarked = (body) => isInlineMarked(body) || hasReviewFooter(body) || hasReplyFooter(body);
+var hidden = (what) => config.review.inlineHide.includes(what);
 var forced = (ctx) => ctx.force === "clean" || ctx.force === "re-review";
 var SEVERITY_ORDER = { HIGH: 0, MEDIUM: 1, LOW: 2 };
 var NO_CHANGE_PLAIN = "### Summary\nNo reviewable changes since the last review; the earlier review stands.";
@@ -49767,7 +50050,9 @@ var Engine = class {
         return this.judge(ctx, deps);
       case 19 /* POST_REVIEW */:
         return this.compose(ctx, deps, false);
-      case 20 /* SKIP */:
+      case 20 /* POST_FILTER_NOTICE */:
+        return this.filterNotice(ctx, deps);
+      case 21 /* SKIP */:
         return ctx.action === "NO_NEW_FINDINGS" ? this.compose(ctx, deps, true) : this.repliesOnly(ctx, deps, "skip");
       case 6 /* CHECK_REPLIES */:
       case 7 /* RESPOND_TO_REPLIES */:
@@ -49782,7 +50067,7 @@ var Engine = class {
     this.finished = true;
     ctx.action = "SKIP";
     ctx.skipReason = reason;
-    return 20 /* SKIP */;
+    return 21 /* SKIP */;
   }
   async identify() {
     let api = null;
@@ -49801,15 +50086,24 @@ var Engine = class {
     if (identity.status === "unavailable") return this.halt(ctx, "identity_unavailable", "the agent identity is unavailable (no adapter lookup and no AGENT_ACCOUNT_ID); nothing was posted");
     if (identity.status === "identity_mismatch") return this.halt(ctx, "identity_mismatch", identity.reason);
     this.rec.identity = identity.status === "api" ? "api" : "setting";
-    const threads = await this.adapter.listMarkedThreads(ctx.prId, isInlineMarked);
+    const listed = await this.adapter.listMarkedThreads(ctx.prId, isInlineOrLegacyMarked);
+    const threads = listed.filter((t) => isInlineMarked(t.root.body));
     const reg = buildRegistry(threads, identity);
     this.rec.untrusted_markers = reg.untrusted;
     if (reg.status === "identity_mismatch") return this.halt(ctx, "identity_mismatch", reg.reason);
     const sel = reg.summary;
+    if (ctx.force !== "clean" && sel.kind === "none" && reg.entries.length === 0 && listed.some((t) => hasLegacyFooter(t.root.body, identity.ids, t.root.authorIds) || t.comments.some((c) => hasLegacyFooter(c.body, identity.ids, c.authorIds)))) {
+      console.log("  This PR has legacy agent comments and no inline summary - using the legacy review flow for this run");
+      this.finished = true;
+      this.rec = { active: false, reason: "legacy_pr" };
+      return deps.transition(5 /* CHECK_PREVIOUS_REVIEWS */, ctx);
+    }
     this.rec.summary_check = sel.kind === "none" ? "missing" : sel.check;
     const valid = sel.kind === "found" && sel.check === "valid" && sel.state ? sel : void 0;
     const state = valid?.state ?? { n: 0, commits: [] };
     const rows = valid ? parseRows(valid.comment.body) : void 0;
+    const afterNotice = !!valid && isNoticeSummary(valid.comment.body);
+    const completed = afterNotice ? parseHistory(valid.comment.body).filter((l) => !l.endsWith(` \xB7 ${NOTICE_HISTORY_TEXT}`)).length : state.n;
     const summaryOnly = (rows?.summaryOnly ?? []).map((r) => ({ severity: r.severity, title: r.title, gist: r.body ?? "", ...r.file ? { file: r.file } : {}, ...r.lines ? { lines: r.lines } : {} }));
     this.s = {
       identity,
@@ -49821,7 +50115,10 @@ var Engine = class {
       who: { ids: identity.ids, names: identity.names },
       ...sel.kind === "found" ? { summaryRootId: sel.comment.id } : {},
       history: valid ? parseHistory(valid.comment.body) : [],
-      carry: { ...valid ? { plain: carryNarrative(valid.comment.body) ?? void 0 } : {}, summaryOnly: rows?.summaryOnly ?? [] }
+      carry: { ...valid && !afterNotice ? { plain: carryNarrative(valid.comment.body) ?? void 0 } : {}, summaryOnly: rows?.summaryOnly ?? [] },
+      afterNotice,
+      completed,
+      ...rows && resolvedBaseline(rows) ? { prevResolved: resolvedBaseline(rows) } : {}
     };
     console.log(`  Summary ${this.rec.summary_check}, ${reg.entries.length} finding thread(s), review ${state.n} completed`);
     if (!forced(ctx) && state.commits.includes(head12)) {
@@ -49834,7 +50131,7 @@ var Engine = class {
       return this.repliesOnly(ctx, deps, "dedup");
     }
     let unchanged = false;
-    if (!forced(ctx) && state.commits.length > 0) {
+    if (!forced(ctx) && state.commits.length > 0 && !afterNotice) {
       const base = state.commits[state.commits.length - 1];
       try {
         console.log(`  Fetching delta diff (${base}..${head12})...`);
@@ -49854,7 +50151,7 @@ var Engine = class {
       }
     }
     ctx.previousReviews = [];
-    ctx.reviewNumber = state.n + 1;
+    ctx.reviewNumber = completed + 1;
     if (unchanged) {
       console.log("  No reviewable changes since the last review - refreshing the summary");
       return this.writeRun(ctx, deps, this.noChangeSource());
@@ -49873,7 +50170,7 @@ var Engine = class {
   }
   async checkNoChange(ctx, deps) {
     if (!isNoChange(ctx.reviewText ?? "")) return deps.transition(13 /* CHECK_NO_CHANGE */, ctx);
-    if (this.s.state.n === 0) throw new Error("Reviewer returned NO_CHANGE on a first review - refusing to silently skip");
+    if (this.s.completed === 0) throw new Error("Reviewer returned NO_CHANGE on a first review - refusing to silently skip");
     console.log("  Reviewer: NO_CHANGE");
     const coherent = ctx.reviewObject ? ctx.reviewObject.no_change === true && ctx.reviewObject.findings?.length === 0 : ctx.reviewText === "NO_CHANGE";
     if (!coherent) return this.repliesOnly(ctx, deps, "incoherent", "NO_CHANGE reported together with findings; not recorded as checked");
@@ -49916,12 +50213,37 @@ var Engine = class {
     const n = found.length;
     const carry = this.s.carry;
     return this.writeRun(ctx, deps, {
+      ...ctx.declinedBundles ? { declined: true } : {},
       plain: guard?.ok ? guard.cleaned : quiet ? carry.plain ?? QUIET_PLAIN : QUIET_PLAIN,
       findings: found,
       ...quiet ? { carriedSummaryOnly: carry.summaryOnly } : {},
       todoSection: guard?.ok ? guard.todoSection : "",
-      historyText: (r) => n === 0 ? "no findings" : `${n} finding${n === 1 ? "" : "s"}, ${r.posted.length} new thread${r.posted.length === 1 ? "" : "s"}`
+      historyText: (r) => this.historyText(n === 0 ? "no findings" : `${n} finding${n === 1 ? "" : "s"}, ${r.posted.length} new thread${r.posted.length === 1 ? "" : "s"}`, ctx, r)
     });
+  }
+  // Parts only append after the original text so old lines keep parsing; a zero part is omitted.
+  historyText(base, ctx, roots) {
+    const prev = this.s.prevResolved;
+    const reported = ctx.reviewObject?.delta_stats?.resolved ?? 0;
+    const byDevelopers = prev ? roots.entries.filter((e) => e.resolved && !prev.has(e.id)).length : 0;
+    const listed = new Set(roots.entries.map((e) => e.id));
+    const open = roots.entries.filter((e) => !e.resolved).length + roots.posted.filter((p) => !listed.has(p.root.id)).length;
+    return [base, reported > 0 ? `${reported} reported fixed` : "", byDevelopers > 0 ? `${byDevelopers} resolved by developers` : "", open > 0 ? `${open} open` : ""].filter(Boolean).join(" \xB7 ");
+  }
+  async filterNotice(ctx, deps) {
+    const next = await this.writeRun(ctx, deps, {
+      plain: `### Summary
+${CONTENT_FILTER_NOTICE_TEXT}`,
+      findings: [],
+      carriedSummaryOnly: this.s.carry.summaryOnly,
+      todoSection: "",
+      historyText: () => NOTICE_HISTORY_TEXT,
+      notice: true
+    });
+    if (next !== 22 /* DONE */) return next;
+    ctx.action = "SKIP";
+    ctx.skipReason = CONTENT_FILTER_SKIP_REASON;
+    return 21 /* SKIP */;
   }
   async geoOf(e, mapper, head12) {
     const kept = { file: e.file || "(unknown)", ...e.lines ? { lines: e.lines } : {}, base: e.openedAt };
@@ -49942,7 +50264,7 @@ var Engine = class {
     this.rec.suppressed = { open_duplicate: plan.suppressed.open.length, resolved: plan.suppressed.resolved.length, in_run_duplicate: plan.suppressed.sameRun.length };
     const replies = await this.replyPlan(ctx, mapper);
     const notes = await this.codeNotes(mapper, s.reg.entries);
-    const footer = { identity: config.agentIdentity, model: config.anthropic.model, build: this.buildId() };
+    const footer = { identity: config.agentIdentity, model: hidden("model") ? void 0 : config.anthropic.model, build: this.buildId() };
     const carried = (src.carriedSummaryOnly ?? []).filter((c) => !mapped.some((m) => !m.entry.resolved && matches(m, c, "open")));
     const buildSummary = (roots, state) => {
       const { threads, resolved: resolved2, summaryOnly } = this.rows(roots, plan, geo, carried, notes);
@@ -49954,10 +50276,13 @@ var Engine = class {
         history: s.history,
         historyText: src.historyText(roots),
         todoSection: src.todoSection,
+        ...src.declined ? { declined: true } : {},
+        ...src.notice ? { notice: true } : {},
         footer,
         head12: s.head12,
         state,
-        agentId: s.identity.agentId
+        agentId: s.identity.agentId,
+        hideConfidence: hidden("confidence")
       });
       this.rec.footer_lines_removed = composed.removed;
       this.rec.rows_collapsed = composed.collapsed;
@@ -50058,6 +50383,7 @@ var Engine = class {
         return status;
       }
     });
+    for (const e of plan.declined) noteContentFilter(ctx, "reply", e);
     this.rec.answers.threads = plan.threads;
     this.rec.answers.deferred_cap = plan.deferredCap;
     if (plan.usage) {
@@ -50086,7 +50412,7 @@ var Engine = class {
         summary: s.reg.summary,
         entries: s.reg.entries,
         markHeadChecked: () => deps.markHeadChecked(ctx),
-        answerMeta: { model: config.reply.model || config.anthropic.model, build: this.buildId() },
+        answerMeta: { model: hidden("model") ? void 0 : config.reply.model || config.anthropic.model, build: this.buildId() },
         ...parts
       });
     } catch (err) {
@@ -50138,27 +50464,27 @@ var Engine = class {
     if (kind === "incoherent") {
       ctx.action = "NO_CHANGE";
       ctx.skipReason = reason;
-      return 20 /* SKIP */;
+      return 21 /* SKIP */;
     }
     if (posted > 0 || res?.outcome === "dry_run" && plan.answers.length > 0) {
       ctx.action = "REPLY";
       ctx.skipReason = void 0;
-      return 21 /* DONE */;
+      return 22 /* DONE */;
     }
     if (kind === "dedup") {
       ctx.action = "DEDUP_SKIP";
       ctx.skipReason = "head already reviewed and no unanswered questions";
     }
-    return 20 /* SKIP */;
+    return 21 /* SKIP */;
   }
   settle(ctx, res) {
     this.noteWrite(res);
     this.rec.outcome = res.outcome;
     this.finished = true;
     if (STOPPED.includes(res.outcome)) return this.skipFor(ctx, res.outcome, res);
-    ctx.action = this.s.state.n === 0 ? "REVIEW" : "RE_REVIEW";
+    ctx.action = this.s.completed === 0 ? "REVIEW" : "RE_REVIEW";
     ctx.skipReason = void 0;
-    return 21 /* DONE */;
+    return 22 /* DONE */;
   }
   skipFor(ctx, outcome, res) {
     this.rec.outcome = outcome;
@@ -50192,7 +50518,7 @@ var Engine = class {
         ctx.action = "SKIP";
         ctx.skipReason = `inline write ended with ${outcome}`;
     }
-    return 20 /* SKIP */;
+    return 21 /* SKIP */;
   }
 };
 
@@ -50463,7 +50789,7 @@ async function transition(state, ctx) {
       }
       ctx.action = "SKIP";
       ctx.skipReason = `${event || "comment event"} by "${commentAuthor}" matches IGNORE_COMMENT_AUTHORS`;
-      return 20 /* SKIP */;
+      return 21 /* SKIP */;
     }
     case 1 /* FETCH_PR_INFO */: {
       console.log("Fetching PR info...");
@@ -50478,7 +50804,7 @@ async function transition(state, ctx) {
       if (config.skipSourceBranches.length > 0 && matchesPattern(src, config.skipSourceBranches)) {
         ctx.action = "SKIP";
         ctx.skipReason = `source branch "${src}" matches SKIP_SOURCE_BRANCHES`;
-        return 20 /* SKIP */;
+        return 21 /* SKIP */;
       }
       if (config.skipTargetBranches.length > 0 && matchesPattern(tgt, config.skipTargetBranches)) {
         if (config.onlyTargetBranches.length > 0 && matchesPattern(tgt, config.onlyTargetBranches)) {
@@ -50486,12 +50812,12 @@ async function transition(state, ctx) {
         }
         ctx.action = "SKIP";
         ctx.skipReason = `target branch "${tgt}" matches SKIP_TARGET_BRANCHES`;
-        return 20 /* SKIP */;
+        return 21 /* SKIP */;
       }
       if (config.onlyTargetBranches.length > 0 && !matchesPattern(tgt, config.onlyTargetBranches)) {
         ctx.action = "SKIP";
         ctx.skipReason = `target branch "${tgt}" is not in ONLY_TARGET_BRANCHES (${config.onlyTargetBranches.join(",")})`;
-        return 20 /* SKIP */;
+        return 21 /* SKIP */;
       }
       return 3 /* FETCH_DIFF */;
     }
@@ -50503,7 +50829,7 @@ async function transition(state, ctx) {
         if (err instanceof PrTooLargeError) {
           ctx.action = "SKIP";
           ctx.skipReason = err.message;
-          return 20 /* SKIP */;
+          return 21 /* SKIP */;
         }
         throw err;
       }
@@ -50522,7 +50848,7 @@ async function transition(state, ctx) {
       if (ctx.reviewableLineCount === 0) {
         ctx.action = "SKIP";
         ctx.skipReason = "no reviewable changes after exclusions";
-        return 20 /* SKIP */;
+        return 21 /* SKIP */;
       }
       return 4 /* CHECK_THRESHOLDS */;
     }
@@ -50533,23 +50859,23 @@ async function transition(state, ctx) {
       if (minChangedFiles > 0 && fileCount < minChangedFiles) {
         ctx.action = "SKIP";
         ctx.skipReason = `PR has ${fileCount} reviewable file(s), minimum is ${minChangedFiles}`;
-        return 20 /* SKIP */;
+        return 21 /* SKIP */;
       }
       const bundling = config.review.bundledReview;
       if (!bundling && maxChangedFiles > 0 && fileCount > maxChangedFiles) {
         ctx.action = "SKIP";
         ctx.skipReason = `PR has ${fileCount} reviewable file(s), maximum is ${maxChangedFiles}`;
-        return 20 /* SKIP */;
+        return 21 /* SKIP */;
       }
       if (minChangedLines > 0 && lineCount < minChangedLines) {
         ctx.action = "SKIP";
         ctx.skipReason = `PR has ${lineCount} reviewable line(s), minimum is ${minChangedLines}`;
-        return 20 /* SKIP */;
+        return 21 /* SKIP */;
       }
       if (!bundling && maxChangedLines > 0 && lineCount > maxChangedLines) {
         ctx.action = "SKIP";
         ctx.skipReason = `PR has ${lineCount} reviewable line(s), maximum is ${maxChangedLines}`;
-        return 20 /* SKIP */;
+        return 21 /* SKIP */;
       }
       return 5 /* CHECK_PREVIOUS_REVIEWS */;
     }
@@ -50561,7 +50887,18 @@ async function transition(state, ctx) {
         return 9 /* LOAD_PROMPT */;
       }
       console.log("Checking for previous reviews...");
-      ctx.previousReviews = await ctx.adapter.getPreviousReviewComments(ctx.prId);
+      const fetched = await ctx.adapter.getPreviousReviewComments(ctx.prId);
+      ctx.previousReviews = fetched.filter((r) => !isContentFilterNotice(r.body));
+      const noticeHead = ctx.prInfo.sourceCommit.slice(0, 12);
+      if (!forced2(ctx) && fetched.some((r) => isContentFilterNotice(r.body) && extractCommitHash(r.body) === noticeHead)) {
+        console.log(`  A content-filter notice was already posted for ${noticeHead} \u2014 not posting another`);
+        markHeadChecked(ctx);
+        ctx.reviewNumber = ctx.previousReviews.length;
+        if (ctx.previousReviews.length > 0) return 6 /* CHECK_REPLIES */;
+        ctx.action = "DEDUP_SKIP";
+        ctx.skipReason = "content-filter notice already posted for this commit";
+        return 21 /* SKIP */;
+      }
       if (ctx.previousReviews.length > 0) {
         console.log(`  Found ${ctx.previousReviews.length} previous review(s) \u2014 will produce delta review`);
         const lastReview = ctx.previousReviews[ctx.previousReviews.length - 1];
@@ -50653,7 +50990,7 @@ async function transition(state, ctx) {
             ctx.action = "DEDUP_SKIP";
             ctx.skipReason = `reply limit reached (${used}/${config.reply.maxComments})`;
           }
-          return perReview && used === config.reply.maxComments ? 8 /* POST_REPLY_LIMIT_NOTE */ : 20 /* SKIP */;
+          return perReview && used === config.reply.maxComments ? 8 /* POST_REPLY_LIMIT_NOTE */ : 21 /* SKIP */;
         }
         console.log(`  Found ${ctx.replies.length} unanswered reply(s) \u2014 responding... (${used}/${config.reply.maxComments || "\u221E"} replies used)`);
         return 7 /* RESPOND_TO_REPLIES */;
@@ -50662,7 +50999,7 @@ async function transition(state, ctx) {
         ctx.action = "DEDUP_SKIP";
         ctx.skipReason = ctx.dedupHit === "checked_commit" ? "head already checked by an earlier run and no unanswered questions" : ctx.dedupHit === "target_merge" ? "target branch merged in; PR diff unchanged since the last review and no unanswered questions" : "no new commits and no unanswered questions";
       }
-      return 20 /* SKIP */;
+      return 21 /* SKIP */;
     }
     case 8 /* POST_REPLY_LIMIT_NOTE */: {
       const replyModel = config.reply.model || config.anthropic.model;
@@ -50672,7 +51009,7 @@ async function transition(state, ctx) {
         console.log("\n=== DRY RUN \u2014 Reply limit note (not posted) ===\n");
         console.log(note);
         console.log("\n=== End of note ===\n");
-        return 20 /* SKIP */;
+        return 21 /* SKIP */;
       }
       try {
         await ctx.adapter.postReply(ctx.prId, ctx.replies[ctx.replies.length - 1].parentId, note);
@@ -50681,7 +51018,7 @@ async function transition(state, ctx) {
         ctx.replyLimitNote = void 0;
         console.warn(`  Reply limit note not posted (${errorText(err)})`);
       }
-      return 20 /* SKIP */;
+      return 21 /* SKIP */;
     }
     case 7 /* RESPOND_TO_REPLIES */: {
       const lastReview = ctx.previousReviews[ctx.previousReviews.length - 1];
@@ -50699,6 +51036,36 @@ async function transition(state, ctx) {
       } catch (err) {
         ctx.failedModel = replyModel;
         recordTokenCall(ctx, "reply", replyModel, err?.usage, err);
+        if (err instanceof ContentFilterError) {
+          refuseCall(ctx, "reply", err, replyModel);
+          const decline = REPLY_DECLINED_TEXT + buildReplyFooter(config.agentIdentity, replyModel, getJobUrl());
+          let answered = ctx.dryRun;
+          if (ctx.dryRun) {
+            console.log("\n=== DRY RUN \u2014 Reply declined (not posted) ===\n");
+            console.log(decline);
+          } else {
+            try {
+              await ctx.adapter.postReply(ctx.prId, ctx.replies[ctx.replies.length - 1].parentId, decline);
+              answered = true;
+            } catch (postErr) {
+              console.warn(`  Decline reply not posted (${errorText(postErr)})`);
+            }
+          }
+          if (ctx.divertedFromReview) {
+            ctx.replyDeclined = true;
+            return 17 /* JUDGE_REVIEW */;
+          }
+          if (answered) {
+            ctx.action = "REPLY";
+            ctx.skipReason = void 0;
+            return 22 /* DONE */;
+          }
+          if (ctx.action !== "NO_CHANGE") {
+            ctx.action = "SKIP";
+            ctx.skipReason = "Reply declined by the content filter; nothing was posted";
+          }
+          return 21 /* SKIP */;
+        }
         throw err;
       }
       recordTokenCall(ctx, "reply", replyModel, result.usage);
@@ -50716,7 +51083,7 @@ async function transition(state, ctx) {
       }
       ctx.action = "REPLY";
       ctx.skipReason = void 0;
-      return 21 /* DONE */;
+      return 22 /* DONE */;
     }
     case 9 /* LOAD_PROMPT */: {
       console.log("Loading prompt...");
@@ -50797,7 +51164,7 @@ async function transition(state, ctx) {
       if (max > 0 && s.total > max) {
         ctx.action = "SKIP";
         ctx.skipReason = `Estimated input ~${s.total.toLocaleString()} tokens exceeds the input budget (${max.toLocaleString()}; min of MAX_INPUT_TOKENS and model context) even without file context \u2014 ${fmt2(s)}`;
-        return 20 /* SKIP */;
+        return 21 /* SKIP */;
       }
       return 12 /* CALL_MODEL */;
     }
@@ -50838,6 +51205,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
         config.review.lineNumbers,
         ...reviewTail
       );
+      const refused2 = {};
       const result = await (async () => {
         for (; ; ) {
           try {
@@ -50846,6 +51214,10 @@ If this PR spans multiple independent themes that could each be a separate, inde
             return answer;
           } catch (err) {
             recordPassCall(ctx, "review", config.anthropic.maxTokens, void 0, err.usage, err);
+            if (err instanceof ContentFilterError && !ctx.outcomeSink) {
+              refused2.err = err;
+              return null;
+            }
             if (!isContextLengthError(err)) throw err;
             if (ctx.fileContexts.length === 0) return null;
             console.warn("  Prompt exceeded the model context \u2014 dropping file contexts, retrying diff-only");
@@ -50855,10 +51227,14 @@ If this PR spans multiple independent themes that could each be a separate, inde
           }
         }
       })();
+      if (refused2.err) {
+        refuseCall(ctx, "review", refused2.err, config.anthropic.model);
+        return 20 /* POST_FILTER_NOTICE */;
+      }
       if (!result) {
         ctx.action = "SKIP";
         ctx.skipReason = "Diff exceeds the model context window";
-        return 20 /* SKIP */;
+        return 21 /* SKIP */;
       }
       ctx.reviewText = result.text;
       ctx.reviewObject = result.review;
@@ -50987,6 +51363,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
           ctx.breadthStatus = "aborted_time";
           console.warn(`  Breadth review stopped at the ${passStopAtSeconds()}s pass deadline (${Math.round((Date.now() - ctx.startTime) / 1e3)}s elapsed) \u2014 continuing with first-pass findings only`);
         } else {
+          if (err instanceof ContentFilterError) noteContentFilter(ctx, "breadth", err);
           ctx.breadthStatus = "failed";
           console.warn(`  Breadth review FAILED (${isContextLengthError(err) ? "context length" : e.message}) \u2014 continuing with first-pass findings only`);
         }
@@ -51101,6 +51478,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
           ctx.secondLookStatus = "aborted_time";
           console.warn(`  Second-look stopped at the ${passStopAtSeconds()}s pass deadline (${Math.round((Date.now() - ctx.startTime) / 1e3)}s elapsed) \u2014 continuing with first-pass and breadth findings only`);
         } else {
+          if (err instanceof ContentFilterError) noteContentFilter(ctx, "second_look", err);
           ctx.secondLookStatus = "failed";
           console.warn(`  Second-look FAILED (${isContextLengthError(err) ? "context length" : e.message}) \u2014 continuing with first-pass and breadth findings only`);
         }
@@ -51202,6 +51580,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
             halt = "skipped_time";
             console.warn(`  Lens ${lens.name} stopped at the ${passStopAtSeconds()}s pass deadline (${Math.round((Date.now() - ctx.startTime) / 1e3)}s elapsed) \u2014 continuing without its findings`);
           } else {
+            if (err instanceof ContentFilterError) noteContentFilter(ctx, `lens:${lens.name}`, err);
             console.warn(`  Lens ${lens.name} FAILED (${isContextLengthError(err) ? "context length" : e.message}) \u2014 continuing without its findings`);
           }
         }
@@ -51225,8 +51604,9 @@ If this PR spans multiple independent themes that could each be a separate, inde
         const limitReached = config.reply.maxComments > 0 && agentReplies >= config.reply.maxComments;
         if (unanswered.length > 0 && limitReached) {
           console.log(`  Unanswered dev reply, but reply limit reached (${agentReplies}/${config.reply.maxComments}) \u2014 finishing the re-review without answering`);
-        } else if (unanswered.length > 0) {
+        } else if (unanswered.length > 0 && !ctx.replyDeclined) {
           ctx.replies = unanswered;
+          ctx.divertedFromReview = true;
           console.log("  Re-review found nothing new, but a developer reply is unanswered \u2014 answering it in-thread");
           if (cleanPrior || await mergeQuiet()) markHeadChecked(ctx);
           return 7 /* RESPOND_TO_REPLIES */;
@@ -51236,14 +51616,14 @@ If this PR spans multiple independent themes that could each be a separate, inde
           ctx.action = "NO_NEW_FINDINGS";
           ctx.skipReason = "Re-review found no new findings (prior review already clean)";
           markHeadChecked(ctx);
-          return 20 /* SKIP */;
+          return 21 /* SKIP */;
         }
         if (await mergeQuiet()) {
           console.log("  Re-review after a target merge: no new findings \u2014 not posting a confirmation");
           ctx.action = "NO_NEW_FINDINGS";
           ctx.skipReason = "Re-review after a target-branch merge found no new findings";
           markHeadChecked(ctx);
-          return 20 /* SKIP */;
+          return 21 /* SKIP */;
         }
         console.log(`  Re-review with no new findings \u2014 posting (${stillOpen ? "findings still open" : "prior review had findings"})`);
       }
@@ -51289,7 +51669,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
         ...sites ? { firstPassSites: sites } : {}
       } : void 0;
       const judgeOpen = ctx.inline?.judgeOpen;
-      const judgeTail = judgeOpen ? [judgeOptions, judgeOpen] : judgeOptions ? [judgeOptions] : [];
+      const judgeTail = inlineActive(ctx) ? [judgeOptions, judgeOpen, true] : judgeOpen ? [judgeOptions, judgeOpen] : judgeOptions ? [judgeOptions] : [];
       try {
         const result = await runJudge(
           config.llmApiKey,
@@ -51310,6 +51690,8 @@ If this PR spans multiple independent themes that could each be a separate, inde
         ctx.judgePromptHash = result.promptHash;
         ctx.judgeDecisions = result.decisions;
         ctx.judgeAnomalies = result.anomalies;
+        if (result.sanity) ctx.judgeSanity = result.sanity;
+        if (result.retryRefusal) noteContentFilter(ctx, "judge", result.retryRefusal);
         ctx.judgedFindings = result.kept;
         if (result.render) ctx.renderJudged = result.render;
         if (result.proposalsDropped) ctx.proposalsDropped = result.proposalsDropped;
@@ -51330,6 +51712,12 @@ If this PR spans multiple independent themes that could each be a separate, inde
       } catch (err) {
         ctx.judgeStatus = "failed";
         recordPassCall(ctx, "judge", config.anthropic.maxTokens, void 0, err.usage, err);
+        if (err instanceof ContentFilterError && !ctx.outcomeSink) {
+          refuseCall(ctx, "judge", err, config.judge.model);
+          if (!noFindings) return 20 /* POST_FILTER_NOTICE */;
+          console.warn("  Judge declined by the content filter \u2014 posting the clean reviewer result");
+          return 19 /* POST_REVIEW */;
+        }
         if (!ctx.outcomeSink && !noFindings) throw err;
         console.warn(`  Judge failed (${err.message}) \u2014 proceeding with unjudged reviewer findings`);
       }
@@ -51338,21 +51726,22 @@ If this PR spans multiple independent themes that could each be a separate, inde
     case 18 /* BUNDLED_REVIEW */: {
       if (config.review.promptCache) ctx.promptCache = { ttl: "5m", reviewer_marked: false, shared_stages: [], uncached: [{ stage: "review", reason: "bundled" }] };
       const outcome = await runBundledReview(ctx, ctx.inputBudget);
+      if (!outcome.ok && outcome.filtered) return 20 /* POST_FILTER_NOTICE */;
       if (!outcome.ok) {
         ctx.action = "SKIP";
         ctx.skipReason = `Bundled review not possible: ${outcome.reason}`;
-        return 20 /* SKIP */;
+        return 21 /* SKIP */;
       }
       if (isNoChange(ctx.reviewText)) return 13 /* CHECK_NO_CHANGE */;
       const merged = ctx.reviewObject;
-      if (merged.findings.length === 0 && ctx.reviewNumber > 1 && ctx.force !== "re-review") {
+      if (merged.findings.length === 0 && ctx.reviewNumber > 1 && ctx.force !== "re-review" && !ctx.declinedBundles) {
         const lastReview = supersedeBoundary(ctx.previousReviews ?? []);
         const priorHadFindings = !!lastReview && markdownHasFindings(lastReview.body);
         if (!priorHadFindings && (merged.delta_stats?.still_open ?? 0) === 0) {
           ctx.action = "NO_NEW_FINDINGS";
           ctx.skipReason = "Re-review found no new findings (prior review already clean)";
           markHeadChecked(ctx);
-          return 20 /* SKIP */;
+          return 21 /* SKIP */;
         }
       }
       return 19 /* POST_REVIEW */;
@@ -51375,7 +51764,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
         if (sunk && sunk.firstPassSiteRows !== void 0) ctx.firstPassSiteRows = sunk.firstPassSiteRows;
         if (sunk && sunk.firstPassSites) ctx.firstPassSitesLog = sunk.firstPassSites;
         ctx.action = "REVIEW";
-        return 21 /* DONE */;
+        return 22 /* DONE */;
       }
       const judgeNotes = ctx.reviewText.match(/<!--\s*JUDGE_NOTES:([\s\S]*?)-->/);
       if (judgeNotes) {
@@ -51401,7 +51790,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
         console.log("  Review text empty or NO_CHANGE after cleanup \u2014 skipping post");
         ctx.action = "NO_CHANGE";
         ctx.skipReason = "Review text empty or NO_CHANGE after cleanup";
-        return 20 /* SKIP */;
+        return 21 /* SKIP */;
       }
       const judged = ctx.judgeUsage !== void 0;
       const tailOk = judged ? parseVerdictScore(cleaned) !== null : /^#{1,4}\s*Unresolved Questions\b/im.test(cleaned);
@@ -51436,7 +51825,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
       } else {
         if (ctx.force === "off") {
           const freshReviews = await ctx.adapter.getPreviousReviewComments(ctx.prId);
-          const alreadyReviewed = freshReviews.some((r) => {
+          const alreadyReviewed = freshReviews.filter((r) => !isContentFilterNotice(r.body)).some((r) => {
             const footerHash = extractCommitHash(r.body);
             warnOnHashDisagreement(ctx.prId, r.body, footerHash);
             return footerHash === commitShort;
@@ -51447,7 +51836,7 @@ If this PR spans multiple independent themes that could each be a separate, inde
             ctx.skipReason = "Another agent run already reviewed this commit (race condition avoided)";
             ctx.suggestedFixes = void 0;
             markHeadChecked(ctx);
-            return 20 /* SKIP */;
+            return 21 /* SKIP */;
           }
         }
         console.log("Posting review comment...");
@@ -51456,15 +51845,41 @@ If this PR spans multiple independent themes that could each be a separate, inde
         console.log("Done. Review posted to PR.\n");
       }
       ctx.action = ctx.reviewNumber > 1 ? "RE_REVIEW" : "REVIEW";
-      return 21 /* DONE */;
+      return 22 /* DONE */;
     }
-    case 20 /* SKIP */: {
+    case 20 /* POST_FILTER_NOTICE */: {
+      const commitShort = ctx.prInfo.sourceCommit.slice(0, 12);
+      const comment = CONTENT_FILTER_NOTICE + buildReviewFooter(config.agentIdentity, config.anthropic.model, promptLabel(ctx.prompt), ctx.reviewNumber, commitShort, getBuildCommit(), getJobUrl());
+      ctx.action = "SKIP";
+      ctx.skipReason = CONTENT_FILTER_SKIP_REASON;
+      if (ctx.dryRun) {
+        console.log("\n=== DRY RUN \u2014 Content-filter notice (not posted) ===\n");
+        console.log(comment);
+        console.log("\n=== End of notice ===\n");
+        return 21 /* SKIP */;
+      }
+      if (ctx.force === "off") {
+        const fresh = await ctx.adapter.getPreviousReviewComments(ctx.prId);
+        if (fresh.some((r) => extractCommitHash(r.body) === commitShort)) {
+          console.log(`  Commit ${commitShort} already reviewed by another run \u2014 skipping the notice`);
+          ctx.action = "DEDUP_SKIP";
+          ctx.skipReason = "Another agent run already covered this commit (race condition avoided)";
+          markHeadChecked(ctx);
+          return 21 /* SKIP */;
+        }
+      }
+      await ctx.adapter.postComment(ctx.prId, comment);
+      markHeadChecked(ctx);
+      console.log("  Content-filter notice posted.");
+      return 21 /* SKIP */;
+    }
+    case 21 /* SKIP */: {
       console.log(`
 Skipping: ${ctx.skipReason}`);
-      return 21 /* DONE */;
+      return 22 /* DONE */;
     }
     default:
-      return 21 /* DONE */;
+      return 22 /* DONE */;
   }
 }
 async function review(adapter2, prId, dryRun2 = false, promptPath, force = "off", logUsage = false, repoSlug = "", outcomeSink, trigger, checkedCommit) {
@@ -51493,7 +51908,7 @@ Starting review for PR #${prId}`);
   let error = null;
   try {
     let state = 0 /* CHECK_TRIGGER */;
-    while (state !== 21 /* DONE */) {
+    while (state !== 22 /* DONE */) {
       state = ctx.inline ? await ctx.inline.step(state, ctx, { transition, markHeadChecked, narrowTargetMergeDelta }) : await transition(state, ctx);
     }
   } catch (err) {
