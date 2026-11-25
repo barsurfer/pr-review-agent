@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { composeSummary, cleanAndGuard, carryNarrative, rootBody, MAX_OPEN_ROWS, type ComposeInput } from '../compose.js'
+import { composeSummary, cleanAndGuard, carryNarrative, rootBody, stripMergeConfidence, inlineFooter, MAX_OPEN_ROWS, type ComposeInput } from '../compose.js'
 import { COMMENT_BUDGET } from '../../review/suggested-fix.js'
 import { verify } from '../state.js'
 import { SUMMARY_HEADER, parseRootMarker } from '../markers.js'
@@ -175,6 +175,54 @@ describe('carryNarrative', () => {
     expect(carried.match(/^### Findings$/gm)).toHaveLength(2)
     expect(carried).toContain('### Findings\nNo findings.')
     expect(carried).toContain('### Merge Confidence: 90%')
+  })
+})
+
+describe('INLINE_HIDE', () => {
+  const DISCLAIMER = '*"This verdict is opinionated and must be validated by a human reviewer."*'
+  const judged = (): string => `${narrative()}\n\n${DISCLAIMER}`
+
+  it('keeps the disclaimer and drops only the Merge Confidence heading, with no dangling blank run', () => {
+    const out = stripMergeConfidence(judged())
+    expect(out).not.toContain('Merge Confidence')
+    expect(out.endsWith(`### Unresolved Questions\nNone.\n\n---\n\n${DISCLAIMER}`)).toBe(true)
+    expect(stripMergeConfidence('A\n\n### Merge Confidence: 5%')).toBe('A\n\n---')
+  })
+
+  it('leaves the summary byte-identical when nothing is hidden', () => {
+    const input = base({ review: { plain: judged(), findings: [] } })
+    expect(composeSummary({ ...input, hideConfidence: false }).body).toBe(composeSummary(input).body)
+    expect(composeSummary(input).body).toContain('### Merge Confidence: 90%')
+  })
+
+  it('hides the heading in the composed summary only, and the result still verifies and carries', () => {
+    const { body } = composeSummary(base({ review: { plain: judged(), findings: [] }, hideConfidence: true }))
+    expect(body).not.toContain('Merge Confidence')
+    expect(body).toContain(DISCLAIMER)
+    expect(verify(body, AGENT)).toEqual({ n: 1, commits: [C] })
+    const carried = carryNarrative(body)!
+    expect(carried).toContain(DISCLAIMER)
+    expect(carried).not.toContain('Merge Confidence')
+    const again = composeSummary(base({ review: { plain: carried, findings: [] }, hideConfidence: true })).body
+    expect(again).toContain(DISCLAIMER)
+    expect(again.match(/This verdict is opinionated/g)).toHaveLength(1)
+    expect(carryNarrative(again)).toBe(carried)
+  })
+
+  it('still cuts at a row-bearing findings section and keeps the disclaimer after it', () => {
+    const f = { severity: 'HIGH' as const, title: 'Null user', file: 'src/a.ts', lines: '4', body: 'Crashes.' }
+    const plain = `${narrative('- **HIGH – Null user** (`src/a.ts:4`)\n  Crashes.')}\n\n${DISCLAIMER}`
+    const { body } = composeSummary(base({ review: { plain, findings: [f] }, threads: [trow(1, 'Null user', 'HIGH')], hideConfidence: true }))
+    expect(body).not.toContain('Merge Confidence')
+    expect(carryNarrative(body)).toContain(DISCLAIMER)
+  })
+
+  it('drops the model from the footer when it is not given', () => {
+    expect(inlineFooter('bot', 'm', 2, C, 'b1')).toBe(`---\n*Inline review by bot (m) | Review 2 | Commit ${C} | Build b1*`)
+    expect(inlineFooter('bot', undefined, 2, C, 'b1')).toBe(`---\n*Inline review by bot | Review 2 | Commit ${C} | Build b1*`)
+    const { body } = composeSummary(base({ footer: { identity: 'review-bot' } }))
+    expect(body).toContain('*Inline review by review-bot | Review 1')
+    expect(verify(body, AGENT)).toEqual({ n: 1, commits: [C] })
   })
 })
 

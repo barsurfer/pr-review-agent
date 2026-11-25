@@ -6,7 +6,7 @@ const cfg = vi.hoisted(() => ({
   anthropic: { model: 'claude-sonnet-5-5', maxRetries: 1, maxTokens: 64000 },
   reply: { maxComments: 5, maxFindingReplies: 5, model: 'claude-haiku-5-5', skipDirectedElsewhere: false },
   judge: { suggestedFixes: true },
-  review: { inlineReviews: true, inlineLowThreads: false, inlineAgentAccountId: '', todoScan: false },
+  review: { inlineReviews: true, inlineLowThreads: false, inlineAgentAccountId: '', inlineHide: [], todoScan: false },
   diffExcludePatterns: [] as string[],
 }))
 vi.mock('../../config.js', () => ({ config: cfg, modelContextWindow: () => 1_000_000 }))
@@ -80,6 +80,7 @@ beforeEach(() => {
   cfg.review.inlineReviews = true
   cfg.review.inlineLowThreads = false
   cfg.review.inlineAgentAccountId = ''
+  cfg.review.inlineHide = []
   cfg.reply.maxComments = 5
   cfg.judge.suggestedFixes = true
   vi.mocked(runFindingReplies).mockReset()

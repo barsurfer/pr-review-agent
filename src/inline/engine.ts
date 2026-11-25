@@ -1,8 +1,8 @@
-import { config } from '../config.js'
+import { config, type InlineHide } from '../config.js'
 import type { LLMUsage } from '../llm/shared.js'
 import { addUsage } from '../review/bundled.js'
 import { headMatches } from '../review/checked-commit.js'
-import { countFindings, isNoChange } from '../review/formatter.js'
+import { countFindings, isNoChange, hasReviewFooter, hasReplyFooter } from '../review/formatter.js'
 import type { RenderedFinding } from '../review/formatter.js'
 import { normalizeFindingPath, parseLineRange } from '../review/findings-output.js'
 import { countChangedLines, filterDiff } from '../review/parsers.js'
@@ -10,7 +10,7 @@ import { State, type OutcomeSink, type ReviewContext } from '../review/types.js'
 import { estimateAttemptsCost, estimateCost, getBuildCommit } from '../review/usage.js'
 import type { AgentIdentity, MarkedThread, VCSAdapter } from '../vcs/adapter.js'
 import { carryNarrative, cleanAndGuard, composeSummary, fixPart, rootBody, type Guarded } from './compose.js'
-import { resolveIdentity, type IdentityResult } from './identity.js'
+import { resolveIdentity, isTrusted, type IdentityResult } from './identity.js'
 import { codeSince, createDeltaMapper, mapEntries, matches, type DeltaMapper, type Mapped } from './match.js'
 import { planRun, type PlanFinding, type RunPlan } from './plan.js'
 import { buildRegistry, isInlineMarked, type Registry } from './registry.js'
@@ -30,6 +30,14 @@ const isCapable = (a: VCSAdapter): a is Capable =>
   && typeof a.postThreadComment === 'function' && typeof a.editComment === 'function'
 
 const STOPPED: readonly InlineOutcome[] = ['concurrent_run', 'head_moved_skip', 'head_moved_partial', 'head_check_failed', 'identity_mismatch', 'force_invalidate_failed']
+
+// Same footer test as the legacy flow, but only the agent's own author id counts, so a human comment quoting a footer never moves a PR to legacy.
+const hasLegacyFooter = (body: string, ids: readonly string[], authorIds: readonly string[]): boolean =>
+  isTrusted(ids, authorIds) && (hasReviewFooter(body) || hasReplyFooter(body))
+
+const isInlineOrLegacyMarked = (body: string): boolean => isInlineMarked(body) || hasReviewFooter(body) || hasReplyFooter(body)
+
+const hidden = (what: InlineHide): boolean => config.review.inlineHide.includes(what)
 
 const forced = (ctx: ReviewContext): boolean => ctx.force === 'clean' || ctx.force === 're-review'
 
@@ -165,12 +173,20 @@ class Engine implements InlineEngine {
     if (identity.status === 'identity_mismatch') return this.halt(ctx, 'identity_mismatch', identity.reason)
     this.rec.identity = identity.status === 'api' ? 'api' : 'setting'
 
-    const threads = await this.adapter.listMarkedThreads(ctx.prId, isInlineMarked)
+    const listed = await this.adapter.listMarkedThreads(ctx.prId, isInlineOrLegacyMarked)
+    const threads = listed.filter(t => isInlineMarked(t.root.body))
     const reg = buildRegistry(threads, identity)
     this.rec.untrusted_markers = reg.untrusted
     if (reg.status === 'identity_mismatch') return this.halt(ctx, 'identity_mismatch', reg.reason)
 
     const sel = reg.summary
+    // --force clean is an explicit manual override, so it starts a fresh inline review even beside legacy comments.
+    if (ctx.force !== 'clean' && sel.kind === 'none' && reg.entries.length === 0 && listed.some(t => hasLegacyFooter(t.root.body, identity.ids, t.root.authorIds) || t.comments.some(c => hasLegacyFooter(c.body, identity.ids, c.authorIds)))) {
+      console.log('  This PR has legacy agent comments and no inline summary - using the legacy review flow for this run')
+      this.finished = true
+      this.rec = { active: false, reason: 'legacy_pr' }
+      return deps.transition(State.CHECK_PREVIOUS_REVIEWS, ctx)
+    }
     this.rec.summary_check = sel.kind === 'none' ? 'missing' : sel.check
     const valid = sel.kind === 'found' && sel.check === 'valid' && sel.state ? sel : undefined
     const state: SummaryState = valid?.state ?? { n: 0, commits: [] }
@@ -311,7 +327,7 @@ class Engine implements InlineEngine {
 
     const replies = await this.replyPlan(ctx, mapper)
     const notes = await this.codeNotes(mapper, s.reg.entries)
-    const footer = { identity: config.agentIdentity, model: config.anthropic.model, build: this.buildId() }
+    const footer = { identity: config.agentIdentity, model: hidden('model') ? undefined : config.anthropic.model, build: this.buildId() }
     // A thread that landed after an uncertain POST already carries the finding, so its stale summary-only row would list it twice.
     const carried = (src.carriedSummaryOnly ?? []).filter(c => !mapped.some(m => !m.entry.resolved && matches(m, c, 'open')))
     const buildSummary = (roots: RootsResult, state: SummaryState): string => {
@@ -319,7 +335,7 @@ class Engine implements InlineEngine {
       const composed = composeSummary({
         review: { plain: src.plain, findings: src.findings as RenderedFinding[] },
         threads, summaryOnly, resolved, history: s.history, historyText: src.historyText(roots), todoSection: src.todoSection,
-        footer, head12: s.head12, state, agentId: s.identity.agentId,
+        footer, head12: s.head12, state, agentId: s.identity.agentId, hideConfidence: hidden('confidence'),
       })
       this.rec.footer_lines_removed = composed.removed
       this.rec.rows_collapsed = composed.collapsed
@@ -421,7 +437,7 @@ class Engine implements InlineEngine {
     try {
       return await writeInline({
         adapter: this.adapter, prId: ctx.prId, head: s.head, identity: s.identity, dryRun: ctx.dryRun, forced: forced(ctx),
-        summary: s.reg.summary, entries: s.reg.entries, markHeadChecked: () => deps.markHeadChecked(ctx), answerMeta: { model: config.reply.model || config.anthropic.model, build: this.buildId() }, ...parts,
+        summary: s.reg.summary, entries: s.reg.entries, markHeadChecked: () => deps.markHeadChecked(ctx), answerMeta: { model: hidden('model') ? undefined : config.reply.model || config.anthropic.model, build: this.buildId() }, ...parts,
       })
     } catch (err: unknown) {
       if (err instanceof InlineWriteError) {

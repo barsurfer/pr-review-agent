@@ -95,7 +95,7 @@ Opt-in (`SKIP_DIRECTED_REPLIES` / `--skip-directed-replies`, default off, Bitbuc
 ## Reply Limit
 ## Inline replies
 
-With `ENABLE_INLINE_REVIEWS` the legacy reply detection below is not used: the inline engine answers each finding thread on its own (`MAX_FINDING_REPLIES`) and the summary thread under `MAX_REPLY_COMMENTS`. See [inline-engine.md](inline-engine.md).
+With `ENABLE_INLINE_REVIEWS` the legacy reply detection below is not used, except on a PR that already holds the agent's own legacy comments and no inline summary, where the run is handed back to the legacy flow (see [inline-engine.md](inline-engine.md)); otherwise the inline engine answers each finding thread on its own (`MAX_FINDING_REPLIES`) and the summary thread under `MAX_REPLY_COMMENTS`. See [inline-engine.md](inline-engine.md).
 
 
 See [review/skip-logic.md#5-reply-limit](skip-logic.md#5-reply-limit) for what each limit check ends with.

@@ -11,7 +11,7 @@ const cfg = vi.hoisted(() => ({
   lenses: { enabled: false, list: 'rel', model: '', recommend: false },
   reply: { maxComments: 5, maxFindingReplies: 5, model: 'claude-haiku-5-5', skipDirectedElsewhere: false },
   review: {
-    inlineReviews: true, inlineLowThreads: false, inlineAgentAccountId: '',
+    inlineReviews: true, inlineLowThreads: false, inlineAgentAccountId: '', inlineHide: [] as string[],
     maxFindings: 0, splitCheck: false, todoScan: false, effort: '', enableNitpicks: false, secondLook: false, lineNumbers: false, promptCache: false,
     targetMergeCheck: false, bundledReview: false, maxBundles: 8, cachedPassEffort: '',
   },
@@ -33,7 +33,7 @@ const completeStructured = vi.fn()
 vi.mock('../../llm/provider.js', () => ({ createProvider: vi.fn(() => ({ complete: vi.fn(), completeStructured })) }))
 
 import { review } from '../../review/index.js'
-import { runReview } from '../../review/client.js'
+import { runReview, runJudge } from '../../review/client.js'
 import { loadPrompt } from '../../prompt/loader.js'
 import { fetchContext } from '../../context/fetcher.js'
 import { renderReview, hasReviewFooter, type ReviewObject } from '../../review/formatter.js'
@@ -99,8 +99,9 @@ beforeEach(() => {
   fake.hooks.diff = DIFF
   fake.hooks.files = FILES
   fake.hooks.commitDiff = () => DELTA
-  Object.assign(cfg.review, { inlineReviews: true, inlineLowThreads: false, inlineAgentAccountId: '', promptCache: false, secondLook: false, bundledReview: false, effort: '', todoScan: false })
+  Object.assign(cfg.review, { inlineReviews: true, inlineLowThreads: false, inlineAgentAccountId: '', inlineHide: [], promptCache: false, secondLook: false, bundledReview: false, effort: '', todoScan: false })
   Object.assign(cfg.reply, { maxComments: 5, maxFindingReplies: 5 })
+  cfg.judge.model = ''
   vi.mocked(loadPrompt).mockResolvedValue({ content: 'System prompt here', source: 'repo' } as never)
   vi.mocked(fetchContext).mockResolvedValue([])
   reviewerFinds([])
@@ -554,22 +555,286 @@ describe('flag on versus off', () => {
     expect(fake.counts.edit).toBe(edits)
   })
 
-  it('flag on beside a legacy review comment neither edits it nor treats it as the summary', async () => {
-    const legacy = fake.add({
-      body: '### Summary\nOld review.\n\n*Reviewed by review-bot (claude-sonnet-5-5) | Prompt: repo | Review #1 | Commit: abcdef123456*',
-      authorIds: [ME],
-    })
-    const legacyBody = fake.comments.find(c => c.id === legacy)!.body
-    fake.raw.getPreviousReviewComments.mockImplementation(async () => [{ id: String(legacy), body: legacyBody, createdOn: '', resolved: false }] as never)
+})
+
+describe('flow choice per PR', () => {
+  const LEGACY_REVIEW = '### Summary\nOld review.\n\n*Reviewed by review-bot (claude-sonnet-5-5) | Prompt: repo | Review #1 | Commit: abcdef123456*'
+  const LEGACY_REPLY = 'Because.\n\n*Reply by review-bot (claude-haiku-5-5)*'
+  const LEGACY_NOTE = 'Reply limit of 5 reached for this review. New questions will be answered under the next review.\n\n*Reply by review-bot (claude-haiku-5-5)*'
+
+  const listLegacyReviews = (): void => {
+    fake.raw.getPreviousReviewComments.mockImplementation(async () =>
+      fake.comments.filter(c => hasReviewFooter(c.body)).map(c => ({ id: String(c.id), body: c.body, createdOn: '', resolved: false })) as never)
+  }
+  const inlineWrites = (): string[] => fake.calls.filter(c => ['root', 'summary', 'reply', 'edit'].includes(c))
+  const scrub = (record: unknown): Record<string, unknown> => {
+    const copy = JSON.parse(JSON.stringify(record)) as Record<string, unknown>
+    delete copy.inline
+    for (const k of Object.keys(copy)) if (/duration|elapsed|timestamp|_ms$|_at$/.test(k)) delete copy[k]
+    return copy
+  }
+
+  it('row 1: flag off with a legacy review runs the legacy flow and writes no inline key', async () => {
+    cfg.review.inlineReviews = false
+    fake.add({ body: LEGACY_REVIEW, authorIds: [ME] })
+    listLegacyReviews()
     reviewerFinds([POOL])
     const record = await run()
-    expect(fake.comments.find(c => c.id === legacy)!.body).toBe(legacyBody)
-    expect(fake.editBodies).toHaveLength(1)
+    expect('inline' in record!).toBe(false)
+    expect(fake.raw.postComment).toHaveBeenCalledTimes(1)
+    expect(inlineWrites()).toEqual([])
+  })
+
+  // The legacy review gets the lowest id and the agent's author only after the first inline run, as on a PR that had a legacy review first.
+  const legacyFirstThenInline = async (): Promise<{ legacy: number; summaryId: number }> => {
+    const legacy = fake.add({ body: LEGACY_REVIEW, authorIds: ['dev'] })
+    reviewerFinds([POOL])
+    await run()
+    fake.comments.find(c => c.id === legacy)!.authorIds = [ME]
+    listLegacyReviews()
+    fake.raw.getPreviousReviewComments.mockClear()
+    return { legacy, summaryId: summaries()[0].id }
+  }
+
+  it('row 2: a legacy review followed by an inline summary stays on inline and never edits the legacy comment', async () => {
+    const { legacy, summaryId } = await legacyFirstThenInline()
+    expect(legacy).toBeLessThan(summaryId)
+    push(HEAD_B)
+    reviewerFinds([POOL, NULLS])
+    const record = await run()
+    expect(record!.inline).toMatchObject({ active: true, outcome: 'written', summary_check: 'valid' })
+    expect(fake.raw.getPreviousReviewComments).not.toHaveBeenCalled()
+    expect(fake.raw.postComment).not.toHaveBeenCalled()
     expect(summaries()).toHaveLength(1)
-    expect(summaries()[0].id).not.toBe(legacy)
-    expect(record!.review_number).toBe(1)
-    expect(record!.inline!.summary_check).toBe('missing')
-    expect(roots()).toHaveLength(1)
+    expect(summaries()[0].id).toBe(summaryId)
+    expect(verify(summaries()[0].body, ME)).toEqual({ n: 2, commits: [HEAD12, B12] })
+    expect(idsOf()).toEqual(['F1', 'F2'])
+    expect(fake.comments.find(c => c.id === legacy)!.body).toBe(LEGACY_REVIEW)
+    expect(fake.editBodies.every(b => b.startsWith(SUMMARY_HEADER))).toBe(true)
+  })
+
+  it('finding threads without a summary, beside a legacy review, stay on inline', async () => {
+    await legacyFirstThenInline()
+    fake.comments.splice(fake.comments.findIndex(c => c.id === summaries()[0].id), 1)
+    push(HEAD_B)
+    const record = await run()
+    expect(record!.inline).toMatchObject({ active: true, summary_check: 'missing' })
+    expect(fake.raw.getPreviousReviewComments).not.toHaveBeenCalled()
+    expect(fake.raw.postComment).not.toHaveBeenCalled()
+    expect(summaries()).toHaveLength(1)
+  })
+
+  it('a tampered summary by the agent, beside a legacy review, stays on inline', async () => {
+    await legacyFirstThenInline()
+    summaries()[0].body += '\nedited by hand'
+    push(HEAD_B)
+    const record = await run()
+    expect(record!.inline).toMatchObject({ active: true, summary_check: 'tampered' })
+    expect(fake.raw.getPreviousReviewComments).not.toHaveBeenCalled()
+    expect(fake.raw.postComment).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['a legacy review', LEGACY_REVIEW],
+    ['a legacy reply', LEGACY_REPLY],
+    ['a legacy limit note', LEGACY_NOTE],
+  ])('row 3: %s and no inline summary runs the legacy flow for this run', async (_name, body) => {
+    fake.add({ body, authorIds: [ME] })
+    listLegacyReviews()
+    reviewerFinds([POOL])
+    const record = await run()
+    expect(record!.inline).toEqual({ active: false, reason: 'legacy_pr' })
+    expect(inlineWrites()).toEqual([])
+    expect(fake.raw.postInlineComment).not.toHaveBeenCalled()
+    expect(fake.raw.postTopLevelComment).not.toHaveBeenCalled()
+    expect(fake.raw.postThreadComment).not.toHaveBeenCalled()
+    expect(fake.raw.editComment).not.toHaveBeenCalled()
+  })
+
+  it('--force clean skips the hand-back and starts a fresh inline review, --force re-review keeps it, and the legacy comment is never edited', async () => {
+    const legacy = fake.add({ body: LEGACY_REVIEW, authorIds: [ME] })
+    listLegacyReviews()
+    reviewerFinds([POOL])
+    const kept = await run('re-review')
+    expect(kept!.inline).toEqual({ active: false, reason: 'legacy_pr' })
+    expect(inlineWrites()).toEqual([])
+    const fresh = await run('clean')
+    expect(fresh!.inline).toMatchObject({ active: true, outcome: 'written', summary_check: 'missing' })
+    expect(summaries()).toHaveLength(1)
+    expect(idsOf()).toEqual(['F1'])
+    expect(fake.comments.find(c => c.id === legacy)!.body).toBe(LEGACY_REVIEW)
+    expect(fake.raw.editComment).not.toHaveBeenCalledWith('7', String(legacy), expect.anything())
+  })
+
+  it('row 3 gives exactly the flag-off result, minus the inline key', async () => {
+    const setup = (): void => {
+      fake = makeFake()
+      fake.hooks.diff = DIFF
+      fake.hooks.files = FILES
+      fake.hooks.commitDiff = () => DELTA
+      fake.add({ body: LEGACY_REVIEW, authorIds: [ME] })
+      listLegacyReviews()
+      reviewerFinds([POOL, NULLS])
+    }
+    setup()
+    const on = await run()
+    const onPosts = fake.raw.postComment.mock.calls.map(c => c.slice(1))
+    expect(on!.inline).toEqual({ active: false, reason: 'legacy_pr' })
+    expect(onPosts).toHaveLength(1)
+
+    cfg.review.inlineReviews = false
+    setup()
+    const off = await run()
+    expect('inline' in off!).toBe(false)
+    expect(fake.raw.postComment.mock.calls.map(c => c.slice(1))).toEqual(onPosts)
+    expect(scrub(on)).toEqual(scrub(off))
+  })
+
+  it('row 3 leaves the legacy flow in charge on later runs of the same PR', async () => {
+    fake.add({ body: LEGACY_REVIEW, authorIds: [ME] })
+    listLegacyReviews()
+    reviewerFinds([POOL])
+    await run()
+    expect(fake.raw.postComment).toHaveBeenCalledTimes(1)
+    fake.comments.push({ id: 99, body: fake.raw.postComment.mock.calls[0][1] as string, authorIds: [ME] })
+    push(HEAD_B)
+    const record = await run()
+    expect(record!.inline).toEqual({ active: false, reason: 'legacy_pr' })
+    expect(inlineWrites()).toEqual([])
+  })
+
+  it('a human comment or another author carrying a legacy footer never moves a PR to legacy', async () => {
+    fake.add({ body: LEGACY_REVIEW, authorIds: ['dev'] })
+    fake.add({ body: LEGACY_REPLY, authorIds: ['someone-else'] })
+    listLegacyReviews()
+    reviewerFinds([POOL])
+    const record = await run()
+    expect(record!.inline).toMatchObject({ active: true, outcome: 'written', summary_check: 'missing' })
+    expect(fake.raw.getPreviousReviewComments).not.toHaveBeenCalled()
+    expect(fake.raw.postComment).not.toHaveBeenCalled()
+    expect(idsOf()).toEqual(['F1'])
+    expect(summaries()).toHaveLength(1)
+  })
+
+  it('row 4: a PR with nothing from the agent gets a first inline review', async () => {
+    fake.add({ body: 'Looks good to me', authorIds: ['dev'] })
+    reviewerFinds([POOL])
+    const record = await run()
+    expect(record!.inline).toMatchObject({ active: true, outcome: 'written' })
+    expect(summaries()).toHaveLength(1)
+    expect(idsOf()).toEqual(['F1'])
+    expect(fake.raw.postComment).not.toHaveBeenCalled()
+  })
+
+})
+
+describe('INLINE_HIDE', () => {
+  const MODEL = 'claude-sonnet-5-5'
+  const DISCLAIMER = '*"This verdict is opinionated and must be validated by a human reviewer."*'
+  const judgedText = (): string => `${renderReview(object([POOL]))}\n\n### Merge Confidence: 80%\n\n${DISCLAIMER}`
+  const judged = (): void => {
+    cfg.judge.model = 'claude-haiku-5-5'
+    mockRunReview.mockImplementation(async () => answerWith([POOL]))
+    vi.mocked(runJudge).mockResolvedValue({ text: judgedText(), usage, notes: '', scores: [], promptHash: 'h', decisions: [], kept: [POOL] } as never)
+  }
+  const footerOf = (body: string): string => body.split('\n').find(l => l.startsWith('*Inline review by'))!
+
+  it('neither value: the model and Merge Confidence appear as before', async () => {
+    judged()
+    await run()
+    expect(footerOf(summaries()[0].body)).toContain(`(${MODEL})`)
+    expect(summaries()[0].body).toContain('### Merge Confidence: 80%')
+    expect(parseRootMarker(roots()[0].body)).toMatchObject({ model: MODEL, build: expect.any(String) })
+  })
+
+  it('model: the footer and the markers drop the model, keep the build, and read back', async () => {
+    cfg.review.inlineHide = ['model']
+    judged()
+    await run()
+    expect(footerOf(summaries()[0].body)).not.toContain(MODEL)
+    expect(footerOf(summaries()[0].body)).toMatch(/^\*Inline review by review-bot \| Review 1 \| Commit [0-9a-f]{12}/)
+    expect(summaries()[0].body).toContain('### Merge Confidence: 80%')
+    const marker = parseRootMarker(roots()[0].body)!
+    expect(marker.model).toBeUndefined()
+    expect(marker.build).toEqual(expect.any(String))
+    expect(roots()[0].body).not.toContain(MODEL)
+
+    const q = ask(roots()[0].id)
+    answerTo('F1', q)
+    push(HEAD_B)
+    fake.hooks.commitDiff = () => ''
+    await run()
+    const answer = agentReplies(roots()[0].id)[0]
+    expect(parseAnswerMarker(answer.body)).toMatchObject({ target: 'F1', through: String(q), build: expect.any(String) })
+    expect(parseAnswerMarker(answer.body)!.model).toBeUndefined()
+    expect(answer.body).not.toContain('claude-haiku-5-5')
+  })
+
+  it('confidence: the heading goes, the disclaimer stays, the score is still recorded', async () => {
+    cfg.review.inlineHide = ['confidence']
+    judged()
+    const record = await run()
+    const body = summaries()[0].body
+    expect(body).not.toContain('Merge Confidence')
+    expect(body).toContain(`---\n\n${DISCLAIMER}`)
+    expect(footerOf(body)).toContain(`(${MODEL})`)
+    expect(record!.verdict_score).toBe(80)
+    expect(verify(body, ME)).toEqual({ n: 1, commits: [HEAD12] })
+  })
+
+  it('both together', async () => {
+    cfg.review.inlineHide = ['model', 'confidence']
+    judged()
+    await run()
+    const body = summaries()[0].body
+    expect(body).not.toContain('Merge Confidence')
+    expect(body).toContain(DISCLAIMER)
+    expect(footerOf(body)).not.toContain(MODEL)
+  })
+
+  it('a summary hidden once is read back as valid, carried on a no-change run and not duplicated', async () => {
+    cfg.review.inlineHide = ['confidence']
+    judged()
+    await run()
+    const summaryId = summaries()[0].id
+    push(HEAD_B)
+    fake.hooks.commitDiff = () => ''
+    mockRunReview.mockClear()
+    const record = await run()
+    expect(record!.inline).toMatchObject({ active: true, summary_check: 'valid', outcome: 'written' })
+    expect(mockRunReview).not.toHaveBeenCalled()
+    expect(summaries()).toHaveLength(1)
+    expect(summaries()[0].id).toBe(summaryId)
+    expect(summaries()[0].body).toContain(DISCLAIMER)
+    expect(summaries()[0].body).not.toContain('Merge Confidence')
+    expect(verify(summaries()[0].body, ME)).toEqual({ n: 2, commits: [HEAD12, B12] })
+  })
+
+  it('a summary written without INLINE_HIDE is edited in place, not duplicated, once the setting is on', async () => {
+    judged()
+    await run()
+    const summaryId = summaries()[0].id
+    expect(summaries()[0].body).toContain('### Merge Confidence: 80%')
+    cfg.review.inlineHide = ['model', 'confidence']
+    push(HEAD_B)
+    fake.hooks.commitDiff = () => ''
+    await run()
+    expect(summaries()).toHaveLength(1)
+    expect(summaries()[0].id).toBe(summaryId)
+    expect(summaries()[0].body).not.toContain('Merge Confidence')
+    expect(summaries()[0].body).toContain(DISCLAIMER)
+    expect(footerOf(summaries()[0].body)).not.toContain(MODEL)
+    expect(verify(summaries()[0].body, ME)).toEqual({ n: 2, commits: [HEAD12, B12] })
+  })
+
+  it('does not touch the legacy review: the legacy flow keeps its Merge Confidence and footer', async () => {
+    cfg.review.inlineHide = ['model', 'confidence']
+    cfg.review.inlineReviews = false
+    judged()
+    await run()
+    const posted = fake.raw.postComment.mock.calls[0][1] as string
+    expect(posted).toContain('### Merge Confidence: 80%')
+    expect(posted).toContain(`(${MODEL})`)
   })
 })
 

@@ -89,11 +89,23 @@ describe('marker suffix', () => {
     expect(parseAnswerMarker('*Answer on F7 | through 12*')).toEqual({ target: 'F7', through: '12' })
   })
 
-  it('omits the build when there is none, and the whole suffix without a model', () => {
+  it('omits the build when there is none, and the whole suffix with neither', () => {
     expect(buildRootMarker('F1', C, { model: 'm' })).toBe(`*Finding F1 | opened at ${C} | m*`)
     expect(parseRootMarker(buildRootMarker('F1', C, { model: 'm' }))).toEqual({ id: 'F1', openedAt: C, model: 'm' })
-    expect(buildRootMarker('F1', C, { build: 'b' })).toBe(`*Finding F1 | opened at ${C}*`)
+    expect(buildRootMarker('F1', C, {})).toBe(`*Finding F1 | opened at ${C}*`)
     expect(buildAnswerMarker('F1', '3', { model: '  ' })).toBe('*Answer on F1 | through 3*')
+  })
+
+  it('writes the build alone when the model is hidden and round-trips all three forms', () => {
+    const root = buildRootMarker('F1', C, { build: 'abc1234' })
+    expect(root).toBe(`*Finding F1 | opened at ${C} | Build abc1234*`)
+    expect(parseRootMarker(root)).toEqual({ id: 'F1', openedAt: C, build: 'abc1234' })
+    const answer = buildAnswerMarker('F1', '3', { model: '', build: 'abc1234' })
+    expect(answer).toBe('*Answer on F1 | through 3 | Build abc1234*')
+    expect(parseAnswerMarker(answer)).toEqual({ target: 'F1', through: '3', build: 'abc1234' })
+    expect(parseRootMarker(`*Finding F1 | opened at ${C} | m | Build b*`)).toEqual({ id: 'F1', openedAt: C, model: 'm', build: 'b' })
+    expect(parseRootMarker(`*Finding F1 | opened at ${C}*`)).toEqual({ id: 'F1', openedAt: C })
+    expect(parseAnswerMarker('*Answer on F1 | through 3*')).toEqual({ target: 'F1', through: '3' })
   })
 
   it('strips *, |, line breaks and control characters from the model and build so a marker cannot be forged or split', () => {
