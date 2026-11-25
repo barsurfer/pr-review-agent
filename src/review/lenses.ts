@@ -181,7 +181,10 @@ export function resolvePlacements(settings: { list: string; sections?: string })
     const canonical = names.filter(n => n !== 'none').map(n => (Object.hasOwn(LENS_ALIASES, n) ? LENS_ALIASES[n] : n))
     const unknown = canonical.filter(n => !Object.hasOwn(LENS_REGISTRY, n))
     if (unknown.length) warnings.push(`LENS_SECTIONS: ignoring unknown lens name(s) ${unknown.join(', ')}`)
-    named = none ? new Set() : new Set(canonical.filter(n => Object.hasOwn(LENS_REGISTRY, n)))
+    const known = canonical.filter(n => Object.hasOwn(LENS_REGISTRY, n))
+    // A value of only typos must not silently push every lens, slop included, into Findings.
+    if (!none && known.length === 0) warnings.push('LENS_SECTIONS has no known lens name - using each lens default placement')
+    else named = none ? new Set() : new Set(known)
   }
   for (const l of lenses) placements.set(l.name, named ? (named.has(l.name) ? 'section' : 'findings') : l.defaultPlacement)
   if (placements.get('slop') === 'findings') warnings.push('Lens slop is placed in Findings: the main judge files its content as minor or style-only, so almost nothing will post')

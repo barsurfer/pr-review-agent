@@ -42,6 +42,12 @@ describe('placement', () => {
     expect(warnings.join('\n')).toContain('ignoring unknown lens name(s) bogus')
   })
 
+  it('only unknown names keep each lens default placement instead of moving all to Findings', () => {
+    const { placements, warnings } = resolvePlacements({ list: 'rel,slop', sections: 'slpo,bogus' })
+    expect([...placements]).toEqual([['reliability', 'findings'], ['slop', 'section']])
+    expect(warnings.join('\n')).toContain('no known lens name - using each lens default placement')
+  })
+
   it('none mixed with names counts as none and warns', () => {
     const { placements, warnings } = resolvePlacements({ list: 'rel', sections: 'none,rel' })
     expect(placements.get('reliability')).toBe('findings')
