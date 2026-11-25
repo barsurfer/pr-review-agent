@@ -29,6 +29,8 @@ Decided in the engine's load step, from the comment list it already fetched (the
 3. Flag on, no inline artifacts, and at least one comment by the agent's own ids carrying the legacy review footer or reply footer (a reply or the reply-limit note): the engine hands control back before touching `ctx`, and the run is a plain legacy run with the legacy output and usage record; only `inline` differs: `{ active: false, reason: "legacy_pr" }`. The PR stays legacy until it holds an inline summary, which only a flag-on run with no legacy comments can create.
 4. Flag on and nothing from the agent: first inline review.
 
+The choice needs the agent's identity: with the flag on and no identity (`GET /2.0/user` fails and `AGENT_ACCOUNT_ID` is unset), the run stops as `identity_unavailable` before the check, so a legacy-only PR gets no review either. Falling back to legacy without an identity would let any comment carrying a footer decide the flow.
+
 The check reads legacy footers (the listing predicate also matches them) and the footer test is the legacy flow's own (`hasReviewFooter`, `hasReplyFooter`) plus the author-id trust the engine uses everywhere, so a human comment or another author carrying a footer never moves a PR to legacy. Limits: only roots matching a footer or marker, and the comments under them, are visible to the check; a legacy reply under an unmarked human root is not seen.
 
 ## Output
