@@ -107,7 +107,7 @@ Both inbound edges to `RESPOND_TO_REPLIES` (`CHECK_REPLIES` and this `JUDGE_REVI
 ## POST_REVIEW Safety Guards
 ## Inline engine seam
 
-With `ENABLE_INLINE_REVIEWS` on (Bitbucket, not a benchmark run), `review()` calls `ctx.inline.step` instead of `transition`. It intercepts `CHECK_PREVIOUS_REVIEWS`, `CHECK_NO_CHANGE`, `JUDGE_REVIEW` (wrapped only), `CHECK_REPLIES`, `RESPOND_TO_REPLIES`, `POST_REPLY_LIMIT_NOTE`, `POST_REVIEW` and `SKIP`; every other state runs the legacy transition. Flag off: no engine, identical flow. See [inline-engine.md](inline-engine.md).
+With `ENABLE_INLINE_REVIEWS` on (Bitbucket, not a benchmark run), `review()` calls `ctx.inline.step` instead of `transition`. It intercepts `CHECK_PREVIOUS_REVIEWS`, `CHECK_NO_CHANGE`, `JUDGE_REVIEW` (wrapped only), `CHECK_REPLIES`, `RESPOND_TO_REPLIES`, `POST_REPLY_LIMIT_NOTE`, `POST_REVIEW` and `SKIP`; every other state runs the legacy transition. At `CHECK_PREVIOUS_REVIEWS` it hands the whole run back to the legacy flow when the PR holds the agent's own legacy review/reply/limit-note and no inline summary or finding thread (record `inline: { active: false, reason: "legacy_pr" }`). Flag off: no engine, identical flow. See [inline-engine.md](inline-engine.md).
 
 
 Three guards run before every post (guard 3 only when `--force` is off; all skipped in benchmark/outcome-sink mode):

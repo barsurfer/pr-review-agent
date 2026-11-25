@@ -11,7 +11,7 @@ const cfg = vi.hoisted(() => ({
   lenses: { enabled: false, list: 'rel', model: '', recommend: false },
   reply: { maxComments: 5, maxFindingReplies: 5, model: 'claude-haiku-5-5', skipDirectedElsewhere: false },
   review: {
-    inlineReviews: true, inlineLowThreads: false, inlineAgentAccountId: '',
+    inlineReviews: true, inlineLowThreads: false, inlineAgentAccountId: '', inlineHide: [],
     maxFindings: 0, splitCheck: false, todoScan: false, effort: '', enableNitpicks: false, secondLook: false, lineNumbers: false, promptCache: false,
     targetMergeCheck: false, bundledReview: false, maxBundles: 8, cachedPassEffort: '',
   },
@@ -82,7 +82,7 @@ beforeEach(async () => {
   fake.hooks.diff = DIFF
   fake.hooks.files = FILES
   fake.hooks.commitDiff = () => DELTA
-  Object.assign(cfg.review, { inlineReviews: true, inlineLowThreads: false, promptCache: false, secondLook: false, bundledReview: false, effort: '' })
+  Object.assign(cfg.review, { inlineReviews: true, inlineLowThreads: false, inlineHide: [], promptCache: false, secondLook: false, bundledReview: false, effort: '' })
   Object.assign(cfg.lenses, { enabled: false, recommend: false })
   Object.assign(cfg.breadth, { enabled: false })
   cfg.judge.model = ''

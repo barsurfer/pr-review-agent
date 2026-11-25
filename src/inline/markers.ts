@@ -6,8 +6,8 @@ export const LEGACY_HEADER_LINE = '### Review summary'
 export const LEGACY_HEADER_TAG = '*inline-summary v1 | maintained by the review agent*'
 
 const ID = 'F[1-9][0-9]{0,5}'
-// The optional suffix is `| <model>` plus `| Build <build>`; suffix-less markers from 0.0.63/0.0.64 still match.
-const SUFFIX = String.raw`(?: \| ([^*|]+?)(?: \| Build ([^*|]+))?)?`
+// The optional suffix is `| <model>` plus `| Build <build>`, or the build alone when the model is hidden; suffix-less markers from 0.0.63/0.0.64 still match.
+const SUFFIX = String.raw`(?: \| (?:Build ([^*|]+)|([^*|]+?)(?: \| Build ([^*|]+))?))?`
 export const ROOT_RE = new RegExp(String.raw`^\*Finding (${ID}) \| opened at ([0-9a-f]{12})${SUFFIX}\*$`)
 export const ANSWER_RE = new RegExp(String.raw`^\*Answer on (${ID}|summary) \| through ([A-Za-z0-9:_-]{1,64})${SUFFIX}\*$`)
 export const NOTE_RE = new RegExp(String.raw`^\*Replies paused on (${ID}|summary)\*$`)
@@ -20,9 +20,14 @@ const cleanMeta = (v: string | undefined): string => (v ?? '').replace(/[*|\x00-
 
 function suffixOf(meta?: MarkerMeta): string {
   const model = cleanMeta(meta?.model)
-  if (!model) return ''
   const build = cleanMeta(meta?.build)
+  if (!model) return build ? ` | Build ${build}` : ''
   return ` | ${model}${build ? ` | Build ${build}` : ''}`
+}
+
+const metaOf = (m: RegExpExecArray, at: number): { model?: string; build?: string } => {
+  const build = m[at] ?? m[at + 2]
+  return { ...(m[at + 1] ? { model: m[at + 1] } : {}), ...(build ? { build } : {}) }
 }
 
 export const buildRootMarker = (id: string, c12: string, meta?: MarkerMeta): string => `*Finding ${id} | opened at ${c12}${suffixOf(meta)}*`
@@ -39,12 +44,12 @@ export function lastNonEmptyLine(body: string): string {
 
 export function parseRootMarker(body: string): { id: string; openedAt: string; model?: string; build?: string } | null {
   const m = ROOT_RE.exec(lastNonEmptyLine(body))
-  return m ? { id: m[1], openedAt: m[2], ...(m[3] ? { model: m[3] } : {}), ...(m[4] ? { build: m[4] } : {}) } : null
+  return m ? { id: m[1], openedAt: m[2], ...metaOf(m, 3) } : null
 }
 
 export function parseAnswerMarker(body: string): { target: string; through: string; model?: string; build?: string } | null {
   const m = ANSWER_RE.exec(lastNonEmptyLine(body))
-  return m ? { target: m[1], through: m[2], ...(m[3] ? { model: m[3] } : {}), ...(m[4] ? { build: m[4] } : {}) } : null
+  return m ? { target: m[1], through: m[2], ...metaOf(m, 3) } : null
 }
 
 export function parseNoteMarker(body: string): { target: string } | null {

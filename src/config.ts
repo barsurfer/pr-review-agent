@@ -21,6 +21,25 @@ function cachedPassEffort(): string {
   return value
 }
 
+const INLINE_HIDE_VALUES = ['model', 'confidence'] as const
+export type InlineHide = typeof INLINE_HIDE_VALUES[number]
+
+// CI passes unset parameters as empty strings, so empty must mean the default, and a typo must not silently turn the feature off.
+function trueUnlessFalse(name: string): boolean {
+  const value = optional(name, '').trim()
+  if (value === '' || value === 'true') return true
+  if (value === 'false') return false
+  console.warn(`${name}=${value} is not true or false - using the default (true)`)
+  return true
+}
+
+function parseInlineHide(value: string): InlineHide[] {
+  const wanted = [...new Set(value.split(',').map(p => p.trim().toLowerCase()).filter(Boolean))]
+  const unknown = wanted.filter(v => !(INLINE_HIDE_VALUES as readonly string[]).includes(v))
+  if (unknown.length) console.warn(`INLINE_HIDE: ignoring unknown value(s) ${unknown.join(', ')} (known: ${INLINE_HIDE_VALUES.join(', ')})`)
+  return wanted.filter((v): v is InlineHide => !unknown.includes(v))
+}
+
 // CI passes unset parameters as empty strings, and parseInt('') is NaN, which would silently disable a threshold compared against it.
 function finiteOr(value: number, fallback: number): number {
   return Number.isFinite(value) ? value : fallback
@@ -194,9 +213,10 @@ export const config = {
     // Off by default: findings become inline threads plus one signed summary (Bitbucket only) instead of the legacy review comment.
     inlineReviews: optional('ENABLE_INLINE_REVIEWS', 'false') === 'true',
     // Off by default: LOW findings also get inline threads instead of summary-only rows.
-    inlineLowThreads: optional('ENABLE_INLINE_LOW_THREADS', 'false') === 'true',
+    inlineLowThreads: trueUnlessFalse('ENABLE_INLINE_LOW_THREADS'),
     // Overrides the adapter's identity lookup; empty = use the lookup.
     inlineAgentAccountId: optional('AGENT_ACCOUNT_ID', '').trim(),
+    inlineHide: parseInlineHide(optional('INLINE_HIDE', '')),
     maxFindings: parseInt(optional('MAX_FINDINGS', '0'), 10),   // 0 = unlimited
     splitCheck: optional('ENABLE_SPLIT_CHECK', 'true') !== 'false',
     todoScan: optional('ENABLE_TODO_SCAN', 'true') !== 'false',

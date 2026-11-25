@@ -435,7 +435,7 @@ describe('v0.0.61 identity at the real config.ts defaults', () => {
     for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k]
     Object.assign(process.env, saved)
     expect(real.review.inlineReviews).toBe(false)
-    expect(real.review.inlineLowThreads).toBe(false)
+    expect(real.review.inlineLowThreads).toBe(true)
     expect(real.review.inlineAgentAccountId).toBe('')
     expect(real.reply.maxFindingReplies).toBe(5)
 

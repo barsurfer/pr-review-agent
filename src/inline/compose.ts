@@ -57,8 +57,21 @@ export function fixPart(f: { body: string; proposal?: string; bodyWithoutFix?: s
   return fence.length > MAX_FENCE ? undefined : { block: renderFixBlock(code, fence), body }
 }
 
-export const inlineFooter = (identity: string, model: string, n: number, c12: string, build?: string): string =>
-  `---\n*Inline review by ${identity} (${model}) | Review ${n} | Commit ${c12}${build ? ` | Build ${build}` : ''}*`
+export const inlineFooter = (identity: string, model: string | undefined, n: number, c12: string, build?: string): string =>
+  `---\n*Inline review by ${identity}${model ? ` (${model})` : ''} | Review ${n} | Commit ${c12}${build ? ` | Build ${build}` : ''}*`
+
+const CONFIDENCE_LINE = /^#{1,4}\s*Merge Confidence:\s*\d+%\s*$/
+
+// Composed text only, so the judged text keeps the score the truncation guard and the usage record read; a rule replaces the heading so the disclaimer stays a standalone notice.
+export function stripMergeConfidence(plain: string): string {
+  const lines = plain.split('\n')
+  const out: string[] = []
+  for (let i = 0; i < lines.length; i++) {
+    if (!CONFIDENCE_LINE.test(lines[i].trimEnd())) { out.push(lines[i]); continue }
+    out.push('---')
+  }
+  return out.join('\n').trimEnd()
+}
 
 // Model text must not forge rows, the header or any marker, because rows and markers are read back as state.
 function sanitizeNarrative(text: string): { text: string; removed: number } {
@@ -136,10 +149,11 @@ export interface ComposeInput {
   history: readonly string[]
   historyText: string
   todoSection: string
-  footer: { identity: string; model: string; build?: string }
+  footer: { identity: string; model?: string; build?: string }
   head12: string
   state: SummaryState
   agentId: string
+  hideConfidence?: boolean
 }
 
 export interface ComposedSummary { body: string; removed: number; collapsed: number }
@@ -167,6 +181,7 @@ export function composeSummary(input: ComposeInput): ComposedSummary {
   const pre = sanitizeNarrative(split.pre)
   pre.text = pre.text.replace(/^\s*### Summary[ \t]*(?:\n|$)/, '').trim()
   const post = sanitizeNarrative(split.post)
+  if (input.hideConfidence) post.text = stripMergeConfidence(post.text)
   const todoText = input.todoSection ? sanitizeNarrative(input.todoSection).text : ''
   const removed = pre.removed + post.removed
 

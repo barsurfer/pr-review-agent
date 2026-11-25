@@ -49,7 +49,7 @@ export type InlineOutcome =
 
 export interface InlineRecord {
   active: boolean
-  reason?: 'unsupported_vcs' | 'benchmark'
+  reason?: 'unsupported_vcs' | 'benchmark' | 'legacy_pr'
   completed?: boolean
   outcome?: InlineOutcome
   identity?: 'api' | 'setting' | 'unavailable'

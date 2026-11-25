@@ -346,15 +346,39 @@ describe('inline review settings', () => {
     for (const k of ['ENABLE_INLINE_REVIEWS', 'ENABLE_INLINE_LOW_THREADS', 'AGENT_ACCOUNT_ID', 'MAX_FINDING_REPLIES']) vi.stubEnv(k, undefined)
     vi.resetModules()
     const c = (await import('../config.js')).config
-    expect(c.review).toMatchObject({ inlineReviews: false, inlineLowThreads: false, inlineAgentAccountId: '' })
+    expect(c.review).toMatchObject({ inlineReviews: false, inlineLowThreads: true, inlineAgentAccountId: '' })
     expect(c.reply.maxFindingReplies).toBe(5)
   })
 
   it('turns the flags on only from the exact string true and trims the account id', async () => {
     const c = await load({ ENABLE_INLINE_REVIEWS: 'true', ENABLE_INLINE_LOW_THREADS: 'true', AGENT_ACCOUNT_ID: ' 712020:abc ' })
     expect(c.review).toMatchObject({ inlineReviews: true, inlineLowThreads: true, inlineAgentAccountId: '712020:abc' })
-    const off = await load({ ENABLE_INLINE_REVIEWS: '1', ENABLE_INLINE_LOW_THREADS: 'yes' })
+    const off = await load({ ENABLE_INLINE_REVIEWS: '1', ENABLE_INLINE_LOW_THREADS: 'false' })
     expect(off.review).toMatchObject({ inlineReviews: false, inlineLowThreads: false })
+  })
+
+  it('ENABLE_INLINE_LOW_THREADS defaults to true for unset or empty, honors false, and warns once on anything else', async () => {
+    expect((await load({ ENABLE_INLINE_LOW_THREADS: '' })).review.inlineLowThreads).toBe(true)
+    expect((await load({ ENABLE_INLINE_LOW_THREADS: 'false' })).review.inlineLowThreads).toBe(false)
+    expect((await load({ ENABLE_INLINE_LOW_THREADS: 'true' })).review.inlineLowThreads).toBe(true)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect((await load({ ENABLE_INLINE_LOW_THREADS: 'yes' })).review.inlineLowThreads).toBe(true)
+    expect(warn.mock.calls.filter(c => String(c[0]).includes('ENABLE_INLINE_LOW_THREADS'))).toHaveLength(1)
+    warn.mockRestore()
+  })
+
+  it('INLINE_HIDE is empty by default, trims and lowercases known values, and warns once about unknown ones', async () => {
+    vi.stubEnv('DOTENV_CONFIG_PATH', 'D:/nonexistent/.env')
+    vi.stubEnv('INLINE_HIDE', undefined)
+    vi.resetModules()
+    expect((await import('../config.js')).config.review.inlineHide).toEqual([])
+    expect((await load({ INLINE_HIDE: '' })).review.inlineHide).toEqual([])
+    expect((await load({ INLINE_HIDE: ' Model , confidence,model' })).review.inlineHide).toEqual(['model', 'confidence'])
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect((await load({ INLINE_HIDE: 'model,color,size' })).review.inlineHide).toEqual(['model'])
+    expect(warn.mock.calls.filter(c => String(c[0]).includes('INLINE_HIDE'))).toHaveLength(1)
+    expect(String(warn.mock.calls.find(c => String(c[0]).includes('INLINE_HIDE'))![0])).toContain('color, size')
+    warn.mockRestore()
   })
 
   it('MAX_FINDING_REPLIES honors 0 and positives and falls back to 5 for empty, NaN or negative', async () => {
