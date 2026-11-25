@@ -143,6 +143,19 @@ Set `MAX_REPLY_COMMENTS=0` to disable.
 
 ---
 
+## 5b. Content-filter refusal
+
+When the reviewer or judge call is refused (`ContentFilterError`, see [../llm/structured-output.md](../llm/structured-output.md)), the run posts one notice and ends `SKIP` with exit 0; it never posts FAILED and never gates the merge. Benchmark runs do not post: a reviewer refusal ends the run as an error as before, and a judge refusal proceeds with the unjudged findings.
+
+- **Legacy.** `POST_FILTER_NOTICE` posts the approved notice (`src/review/content-filter.ts`) as a top-level comment with the normal review footer plus the fixed marker line `*Review not completed: content filter*` above it, so the commit-hash dedup stops a second post on the same head, comment-triggered runs included. `CHECK_PREVIOUS_REVIEWS` filters notices out of `previousReviews` (the same-head check reads them first), so the next push is a full first review with `review_number` counting only real reviews, and a reply is never answered from a notice. The head counts as checked (`checked_commit`).
+- **Judge refused:** the same notice. Exception (owner-approved): a clean reviewer whose judge ran only to validate breadth/second-look/lens candidates still posts the clean review, the refusal is recorded, and those extra findings are dropped without a note.
+- **Bundled:** a refused bundle (reviewer or judge) is skipped and the others go on; the merged review then ends its Findings section with `Some files were not reviewed because the model's safety filters declined them.` No bundle producing a review while at least one was refused (all refused, or the rest NO_CHANGE or overflowed) posts the notice. A re-review whose other bundles are clean still posts the partial note (the quiet gate is skipped) and does not mark the head checked.
+- **Breadth, second look, lens:** the pass is dropped like any failed pass (status stays `failed`) and the refusal is recorded.
+- **Reply refused (legacy and inline):** the thread gets the short reply `I can't answer this one: the review model's safety filters declined it.` so the question counts as answered and is never re-sent (legacy: with the reply footer, `action: REPLY`; inline: with the normal answer marker; a refused multi-thread batch is split once, each thread re-asked in its own smaller call, and only a thread whose own call is refused gets the decline; a refused single-thread call is declined directly; every refusal is recorded). A clean re-review that was diverted to the refused reply still posts. The refusal is recorded; if the decline itself cannot be posted, legacy ends `SKIP`.
+- **Record:** `action: SKIP` plus the `content_filter` array ([../../reference/usage-logging.md](../../reference/usage-logging.md)); the refused request's usage is priced into `cost_usd`.
+
+---
+
 ## 6. Oversized Diff (fetch failure) — GitHub
 
 When an adapter cannot fetch a PR's complete diff because it exceeds the provider's size ceilings, it throws `PrTooLargeError` (`src/vcs/adapter.ts`); `FETCH_DIFF` catches it and exits as a clean **SKIP**, never an ERROR — an AI review never gates a merge, so an unreviewable PR fails open.

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { GitHubAdapter } from '../github.js'
 import { PrTooLargeError } from '../adapter.js'
 import { buildReviewFooter, buildReplyFooter } from '../../review/formatter.js'
+import { CONTENT_FILTER_NOTICE } from '../../review/content-filter.js'
 
 const { clientMock, isAxiosError } = vi.hoisted(() => ({
   clientMock: { get: vi.fn(), post: vi.fn() },
@@ -352,6 +353,16 @@ describe('getRepliesToReviewComments — timestamp model', () => {
       ['3', 'Agent (prior reply)'],
       ['4', 'dev1'],
     ])
+  })
+
+  it('ignores a content-filter notice: questions before it stay open and replies attach to the real review', async () => {
+    const notice = comment(3, CONTENT_FILTER_NOTICE + buildReviewFooter('bot', 'm', 'repo', 2, 'abc123abc123', 'dev'), '2026-07-01T12:00:00Z', 'github-actions[bot]')
+    clientMock.get.mockResolvedValue({ headers: {}, data: [thread[0], thread[1], notice, thread[3]] })
+
+    const result = await makeAdapter().getRepliesToReviewComments('7', ['1'])
+
+    expect(result.replies.map(r => r.id)).toEqual(['2', '4'])
+    expect(result.replies.every(r => r.parentId === '1')).toBe(true)
   })
 
   it('returns no replies when the agent has not reviewed yet', async () => {

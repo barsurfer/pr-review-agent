@@ -50,6 +50,10 @@ The check reads legacy footers (the listing predicate also matches them) and the
 - `model`: the summary footer reads `*Inline review by <identity> | Review n | Commit c12 | Build b*` (no `(model)`), and root and answer markers drop the model but keep `| Build <b>`. The three marker forms (full, build-only, suffix-less) all parse.
 - `confidence`: the `### Merge Confidence: N%` heading is removed from the composed summary; a `---` rule replaces it and the disclaimer line stays below as a standalone human-review notice. It is removed at compose time after the truncation guard, so the judged text, `verdict_score` and every other record field are unchanged, and `carryNarrative` keeps the disclaimer on carried summaries. A summary written either way reads back as `valid` and is edited in place when the setting changes.
 
+## Content-filter refusal
+
+A refused reviewer or judge call (see [skip-logic.md](skip-logic.md) section 5b) writes the same summary comment with the approved notice (and its marker line `*Review not completed: content filter*`) in place of the narrative; thread rows, resolved rows and history are kept, no thread is opened, the head goes into the signed state line (so the same head dedups) and the run ends `SKIP`. The summary has the marker as its first line under the header and no `### Findings` filler. The notice takes a state number but not a review number: completed reviews are counted from the history lines that are not notices, so the next push is a first review (`REVIEW`, all passes, the NO_CHANGE guard intact). It reviews the whole PR (no delta against the notice head), so it can raise threads on code that an earlier real review already covered, and the notice is replaced by the real review. A refused reply is answered with a decline answer (normal answer marker) and recorded as `content_filter` stage `reply`. A bundled review with some refused bundles ends its `### Findings` section with the one-line note.
+
 ## Rules
 
 - **The agent closes nothing.** It never resolves, reopens or deletes a thread. A fixed finding stays open until a developer resolves it.

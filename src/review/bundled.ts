@@ -6,6 +6,8 @@ import { config } from '../config.js'
 import { breadthPass } from './breadth-pass.js'
 import { fetchContext, type FileContext } from '../context/fetcher.js'
 import { runReview, runJudge } from './client.js'
+import { ContentFilterError } from '../llm/shared.js'
+import { noteContentFilter } from './content-filter.js'
 import type { JudgeOptions } from './judge-decisions.js'
 import { planBundles, splitDiffByFile, estimateTokens as tok } from './bundler.js'
 import { parseReviewMarkdown, mergeReviews, type BundleReview } from './aggregate.js'
@@ -22,7 +24,16 @@ const FIT_RATIO = 0.85
 const MIN_DIFF_SHARE = 0.1
 const BUNDLE_NOTE_RESERVE_CHARS = 1500
 
-export type BundledOutcome = { ok: true } | { ok: false; reason: string }
+export type BundledOutcome = { ok: true } | { ok: false; reason: string; filtered?: true }
+
+// Whatever the provider billed for the refused request joins the run before the call is recorded as a filter event.
+export function refuseCall(ctx: ReviewContext, stage: string, err: ContentFilterError, model: string, bundle?: number): void {
+  if (err.usage) {
+    addUsage(ctx, err.usage)
+    ;(ctx.remainderRequests ??= []).push({ usage: err.usage, model })
+  }
+  noteContentFilter(ctx, stage, err, bundle)
+}
 
 export async function runBundledReview(ctx: ReviewContext, maxInputTokens: number): Promise<BundledOutcome> {
   const prInfo = ctx.prInfo!
@@ -51,6 +62,7 @@ export async function runBundledReview(ctx: ReviewContext, maxInputTokens: numbe
   const unreviewed = plan.oversized.map(u => u.path)
   let anyOverflow = false
   let incoherent = false
+  let declined = 0
   const judgeScores: NonNullable<ReviewContext['judgeScores']> = []
   const judgeUsage: { input_tokens: number; output_tokens: number; cost_usd?: number } = { input_tokens: 0, output_tokens: 0 }
   const judgeRequests: StageUsage[] = []
@@ -93,6 +105,7 @@ export async function runBundledReview(ctx: ReviewContext, maxInputTokens: numbe
     // rejection drop this bundle's file contexts and retry diff-only; if the diff alone won't fit,
     // leave the bundle unreviewed (surfaced under Unresolved Questions) rather than fail the PR.
     let bundleContexts = contexts
+    let refusal: ContentFilterError | undefined
     const result = await (async () => {
       for (;;) {
         try {
@@ -105,6 +118,10 @@ export async function runBundledReview(ctx: ReviewContext, maxInputTokens: numbe
           return answer
         } catch (err: unknown) {
           recordPassCall(ctx, 'review', config.anthropic.maxTokens, undefined, (err as { usage?: LLMUsage }).usage, err)
+          if (err instanceof ContentFilterError && !ctx.outcomeSink) {
+            refusal = err
+            return null
+          }
           if (!isContextLengthError(err)) throw err
           if (bundleContexts.length === 0) return null
           console.warn(`  Bundle ${i + 1} exceeded the model context — dropping file contexts, retrying diff-only`)
@@ -113,6 +130,11 @@ export async function runBundledReview(ctx: ReviewContext, maxInputTokens: numbe
         }
       }
     })()
+    if (refusal) {
+      refuseCall(ctx, 'review', refusal, config.anthropic.model, i + 1)
+      declined++
+      continue
+    }
     if (!result) {
       console.warn(`  Bundle ${i + 1} (${bundle.label}) could not be reviewed within the model context — leaving its files unreviewed`)
       unreviewed.push(...bundle.files)
@@ -142,6 +164,7 @@ export async function runBundledReview(ctx: ReviewContext, maxInputTokens: numbe
       const judgeTail: [number?, JudgeOptions?, { block: string }?] = open
         ? [undefined, config.judge.quality ? { quality: true } : undefined, open]
         : config.judge.quality ? [undefined, { quality: true }] : []
+      let judgeRefused = false
       try {
         const verdict = await runJudge(
           config.llmApiKey, config.judge.model, config.judge.maxRetries, config.anthropic.maxTokens, config.judge.effort,
@@ -164,17 +187,24 @@ export async function runBundledReview(ctx: ReviewContext, maxInputTokens: numbe
       } catch (err: unknown) {
         ctx.judgeStatus = 'failed'
         recordPassCall(ctx, 'judge', config.anthropic.maxTokens, undefined, (err as { usage?: LLMUsage }).usage, err)
-        // Benchmark: a judge failure falls back to the unjudged bundle findings; normal mode still throws so CI retries.
-        if (!ctx.outcomeSink) throw err
-        console.warn(`  Bundle ${i + 1} judge failed (${(err as Error).message}) — proceeding with unjudged reviewer findings`)
+        if (err instanceof ContentFilterError && !ctx.outcomeSink) {
+          refuseCall(ctx, 'judge', err, config.judge.model, i + 1)
+          declined++
+          judgeRefused = true
+        } else if (!ctx.outcomeSink) throw err
+        if (!judgeRefused) console.warn(`  Bundle ${i + 1} judge failed (${(err as Error).message}) — proceeding with unjudged reviewer findings`)
       }
+      if (judgeRefused) continue
     }
     reviews.push({ label: bundle.label, parsed: parseReviewMarkdown(text) })
   }
   ctx.bundleIndex = undefined
   ctx.remainderRequests = ctx.remainderRequests?.filter(r => !judgeRequests.includes(r.usage))
 
+  ctx.declinedBundles = declined || undefined
+
   if (!reviews.length) {
+    if (declined > 0) return { ok: false, reason: 'every bundle was declined by the content filter', filtered: true }
     // An overflowed bundle was never reviewed — that is not NO_CHANGE; skip honestly rather than emit a false sentinel a first review would throw on.
     if (anyOverflow) return { ok: false, reason: `A bundle exceeded the model context — ${unreviewed.length} file(s) left unreviewed` }
     ctx.reviewText = 'NO_CHANGE'
@@ -182,7 +212,7 @@ export async function runBundledReview(ctx: ReviewContext, maxInputTokens: numbe
     return { ok: true }
   }
 
-  const merged = mergeReviews(reviews, unreviewed)
+  const merged = mergeReviews(reviews, unreviewed, declined > 0)
   ctx.reviewText = merged.markdown
   ctx.reviewObject = sawDelta ? { ...merged.object, delta_stats: deltaStats } : merged.object
   ctx.bundleCount = plan.bundles.length
@@ -192,7 +222,7 @@ export async function runBundledReview(ctx: ReviewContext, maxInputTokens: numbe
     ctx.judgeScores = judgeScores
   }
   console.log(`\nMerged ${reviews.length} bundle review(s): ${merged.object.findings.length} finding(s) after dedupe`)
-  ctx.bundleUncertain = unreviewed.length > 0 || incoherent
+  ctx.bundleUncertain = unreviewed.length > 0 || incoherent || declined > 0
   return { ok: true }
 }
 

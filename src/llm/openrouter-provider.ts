@@ -1,6 +1,6 @@
 import axios from 'axios'
 import { config } from '../config.js'
-import { TruncatedResponseError, DeadlineAbortError, missingRequired, hasCachePart } from './shared.js'
+import { TruncatedResponseError, DeadlineAbortError, ContentFilterError, missingRequired, hasCachePart, requireText } from './shared.js'
 import type { LLMProvider, LLMUsage, LLMOptions, UserPart } from './shared.js'
 
 // OpenRouter's OpenAI-compatible gateway. Non-streaming: OpenAI semantics don't force streaming
@@ -11,7 +11,8 @@ export class OpenRouterProvider implements LLMProvider {
   async complete(system: string, user: string, opts: LLMOptions): Promise<{ text: string; usage: LLMUsage }> {
     const data = await this.request({ model: opts.model, max_tokens: opts.maxTokens, messages: openRouterMessages(system, user) }, opts)
     const choice = firstChoice(data, opts.maxTokens, cacheAware())
-    return { text: contentOf(choice), usage: mapOpenRouterUsage(data.usage, cacheAware()) }
+    const usage = mapOpenRouterUsage(data.usage, cacheAware())
+    return { text: requireText(contentOf(choice), usage), usage }
   }
 
   async completeStructured<T>(system: string, user: string | UserPart[], schema: Record<string, unknown>, opts: LLMOptions): Promise<{ object: T; usage: LLMUsage }> {
@@ -78,10 +79,17 @@ export class OpenRouterProvider implements LLMProvider {
         const resp = await axios.post<OpenRouterResponse>(url, body, opts.signal ? { headers, timeout: OPENROUTER_TIMEOUT_MS, signal: opts.signal } : { headers, timeout: OPENROUTER_TIMEOUT_MS })
         const data = resp.data
         // OpenRouter can return HTTP 200 with an error object instead of choices.
-        if (data?.error) throw openRouterError(typeof data.error.code === 'number' ? data.error.code : undefined, data.error.message ?? 'OpenRouter returned an error', data.error.code)
+        if (data?.error) {
+          const filtered = data.choices?.length ? undefined : moderationOf(data.error, 200, data.usage ? mapOpenRouterUsage(data.usage, cacheAware()) : undefined)
+          if (filtered) throw filtered
+          throw openRouterError(typeof data.error.code === 'number' ? data.error.code : undefined, data.error.message ?? 'OpenRouter returned an error', data.error.code)
+        }
         return data
       } catch (err: unknown) {
-        if (isOpenRouterError(err)) throw err
+        if (isOpenRouterError(err) || err instanceof ContentFilterError) throw err
+        const ax = err as AxiosLikeError
+        const filtered = ax.response?.status === 403 ? moderationOf(ax.response.data?.error, 403) : undefined
+        if (filtered) throw filtered
         // A cancelled request has no response, so isRetryable would otherwise send it again.
         if (opts.signal?.aborted) throw deadlineAbort(opts)
         lastErr = err
@@ -96,10 +104,12 @@ export class OpenRouterProvider implements LLMProvider {
   }
 }
 
+interface OpenRouterErrorBody { message?: string; code?: number | string; metadata?: { reasons?: unknown; flagged_input?: unknown } }
+
 interface OpenRouterResponse {
-  choices?: Array<{ message?: { content?: string | null }; finish_reason?: string }>
+  choices?: Array<{ message?: { content?: string | null; refusal?: string | null }; finish_reason?: string; native_finish_reason?: string }>
   usage?: { prompt_tokens?: number; completion_tokens?: number; completion_tokens_details?: { reasoning_tokens?: number }; cost?: number; cost_details?: { upstream_inference_cost?: number }; prompt_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number } }
-  error?: { message?: string; code?: number | string }
+  error?: OpenRouterErrorBody
 }
 
 const OPENROUTER_TIMEOUT_MS = 600_000
@@ -113,10 +123,36 @@ function openRouterMessages(system: string, user: string | UserPart[], systemAft
 function firstChoice(data: OpenRouterResponse, maxTokens: number, cached = false): NonNullable<OpenRouterResponse['choices']>[number] {
   const choice = data.choices?.[0]
   if (!choice) throw new Error('OpenRouter returned no choices')
+  console.log(`  finish: ${choice.finish_reason ?? 'unknown'} (native: ${choice.native_finish_reason ?? 'unknown'})`)
+  const signal = refusalSignal(choice)
+  if (signal) {
+    throw new ContentFilterError({ signal, ...(choice.native_finish_reason ? { nativeFinishReason: choice.native_finish_reason } : {}), usage: mapOpenRouterUsage(data.usage, cached) })
+  }
+  const content = choice.message?.content
+  if ((content === null || content === undefined || content === '') && (data.usage?.completion_tokens ?? 0) === 0) {
+    console.warn('  Empty response with zero completion tokens - not treated as a content filter')
+  }
   if (choice.finish_reason === 'length') {
     throw new TruncatedResponseError(`Model response truncated at ${maxTokens} output tokens — refusing to post a cut-off response`, mapOpenRouterUsage(data.usage, cached))
   }
   return choice
+}
+
+// Priority order matters when several signals are present; the first match names the signal.
+function refusalSignal(choice: NonNullable<OpenRouterResponse['choices']>[number]): 'native_refusal' | 'content_filter' | 'message_refusal' | undefined {
+  if (choice.native_finish_reason === 'refusal') return 'native_refusal'
+  if (choice.finish_reason === 'content_filter') return 'content_filter'
+  const refusal = choice.message?.refusal
+  if (typeof refusal === 'string' && refusal.trim() !== '') return 'message_refusal'
+  return undefined
+}
+
+// Only the moderation metadata makes a 403 or an error-only 200 a refusal; flagged_input is customer code and is read for presence alone.
+function moderationOf(error: OpenRouterErrorBody | undefined, httpStatus: number, usage?: LLMUsage): ContentFilterError | undefined {
+  const meta = error?.metadata
+  if (!meta || (meta.reasons === undefined && meta.flagged_input === undefined)) return undefined
+  const reasons = Array.isArray(meta.reasons) ? meta.reasons.filter((r): r is string => typeof r === 'string').slice(0, 10).map(r => r.slice(0, 100)) : []
+  return new ContentFilterError({ signal: 'moderation', httpStatus, ...(reasons.length ? { reasons } : {}), ...(usage ? { usage } : {}) })
 }
 
 function contentOf(choice: NonNullable<OpenRouterResponse['choices']>[number]): string {
@@ -215,7 +251,7 @@ function isReasoningRejection(err: unknown): boolean {
 }
 
 interface AxiosLikeError {
-  response?: { status?: number; headers?: Record<string, string>; data?: { error?: { message?: string; code?: number | string } } }
+  response?: { status?: number; headers?: Record<string, string>; data?: { error?: OpenRouterErrorBody } }
   code?: string
   message?: string
 }

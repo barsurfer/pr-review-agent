@@ -3,6 +3,7 @@ import type { LLMUsage } from '../llm/shared.js'
 import { addUsage } from '../review/bundled.js'
 import { headMatches } from '../review/checked-commit.js'
 import { countFindings, isNoChange, hasReviewFooter, hasReplyFooter } from '../review/formatter.js'
+import { CONTENT_FILTER_NOTICE_TEXT, CONTENT_FILTER_SKIP_REASON, NOTICE_HISTORY_TEXT, isNoticeSummary, noteContentFilter } from '../review/content-filter.js'
 import type { RenderedFinding } from '../review/formatter.js'
 import { normalizeFindingPath, parseLineRange } from '../review/findings-output.js'
 import { countChangedLines, filterDiff } from '../review/parsers.js'
@@ -77,6 +78,8 @@ interface Session {
   summaryRootId?: string
   history: string[]
   carry: { plain?: string; summaryOnly: SummaryOnlyRow[] }
+  afterNotice: boolean
+  completed: number
 }
 
 interface Geo { file: string; lines?: string; base: string }
@@ -87,6 +90,8 @@ interface RunSource {
   carriedSummaryOnly?: readonly SummaryOnlyRow[]
   todoSection: string
   historyText: (r: RootsResult) => string
+  declined?: boolean
+  notice?: boolean
 }
 
 const lineString = (m: Mapped): string | undefined =>
@@ -137,6 +142,7 @@ class Engine implements InlineEngine {
       case State.CHECK_NO_CHANGE: return this.checkNoChange(ctx, deps)
       case State.JUDGE_REVIEW: return this.judge(ctx, deps)
       case State.POST_REVIEW: return this.compose(ctx, deps, false)
+      case State.POST_FILTER_NOTICE: return this.filterNotice(ctx, deps)
       case State.SKIP: return ctx.action === 'NO_NEW_FINDINGS' ? this.compose(ctx, deps, true) : this.repliesOnly(ctx, deps, 'skip')
       case State.CHECK_REPLIES:
       case State.RESPOND_TO_REPLIES:
@@ -191,12 +197,17 @@ class Engine implements InlineEngine {
     const valid = sel.kind === 'found' && sel.check === 'valid' && sel.state ? sel : undefined
     const state: SummaryState = valid?.state ?? { n: 0, commits: [] }
     const rows = valid ? parseRows(valid.comment.body) : undefined
+    // A notice summary reviewed nothing, so the next run cannot treat its head as a reviewed base.
+    const afterNotice = !!valid && isNoticeSummary(valid.comment.body)
+    // A notice takes a state number but reviewed nothing, so reviews completed are counted from the history lines that are not notices.
+    const completed = afterNotice ? parseHistory(valid.comment.body).filter(l => !l.endsWith(` · ${NOTICE_HISTORY_TEXT}`)).length : state.n
     const summaryOnly: Listed[] = (rows?.summaryOnly ?? []).map(r => ({ severity: r.severity, title: r.title, gist: r.body ?? '', ...(r.file ? { file: r.file } : {}), ...(r.lines ? { lines: r.lines } : {}) }))
     this.s = {
       identity, reg, threads, state, head, head12, who: { ids: identity.ids, names: identity.names },
       ...(sel.kind === 'found' ? { summaryRootId: sel.comment.id } : {}),
       history: valid ? parseHistory(valid.comment.body) : [],
-      carry: { ...(valid ? { plain: carryNarrative(valid.comment.body) ?? undefined } : {}), summaryOnly: rows?.summaryOnly ?? [] },
+      carry: { ...(valid && !afterNotice ? { plain: carryNarrative(valid.comment.body) ?? undefined } : {}), summaryOnly: rows?.summaryOnly ?? [] },
+      afterNotice, completed,
     }
     console.log(`  Summary ${this.rec.summary_check}, ${reg.entries.length} finding thread(s), review ${state.n} completed`)
 
@@ -211,7 +222,7 @@ class Engine implements InlineEngine {
     }
 
     let unchanged = false
-    if (!forced(ctx) && state.commits.length > 0) {
+    if (!forced(ctx) && state.commits.length > 0 && !afterNotice) {
       const base = state.commits[state.commits.length - 1]
       try {
         console.log(`  Fetching delta diff (${base}..${head12})...`)
@@ -229,7 +240,7 @@ class Engine implements InlineEngine {
     }
 
     ctx.previousReviews = []
-    ctx.reviewNumber = state.n + 1
+    ctx.reviewNumber = completed + 1
     if (unchanged) {
       console.log('  No reviewable changes since the last review - refreshing the summary')
       return this.writeRun(ctx, deps, this.noChangeSource())
@@ -250,7 +261,7 @@ class Engine implements InlineEngine {
 
   private async checkNoChange(ctx: ReviewContext, deps: InlineDeps): Promise<State> {
     if (!isNoChange(ctx.reviewText ?? '')) return deps.transition(State.CHECK_NO_CHANGE, ctx)
-    if (this.s!.state.n === 0) throw new Error('Reviewer returned NO_CHANGE on a first review - refusing to silently skip')
+    if (this.s!.completed === 0) throw new Error('Reviewer returned NO_CHANGE on a first review - refusing to silently skip')
     console.log('  Reviewer: NO_CHANGE')
     // Same coherence rule as legacy: a NO_CHANGE that still carries findings is not trusted as a completed check.
     const coherent = ctx.reviewObject ? ctx.reviewObject.no_change === true && ctx.reviewObject.findings?.length === 0 : ctx.reviewText === 'NO_CHANGE'
@@ -298,12 +309,23 @@ class Engine implements InlineEngine {
     const n = found.length
     const carry = this.s!.carry
     return this.writeRun(ctx, deps, {
+      ...(ctx.declinedBundles ? { declined: true } : {}),
       plain: guard?.ok ? guard.cleaned : quiet ? (carry.plain ?? QUIET_PLAIN) : QUIET_PLAIN,
       findings: found,
       ...(quiet ? { carriedSummaryOnly: carry.summaryOnly } : {}),
       todoSection: guard?.ok ? guard.todoSection : '',
       historyText: r => (n === 0 ? 'no findings' : `${n} finding${n === 1 ? '' : 's'}, ${r.posted.length} new thread${r.posted.length === 1 ? '' : 's'}`),
     })
+  }
+
+  private async filterNotice(ctx: ReviewContext, deps: InlineDeps): Promise<State> {
+    const next = await this.writeRun(ctx, deps, {
+      plain: `### Summary\n${CONTENT_FILTER_NOTICE_TEXT}`, findings: [], carriedSummaryOnly: this.s!.carry.summaryOnly, todoSection: '', historyText: () => NOTICE_HISTORY_TEXT, notice: true,
+    })
+    if (next !== State.DONE) return next
+    ctx.action = 'SKIP'
+    ctx.skipReason = CONTENT_FILTER_SKIP_REASON
+    return State.SKIP
   }
 
   private async geoOf(e: ThreadEntry, mapper: DeltaMapper, head12: string): Promise<Geo> {
@@ -334,7 +356,7 @@ class Engine implements InlineEngine {
       const { threads, resolved, summaryOnly } = this.rows(roots, plan, geo, carried, notes)
       const composed = composeSummary({
         review: { plain: src.plain, findings: src.findings as RenderedFinding[] },
-        threads, summaryOnly, resolved, history: s.history, historyText: src.historyText(roots), todoSection: src.todoSection,
+        threads, summaryOnly, resolved, history: s.history, historyText: src.historyText(roots), todoSection: src.todoSection, ...(src.declined ? { declined: true } : {}), ...(src.notice ? { notice: true } : {}),
         footer, head12: s.head12, state, agentId: s.identity.agentId, hideConfidence: hidden('confidence'),
       })
       this.rec.footer_lines_removed = composed.removed
@@ -417,6 +439,7 @@ class Engine implements InlineEngine {
         return status
       },
     })
+    for (const e of plan.declined) noteContentFilter(ctx, 'reply', e)
     this.rec.answers!.threads = plan.threads
     this.rec.answers!.deferred_cap = plan.deferredCap
     if (plan.usage) {
@@ -511,7 +534,7 @@ class Engine implements InlineEngine {
     this.rec.outcome = res.outcome
     this.finished = true
     if (STOPPED.includes(res.outcome)) return this.skipFor(ctx, res.outcome, res)
-    ctx.action = this.s!.state.n === 0 ? 'REVIEW' : 'RE_REVIEW'
+    ctx.action = this.s!.completed === 0 ? 'REVIEW' : 'RE_REVIEW'
     ctx.skipReason = undefined
     return State.DONE
   }
