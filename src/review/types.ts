@@ -38,8 +38,19 @@ export enum State {
   JUDGE_REVIEW,
   BUNDLED_REVIEW,
   POST_REVIEW,
+  POST_FILTER_NOTICE,
   SKIP,
   DONE,
+}
+
+export interface ContentFilterRecord {
+  stage: string
+  signal: string
+  native_finish_reason?: string
+  category?: string
+  reasons?: string[]
+  http_status?: number
+  bundle?: number
 }
 
 /** A finished review handed to an outcome sink instead of being posted (benchmark mode). */
@@ -267,6 +278,10 @@ export interface ReviewContext {
   mergeNarrowed?: boolean
   deltaBase?: string
   replyLimitNote?: boolean
+  contentFilters?: ContentFilterRecord[]
+  declinedBundles?: number
+  divertedFromReview?: boolean
+  replyDeclined?: boolean
   headChecked?: boolean
   deltaFetchFailed?: boolean
   bundleUncertain?: boolean

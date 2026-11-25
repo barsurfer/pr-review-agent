@@ -65,6 +65,38 @@ export class TruncatedResponseError extends Error {
   }
 }
 
+export type ContentFilterSignal = 'native_refusal' | 'content_filter' | 'message_refusal' | 'moderation'
+
+export interface ContentFilterDetails {
+  signal: ContentFilterSignal
+  nativeFinishReason?: string
+  category?: string
+  reasons?: string[]
+  httpStatus?: number
+  usage?: LLMUsage
+}
+
+// A refusal repeats for the same input, so nothing may retry or resend it; flagged_input is customer code and is never kept.
+export class ContentFilterError extends Error {
+  readonly signal: ContentFilterSignal
+  readonly nativeFinishReason?: string
+  readonly category?: string
+  readonly reasons?: string[]
+  readonly httpStatus?: number
+  usage?: LLMUsage
+
+  constructor(d: ContentFilterDetails) {
+    super(`The model's safety filters declined the request (${d.signal}${d.category ? `, ${d.category}` : ''})`)
+    this.name = 'ContentFilterError'
+    this.signal = d.signal
+    if (d.nativeFinishReason !== undefined) this.nativeFinishReason = d.nativeFinishReason
+    if (d.category !== undefined) this.category = d.category
+    if (d.reasons?.length) this.reasons = d.reasons
+    if (d.httpStatus !== undefined) this.httpStatus = d.httpStatus
+    if (d.usage) this.usage = d.usage
+  }
+}
+
 // A benchmark pass deadline fired; kept apart from TruncatedResponseError and transport errors so the stage records aborted_time, not failed.
 export class DeadlineAbortError extends Error {
   // Usage of attempts that finished before the abort, kept apart from the aborted stream's partial usage.
@@ -97,4 +129,10 @@ export function missingRequired(object: unknown, schema: Record<string, unknown>
     })
   }
   return missing
+}
+
+// An empty reply with no refusal signal is a broken call, not an answer worth posting.
+export function requireText(text: string, usage: LLMUsage): string {
+  if (text.trim() === '') throw Object.assign(new Error('Model returned empty text'), { usage })
+  return text
 }

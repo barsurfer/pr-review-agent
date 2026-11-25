@@ -5,6 +5,7 @@
 import type { ReviewFinding, ReviewObject } from './formatter.js'
 import { parseVerdictScore } from './parsers.js'
 import { citations } from './findings-output.js'
+import { PARTIAL_FILTER_LINE } from './content-filter.js'
 
 export interface ParsedReview {
   summary: string
@@ -134,7 +135,7 @@ export interface MergedReview {
 /** Combine per-bundle reviews into one in the reviewer/judge markdown shape, so downstream
  *  cleanup, truncation guard, and metrics parse it unchanged. Merge Confidence is the minimum
  *  across bundles — one risky module should not be averaged away. */
-export function mergeReviews(reviews: BundleReview[], unreviewed: string[] = []): MergedReview {
+export function mergeReviews(reviews: BundleReview[], unreviewed: string[] = [], declined = false): MergedReview {
   const findings = dedupeFindings(reviews.flatMap(r => r.parsed.findings))
   const behavioral = dedupeStrings(reviews.flatMap(r => r.parsed.behavioral))
   const risk = dedupeStrings(reviews.flatMap(r => r.parsed.risk))
@@ -154,10 +155,11 @@ export function mergeReviews(reviews: BundleReview[], unreviewed: string[] = [])
         return `- **${f.severity} – ${f.title}**${loc}\n  ${f.body}`
       }).join('\n\n')
     : 'No findings.'
+  const findingsSection = declined ? `${findingsMd}\n\n${PARTIAL_FILTER_LINE}` : findingsMd
 
   let markdown = [
     `### Summary\n${summary}`,
-    `### Findings\n${findingsMd}`,
+    `### Findings\n${findingsSection}`,
     `### Behavioral Diff\n${bullets(behavioral)}`,
     `### Production Risk\n${bullets(risk)}`,
     `### Unresolved Questions\n${bullets(questions)}`,

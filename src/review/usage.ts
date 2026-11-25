@@ -19,7 +19,7 @@ import { MAX_UNTOUCHED_LISTED, type BreadthStatus, type SecondLookStatus, type L
 import { activeLenses, type LensRecommendation } from './lenses.js'
 import { isCheckedCommitHash } from './checked-commit.js'
 import type { SuggestedFixStats } from './suggested-fix.js'
-import type { ReviewContext, LensRun, EventKind, PassCall, PromptCacheLog, StageUsage, TokenMetrics } from './types.js'
+import type { ReviewContext, LensRun, EventKind, PassCall, PromptCacheLog, StageUsage, TokenMetrics, ContentFilterRecord } from './types.js'
 import { isAgentReply } from '../vcs/adapter.js'
 import { inlineRecord } from '../inline/record.js'
 import type { InlineRecord } from '../inline/types.js'
@@ -132,6 +132,7 @@ export interface UsageRecord {
   checked_commit?: string
   dedup_source?: 'checked_commit' | 'target_merge'
   reply_limit_note?: true
+  content_filter?: ContentFilterRecord[]
   inline?: InlineRecord
   jenkins: { job: string; build: string; url: string } | null
   trigger?: { event: string | null; comment_author: string | null; event_kind?: EventKind }
@@ -599,6 +600,7 @@ export function buildUsageRecord(
     ...(ctx.headChecked && !error && isCheckedCommitHash(ctx.prInfo!.sourceCommit) ? { checked_commit: ctx.prInfo!.sourceCommit } : {}),
     ...(ctx.dedupHit ? { dedup_source: ctx.dedupHit } : {}),
     ...(ctx.replyLimitNote ? { reply_limit_note: true as const } : {}),
+    ...(ctx.contentFilters?.length ? { content_filter: ctx.contentFilters } : {}),
     ...(config.review.inlineReviews ? { inline: inlineRecord(ctx) } : {}),
     jenkins: getJenkinsMeta(),
     // Absent when CI passed no trigger, so those records serialize exactly as before.

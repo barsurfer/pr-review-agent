@@ -1,4 +1,4 @@
-import { sumAttempts, type LLMUsage } from '../llm/shared.js'
+import { sumAttempts, ContentFilterError, type LLMUsage } from '../llm/shared.js'
 import type { MarkedThread } from '../vcs/adapter.js'
 import { isTrusted } from './identity.js'
 import { parseRootMarker } from './markers.js'
@@ -6,6 +6,10 @@ import { decide, selectBatch, targetOf, threadView, type ThreadView } from './re
 import type { CodeSince } from './match.js'
 import { runFindingReplies, runSummaryReplies, type CallArgs } from './replies-call.js'
 import type { PlannedAnswer, PlannedNote } from './writer.js'
+import { REPLY_DECLINED_TEXT } from '../review/content-filter.js'
+
+// One call covers the whole batch, so the refusal cannot be pinned on a thread; each declined thread is answered once and the rest move on.
+const declineAnswer = (v: ThreadView): PlannedAnswer => ({ target: v.target, rootId: v.rootId, through: v.pending.reduce((a, q) => (q.seq > a.seq ? q : a)).id, text: REPLY_DECLINED_TEXT })
 
 export interface ReplyPlanInput {
   threads: readonly MarkedThread[]
@@ -27,13 +31,14 @@ export interface ReplyPlan {
   usage?: LLMUsage
   callFailed: boolean
   error?: Error
+  declined: ContentFilterError[]
 }
 
 const usageOf = (err: unknown): LLMUsage | undefined => (err as { usage?: LLMUsage } | null)?.usage
 
 // A reply failure must not lose a finished review, so a failed call leaves its questions pending for a later run.
 export async function planReplies(input: ReplyPlanInput): Promise<ReplyPlan> {
-  const plan: ReplyPlan = { answers: [], notes: [], threads: 0, deferredCap: 0, summaryAnswered: false, callFailed: false }
+  const plan: ReplyPlan = { answers: [], notes: [], threads: 0, deferredCap: 0, summaryAnswered: false, callFailed: false, declined: [] }
   const views: ThreadView[] = []
   const open = new Set<string>()
   for (const t of input.threads) {
@@ -74,11 +79,41 @@ export async function planReplies(input: ReplyPlanInput): Promise<ReplyPlan> {
       usages.push(r.usage)
       plan.answers.push(...r.answers)
     } catch (err: unknown) {
-      plan.callFailed = true
-      plan.error = err instanceof Error ? err : new Error(String(err))
       const u = usageOf(err)
       if (u) usages.push(u)
-      console.warn(`  Finding replies failed (${(err as Error)?.message}) - the questions stay pending`)
+      // A refusal repeats for the same question, so it is answered with a decline instead of staying pending and being re-sent.
+      if (err instanceof ContentFilterError) {
+        plan.declined.push(err)
+        if (batch.length === 1) {
+          plan.answers.push(declineAnswer(batch[0]))
+          console.warn('  Finding reply declined by the content filter - posting a decline answer')
+        } else {
+          console.warn('  Finding replies declined by the content filter - asking each thread once on its own')
+          // Each thread gets one smaller request of its own; this runs at most once per run because the batch call does.
+          for (const v of batch) {
+            try {
+              const r = await runFindingReplies({ ...input.call, threads: [v] })
+              usages.push(r.usage)
+              plan.answers.push(...r.answers)
+            } catch (splitErr: unknown) {
+              const su = usageOf(splitErr)
+              if (su) usages.push(su)
+              if (splitErr instanceof ContentFilterError) {
+                plan.declined.push(splitErr)
+                plan.answers.push(declineAnswer(v))
+              } else {
+                plan.callFailed = true
+                plan.error ??= splitErr instanceof Error ? splitErr : new Error(String(splitErr))
+                console.warn(`  Finding reply for ${v.target} failed (${(splitErr as Error)?.message}) - the question stays pending`)
+              }
+            }
+          }
+        }
+      } else {
+        plan.callFailed = true
+        plan.error = err instanceof Error ? err : new Error(String(err))
+        console.warn(`  Finding replies failed (${(err as Error)?.message}) - the questions stay pending`)
+      }
     }
   }
   if (summaryView) {
@@ -87,11 +122,17 @@ export async function planReplies(input: ReplyPlanInput): Promise<ReplyPlan> {
       usages.push(r.usage)
       if (r.answer) { plan.answers.push(r.answer); plan.summaryAnswered = true }
     } catch (err: unknown) {
-      plan.callFailed = true
-      plan.error ??= err instanceof Error ? err : new Error(String(err))
       const u = usageOf(err)
       if (u) usages.push(u)
-      console.warn(`  Summary reply failed (${(err as Error)?.message}) - the question stays pending`)
+      if (err instanceof ContentFilterError) {
+        plan.declined.push(err)
+        plan.answers.push(declineAnswer(summaryView))
+        console.warn('  Summary reply declined by the content filter - posting a decline answer')
+      } else {
+        plan.callFailed = true
+        plan.error ??= err instanceof Error ? err : new Error(String(err))
+        console.warn(`  Summary reply failed (${(err as Error)?.message}) - the question stays pending`)
+      }
     }
   }
   if (usages.length > 0) plan.usage = sumAttempts(...usages)

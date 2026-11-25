@@ -56,7 +56,7 @@ Both inbound edges to `RESPOND_TO_REPLIES` (`CHECK_REPLIES` and this `JUDGE_REVI
 
 **Bundled path (`ENABLE_BUNDLED_REVIEW=true`, default off):** after `FETCH_CONTEXT`, `ESTIMATE_TOKENS` drops file contexts if over `MAX_INPUT_TOKENS`; if the diff alone is still over budget it routes to `BUNDLED_REVIEW` instead of SKIP, then `POST_REVIEW`. In-budget PRs never enter it. It bypasses `BREADTH_REVIEW`, `SECOND_LOOK` and `LENS_REVIEW`; the usage record infers their statuses (each active lens → `skipped_bundled`).
 
-**22 states. 11 possible outcomes:**
+**23 states. 11 possible outcomes:**
 1. Skip — ignored comment author (`IGNORE_COMMENT_AUTHORS`, before any VCS call)
 2. Skip — branch exclusion (incl. a target not in `ONLY_TARGET_BRANCHES`)
 3. Skip — no reviewable changes after exclusions
@@ -104,10 +104,12 @@ Both inbound edges to `RESPOND_TO_REPLIES` (`CHECK_REPLIES` and this `JUDGE_REVI
 
 ---
 
+**`POST_FILTER_NOTICE`:** reached from `CALL_MODEL`, `JUDGE_REVIEW` or `BUNDLED_REVIEW` (normal mode only) when the reviewer or judge is refused by the model's safety filters (`ContentFilterError`); posts the content-filter notice once per head and ends `SKIP`. `CHECK_PREVIOUS_REVIEWS` filters notices out of the previous reviews and dedups a head that already has one. See [skip-logic.md](skip-logic.md) section 5b.
+
 ## POST_REVIEW Safety Guards
 ## Inline engine seam
 
-With `ENABLE_INLINE_REVIEWS` on (Bitbucket, not a benchmark run), `review()` calls `ctx.inline.step` instead of `transition`. It intercepts `CHECK_PREVIOUS_REVIEWS`, `CHECK_NO_CHANGE`, `JUDGE_REVIEW` (wrapped only), `CHECK_REPLIES`, `RESPOND_TO_REPLIES`, `POST_REPLY_LIMIT_NOTE`, `POST_REVIEW` and `SKIP`; every other state runs the legacy transition. At `CHECK_PREVIOUS_REVIEWS` it hands the whole run back to the legacy flow when the PR holds the agent's own legacy review/reply/limit-note and no inline summary or finding thread (record `inline: { active: false, reason: "legacy_pr" }`). Flag off: no engine, identical flow. See [inline-engine.md](inline-engine.md).
+With `ENABLE_INLINE_REVIEWS` on (Bitbucket, not a benchmark run), `review()` calls `ctx.inline.step` instead of `transition`. It intercepts `CHECK_PREVIOUS_REVIEWS`, `CHECK_NO_CHANGE`, `JUDGE_REVIEW` (wrapped only), `CHECK_REPLIES`, `RESPOND_TO_REPLIES`, `POST_REPLY_LIMIT_NOTE`, `POST_REVIEW`, `POST_FILTER_NOTICE` and `SKIP`; every other state runs the legacy transition. At `CHECK_PREVIOUS_REVIEWS` it hands the whole run back to the legacy flow when the PR holds the agent's own legacy review/reply/limit-note and no inline summary or finding thread (record `inline: { active: false, reason: "legacy_pr" }`). Flag off: no engine, identical flow. See [inline-engine.md](inline-engine.md).
 
 
 Three guards run before every post (guard 3 only when `--force` is off; all skipped in benchmark/outcome-sink mode):

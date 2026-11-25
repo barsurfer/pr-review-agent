@@ -7,7 +7,7 @@ import { config } from '../config.js'
 import { breadthPass } from './breadth-pass.js'
 import { contextWindowFor } from '../llm/context-window.js'
 import { takesSystemAfter, takesEffortAfter, baseModelId } from '../llm/model-id.js'
-import { DeadlineAbortError, isSystemMessageRejection, sumAttempts, type LLMUsage, type LLMOptions } from '../llm/shared.js'
+import { DeadlineAbortError, ContentFilterError, isSystemMessageRejection, sumAttempts, type LLMUsage, type LLMOptions } from '../llm/shared.js'
 import { loadPrompt, type LoadedPrompt } from '../prompt/loader.js'
 import { describeHttpError } from '../vcs/http-retry.js'
 import { fetchContext } from '../context/fetcher.js'
@@ -21,7 +21,8 @@ import { defaultTokenEstimator } from './token-estimator.js'
 import { normalizeFindingPath, type FirstPassSite } from './findings-output.js'
 import { filterDiff, countChangedLines, parseVerdictScore, isPathExcluded, scanTodos, isContextLengthError, shownLength } from './parsers.js'
 import { spaceLists, buildReviewFooter, buildReplyFooter, stripPreviousFooter, stripDeltaStats, stripJudgeNotes, stripJenkinsMeta, stripPreamble, isNoChange, extractCommitHash, legacyCommitHash, countFindings, markdownHasFindings, hasReplyFooter, renderReview, type ReviewFinding } from './formatter.js'
-import { runBundledReview, addUsage, recordPassCall } from './bundled.js'
+import { runBundledReview, addUsage, recordPassCall, refuseCall } from './bundled.js'
+import { CONTENT_FILTER_NOTICE, CONTENT_FILTER_SKIP_REASON, REPLY_DECLINED_TEXT, isContentFilterNotice, noteContentFilter } from './content-filter.js'
 import { composeSuggestedFixes, COMMENT_BUDGET } from './suggested-fix.js'
 import { orderPosted } from './posted-order.js'
 import { buildUsageRecord, logUsageRecord, getBuildCommit, getJobUrl } from './usage.js'
@@ -483,7 +484,19 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         return State.LOAD_PROMPT
       }
       console.log('Checking for previous reviews...')
-      ctx.previousReviews = await ctx.adapter.getPreviousReviewComments(ctx.prId)
+      const fetched = await ctx.adapter.getPreviousReviewComments(ctx.prId)
+      // A notice carries the review footer so the head dedups, but it is not a review: delta, replies and numbering must never build on it.
+      ctx.previousReviews = fetched.filter(r => !isContentFilterNotice(r.body))
+      const noticeHead = ctx.prInfo!.sourceCommit.slice(0, 12)
+      if (!forced(ctx) && fetched.some(r => isContentFilterNotice(r.body) && extractCommitHash(r.body) === noticeHead)) {
+        console.log(`  A content-filter notice was already posted for ${noticeHead} — not posting another`)
+        markHeadChecked(ctx)
+        ctx.reviewNumber = ctx.previousReviews.length
+        if (ctx.previousReviews.length > 0) return State.CHECK_REPLIES
+        ctx.action = 'DEDUP_SKIP'
+        ctx.skipReason = 'content-filter notice already posted for this commit'
+        return State.SKIP
+      }
 
       if (ctx.previousReviews.length > 0) {
         console.log(`  Found ${ctx.previousReviews.length} previous review(s) — will produce delta review`)
@@ -645,6 +658,39 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       } catch (err: unknown) {
         ctx.failedModel = replyModel
         recordTokenCall(ctx, 'reply', replyModel, (err as { usage?: LLMUsage } | null | undefined)?.usage, err)
+        if (err instanceof ContentFilterError) {
+          refuseCall(ctx, 'reply', err, replyModel)
+          // A posted decline counts as the answer, so the question is never sent to the model again.
+          const decline = REPLY_DECLINED_TEXT + buildReplyFooter(config.agentIdentity, replyModel, getJobUrl())
+          let answered = ctx.dryRun
+          if (ctx.dryRun) {
+            console.log('\n=== DRY RUN — Reply declined (not posted) ===\n')
+            console.log(decline)
+          } else {
+            try {
+              await ctx.adapter.postReply(ctx.prId, ctx.replies![ctx.replies!.length - 1].parentId, decline)
+              answered = true
+            } catch (postErr: unknown) {
+              console.warn(`  Decline reply not posted (${errorText(postErr)})`)
+            }
+          }
+          // The re-review that was diverted to this reply is not discarded: the decision resumes without the divert.
+          if (ctx.divertedFromReview) {
+            ctx.replyDeclined = true
+            return State.JUDGE_REVIEW
+          }
+          if (answered) {
+            ctx.action = 'REPLY'
+            ctx.skipReason = undefined
+            return State.DONE
+          }
+          // A review that ran upstream keeps its NO_CHANGE label, as at the reply-limit skip.
+          if (ctx.action !== 'NO_CHANGE') {
+            ctx.action = 'SKIP'
+            ctx.skipReason = 'Reply declined by the content filter; nothing was posted'
+          }
+          return State.SKIP
+        }
         throw err
       }
       recordTokenCall(ctx, 'reply', replyModel, result.usage)
@@ -801,6 +847,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       )
       // Backstop for an under-counted estimate: on a context-length rejection, drop file contexts
       // and retry diff-only; if the diff alone won't fit, skip rather than let the API error.
+      const refused: { err?: ContentFilterError } = {}
       const result = await (async () => {
         for (;;) {
           try {
@@ -810,6 +857,10 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
           } catch (err: unknown) {
             // Every attempt is logged, so a truncated or context-rejected first try still shows in pass_calls.
             recordPassCall(ctx, 'review', config.anthropic.maxTokens, undefined, (err as { usage?: LLMUsage }).usage, err)
+            if (err instanceof ContentFilterError && !ctx.outcomeSink) {
+              refused.err = err
+              return null
+            }
             if (!isContextLengthError(err)) throw err
             if (ctx.fileContexts!.length === 0) return null
             console.warn('  Prompt exceeded the model context — dropping file contexts, retrying diff-only')
@@ -819,6 +870,10 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
           }
         }
       })()
+      if (refused.err) {
+        refuseCall(ctx, 'review', refused.err, config.anthropic.model)
+        return State.POST_FILTER_NOTICE
+      }
       if (!result) {
         ctx.action = 'SKIP'
         ctx.skipReason = 'Diff exceeds the model context window'
@@ -941,6 +996,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
           ctx.breadthStatus = 'aborted_time'
           console.warn(`  Breadth review stopped at the ${passStopAtSeconds()}s pass deadline (${Math.round((Date.now() - ctx.startTime) / 1000)}s elapsed) — continuing with first-pass findings only`)
         } else {
+          if (err instanceof ContentFilterError) noteContentFilter(ctx, 'breadth', err)
           ctx.breadthStatus = 'failed'
           console.warn(`  Breadth review FAILED (${isContextLengthError(err) ? 'context length' : e.message}) — continuing with first-pass findings only`)
         }
@@ -1041,6 +1097,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
           ctx.secondLookStatus = 'aborted_time'
           console.warn(`  Second-look stopped at the ${passStopAtSeconds()}s pass deadline (${Math.round((Date.now() - ctx.startTime) / 1000)}s elapsed) — continuing with first-pass and breadth findings only`)
         } else {
+          if (err instanceof ContentFilterError) noteContentFilter(ctx, 'second_look', err)
           ctx.secondLookStatus = 'failed'
           console.warn(`  Second-look FAILED (${isContextLengthError(err) ? 'context length' : e.message}) — continuing with first-pass and breadth findings only`)
         }
@@ -1134,6 +1191,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
             halt = 'skipped_time'
             console.warn(`  Lens ${lens.name} stopped at the ${passStopAtSeconds()}s pass deadline (${Math.round((Date.now() - ctx.startTime) / 1000)}s elapsed) — continuing without its findings`)
           } else {
+            if (err instanceof ContentFilterError) noteContentFilter(ctx, `lens:${lens.name}`, err)
             console.warn(`  Lens ${lens.name} FAILED (${isContextLengthError(err) ? 'context length' : e.message}) — continuing without its findings`)
           }
         }
@@ -1166,8 +1224,9 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         if (unanswered.length > 0 && limitReached) {
           // The re-review already ran and was paid for, so it finishes below instead of being discarded.
           console.log(`  Unanswered dev reply, but reply limit reached (${agentReplies}/${config.reply.maxComments}) — finishing the re-review without answering`)
-        } else if (unanswered.length > 0) {
+        } else if (unanswered.length > 0 && !ctx.replyDeclined) {
           ctx.replies = unanswered
+          ctx.divertedFromReview = true
           console.log('  Re-review found nothing new, but a developer reply is unanswered — answering it in-thread')
           // A non-quiet re-review still owes the confirmation post on the next event, so only a quiet one counts as checked.
           if (cleanPrior || await mergeQuiet()) markHeadChecked(ctx)
@@ -1280,6 +1339,12 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       } catch (err: unknown) {
         ctx.judgeStatus = 'failed'
         recordPassCall(ctx, 'judge', config.anthropic.maxTokens, undefined, (err as { usage?: LLMUsage }).usage, err)
+        if (err instanceof ContentFilterError && !ctx.outcomeSink) {
+          refuseCall(ctx, 'judge', err, config.judge.model)
+          if (!noFindings) return State.POST_FILTER_NOTICE
+          console.warn('  Judge declined by the content filter — posting the clean reviewer result')
+          return State.POST_REVIEW
+        }
         // Benchmark keeps the unjudged reviewer findings; normal mode throws so CI retries, unless the reviewer was clean and the judge ran only for breadth — then the clean review posts as it would without breadth.
         if (!ctx.outcomeSink && !noFindings) throw err
         console.warn(`  Judge failed (${(err as Error).message}) — proceeding with unjudged reviewer findings`)
@@ -1291,6 +1356,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
     case State.BUNDLED_REVIEW: {
       if (config.review.promptCache) ctx.promptCache = { ttl: '5m', reviewer_marked: false, shared_stages: [], uncached: [{ stage: 'review', reason: 'bundled' }] }
       const outcome = await runBundledReview(ctx, ctx.inputBudget!)
+      if (!outcome.ok && outcome.filtered) return State.POST_FILTER_NOTICE
       if (!outcome.ok) {
         ctx.action = 'SKIP'
         ctx.skipReason = `Bundled review not possible: ${outcome.reason}`
@@ -1300,7 +1366,8 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
 
       // Same quiet-re-review rule as JUDGE_REVIEW: nothing found and prior review was clean means nothing worth posting.
       const merged = ctx.reviewObject!
-      if (merged.findings.length === 0 && ctx.reviewNumber > 1 && ctx.force !== 're-review') {
+      // A partial review must post its note, so the quiet gate does not apply when a bundle was declined.
+      if (merged.findings.length === 0 && ctx.reviewNumber > 1 && ctx.force !== 're-review' && !ctx.declinedBundles) {
         const lastReview = supersedeBoundary(ctx.previousReviews ?? [])
         const priorHadFindings = !!lastReview && markdownHasFindings(lastReview.body)
         if (!priorHadFindings && (merged.delta_stats?.still_open ?? 0) === 0) {
@@ -1407,7 +1474,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         // Pre-post dedup: re-fetch reviews to catch concurrent runs that posted while we were working
         if (ctx.force === 'off') {
           const freshReviews = await ctx.adapter.getPreviousReviewComments(ctx.prId)
-          const alreadyReviewed = freshReviews.some(r => {
+          const alreadyReviewed = freshReviews.filter(r => !isContentFilterNotice(r.body)).some(r => {
             const footerHash = extractCommitHash(r.body)
             warnOnHashDisagreement(ctx.prId, r.body, footerHash)
             return footerHash === commitShort
@@ -1429,6 +1496,33 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       }
       ctx.action = ctx.reviewNumber > 1 ? 'RE_REVIEW' : 'REVIEW'
       return State.DONE
+    }
+
+    case State.POST_FILTER_NOTICE: {
+      const commitShort = ctx.prInfo!.sourceCommit.slice(0, 12)
+      const comment = CONTENT_FILTER_NOTICE + buildReviewFooter(config.agentIdentity, config.anthropic.model, promptLabel(ctx.prompt!), ctx.reviewNumber, commitShort, getBuildCommit(), getJobUrl())
+      ctx.action = 'SKIP'
+      ctx.skipReason = CONTENT_FILTER_SKIP_REASON
+      if (ctx.dryRun) {
+        console.log('\n=== DRY RUN — Content-filter notice (not posted) ===\n')
+        console.log(comment)
+        console.log('\n=== End of notice ===\n')
+        return State.SKIP
+      }
+      if (ctx.force === 'off') {
+        const fresh = await ctx.adapter.getPreviousReviewComments(ctx.prId)
+        if (fresh.some(r => extractCommitHash(r.body) === commitShort)) {
+          console.log(`  Commit ${commitShort} already reviewed by another run — skipping the notice`)
+          ctx.action = 'DEDUP_SKIP'
+          ctx.skipReason = 'Another agent run already covered this commit (race condition avoided)'
+          markHeadChecked(ctx)
+          return State.SKIP
+        }
+      }
+      await ctx.adapter.postComment(ctx.prId, comment)
+      markHeadChecked(ctx)
+      console.log('  Content-filter notice posted.')
+      return State.SKIP
     }
 
     case State.SKIP: {

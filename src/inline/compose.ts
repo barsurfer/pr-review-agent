@@ -1,3 +1,4 @@
+import { PARTIAL_FILTER_LINE, CONTENT_FILTER_MARKER } from '../review/content-filter.js'
 import { stripPreviousFooter, stripDeltaStats, stripJudgeNotes, stripPreamble, stripJenkinsMeta, isNoChange, renderFinding, type RenderedFinding } from '../review/formatter.js'
 import { parseVerdictScore, scanTodos } from '../review/parsers.js'
 import { PROPOSAL_CAP } from '../review/judge-decisions.js'
@@ -79,6 +80,8 @@ function sanitizeNarrative(text: string): { text: string; removed: number } {
   let removed = stripped.removed
   const kept = stripped.text.split('\n').filter(line => {
     const t = line.trimEnd()
+    // The partial-review line and the notice marker are added from flags, so a copy in the narrative would double or forge them.
+    if (t === PARTIAL_FILTER_LINE || t === CONTENT_FILTER_MARKER) return false
     const forged = t === SUMMARY_HEADER || t === LEGACY_HEADER_LINE || t === LEGACY_HEADER_TAG || parseThreadRow(t) || parseResolvedRow(t) || parseOverflow(t) || parseHistoryLine(t) || parseSummaryOnlyRow(t)
     if (forged) removed++
     return !forged
@@ -149,6 +152,8 @@ export interface ComposeInput {
   history: readonly string[]
   historyText: string
   todoSection: string
+  declined?: boolean
+  notice?: boolean
   footer: { identity: string; model?: string; build?: string }
   head12: string
   state: SummaryState
@@ -216,7 +221,8 @@ export function composeSummary(input: ComposeInput): ComposedSummary {
       // Without the blank line Bitbucket renders the rows as plain text, not a list.
       findings.push('**Not posted as threads**\n\n' + lines.join('\n'))
     }
-    if (!findings.length) findings.push('No findings.')
+    if (!findings.length && !input.notice) findings.push('No findings.')
+    if (input.declined) findings.push(PARTIAL_FILTER_LINE)
 
     let preText = pre.text
     let postText = post.text
@@ -231,8 +237,9 @@ export function composeSummary(input: ComposeInput): ComposedSummary {
 
     const parts = [
       SUMMARY_HEADER,
+      input.notice ? CONTENT_FILTER_MARKER : '',
       preText,
-      `### Findings\n${findings.join('\n\n')}`,
+      findings.length ? `### Findings\n${findings.join('\n\n')}` : '',
       postText,
       trimTodos(todoText, p.todoKeep),
       p.resolved && input.resolved.length ? `### Resolved by developers\n${input.resolved.map(r => resolvedRow(r)).join('\n')}` : '',

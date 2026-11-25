@@ -1,6 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { config } from '../config.js'
-import { TruncatedResponseError, DeadlineAbortError, missingRequired, isSystemMessageRejection } from './shared.js'
+import { TruncatedResponseError, DeadlineAbortError, ContentFilterError, missingRequired, isSystemMessageRejection, requireText } from './shared.js'
 import type { LLMProvider, LLMUsage, LLMOptions, UserPart } from './shared.js'
 
 export class AnthropicProvider implements LLMProvider {
@@ -12,7 +12,8 @@ export class AnthropicProvider implements LLMProvider {
 
   async complete(system: string, user: string, opts: LLMOptions): Promise<{ text: string; usage: LLMUsage }> {
     const response = await this.streamFinal({ model: opts.model, max_tokens: opts.maxTokens, system, messages: [{ role: 'user', content: user }] }, opts)
-    return { text: textOf(response, opts.maxTokens), usage: mapUsage(response.usage) }
+    const usage = mapUsage(response.usage)
+    return { text: requireText(textOf(response, opts.maxTokens), usage), usage }
   }
 
   async completeStructured<T>(system: string, user: string | UserPart[], schema: Record<string, unknown>, opts: LLMOptions): Promise<{ object: T; usage: LLMUsage }> {
@@ -63,6 +64,8 @@ export class AnthropicProvider implements LLMProvider {
   }
 }
 
+const BILLED_REFUSAL_CATEGORIES = new Set(['bio', 'frontier_llm', 'reasoning_extraction'])
+
 const EFFORT_AFTER_BETA = 'mid-conversation-output-config-2026-07-01'
 
 function anthropicMessages(user: string | UserPart[], systemAfter?: string, effortAfter?: string): Array<{ role: string; content: unknown }> {
@@ -80,6 +83,14 @@ function finalReasoning(response: Anthropic.Message, opts: LLMOptions): { final_
 // A max_tokens stop is a cut-off response — refuse rather than post a partial. Newer models
 // can emit a thinking block ahead of the text, so find the text block, don't assume it's first.
 function textOf(response: Anthropic.Message, maxTokens: number): string {
+  console.log(`  finish: ${response.stop_reason ?? 'unknown'}`)
+  if (response.stop_reason === 'refusal') {
+    const category = response.stop_details?.category
+    const usage = mapUsage(response.usage)
+    // Anthropic bills a refusal before any output only for these categories, so the others are priced at zero instead of the table rate.
+    const free = usage.output_tokens === 0 && !(category && BILLED_REFUSAL_CATEGORIES.has(category))
+    throw new ContentFilterError({ signal: 'native_refusal', nativeFinishReason: 'refusal', ...(category ? { category } : {}), usage: free ? { ...usage, cost_usd: 0 } : usage })
+  }
   if (response.stop_reason === 'max_tokens') {
     throw new TruncatedResponseError(`Model response truncated at ${maxTokens} output tokens — refusing to post a cut-off response`, mapUsage(response.usage))
   }

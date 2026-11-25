@@ -1,5 +1,6 @@
 import axios, { AxiosInstance } from 'axios'
 import { hasReviewFooter, hasReplyFooter } from '../review/formatter.js'
+import { isContentFilterNotice } from '../review/content-filter.js'
 import { PrTooLargeError } from './adapter.js'
 import type { VCSAdapter, PRInfo, ChangedFile, ReviewComment, CommentReply, ReplyResult } from './adapter.js'
 import { AGENT_REPLY_AUTHOR } from './adapter.js'
@@ -151,6 +152,7 @@ export class GitHubAdapter implements VCSAdapter {
 
     for (const c of comments) {
       const body: string = c.body ?? ''
+      if (isContentFilterNotice(body)) continue
       if (hasReviewFooter(body)) {
         if (!latestReview || c.created_at > latestReview.createdOn) latestReview = { id: String(c.id), createdOn: c.created_at }
         if (c.created_at > latestAgentComment) latestAgentComment = c.created_at
