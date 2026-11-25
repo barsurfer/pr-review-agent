@@ -19,7 +19,7 @@ import { contextReplies } from './replies.js'
 import { planReplies, type ReplyPlan } from './reply-flow.js'
 import { buildPrior, buildOpenList, type PriorItems } from './reviewer-list.js'
 import type { CodeNote, ResolvedRow, SummaryOnlyRow, ThreadRow } from './rows.js'
-import { parseHistory, parseRows } from './rows.js'
+import { parseHistory, parseRows, resolvedBaseline } from './rows.js'
 import type { InlineDeps, InlineEngine, InlineOutcome, InlineRecord, Listed, SummaryState, ThreadEntry } from './types.js'
 import { InlineWriteError, writeInline, type RootsResult, type WriteInput, type WriteResult } from './writer.js'
 
@@ -209,7 +209,7 @@ class Engine implements InlineEngine {
       ...(sel.kind === 'found' ? { summaryRootId: sel.comment.id } : {}),
       history: valid ? parseHistory(valid.comment.body) : [],
       carry: { ...(valid && !afterNotice ? { plain: carryNarrative(valid.comment.body) ?? undefined } : {}), summaryOnly: rows?.summaryOnly ?? [] },
-      afterNotice, completed, ...(rows ? { prevResolved: new Set(rows.resolved.map(r => r.id)) } : {}),
+      afterNotice, completed, ...(rows && resolvedBaseline(rows) ? { prevResolved: resolvedBaseline(rows) } : {}),
     }
     console.log(`  Summary ${this.rec.summary_check}, ${reg.entries.length} finding thread(s), review ${state.n} completed`)
 
