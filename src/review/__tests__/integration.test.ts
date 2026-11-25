@@ -1912,7 +1912,7 @@ describe('lens review and the judge in normal mode', () => {
     cfg.lenses.enabled = false
     const estimated = (await review(bigAdapter(), '100', true))!.tokens.estimated_input
     const estimate = (name: string) => estimated + Math.ceil((lensSystemPrompt('System prompt here', LENS_REGISTRY[name], 0).length - 'System prompt here'.length + lensBriefing([A_BUG]).length) / 4)
-    const [big, small] = Object.keys(LENS_REGISTRY).sort((x, y) => estimate(y) - estimate(x)).filter((_, i, a) => i === 0 || i === a.length - 1)
+    const [big, small] = Object.keys(LENS_REGISTRY).filter(n => n !== 'slop').sort((x, y) => estimate(y) - estimate(x)).filter((_, i, a) => i === 0 || i === a.length - 1)
     expect(estimate(small)).toBeLessThan(estimate(big))
 
     cfg.lenses = { enabled: true, list: `${big}+${small}`, model: '' }

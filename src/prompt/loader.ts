@@ -3,6 +3,7 @@ import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import type { VCSAdapter, PRInfo, ChangedFile } from '../vcs/adapter.js'
 import { detectStacks } from './stack.js'
+import { rememberExceptions } from './exceptions.js'
 import { DEFAULT_ROLE, DEFAULT_REVIEW_PRIORITIES, DEFAULT_SECURITY, DEFAULT_MENTAL_MODEL, DEFAULT_EXCEPTIONS } from './defaults.js'
 import { config } from '../config.js'
 import { describeHttpError } from '../vcs/http-retry.js'
@@ -217,7 +218,7 @@ export async function loadPrompt(adapter: VCSAdapter, prInfo: PRInfo, localPromp
     const sections = parseRepoPrompt(content)
     logSections(sections)
     const filled = fillTemplate(template, sections)
-    return { content: filled, source: localPromptPath }
+    return rememberExceptions({ content: filled, source: localPromptPath }, sections.exceptions)
   }
 
   // 2. Try source commit, then target branch; check root and docs/ in each
@@ -262,7 +263,7 @@ export async function loadPrompt(adapter: VCSAdapter, prInfo: PRInfo, localPromp
         const sections = parseRepoPrompt(repoPrompt)
         logSections(sections)
         const filled = fillTemplate(template, sections)
-        return { content: filled, source: 'repo' }
+        return rememberExceptions({ content: filled, source: 'repo' }, sections.exceptions)
       }
     }
   }
@@ -279,7 +280,7 @@ export async function loadPrompt(adapter: VCSAdapter, prInfo: PRInfo, localPromp
     if (reportFailed) logFailed(`stack:${names.join('+')}`)
     const sections = composeSections(names.map(n => parseRepoPrompt(getStackPrompt(n))))
     logSections(sections)
-    return { content: fillTemplate(template, sections), source: `stack:${names.join('+')}`, ...failed }
+    return rememberExceptions({ content: fillTemplate(template, sections), source: `stack:${names.join('+')}`, ...failed }, sections.exceptions)
   }
 
   // 4. Fall back to all defaults

@@ -11,21 +11,25 @@ import { DeadlineAbortError, ContentFilterError, isSystemMessageRejection, sumAt
 import { loadPrompt, type LoadedPrompt } from '../prompt/loader.js'
 import { describeHttpError } from '../vcs/http-retry.js'
 import { fetchContext } from '../context/fetcher.js'
-import { runReview, runCommentResponse, runJudge, runBreadth, runLens, runSharedPass, findingsOutputSchema, sharedOutputSchema, sanitizeFirstPassSites, type SiteDropReason, type SharedPrefix } from './client.js'
+import { runReview, runCommentResponse, runJudge, runBreadth, runLens, runSharedPass, findingsOutputSchema, sharedOutputSchema, sanitizeFirstPassSites, type SiteDropReason, type SharedPrefix, type JudgeResult } from './client.js'
 import { buildShownSource } from './shown-anchors.js'
-import { candidateId, type JudgeOptions } from './judge-decisions.js'
-import { fileCoverage, prioritizeUntouched, breadthSystemPrompt, breadthBriefing, breadthOverlay, flaggedFiles, findingsInFiles, secondLookSystemPrompt, secondLookBriefing, secondLookOverlay, secondLookFilesBriefing, type LensStatus } from './breadth.js'
-import { activeLenses, parseLensList, lensSystemPrompt, lensBriefing, lensOverlay } from './lenses.js'
+import { candidateId, isNumericLines, type JudgeOptions } from './judge-decisions.js'
+import { SHOWN_LINE_CLAUSE, fileCoverage, prioritizeUntouched, breadthSystemPrompt, breadthBriefing, breadthOverlay, flaggedFiles, findingsInFiles, secondLookSystemPrompt, secondLookBriefing, secondLookOverlay, secondLookFilesBriefing, type LensStatus } from './breadth.js'
+import { activeLenses, parseLensList, resolvePlacements, lensSystemPrompt, lensBriefing, lensOverlay, LENS_REGISTRY, type Lens } from './lenses.js'
+import { intakeSection, placeAsFinding, makeRoute, finalizeContextSections, markSectionsPosted, addedByFile, type OpenAnchor } from './lens-sections.js'
+import { judgeSection, sectionJudgeRequest } from './section-judge.js'
+import { renderBlocks, type SectionBlock } from './section-render.js'
+import { exceptionsOf } from '../prompt/exceptions.js'
 import { splitDiffByFile } from './bundler.js'
 import { defaultTokenEstimator } from './token-estimator.js'
-import { normalizeFindingPath, type FirstPassSite } from './findings-output.js'
+import { normalizeFindingPath, parseLineRange, type FirstPassSite } from './findings-output.js'
 import { filterDiff, countChangedLines, parseVerdictScore, isPathExcluded, scanTodos, isContextLengthError, shownLength } from './parsers.js'
 import { spaceLists, buildReviewFooter, buildReplyFooter, stripPreviousFooter, stripDeltaStats, stripJudgeNotes, stripJenkinsMeta, stripPreamble, isNoChange, extractCommitHash, legacyCommitHash, countFindings, markdownHasFindings, hasReplyFooter, renderReview, type ReviewFinding } from './formatter.js'
 import { runBundledReview, addUsage, recordPassCall, refuseCall, inlineActive } from './bundled.js'
 import { CONTENT_FILTER_NOTICE, CONTENT_FILTER_SKIP_REASON, REPLY_DECLINED_TEXT, isContentFilterNotice, noteContentFilter } from './content-filter.js'
 import { composeSuggestedFixes, COMMENT_BUDGET } from './suggested-fix.js'
 import { orderPosted } from './posted-order.js'
-import { buildUsageRecord, logUsageRecord, getBuildCommit, getJobUrl } from './usage.js'
+import { buildUsageRecord, logUsageRecord, getBuildCommit, getJobUrl, estimateAttemptsCost } from './usage.js'
 import { recordTokenCall, tokenSummaryLine } from './token-metrics.js'
 import { ignoredCommentAuthor } from './trigger.js'
 import { headMatches } from './checked-commit.js'
@@ -342,8 +346,153 @@ function stageAfterSecondLook(): State {
   if (!config.lenses.enabled) return State.JUDGE_REVIEW
   const { lenses, unknown } = parseLensList(config.lenses.list)
   if (unknown.length) console.warn(`  Ignoring unknown lens name(s): ${unknown.join(', ')}`)
-  return lenses.length ? State.LENS_REVIEW : State.JUDGE_REVIEW
+  if (!lenses.length) return State.JUDGE_REVIEW
+  const { placements, warnings } = resolvePlacements(config.lenses)
+  for (const w of warnings) console.warn(`  ${w}`)
+  console.log(`  Lens placement: ${[...placements].map(([n, p]) => `${n}=${p}`).join(', ')}`)
+  return State.LENS_REVIEW
 }
+
+// Findings-lens candidates on a re-review are kept only where the delta added code; one with no numeric line cannot be placed, so it passes.
+function gateToDelta(findings: readonly ReviewFinding[], deltaDiff: string, paths: readonly string[]): { kept: ReviewFinding[]; outside: number } {
+  const added = addedByFile(deltaDiff)
+  const kept = findings.filter(f => {
+    const range = parseLineRange(f.lines)
+    if (!f.file || !range || !isNumericLines(f.lines)) return true
+    const lines = added.get(normalizeFindingPath(f.file, paths))
+    if (!lines) return false
+    for (let n = range.start; n <= range.end; n++) if (lines.has(n)) return true
+    return false
+  })
+  return { kept, outside: findings.length - kept.length }
+}
+
+type LensHistory = NonNullable<Parameters<typeof runLens>[14]>
+
+// The re-review message the reviewer itself saw; undefined on a first review, so those requests stay byte-identical.
+function lensHistory(ctx: ReviewContext): LensHistory | undefined {
+  if (ctx.reviewNumber <= 1) return undefined
+  return { previousReviews: ctx.previousReviews ?? [], developerReplies: ctx.replies ?? [], changesSinceLastReview: ctx.deltaDiff ?? '', ...(ctx.inline?.prior ? { priorBlock: ctx.inline.prior.block } : {}) }
+}
+
+const SECTION_JUDGE_STATUS_FAILED = new Set(['failed', 'refused', 'aborted_time'])
+
+// A section lens never reaches the main judge: its places are validated here and only a kept place can be posted.
+async function sectionStage(ctx: ReviewContext, lens: Lens, run: LensRun, found: readonly ReviewFinding[], budget: number): Promise<void> {
+  const deltaScope = ctx.reviewNumber > 1 && !inlineActive(ctx) && !!ctx.deltaDiff
+  const intake = intakeSection(lens, found, { filteredDiff: ctx.filteredDiff!, fileContexts: ctx.fileContexts ?? [], ...(deltaScope ? { deltaDiff: ctx.deltaDiff } : {}) })
+  run.intake = { received: intake.received, places: intake.places.length, dropped: intake.dropped }
+  const places = intake.places
+  console.log(`  Lens ${lens.name}: ${found.length} candidate(s) -> ${places.length} place(s) after intake`)
+  if (places.length === 0) { run.places = []; run.sectionOk = true; return }
+
+  const judgeModel = config.judge.model
+  const stage = `lens_judge:${lens.name}`
+  const args = {
+    apiKey: config.llmApiKey, model: judgeModel, maxRetries: config.judge.maxRetries, maxTokens: config.anthropic.maxTokens, effort: config.judge.effort,
+    lens, places, diff: ctx.filteredDiff!, fileContexts: ctx.fileContexts ?? [], lineNumbers: config.review.lineNumbers, exceptions: exceptionsOf(ctx.prompt),
+  }
+  const skipped = (status: 'skipped_budget' | 'skipped_time'): void => {
+    run.judgeLog = { status, model: judgeModel, prompt_hash: null, tokens: null, cost_usd: null, decisions: [] }
+  }
+  const req = sectionJudgeRequest(args)
+  const estimate = defaultTokenEstimator.estimate(req.system.length + req.user.length)
+  if (estimate > budget) {
+    skipped('skipped_budget')
+    console.log(`  Section judge for ${lens.name} skipped: ~${estimate.toLocaleString()} tokens exceeds the budget (${budget.toLocaleString()})`)
+    return
+  }
+  const limitMs = passTimeLeftMs(ctx)
+  if (limitMs !== undefined && limitMs <= 0) {
+    skipped('skipped_time')
+    console.log(`  Section judge for ${lens.name} skipped: no time left before the ${passStopAtSeconds()}s pass deadline`)
+    return
+  }
+
+  const outcome = await withPassDeadline(limitMs, signal => judgeSection(signal ? { ...args, signal } : args))
+  const usages: LLMUsage[] = []
+  for (const at of outcome.attempts) {
+    const err = at.error as (Error & { usage?: LLMUsage }) | undefined
+    if (err instanceof ContentFilterError) {
+      recordPassCall(ctx, stage, config.anthropic.maxTokens, limitMs, err.usage, err)
+      refuseCall(ctx, stage, err, judgeModel)
+      if (err.usage) usages.push(err.usage)
+      continue
+    }
+    const used = err ? spentUsage(err, err.usage) : at.usage
+    if (used) {
+      addUsage(ctx, used)
+      ;(ctx.remainderRequests ??= []).push({ usage: stageUsage(used), model: judgeModel })
+      usages.push(used)
+    }
+    recordPassCall(ctx, stage, config.anthropic.maxTokens, limitMs, used, err)
+  }
+  const cache = !!config.review.promptCache
+  const sum = (pick: (u: LLMUsage) => number | undefined): number => usages.reduce((n, u) => n + (pick(u) ?? 0), 0)
+  run.judgeLog = {
+    status: outcome.status, model: judgeModel, prompt_hash: outcome.promptHash,
+    tokens: usages.length ? { input: sum(u => u.input_tokens), output: sum(u => u.output_tokens), ...(cache ? { cache_read: sum(u => u.cache_read_input_tokens), cache_write: sum(u => u.cache_creation_input_tokens) } : {}) } : null,
+    cost_usd: usages.length ? estimateAttemptsCost(usages, judgeModel, true) : null,
+    anomalies: outcome.anomalies, ...(outcome.sanity ? { sanity: outcome.sanity } : {}), decisions: outcome.decisions,
+  }
+  if (SECTION_JUDGE_STATUS_FAILED.has(outcome.status)) {
+    console.warn(`  Section judge for ${lens.name} ${outcome.status} - no section this run`)
+    return
+  }
+  places.forEach((p, i) => { p.score = outcome.decisions[i]?.score })
+  run.places = outcome.kept.map(i => places[i])
+  run.sectionOk = true
+  console.log(`  Section judge for ${lens.name}: kept ${run.places.length} of ${places.length} place(s)`)
+}
+
+// Only kept places of a lens that absorbs LOWs can move a finding, and never under the benchmark, so findings.json never depends on a section lens.
+function sectionRouting(ctx: ReviewContext): { route: NonNullable<JudgeOptions['route']>; commit: () => void } | undefined {
+  if (ctx.outcomeSink) return undefined
+  const sections = (ctx.lensRuns ?? []).flatMap(r => {
+    const def = LENS_REGISTRY[r.name]?.section
+    return r.placement === 'section' && r.sectionOk && r.places?.length && def?.absorbLow ? [{ def, places: r.places }] : []
+  })
+  if (!sections.length) return undefined
+  const open: readonly OpenAnchor[] = inlineActive(ctx) ? ctx.inline?.openAnchors ?? [] : []
+  const { route, absorbed } = makeRoute(sections, open, (ctx.changedFiles ?? []).map(f => f.path))
+  const commit = (): void => {
+    for (const [place, n] of absorbed()) {
+      place.absorbed = true
+      const run = (ctx.lensRuns ?? []).find(r => r.name === place.lens)
+      if (run) run.absorbedLow = (run.absorbedLow ?? 0) + n
+    }
+  }
+  return { route, commit }
+}
+
+function applyJudgeResult(ctx: ReviewContext, result: JudgeResult): void {
+  ctx.reviewText = result.text
+  ctx.judgeScores = result.scores
+  ctx.judgePromptHash = result.promptHash
+  ctx.judgeDecisions = result.decisions
+  ctx.judgeAnomalies = result.anomalies
+  if (result.sanity) ctx.judgeSanity = result.sanity
+  if (result.retryRefusal) noteContentFilter(ctx, 'judge', result.retryRefusal)
+  ctx.judgedFindings = result.kept
+  if (result.render) ctx.renderJudged = result.render
+  if (result.proposalsDropped) ctx.proposalsDropped = result.proposalsDropped
+  if (result.notes) {
+    console.log(`  Judge notes (not posted): ${result.notes}`)
+  }
+  const a = result.anomalies
+  if (a && (a.unknown_ids || a.undecided || a.duplicate_ids || a.drop_without_evidence)) {
+    console.warn(`  Judge anomalies: unknown_ids ${a.unknown_ids}, undecided ${a.undecided}, duplicate_ids ${a.duplicate_ids}, drop_without_evidence ${a.drop_without_evidence}`)
+  }
+  if (result.scores?.length) {
+    console.log(`  Judge finding scores: ${result.scores.map(s => `${s.severity} ${s.score}/10`).join(', ')}`)
+  }
+  ctx.judgeUsage = stageUsage(result.usage)
+  addUsage(ctx, result.usage)
+  ctx.judgeStatus = 'succeeded'
+  recordPassCall(ctx, 'judge', config.anthropic.maxTokens, undefined, result.usage)
+}
+
+const finalizeRunSections = (ctx: ReviewContext, posted: boolean): SectionBlock[] => finalizeContextSections(ctx, inlineActive(ctx) ? ctx.inline?.openAnchors ?? [] : [], posted)
 
 import type { UsageRecord } from './usage.js'
 export type { UsageRecord } from './usage.js'
@@ -1106,14 +1255,16 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
     }
 
     case State.LENS_REVIEW: {
-      // Same stage skips as second-look: lens candidates only post after judging, and a re-review targets the delta.
+      // Same stage skips as second-look: lens candidates only post after judging; a re-review runs them only with ENABLE_LENS_REREVIEW.
       const lenses = activeLenses(config.lenses)
+      const placements = resolvePlacements(config.lenses).placements
       const model = config.lenses.model || config.anthropic.model
       const runs: LensRun[] = []
       ctx.lensRuns = runs
-      const stageSkip: LensStatus | undefined = !config.judge.model ? 'skipped_no_judge' : ctx.reviewNumber > 1 ? 'skipped_rereview' : undefined
+      const sectionOf = (lens: Lens): boolean => placements.get(lens.name) === 'section'
+      const stageSkip: LensStatus | undefined = !config.judge.model ? 'skipped_no_judge' : ctx.reviewNumber > 1 && config.lenses.everyReview !== true ? 'skipped_rereview' : undefined
       if (stageSkip) {
-        for (const lens of lenses) runs.push({ name: lens.name, status: stageSkip, model, findings: [] })
+        for (const lens of lenses) runs.push({ name: lens.name, status: stageSkip, model, findings: [], ...(sectionOf(lens) ? { placement: 'section' as const } : {}) })
         return State.JUDGE_REVIEW
       }
 
@@ -1121,20 +1272,27 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       const earlier = [...(ctx.reviewObject?.findings ?? []), ...(ctx.breadthFindings ?? []), ...(ctx.secondLookFindings ?? [])]
       const limits = [config.anthropic.maxInputTokens, contextWindowFor(model) - extraPassMaxTokens(ctx)].filter(n => n > 0)
       const budget = limits.length ? Math.min(...limits) : Infinity
+      const rereview = ctx.reviewNumber > 1
+      const history = lensHistory(ctx)
+      const paths = (ctx.changedFiles ?? []).map(f => f.path)
       let halt: LensStatus | undefined
       for (const lens of lenses) {
-        const run: LensRun = { name: lens.name, status: 'failed', model, findings: [] }
+        const section = sectionOf(lens)
+        const run: LensRun = { name: lens.name, status: 'failed', model, findings: [], ...(section ? { placement: 'section' as const } : {}) }
         runs.push(run)
-        if (halt) { run.status = halt; continue }
+        // A section lens has its own cap, so a MAX_FINDINGS halt from the findings lenses does not reach it.
+        if (halt && !(section && halt === 'skipped_limit')) { run.status = halt; continue }
 
         const known = [...earlier, ...runs.flatMap(r => r.findings)]
-        const remaining = config.review.maxFindings > 0 ? config.review.maxFindings - known.length : 0
-        if (config.review.maxFindings > 0 && remaining <= 0) { run.status = halt = 'skipped_limit'; continue }
+        const remaining = section ? lens.cap ?? 25 : config.review.maxFindings > 0 ? config.review.maxFindings - known.length : lens.cap ?? 0
+        if (!section && config.review.maxFindings > 0 && remaining <= 0) { run.status = halt = 'skipped_limit'; continue }
 
-        const system = lensSystemPrompt(ctx.prompt!.content, lens, remaining, config.judge.shownAnchors)
-        const briefing = lensBriefing(known)
+        // The shown-line allowance rewrites a clause only some overlays contain, and a section lens never takes unchanged lines.
+        const shownOk = !!config.judge.shownAnchors && !section && lens.overlay.includes(SHOWN_LINE_CLAUSE)
+        const system = lensSystemPrompt(ctx.prompt!.content, lens, remaining, shownOk)
+        const briefing = lensBriefing(section ? [] : known)
         const prefix = sharedPrefix(ctx, `lens:${lens.name}`)
-        const overlay = prefix ? lensOverlay(lens, remaining, config.judge.shownAnchors) : ''
+        const overlay = prefix ? lensOverlay(lens, remaining, shownOk) : ''
         const estimate = prefix ? cachedEstimate(prefix, overlay, briefing) : ctx.estimatedInputTokens + defaultTokenEstimator.estimate(system.length - ctx.prompt!.content.length + briefing.length)
         ctx.stageEstimates = { ...ctx.stageEstimates, [`lens:${lens.name}`]: { tokens: estimate } }
         if (estimate > budget) {
@@ -1156,13 +1314,16 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
           continue
         }
 
-        if (config.judge.shownAnchors && !ctx.shownLens) ctx.shownLens = buildShownSource(ctx.filteredDiff!, ctx.fileContexts ?? [])
-        console.log(`  Lens ${lens.name}: full-PR pass, excluding ${known.length} known finding(s)`)
+        if (shownOk && !ctx.shownLens) ctx.shownLens = buildShownSource(ctx.filteredDiff!, ctx.fileContexts ?? [])
+        console.log(`  Lens ${lens.name}: full-PR pass, excluding ${known.length} known finding(s)${section ? ' (own section)' : ''}`)
         const extras = { alsoAffects: hiBench(ctx), scenario: !!config.review.highImpact && !!lens.scenarioTag }
         const lensSchema: [Record<string, unknown>?] = extras.alsoAffects || extras.scenario ? [findingsOutputSchema(extras)] : []
+        // A section lens only sees the re-review message when the delta scopes its places, so a whole-PR pass reads the first-review payload.
+        const passHistory = !history || (section && (inlineActive(ctx) || !ctx.deltaDiff)) ? undefined : history
+        let sectionFound: readonly ReviewFinding[] | undefined
         try {
           const result = await withPassDeadline(limitMs, signal => {
-            const tail: [Record<string, unknown>?, AbortSignal?] = signal ? [lensSchema[0], signal] : lensSchema
+            const tail: [Record<string, unknown>?, AbortSignal?, LensHistory?] = passHistory ? [lensSchema[0], signal, passHistory] : signal ? [lensSchema[0], signal] : lensSchema
             const uncached = () => runLens(
               config.llmApiKey, model, config.anthropic.maxRetries, extraPassMaxTokens(ctx), effort,
               ctx.prInfo!, ctx.filteredDiff!, ctx.fileContexts ?? [], system, briefing, config.review.lineNumbers, `lens:${lens.name}`, ...tail,
@@ -1171,13 +1332,25 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
               ? cachedOrUncached(ctx, `lens:${lens.name}`, limitMs, () => effortPass(ctx, `lens:${lens.name}`, limitMs, extra => runSharedPass(config.llmApiKey, model, config.anthropic.maxRetries, extraPassMaxTokens(ctx), effort, prefix, briefing, overlay, `lens:${lens.name}`, signal, extra)), uncached)
               : uncached()
           })
-          run.findings = result.findings
           run.promptHash = result.promptHash
           run.usage = stageUsage(result.usage)
           addUsage(ctx, result.usage)
           run.status = 'succeeded'
-          console.log(`  Lens ${lens.name}: ${result.findings.length} finding(s)`)
           recordPassCall(ctx, `lens:${lens.name}`, extraPassMaxTokens(ctx), limitMs, callUsageOf(result), undefined, passEffortSent(ctx, sharedPrefix(ctx, `lens:${lens.name}`)))
+          if (section) {
+            sectionFound = result.findings
+          } else {
+            let found = result.findings
+            // A section lens placed in Findings still has its kind, path and added-line rules enforced before the main judge sees it.
+            if (lens.section.kinds) found = intakeSection(lens, found, { filteredDiff: ctx.filteredDiff!, fileContexts: ctx.fileContexts ?? [] }).places.map(placeAsFinding)
+            if (rereview) {
+              const gated = ctx.deltaDiff ? gateToDelta(found, ctx.deltaDiff, paths) : { kept: found, outside: 0 }
+              found = gated.kept
+              run.rereview = { outside_delta: gated.outside }
+            }
+            run.findings = found
+            console.log(`  Lens ${lens.name}: ${found.length} finding(s)`)
+          }
         } catch (err: unknown) {
           const e = err as Error & { usage?: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number; cost_usd?: number; reasoning_tokens?: number } }
           const used = hasCallUsage(e) ? e.usage : spentUsage(err, e.usage)
@@ -1195,6 +1368,8 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
             console.warn(`  Lens ${lens.name} FAILED (${isContextLengthError(err) ? 'context length' : e.message}) — continuing without its findings`)
           }
         }
+        // Outside the try so a section-stage error is not logged as a failed lens call.
+        if (sectionFound) await sectionStage(ctx, lens, run, sectionFound, budget)
       }
       return State.JUDGE_REVIEW
     }
@@ -1204,8 +1379,112 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       console.log(`  Reviewer findings: ${reviewFindings.high}H / ${reviewFindings.medium}M / ${reviewFindings.low}L`)
       const noFindings = reviewFindings.high === 0 && reviewFindings.medium === 0 && reviewFindings.low === 0
 
+      const firstPass = ctx.reviewObject?.findings ?? []
+      // Everything the judge sees, built once so a re-review's lens-only judge and the normal judge send the same request.
+      const makeJudge = () => {
+        const breadth = ctx.breadthFindings ?? []
+        const secondLook = ctx.secondLookFindings ?? []
+        const lens = (ctx.lensRuns ?? []).flatMap(r => r.findings)
+        // Order is load-bearing: the boundary arg (firstPass.length) keeps review as trusted-anchor, breadth+second_look+lens changed-line-only.
+        const candidates = [
+          ...firstPass.map(f => ({ ...f, origin: 'review' as const })),
+          ...breadth.map(f => ({ ...f, origin: 'breadth' as const })),
+          ...secondLook.map(f => ({ ...f, origin: 'second_look' as const })),
+          ...(ctx.lensRuns ?? []).flatMap(r => r.findings.map(f => ({ ...f, origin: `lens:${r.name}` as const }))),
+        ]
+        const extra = breadth.length > 0 || secondLook.length > 0 || lens.length > 0
+        const judgeInput = extra ? { ...ctx.reviewObject!, findings: [...firstPass, ...breadth, ...secondLook, ...lens] } : ctx.reviewObject!
+        const suggestedFixes = !!config.judge.suggestedFixes
+        const counterparts = !!ctx.outcomeSink && config.benchmarkCounterpartRows
+        const alsoAffects = hiBench(ctx)
+        const sites = ctx.firstPassSites?.size ? ctx.firstPassSites : undefined
+        const routing = sectionRouting(ctx)
+        const judgeOptions: JudgeOptions | undefined = config.judge.quality || config.judge.shownAnchors || config.judge.proposals || suggestedFixes || counterparts || alsoAffects || sites || routing
+          ? {
+              quality: config.judge.quality,
+              proposals: config.judge.proposals,
+              shownAnchors: config.judge.shownAnchors
+                ? {
+                    judge: buildShownSource(ctx.filteredDiff!, config.judge.fileContext ? ctx.fileContexts ?? [] : []), breadth: ctx.shownBreadth, secondLook: ctx.shownSecondLook, secondLookFrom: firstPass.length + breadth.length,
+                    ...(lens.length ? { lens: ctx.shownLens, lensFrom: firstPass.length + breadth.length + secondLook.length } : {}),
+                  }
+                : undefined,
+              ...(suggestedFixes ? { proposals: true, codeProposals: true } : {}),
+              ...(counterparts ? { counterparts: true } : {}),
+              ...(alsoAffects ? { alsoAffects: true } : {}),
+              ...(sites ? { firstPassSites: sites } : {}),
+              ...(routing ? { route: routing.route } : {}),
+            }
+          : undefined
+        const judgeOpen = ctx.inline?.judgeOpen
+        const judgeTail: [JudgeOptions?, { block: string }?, boolean?] = inlineActive(ctx) ? [judgeOptions, judgeOpen, true] : judgeOpen ? [judgeOptions, judgeOpen] : judgeOptions ? [judgeOptions] : []
+        const call = () => runJudge(
+          config.llmApiKey,
+          config.judge.model,
+          config.judge.maxRetries,
+          config.anthropic.maxTokens,
+          config.judge.effort,
+          ctx.filteredDiff!,
+          judgeInput,
+          config.judge.fileContext ? ctx.fileContexts ?? [] : [],
+          config.judge.policy,
+          config.review.lineNumbers,
+          extra ? firstPass.length : undefined,
+          ...judgeTail,
+        )
+        return { candidates, call, commit: () => routing?.commit() }
+      }
+
+      // A re-review where only findings lenses found something: judge those candidates alone first, so a dry reviewer does not hide them behind the 0-finding gate below.
+      const lensOnly = noFindings && ctx.reviewNumber > 1 && ctx.force !== 're-review' && !!config.judge.model && !ctx.lensCandidatesCleared && (ctx.lensRuns ?? []).some(r => r.findings.length > 0)
+      if (lensOnly) {
+        const judge = makeJudge()
+        try {
+          const result = await judge.call()
+          if ((result.kept ?? []).length > 0) {
+            ctx.judgeCandidates = judge.candidates
+            ctx.reviewTextBeforeJudge = ctx.reviewText
+            applyJudgeResult(ctx, result)
+            judge.commit()
+            return State.POST_REVIEW
+          }
+          const model = config.judge.model
+          // Routing runs before the kept count, so a judge whose kept findings all moved to a section still has to flag those places absorbed.
+          judge.commit()
+          addUsage(ctx, result.usage)
+          ;(ctx.remainderRequests ??= []).push({ usage: stageUsage(result.usage), model })
+          recordPassCall(ctx, 'judge', config.anthropic.maxTokens, undefined, result.usage)
+          if (result.retryRefusal) noteContentFilter(ctx, 'judge', result.retryRefusal)
+          const cache = !!config.review.promptCache
+          ctx.rereviewLensJudge = {
+            status: 'succeeded', model, prompt_hash: result.promptHash ?? null,
+            tokens: { input: result.usage.input_tokens, output: result.usage.output_tokens, ...(cache ? { cache_read: result.usage.cache_read_input_tokens ?? 0, cache_write: result.usage.cache_creation_input_tokens ?? 0 } : {}) },
+            cost_usd: result.usage.cost_usd ?? (result.usage.attempts ? estimateAttemptsCost(result.usage.attempts, model, true) : estimateAttemptsCost([result.usage], model, true)),
+            kept: 0, ...(result.sanity ? { sanity: result.sanity } : {}), decisions: result.decisions ?? [],
+          }
+          console.log('  Re-review: the lens candidates did not survive the judge - continuing as a re-review with nothing new')
+        } catch (err: unknown) {
+          recordPassCall(ctx, 'judge', config.anthropic.maxTokens, undefined, (err as { usage?: LLMUsage }).usage, err)
+          const refused = err instanceof ContentFilterError && !ctx.outcomeSink
+          if (refused) refuseCall(ctx, 'judge', err, config.judge.model)
+          else {
+            const spent = (err as { usage?: LLMUsage }).usage
+            if (spent) {
+              addUsage(ctx, spent)
+              ;(ctx.remainderRequests ??= []).push({ usage: stageUsage(spent), model: config.judge.model })
+            }
+          }
+          ctx.rereviewLensJudge = { status: refused ? 'refused' : 'failed', model: config.judge.model, prompt_hash: null, tokens: null, cost_usd: null, kept: 0, decisions: [] }
+          console.warn(`  Re-review lens judge ${refused ? 'declined by the content filter' : `failed (${(err as Error).message})`} - continuing without those candidates`)
+        }
+        ctx.lensCandidatesCleared = true
+      }
+      const lensCandidates = ctx.lensCandidatesCleared ? [] : (ctx.lensRuns ?? []).flatMap(r => r.findings)
+
       // 0-finding re-review: an unanswered dev reply is answered in-thread (reply priority); else suppress noise, or post one confirmation when a finding was resolved or is still open. --force re-review bypasses this and always posts.
       if (noFindings && ctx.reviewNumber > 1 && ctx.force !== 're-review') {
+        // Every exit below can skip POST_REVIEW, so the section places are summarised (unposted) before any of them.
+        finalizeRunSections(ctx, false)
         const lastReview = supersedeBoundary(ctx.previousReviews ?? [])
         // Agent replies carry a footer; an unanswered dev reply is one without, newer than our last review and last agent reply.
         const replies = ctx.replies ?? []
@@ -1258,86 +1537,19 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
       // The re-review gate above stays on reviewer findings; the judge runs whenever there is anything to validate.
       const breadth = ctx.breadthFindings ?? []
       const secondLook = ctx.secondLookFindings ?? []
-      const lens = (ctx.lensRuns ?? []).flatMap(r => r.findings)
-      if (noFindings && breadth.length === 0 && secondLook.length === 0 && lens.length === 0) {
+      if (noFindings && breadth.length === 0 && secondLook.length === 0 && lensCandidates.length === 0) {
         ctx.judgeStatus = 'skipped_no_findings'
         console.log('  Skipping judge — no findings to validate')
         return State.POST_REVIEW
       }
 
-      const firstPass = ctx.reviewObject?.findings ?? []
-      // Order is load-bearing: the boundary arg (firstPass.length) keeps review as trusted-anchor, breadth+second_look+lens changed-line-only.
-      ctx.judgeCandidates = [
-        ...firstPass.map(f => ({ ...f, origin: 'review' as const })),
-        ...breadth.map(f => ({ ...f, origin: 'breadth' as const })),
-        ...secondLook.map(f => ({ ...f, origin: 'second_look' as const })),
-        ...(ctx.lensRuns ?? []).flatMap(r => r.findings.map(f => ({ ...f, origin: `lens:${r.name}` as const }))),
-      ]
-      const extra = breadth.length > 0 || secondLook.length > 0 || lens.length > 0
-      const judgeInput = extra ? { ...ctx.reviewObject!, findings: [...firstPass, ...breadth, ...secondLook, ...lens] } : ctx.reviewObject!
-
+      const judge = makeJudge()
+      ctx.judgeCandidates = judge.candidates
       ctx.reviewTextBeforeJudge = ctx.reviewText
-      const suggestedFixes = !!config.judge.suggestedFixes
-      const counterparts = !!ctx.outcomeSink && config.benchmarkCounterpartRows
-      const alsoAffects = hiBench(ctx)
-      const sites = ctx.firstPassSites?.size ? ctx.firstPassSites : undefined
-      const judgeOptions: JudgeOptions | undefined = config.judge.quality || config.judge.shownAnchors || config.judge.proposals || suggestedFixes || counterparts || alsoAffects || sites
-        ? {
-            quality: config.judge.quality,
-            proposals: config.judge.proposals,
-            shownAnchors: config.judge.shownAnchors
-              ? {
-                  judge: buildShownSource(ctx.filteredDiff!, config.judge.fileContext ? ctx.fileContexts ?? [] : []), breadth: ctx.shownBreadth, secondLook: ctx.shownSecondLook, secondLookFrom: firstPass.length + breadth.length,
-                  ...(lens.length ? { lens: ctx.shownLens, lensFrom: firstPass.length + breadth.length + secondLook.length } : {}),
-                }
-              : undefined,
-            ...(suggestedFixes ? { proposals: true, codeProposals: true } : {}),
-            ...(counterparts ? { counterparts: true } : {}),
-            ...(alsoAffects ? { alsoAffects: true } : {}),
-            ...(sites ? { firstPassSites: sites } : {}),
-          }
-        : undefined
-      const judgeOpen = ctx.inline?.judgeOpen
-      const judgeTail: [JudgeOptions?, { block: string }?, boolean?] = inlineActive(ctx) ? [judgeOptions, judgeOpen, true] : judgeOpen ? [judgeOptions, judgeOpen] : judgeOptions ? [judgeOptions] : []
       try {
-        const result = await runJudge(
-          config.llmApiKey,
-          config.judge.model,
-          config.judge.maxRetries,
-          config.anthropic.maxTokens,
-          config.judge.effort,
-          ctx.filteredDiff!,
-          judgeInput,
-          config.judge.fileContext ? ctx.fileContexts ?? [] : [],
-          config.judge.policy,
-          config.review.lineNumbers,
-          extra ? firstPass.length : undefined,
-          ...judgeTail,
-        )
-        ctx.reviewText = result.text
-        ctx.judgeScores = result.scores
-        ctx.judgePromptHash = result.promptHash
-        ctx.judgeDecisions = result.decisions
-        ctx.judgeAnomalies = result.anomalies
-        if (result.sanity) ctx.judgeSanity = result.sanity
-        if (result.retryRefusal) noteContentFilter(ctx, 'judge', result.retryRefusal)
-        ctx.judgedFindings = result.kept
-        if (result.render) ctx.renderJudged = result.render
-        if (result.proposalsDropped) ctx.proposalsDropped = result.proposalsDropped
-        if (result.notes) {
-          console.log(`  Judge notes (not posted): ${result.notes}`)
-        }
-        const a = result.anomalies
-        if (a && (a.unknown_ids || a.undecided || a.duplicate_ids || a.drop_without_evidence)) {
-          console.warn(`  Judge anomalies: unknown_ids ${a.unknown_ids}, undecided ${a.undecided}, duplicate_ids ${a.duplicate_ids}, drop_without_evidence ${a.drop_without_evidence}`)
-        }
-        if (result.scores?.length) {
-          console.log(`  Judge finding scores: ${result.scores.map(s => `${s.severity} ${s.score}/10`).join(', ')}`)
-        }
-        ctx.judgeUsage = stageUsage(result.usage)
-        addUsage(ctx, result.usage)
-        ctx.judgeStatus = 'succeeded'
-        recordPassCall(ctx, 'judge', config.anthropic.maxTokens, undefined, result.usage)
+        const result = await judge.call()
+        applyJudgeResult(ctx, result)
+        judge.commit()
       } catch (err: unknown) {
         ctx.judgeStatus = 'failed'
         recordPassCall(ctx, 'judge', config.anthropic.maxTokens, undefined, (err as { usage?: LLMUsage }).usage, err)
@@ -1373,6 +1585,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         const lastReview = supersedeBoundary(ctx.previousReviews ?? [])
         const priorHadFindings = !!lastReview && markdownHasFindings(lastReview.body)
         if (!priorHadFindings && (merged.delta_stats?.still_open ?? 0) === 0) {
+          finalizeRunSections(ctx, false)
           ctx.action = 'NO_NEW_FINDINGS'
           ctx.skipReason = 'Re-review found no new findings (prior review already clean)'
           markHeadChecked(ctx)
@@ -1385,6 +1598,8 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
     case State.POST_REVIEW: {
       // The sink takes the structured review instead of a posted comment, so cleanup, cut guard and footer don't apply.
       if (ctx.outcomeSink) {
+        // Section output only reaches the record: findings.json never depends on a section lens.
+        finalizeRunSections(ctx, false)
         const sunk = await ctx.outcomeSink({
           review: ctx.reviewObject!, reviewText: ctx.reviewText!, judged: ctx.judgeUsage !== undefined, judgeScores: ctx.judgeScores, judgedFindings: ctx.judgedFindings, breadthFindings: ctx.breadthFindings, secondLookFindings: ctx.secondLookFindings,
           ...(ctx.lensRuns ? { lensFindings: ctx.lensRuns.flatMap(r => r.findings) } : {}),
@@ -1457,16 +1672,18 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         ? orderPosted(cleaned, ctx.judgedFindings ?? [], order => judgedRender(new Map(), order))
         : !judged && reviewObject ? orderPosted(cleaned, reviewObject.findings, order => renderReview(reviewObject, { order })) : { text: cleaned }
       let body = posted.text
+      const sectionBlocks = finalizeRunSections(ctx, false)
+      const sectionsText = sectionBlocks.length ? `\n\n${renderBlocks(sectionBlocks)}` : ''
       // After every guard and parser has read the plain text, so no reviewText consumer ever sees a block.
       if (config.judge.suggestedFixes && judgedRender) {
-        const composed = composeSuggestedFixes(ctx.judgedFindings ?? [], s => judgedRender(s, posted.order), body, COMMENT_BUDGET - todoSection.length - footer.length, (s, fixFree) => judgedRender(s, posted.order, fixFree))
+        const composed = composeSuggestedFixes(ctx.judgedFindings ?? [], s => judgedRender(s, posted.order), body, COMMENT_BUDGET - todoSection.length - footer.length - sectionsText.length, (s, fixFree) => judgedRender(s, posted.order, fixFree))
         body = composed.text
         const dropped = ctx.proposalsDropped
         ctx.suggestedFixes = dropped ? { ...composed.stats, dropped } : composed.stats
         const { rendered, rejected, skipped } = composed.stats
         console.log(`  Suggested fixes: ${rendered} rendered, ${rejected} rejected${dropped ? `, ${dropped} dropped by the sanitizer` : ''}${skipped ? `, all skipped (${skipped})` : ''}`)
       }
-      const comment = body + todoSection + footer
+      const comment = body + sectionsText + todoSection + footer
 
       if (ctx.dryRun) {
         console.log('\n=== DRY RUN — Review output (not posted) ===\n')
@@ -1493,6 +1710,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         }
         console.log('Posting review comment...')
         await ctx.adapter.postComment(ctx.prId, comment)
+        markSectionsPosted(ctx)
         markHeadChecked(ctx)
         console.log('Done. Review posted to PR.\n')
       }

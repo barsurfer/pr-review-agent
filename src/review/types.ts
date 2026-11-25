@@ -15,6 +15,8 @@ import type { ShownSource } from './shown-anchors.js'
 import type { LensRecommendation } from './lenses.js'
 import type { SiteDropReason, SharedPrefix } from './client.js'
 import type { InlineEngine } from '../inline/types.js'
+import type { DropReason, SectionPlace, SectionSummary } from './lens-sections.js'
+import type { SectionBlock } from './section-render.js'
 
 /** Every node in the review flow. */
 export enum State {
@@ -72,6 +74,36 @@ export interface LensRun {
   findings: ReviewFinding[]
   promptHash?: string
   usage?: StageUsage
+  placement?: 'section'
+  places?: SectionPlace[]
+  sectionOk?: boolean
+  absorbedLow?: number
+  intake?: { received: number; places: number; dropped: Record<DropReason, number> }
+  judgeLog?: SectionJudgeLog
+  section?: SectionSummary
+  rereview?: { outside_delta: number }
+}
+
+export interface SectionJudgeLog {
+  status: 'succeeded' | 'failed' | 'refused' | 'aborted_time' | 'skipped_time' | 'skipped_budget'
+  model: string
+  prompt_hash: string | null
+  tokens: { input: number; output: number; cache_read?: number; cache_write?: number } | null
+  cost_usd: number | null
+  anomalies?: { unknown_ids: number; undecided: number; duplicate_ids: number }
+  sanity?: { retried: boolean; degenerate_after_retry: boolean; reasons: string[] }
+  decisions: Array<{ id: string; label: string; anchor: string; reason: string; verdict: string; evidence: string; score: number }>
+}
+
+export interface RereviewLensJudge {
+  status: 'succeeded' | 'failed' | 'refused'
+  model: string
+  prompt_hash: string | null
+  tokens: { input: number; output: number; cache_read?: number; cache_write?: number } | null
+  cost_usd: number | null
+  kept: 0
+  sanity?: { retried: boolean; degenerate_after_retry: boolean; reasons: string[] }
+  decisions: AppliedDecision[]
 }
 
 export interface StageUsage {
@@ -221,6 +253,10 @@ export interface ReviewContext {
   judgeAnomalies?: JudgeAnomalies
   judgeSanity?: { retried: boolean; degenerate_after_retry: boolean; reasons: string[] }
   judgedFindings?: KeptFinding[]
+  rereviewLensJudge?: RereviewLensJudge
+  lensCandidatesCleared?: boolean
+  sectionBlocks?: SectionBlock[]
+  sectionsPosted?: boolean
   // A render closure, so POST_REVIEW orders findings and splices blocks into the posted comment while reviewText stays plain.
   renderJudged?: RenderJudged
   suggestedFixes?: SuggestedFixStats

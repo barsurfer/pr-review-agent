@@ -45,6 +45,16 @@ The check reads legacy footers (the listing predicate also matches them) and the
 - **Directed replies.** A reply that @-mentions only someone else is still answered unless `SKIP_DIRECTED_REPLIES=true`, which drops it exactly as the legacy reply flow does.
 - **Summary thread.** Replies under the summary are answered too. Its budget is `MAX_REPLY_COMMENTS`, counted only over trusted answers inside the summary thread; finding-thread answers do not count.
 
+## Section blocks (lens sections)
+
+- A lens placed in a section (`slop` by default, `LENS_SECTIONS`) adds a block per lens to the summary, after the narrative tail (after the Merge Confidence disclaimer, or the `---` rule under `INLINE_HIDE=confidence`) and before `### TODOs Introduced`. Format: heading, exact legend, a blank line, then rows (`- \`file:lines\` · label · reason`). Heading + legend recognise a block; both are constant across settings.
+- **Rows are never threads**, even with LOW threads on: the agent closes nothing, so cleanup threads would pile up as unresolved work; rows are not state (no F ids, matching, re-raise or prior-block entry) so a section's correction can never leave stale threads behind. A LOW finding the main judge moved into a section (routing) is removed before `planRun` and gets no thread either.
+- **Regeneration:** every block is regenerated from the whole PR on each review (inline sections use the first-review payload); row churn between pushes is accepted. A run with no model call (no reviewable delta, merge-only delta, coherent NO_CHANGE) carries the previous valid summary's blocks as text, only for lenses still placed in a section. A run that called the model shows this run's rows when the lens and its section judge succeeded (or there were no places), and no block when the lens or judge was skipped, failed, refused or aborted. A notice summary renders none and the next review regenerates.
+- **Open threads win:** `ctx.inline.openAnchors` (recorded ranges of open finding threads, plus the `no thread` rows on runs that carry them, with no line mapping) drops a section place on the same lines and stops routing; a thread whose code moved can sit beside a Cleanup row.
+- **History:** ` · N cleanup` is appended after the other parts (the lower-cased heading per block, rows shown; none on notice or no-change lines). `parseHistoryLine` accepts every form.
+- **Size trim:** per section, in `order`: bodies off and 5 rows plus `- and N more … items` (after the TODO cut to 10), then `N … items; list omitted to fit the size limit` (after the TODO count), and the blocks are omitted by the fallback layout; hidden rows are counted in `inline.section_rows_hidden`. `carryNarrative` leaves recognised blocks out, `parseSectionBlocks` returns them for carrying.
+- The lens-only re-review judge (R2) and the judge's shared stage now handle lens candidates, so `Engine.judge()`'s `extra` counts only breadth and second look.
+
 ## Hiding output
 
 `INLINE_HIDE` applies to inline output only; the legacy review, legacy replies and legacy footer never change.
@@ -83,6 +93,7 @@ With the flag on, the record has an `inline` key (outcome, identity source, summ
 - Fixed findings stay open until a developer resolves them (stage 2 would close them).
 - In bundled mode an open finding on a since-renamed file is left out of that bundle's judge block (same limit as the reviewer prior list).
 - Without a fresh judge pass the narrative can lag open threads: a bundle with no findings, files outside every bundle, a re-review with zero candidates, and quiet or unchanged runs that carry an older narrative.
+- The history line's section count (` · N cleanup`) is recomposed once with the first render's shown rows; if that second render trims further, the count can exceed the rows actually posted (very large summaries only).
 
 ## Before enabling in production
 

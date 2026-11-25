@@ -14,6 +14,7 @@ export interface InlineEngine {
   judgeOpen?: { block: string }
   judgeOpenFor?(files: string[]): { block: string } | undefined
   replyUsage?: LLMUsage
+  openAnchors?: Array<{ file: string; lines?: string }>
   record(): InlineRecord
 }
 
@@ -65,4 +66,5 @@ export interface InlineRecord {
   rows_collapsed?: number
   head_moved_at?: string
   footer_lines_removed?: number
+  section_rows_hidden?: number
 }

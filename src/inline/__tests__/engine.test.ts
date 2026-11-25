@@ -19,6 +19,7 @@ import { renderReview, type ReviewFinding } from '../../review/formatter.js'
 import { rootBody } from '../compose.js'
 import { withState, verify } from '../state.js'
 import { SUMMARY_HEADER, buildAnswerMarker, parseAnswerMarker } from '../markers.js'
+import { parseRows } from '../rows.js'
 import { makeFake, httpErr, ME, HEAD, HEAD12, type Fake } from './fake-bitbucket.js'
 import type { InlineDeps, InlineOutcome } from '../types.js'
 
@@ -621,7 +622,7 @@ describe('JUDGE_REVIEW wrap', () => {
     expect(deps.markHeadChecked).toHaveBeenCalledTimes(1)
   })
 
-  it('does the same for a lens finding', async () => {
+  it('leaves the review number alone for a lens finding: the shared judge stage judges it on its own', async () => {
     seedSummary(fake, { n: 1, commits: [A] })
     const e = engineOf(fake)
     const ctx = ctxOf(fake)
@@ -631,7 +632,7 @@ describe('JUDGE_REVIEW wrap', () => {
     reviewed(ctx, [])
     ctx.lensRuns = [{ name: 'reliability', status: 'succeeded', model: 'm', findings: [second] }]
     await e.step(State.JUDGE_REVIEW, ctx, deps)
-    expect(seen.n).toBe(1)
+    expect(seen.n).toBe(2)
     expect(ctx.reviewNumber).toBe(2)
   })
 
@@ -945,5 +946,119 @@ describe('second fix round', () => {
     const body = summaryOf(fake)!.body
     expect(body).toContain('· F1 ·')
     expect(body).not.toContain('· no thread')
+  })
+})
+
+describe('section blocks', () => {
+  const HEAD2 = 'e'.repeat(40)
+  const place = (over: Record<string, unknown> = {}) => ({ lens: 'slop', file: 'src/a.ts', start: 4, end: 4, label: 'Restating comment', reason: 'says the obvious', body: 'b', severity: 'LOW', type: 'maintainability', ...over })
+  const slopRun = (over: Record<string, unknown> = {}) => ({ name: 'slop', status: 'succeeded', model: 'm', findings: [], placement: 'section', sectionOk: true, places: [place(), place({ start: 9, end: 9, label: 'Commented-out code' })], ...over })
+  const BLOCK_HEAD = '### Cleanup\nLow-value code added in this PR; not counted in the findings or the verdict.\n\n'
+
+  beforeEach(() => { (cfg as any).lenses = { enabled: true, list: 'slop', model: '', sections: '', everyReview: true } })
+
+  async function firstReview(run: Record<string, unknown> = slopRun()): Promise<ReviewContext> {
+    const e = engineOf(fake)
+    const ctx = ctxOf(fake)
+    const deps = depsOf()
+    await e.step(State.CHECK_PREVIOUS_REVIEWS, ctx, deps)
+    reviewed(ctx, [])
+    ctx.lensRuns = [run as never]
+    await e.step(State.POST_REVIEW, ctx, deps)
+    return ctx
+  }
+
+  it('writes the block into the summary after the narrative, counts it in the history, and opens no thread for it', async () => {
+    await firstReview()
+    const body = summaryOf(fake)!.body
+    expect(body).toContain(`${BLOCK_HEAD}- \`src/a.ts:4\` · Restating comment · says the obvious\n- \`src/a.ts:9\` · Commented-out code · says the obvious`)
+    expect(body.indexOf('### Unresolved Questions')).toBeLessThan(body.indexOf('### Cleanup'))
+    expect(body.indexOf('### Cleanup')).toBeLessThan(body.indexOf('### Review History'))
+    expect(body).toContain(`- Review 1 · ${HEAD12} · no findings · 2 cleanup`)
+    expect(roots(fake)).toHaveLength(0)
+    expect(parseRows(body)).toEqual({ threads: [], summaryOnly: [], resolved: [] })
+    expect(verify(body, ME)).toEqual({ n: 1, commits: [HEAD12] })
+  })
+
+  it('carries the block through a run that made no model call, without a count', async () => {
+    await firstReview()
+    fake.hooks.head = HEAD2
+    fake.hooks.commitDiff = () => ''
+    const ctx = ctxOf(fake, { prInfo: { id: '7', title: 't', description: '', author: 'dev', sourceBranch: 'f', targetBranch: 'main', sourceCommit: HEAD2 } })
+    expect(await engineOf(fake).step(State.CHECK_PREVIOUS_REVIEWS, ctx, depsOf())).toBe(State.DONE)
+    const body = summaryOf(fake)!.body
+    expect(body).toContain(`${BLOCK_HEAD}- \`src/a.ts:4\``)
+    expect(body.match(/### Cleanup/g)).toHaveLength(1)
+    expect(body).toMatch(/- Review 2 · eeeeeeeeeeee · no change\n/)
+  })
+
+  it('drops a carried block once its lens is no longer placed in a section', async () => {
+    await firstReview()
+    ;(cfg as any).lenses.sections = 'none'
+    fake.hooks.head = HEAD2
+    fake.hooks.commitDiff = () => ''
+    const ctx = ctxOf(fake, { prInfo: { id: '7', title: 't', description: '', author: 'dev', sourceBranch: 'f', targetBranch: 'main', sourceCommit: HEAD2 } })
+    await engineOf(fake).step(State.CHECK_PREVIOUS_REVIEWS, ctx, depsOf())
+    expect(summaryOf(fake)!.body).not.toContain('### Cleanup')
+  })
+
+  it('regenerates the block on a run that made a call, and shows none when the lens did not complete', async () => {
+    await firstReview()
+    fake.hooks.head = HEAD2
+    const next = async (run: Record<string, unknown>): Promise<string> => {
+      const ctx = ctxOf(fake, { prInfo: { id: '7', title: 't', description: '', author: 'dev', sourceBranch: 'f', targetBranch: 'main', sourceCommit: HEAD2 } })
+      const e = engineOf(fake)
+      const deps = depsOf()
+      await e.step(State.CHECK_PREVIOUS_REVIEWS, ctx, deps)
+      reviewed(ctx, [])
+      ctx.lensRuns = [run as never]
+      await e.step(State.POST_REVIEW, ctx, deps)
+      return summaryOf(fake)!.body
+    }
+    const fresh = await next(slopRun({ places: [place({ start: 12, end: 12 })] }))
+    expect(fresh).toContain('- `src/a.ts:12` · Restating comment')
+    expect(fresh).not.toContain('- `src/a.ts:9`')
+    expect(fresh).toContain(' · 1 cleanup')
+  })
+
+  it('shows no block when the lens failed on a run that changed code', async () => {
+    await firstReview()
+    fake.hooks.head = HEAD2
+    const ctx = ctxOf(fake, { prInfo: { id: '7', title: 't', description: '', author: 'dev', sourceBranch: 'f', targetBranch: 'main', sourceCommit: HEAD2 } })
+    const e = engineOf(fake)
+    const deps = depsOf()
+    await e.step(State.CHECK_PREVIOUS_REVIEWS, ctx, deps)
+    reviewed(ctx, [])
+    ctx.lensRuns = [slopRun({ status: 'failed', sectionOk: false, places: undefined }) as never]
+    await e.step(State.POST_REVIEW, ctx, deps)
+    expect(summaryOf(fake)!.body).not.toContain('### Cleanup')
+  })
+
+  it('yields to an open thread whose recorded range covers the place', async () => {
+    seedSummary(fake, { n: 1, commits: [A] })
+    seedThread(fake, { id: 'F1', title: 'Null user', line: 4 })
+    fake.hooks.head = HEAD2
+    const ctx = ctxOf(fake, { prInfo: { id: '7', title: 't', description: '', author: 'dev', sourceBranch: 'f', targetBranch: 'main', sourceCommit: HEAD2 } })
+    const e = engineOf(fake)
+    const deps = depsOf()
+    await e.step(State.CHECK_PREVIOUS_REVIEWS, ctx, deps)
+    expect(e.openAnchors).toEqual([{ file: 'src/a.ts', lines: '4' }])
+    reviewed(ctx, [])
+    ctx.lensRuns = [slopRun() as never]
+    await e.step(State.POST_REVIEW, ctx, deps)
+    const body = summaryOf(fake)!.body
+    expect(body).not.toContain('- `src/a.ts:4`')
+    expect(body).toContain('- `src/a.ts:9`')
+    expect(ctx.lensRuns[0].section).toMatchObject({ covered_by_thread: 1, rows: 1 })
+  })
+
+  it('renders no block on a content-filter notice run', async () => {
+    const e = engineOf(fake)
+    const ctx = ctxOf(fake)
+    const deps = depsOf()
+    await e.step(State.CHECK_PREVIOUS_REVIEWS, ctx, deps)
+    ctx.lensRuns = [slopRun() as never]
+    await e.step(State.POST_FILTER_NOTICE, ctx, deps)
+    expect(summaryOf(fake)!.body).not.toContain('### Cleanup')
   })
 })

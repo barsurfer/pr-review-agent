@@ -101,7 +101,7 @@ describe('impact lens (an ordinary registry lens)', () => {
   it('alone asks for the scenario tag; the other lenses are unchanged objects', () => {
     expect(impact.scenarioTag).toBe(true)
     for (const name of ['reliability', 'security', 'testing', 'performance', 'architecture']) {
-      expect(Object.keys(LENS_REGISTRY[name])).toEqual(['name', 'when', 'overlay'])
+      expect(Object.keys(LENS_REGISTRY[name])).toEqual(['name', 'when', 'defaultPlacement', 'section', 'overlay'])
     }
   })
 

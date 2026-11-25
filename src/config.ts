@@ -183,7 +183,11 @@ export const config = {
     list: optional('LENSES', ''),
     model: optional('LENS_MODEL', ''),
     recommend: optional('ENABLE_LENS_RECOMMENDATION', 'false') === 'true',
-  },
+    // Unset or empty = each lens's default placement; none = every lens in Findings; a list = exactly those lenses get a section of their own.
+    sections: optional('LENS_SECTIONS', '').trim(),
+    // On by default with a kill switch: false restores lenses skipping every re-review.
+    everyReview: trueUnlessFalse('ENABLE_LENS_REREVIEW'),
+  } as { enabled: boolean; list: string; model: string; recommend: boolean; sections?: string; everyReview?: boolean },
 
   agentIdentity: process.env.AGENT_IDENTITY || process.env.BITBUCKET_USERNAME || 'Claude',
   // Reviewed repo slug — set from --repo-slug at runtime; sent as OpenRouter's `user` for segmentation.

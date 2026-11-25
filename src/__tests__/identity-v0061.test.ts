@@ -471,3 +471,24 @@ describe('v0.0.61 identity with ENABLE_TOKEN_METRICS on (the key and the two con
     expect(scrub(JSON.stringify(captured, visible, 2))).toBe(readFileSync(new URL(fixtureOf(name), import.meta.url), 'utf-8').replace(/\r\n/g, '\n'))
   })
 })
+
+describe('v0.0.61 identity with ENABLE_LENS_REREVIEW on and the lens finding nothing', () => {
+  const fixtureJson = (name: string) => JSON.parse(readFileSync(new URL(fixtureOf(name), import.meta.url), 'utf-8').replace(/\r\n/g, '\n'))
+  const lensStage = (c: { stage: string }) => c.stage === 'reliability'
+  const LENS_AFFECTED = ['lens_runs', 'cost_usd', 'tokens', 'pass_calls', 'token_metrics', 'tokens_by_stage', 'stage_estimates', 'stage_tokens']
+
+  it.each(SCENARIOS.filter(([name]) => name.startsWith('2 ') || name.startsWith('7 ')))('%s', async (name, _action, run) => {
+    cfg.lenses.everyReview = true
+    const original = completeStructured.getMockImplementation()!
+    completeStructured.mockImplementation(async (system: string, user: any, schema: any, opts: any) => (stageOf(system, schema, opts) === 'reliability' ? { object: { findings: [] }, usage: plain } : original(system, user, schema, opts)))
+    const live = JSON.parse(scrub(JSON.stringify(await run(), visible, 2)))
+    const before = fixtureJson(name)
+    expect(live.calls.filter(lensStage), 'the lens must run once').toHaveLength(1)
+    expect(live.record.lens_runs[0]).toMatchObject({ name: 'reliability', status: 'succeeded', findings: 0 })
+    expect(live.requests).toEqual(before.requests)
+    expect(live.calls.filter((c: { stage: string }) => !lensStage(c))).toEqual(before.calls)
+    expect(live.completes).toEqual(before.completes)
+    const strip = (r: Record<string, unknown>) => Object.fromEntries(Object.entries(r).filter(([k]) => !LENS_AFFECTED.includes(k)))
+    expect(strip(live.record)).toEqual(strip(before.record))
+  })
+})
