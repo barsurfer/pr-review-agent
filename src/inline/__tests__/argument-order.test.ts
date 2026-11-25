@@ -23,6 +23,7 @@ vi.mock('../../review/client.js', async (importOriginal) => {
 import * as client from '../../review/client.js'
 import { runBundledReview } from '../../review/bundled.js'
 import { config } from '../../config.js'
+import { ContentFilterError } from '../../llm/shared.js'
 
 const realRunReview = (client as unknown as { realRunReview: typeof client.runReview }).realRunReview
 const mockRun = vi.mocked(client.runReview)
@@ -159,6 +160,26 @@ describe('bundled judge open block', () => {
       expect(judgeOpenFor.mock.calls.every(([files]) => Array.isArray(files) && files.length > 0)).toBe(true)
     }
     delete (cfg.judge as { quality?: boolean }).quality
+  })
+
+  it('appends the sanity flag only when the engine reports an active inline run', async () => {
+    for (const [active, tail] of [[true, [undefined, undefined, undefined, true]], [false, []]] as const) {
+      mockJudge.mockClear()
+      await runBundledReview(mkCtx({ priorFor: () => undefined, judgeOpenFor: () => undefined, record: () => ({ active }) }), 1000)
+      expect(mockJudge.mock.calls.length).toBeGreaterThan(1)
+      for (const c of mockJudge.mock.calls) expect(c.slice(10)).toEqual(tail)
+    }
+  })
+
+  it('merges per-bundle sanity records and records a retry refusal against its bundle', async () => {
+    const refusal = new ContentFilterError({ signal: 'native_refusal' })
+    mockJudge
+      .mockResolvedValueOnce({ text: 'judged', usage, scores: [], promptHash: 'h', decisions: [], kept: [], sanity: { retried: true, degenerate_after_retry: false, reasons: ['summary stub'] } } as never)
+      .mockResolvedValueOnce({ text: 'judged', usage, scores: [], promptHash: 'h', decisions: [], kept: [], sanity: { retried: true, degenerate_after_retry: true, reasons: ['summary stub', '1 undecided'] }, retryRefusal: refusal } as never)
+    const ctx = mkCtx({ priorFor: () => undefined, record: () => ({ active: true }) }) as unknown as { judgeSanity?: unknown; contentFilters?: Array<{ stage: string; bundle?: number }> }
+    await runBundledReview(ctx as never, 1000)
+    expect(ctx.judgeSanity).toEqual({ retried: true, degenerate_after_retry: true, reasons: ['summary stub', '1 undecided'] })
+    expect(ctx.contentFilters).toMatchObject([{ stage: 'judge', bundle: 2 }])
   })
 
   it('keeps today\'s tail with no open threads, a priorFor-only stub or no engine', async () => {

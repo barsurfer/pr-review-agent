@@ -21,7 +21,7 @@ import { defaultTokenEstimator } from './token-estimator.js'
 import { normalizeFindingPath, type FirstPassSite } from './findings-output.js'
 import { filterDiff, countChangedLines, parseVerdictScore, isPathExcluded, scanTodos, isContextLengthError, shownLength } from './parsers.js'
 import { spaceLists, buildReviewFooter, buildReplyFooter, stripPreviousFooter, stripDeltaStats, stripJudgeNotes, stripJenkinsMeta, stripPreamble, isNoChange, extractCommitHash, legacyCommitHash, countFindings, markdownHasFindings, hasReplyFooter, renderReview, type ReviewFinding } from './formatter.js'
-import { runBundledReview, addUsage, recordPassCall, refuseCall } from './bundled.js'
+import { runBundledReview, addUsage, recordPassCall, refuseCall, inlineActive } from './bundled.js'
 import { CONTENT_FILTER_NOTICE, CONTENT_FILTER_SKIP_REASON, REPLY_DECLINED_TEXT, isContentFilterNotice, noteContentFilter } from './content-filter.js'
 import { composeSuggestedFixes, COMMENT_BUDGET } from './suggested-fix.js'
 import { orderPosted } from './posted-order.js'
@@ -1298,7 +1298,7 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
           }
         : undefined
       const judgeOpen = ctx.inline?.judgeOpen
-      const judgeTail: [JudgeOptions?, { block: string }?] = judgeOpen ? [judgeOptions, judgeOpen] : judgeOptions ? [judgeOptions] : []
+      const judgeTail: [JudgeOptions?, { block: string }?, boolean?] = inlineActive(ctx) ? [judgeOptions, judgeOpen, true] : judgeOpen ? [judgeOptions, judgeOpen] : judgeOptions ? [judgeOptions] : []
       try {
         const result = await runJudge(
           config.llmApiKey,
@@ -1319,6 +1319,8 @@ async function transition(state: State, ctx: ReviewContext): Promise<State> {
         ctx.judgePromptHash = result.promptHash
         ctx.judgeDecisions = result.decisions
         ctx.judgeAnomalies = result.anomalies
+        if (result.sanity) ctx.judgeSanity = result.sanity
+        if (result.retryRefusal) noteContentFilter(ctx, 'judge', result.retryRefusal)
         ctx.judgedFindings = result.kept
         if (result.render) ctx.renderJudged = result.render
         if (result.proposalsDropped) ctx.proposalsDropped = result.proposalsDropped

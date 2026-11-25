@@ -101,6 +101,7 @@ export interface UsageRecord {
   unjudged_candidates?: NonNullable<UsageRecord['review_candidates']>
   judge_decisions: AppliedDecision[] | null
   judge_anomalies: JudgeAnomalies | null
+  judge_sanity?: { retried: boolean; degenerate_after_retry: boolean; reasons: string[] }
   judge_policy: { keep_minor: boolean; keep_unverified: boolean; file_context: boolean; keep_test_gaps?: boolean } | null
   breadth_status: BreadthStatus | null
   breadth_model: string | null
@@ -550,6 +551,7 @@ export function buildUsageRecord(
     ...(error && ctx.judgeStatus === 'failed' && ctx.judgeCandidates ? { unjudged_candidates: candidateRows(ctx.judgeCandidates, !!ctx.outcomeSink, withHi) } : {}),
     judge_decisions: ctx.judgeDecisions ?? null,
     judge_anomalies: ctx.judgeAnomalies ?? null,
+    ...(ctx.judgeSanity ? { judge_sanity: ctx.judgeSanity } : {}),
     judge_policy: judgeModel && judgeTokens
       ? { keep_minor: config.judge.policy.keepMinor, keep_unverified: config.judge.policy.keepUnverified, file_context: config.judge.fileContext, ...(config.judge.policy.keepTestGaps ? { keep_test_gaps: true } : {}) }
       : null,

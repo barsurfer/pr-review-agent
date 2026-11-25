@@ -148,3 +148,11 @@ The `computed_score` field in `results.jsonl` provides a separate arithmetic sco
 ## Judge Prompt (`src/prompt/judge-prompt.txt`)
 
 Standalone file — not derived from the base review template. Includes its own SCOPE LOCK to resist prompt injection from reviewer output that might contain adversarial content.
+
+## Sanity check and one retry (inline runs only)
+
+- `runJudge` takes a trailing `sanityCheck` argument, set only when the inline engine is active (`inlineActive`, so a `legacy_pr` fallback run stays legacy) and per bundle in bundled mode. Legacy and benchmark runs are out of scope for now (backlog): they keep one judge request per call, so recorded behaviour and the identity fixtures are unchanged.
+- Degenerate means the trimmed `summary` is under 20 characters (a stub such as `x` seen on Haiku 5.5) or the `undecided` anomaly count is above 0. The judge is retried once with the same input; a `ContentFilterError` on the first call is never retried. Both requests are summed with `sumAttempts`, so `judge_cost_usd`, `cost_usd`, `tokens` and `token_metrics` price each request alone. A failed retry falls back to the first output and keeps its spend.
+- A refusal (`ContentFilterError`) on the retry keeps the first output and is recorded in `content_filter` with stage `judge`; its billed usage is summed in.
+- A good retry is used. If the output stays degenerate, fields are chosen separately: decisions come from the attempt with fewer undecided candidates (the retry on a tie), the narrative and its Merge Confidence from whichever attempt has a non-stub summary (the decisions attempt first); undecided candidates are still dropped (keeping them as unverified is backlog); a stub summary is replaced by the reviewer's own `summary`, `behavioral_diff`, `production_risk` and `unresolved_questions` from this run, keeping the judge's `merge_confidence` so the truncation guard still finds Merge Confidence. A stub summary without a numeric `merge_confidence` in 0-100 throws into the existing judge-failure path; no score is invented.
+- Logged as one console line before the retry (`Judge output degenerate (summary stub, 2 undecided) - retrying once`) and one for the outcome, plus the `judge_sanity` usage key.

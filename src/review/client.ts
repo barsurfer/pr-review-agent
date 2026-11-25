@@ -3,6 +3,7 @@ import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { createHash } from 'crypto'
 import { createProvider, type LLMUsage, type UserPart } from '../llm/provider.js'
+import { sumAttempts, ContentFilterError } from '../llm/shared.js'
 import { renderReview, ISSUE_TYPES, SCENARIOS, type ReviewObject, type ReviewFinding, type FindingScore } from './formatter.js'
 import type { KeptFinding, FirstPassSite } from './findings-output.js'
 import {
@@ -36,6 +37,8 @@ export interface SharedPrefix {
   sessionId?: string
 }
 
+export interface JudgeSanity { retried: boolean; degenerate_after_retry: boolean; reasons: string[] }
+
 export interface JudgeResult extends ModelResult {
   /** Validation reasoning — logged, never posted. */
   notes?: string
@@ -49,6 +52,8 @@ export interface JudgeResult extends ModelResult {
   render?: RenderJudged
   renderWith?: RenderJudged
   proposalsDropped?: number
+  sanity?: JudgeSanity
+  retryRefusal?: ContentFilterError
 }
 
 // The judge rules on candidate ids and the app renders the comment, so reasoning can't leak; the judge only anchors candidates whose reviewer location has no numeric line.
@@ -511,6 +516,24 @@ This is a re-review. The message ends with "Still Open on This PR": findings fro
 - Treat an open finding as still present unless the diff plainly shows its problem is gone; then say in \`summary\` that it appears fixed and its thread awaits resolution, and leave it out of \`production_risk\`.
 - F ids (e.g. F2) are thread ids, not candidate ids: you may name an open finding by its F id in \`summary\` and \`production_risk\`.`
 
+const STUB_SUMMARY_CHARS = 20
+const summaryStub = (o: JudgeOutput): boolean => (typeof o.summary === 'string' ? o.summary.trim().length : 0) < STUB_SUMMARY_CHARS
+
+const validScore = (o: JudgeOutput): boolean => typeof o.merge_confidence === 'number' && Number.isFinite(o.merge_confidence) && o.merge_confidence >= 0 && o.merge_confidence <= 100
+
+// Per field on a double failure: decisions from the attempt that ruled on more candidates, narrative from whichever attempt has a real summary.
+function mergeAttempts(first: JudgeOutput, second: JudgeOutput, undecidedFirst: number, undecidedSecond: number): JudgeOutput {
+  const base = undecidedSecond <= undecidedFirst ? second : first
+  const other = base === second ? first : second
+  const narrative = !summaryStub(base) ? base : !summaryStub(other) ? other : undefined
+  if (!narrative) return { ...base, merge_confidence: validScore(base) ? base.merge_confidence : other.merge_confidence }
+  return { ...base, summary: narrative.summary, behavioral_diff: narrative.behavioral_diff, production_risk: narrative.production_risk, unresolved_questions: narrative.unresolved_questions, merge_confidence: validScore(narrative) ? narrative.merge_confidence : base.merge_confidence }
+}
+
+function degenerateReasons(o: JudgeOutput, a: JudgeAnomalies): string[] {
+  return [...(summaryStub(o) ? ['summary stub'] : []), ...(a.undecided > 0 ? [`${a.undecided} undecided`] : [])]
+}
+
 export async function runJudge(
   apiKey: string,
   model: string,
@@ -526,6 +549,8 @@ export async function runJudge(
   options?: JudgeOptions,
   // Inline only: absent, the judge request stays byte-identical for legacy and the benchmark.
   open?: { block: string },
+  // Inline only: legacy and benchmark keep one judge request per call so recorded behaviour is unchanged.
+  sanityCheck = false,
 ): Promise<JudgeResult> {
   const parts: string[] = []
   parts.push(renderDiff(diff, lineNumbers))
@@ -543,17 +568,59 @@ export async function runJudge(
   const schema = judgeOutputSchema(quality, shownAnchors, proposals, codeProposals)
   const callOpts = { model, maxTokens, maxRetries, effort: effort || undefined }
   console.log(`Sending to judge (${model}, maxRetries: ${maxRetries}${fileContexts.length ? `, ${fileContexts.length} context file(s)` : ''})...`)
-  const { object, usage } = await createProvider(apiKey).completeStructured<JudgeOutput>(judgePrompt, userMessage, schema, callOpts)
+  const attempt = () => createProvider(apiKey).completeStructured<JudgeOutput>(judgePrompt, userMessage, schema, callOpts)
+  const judge = (o: JudgeOutput) => applyJudgeDecisions(review.findings, o, policy, review.can_be_split, diff, breadthFrom, options)
+  let { object, usage } = await attempt()
 
   console.log(`Judge received (${usage.input_tokens} in / ${usage.output_tokens} out tokens)`)
 
-  const judged = applyJudgeDecisions(review.findings, object, policy, review.can_be_split, diff, breadthFrom, options)
+  let judged = judge(object)
+  let sanity: JudgeSanity | undefined
+  let retryRefusal: ContentFilterError | undefined
+  if (sanityCheck) {
+    const reasons = degenerateReasons(object, judged.anomalies)
+    if (reasons.length) {
+      console.log(`  Judge output degenerate (${reasons.join(', ')}) - retrying once`)
+      sanity = { retried: true, degenerate_after_retry: true, reasons }
+      try {
+        const second = await attempt()
+        usage = sumAttempts(usage, second.usage)
+        console.log(`Judge received (${second.usage.input_tokens} in / ${second.usage.output_tokens} out tokens)`)
+        const retried = judge(second.object)
+        const again = degenerateReasons(second.object, retried.anomalies)
+        if (again.length === 0) { object = second.object; judged = retried } else {
+          object = mergeAttempts(object, second.object, judged.anomalies.undecided, retried.anomalies.undecided)
+          judged = judge(object)
+        }
+        sanity.degenerate_after_retry = again.length > 0
+        console.log(sanity.degenerate_after_retry ? `  Judge retry still degenerate (${again.join(', ')})` : '  Judge retry fine')
+      } catch (err: unknown) {
+        // The first attempt is still usable, so a failed retry must not discard it; any spend on the failed request is kept.
+        const spent = (err as { usage?: LLMUsage }).usage
+        if (spent) usage = sumAttempts(usage, spent)
+        // A refusal is billed and must reach the run's content_filter record even though the first output is kept.
+        if (err instanceof ContentFilterError) retryRefusal = err
+        console.warn(`  Judge retry failed (${(err as Error)?.message}) - using the first output`)
+      }
+      if (sanity.degenerate_after_retry && summaryStub(object)) {
+        // Only the app's own score can stand in for a missing one, so no valid score means the existing failure path.
+        if (!validScore(object)) {
+          throw Object.assign(new Error('Judge output has no usable summary or Merge Confidence after one retry'), { usage })
+        }
+        object = { ...object, summary: review.summary, behavioral_diff: review.behavioral_diff, production_risk: review.production_risk, unresolved_questions: review.unresolved_questions }
+        judged = judge(object)
+        console.log("  Judge summary replaced by the reviewer's narrative")
+      }
+    }
+  }
 
   const promptHash = createHash('sha256').update(judgePrompt).digest('hex').slice(0, 12)
   return {
     text: judged.markdown, usage, notes: summarizeDecisions(judged.decisions), scores: judged.scores, promptHash,
     decisions: judged.decisions, anomalies: judged.anomalies, kept: judged.kept, render: judged.render,
     ...(judged.renderWith ? { renderWith: judged.renderWith, proposalsDropped: judged.proposalsDropped } : {}),
+    ...(sanity ? { sanity } : {}),
+    ...(retryRefusal ? { retryRefusal } : {}),
   }
 }
 

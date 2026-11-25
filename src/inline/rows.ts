@@ -82,6 +82,11 @@ export function parseSummaryOnlyRow(line: string, bodyLine?: string): SummaryOnl
   return { kind: 'summary_only', severity: m[1] as Severity, title: m[2], ...(l ? { file: l[1], ...(l[2] ? { lines: l[2] } : {}) } : {}), ...(body ? { body } : {}) }
 }
 
+// The overflow form drops the resolved rows, so it gives no baseline and the count must be omitted rather than inflated.
+export function resolvedBaseline(rows: { resolved: readonly ResolvedRow[]; overflow?: OverflowRow }): ReadonlySet<string> | undefined {
+  return rows.overflow ? undefined : new Set(rows.resolved.map(r => r.id))
+}
+
 export function parseRows(body: string): { threads: ThreadRow[]; summaryOnly: SummaryOnlyRow[]; resolved: ResolvedRow[]; overflow?: OverflowRow } {
   const lines = body.replace(/\r\n/g, '\n').split('\n')
   const out: ReturnType<typeof parseRows> = { threads: [], summaryOnly: [], resolved: [] }

@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import { resolvedBaseline } from '../rows.js'
 import {
   sanitizeTitle, threadRow, summaryOnlyRow, resolvedRow, overflowLine, parseRows, parseThreadRow, parseResolvedRow, parseOverflow,
   historyLine, parseHistoryLine, parseHistory, capHistory, MAX_TITLE,
@@ -85,5 +86,25 @@ describe('history', () => {
     expect(capHistory(lines)[0]).toBe(lines[5])
     expect(capHistory(lines, 5)).toHaveLength(5)
     expect(parseHistory(['x', ...lines.slice(0, 2), 'y'].join('\n'))).toEqual(lines.slice(0, 2))
+  })
+
+  it('parses the old form and every combination of the appended parts', () => {
+    const texts = ['2 findings, 1 new thread', '1 finding, 1 new thread · 15 reported fixed · 2 open', 'no findings · 1 resolved by developers', 'no change · 3 reported fixed · 2 resolved by developers · 4 open']
+    for (const text of texts) expect(parseHistoryLine(historyLine(2, 'a1b2c3d4e5f6', text))).toEqual({ n: 2, c12: 'a1b2c3d4e5f6', text })
+    const old = '- Review 1 · 00ecb650c68d · 1 finding, 1 new thread'
+    const next = historyLine(2, 'a1b2c3d4e5f6', texts[1])
+    expect(parseHistory([old, next].join('\n'))).toEqual([old, next])
+  })
+})
+
+describe('resolvedBaseline', () => {
+  const resolved = [{ kind: 'resolved' as const, id: 'F2', severity: 'LOW' as const, title: 't' }]
+
+  it('gives the resolved ids of a normal summary', () => {
+    expect([...resolvedBaseline({ resolved })!]).toEqual(['F2'])
+  })
+
+  it('gives no baseline for the overflow form, so the count is omitted', () => {
+    expect(resolvedBaseline({ resolved: [], overflow: { kind: 'overflow', count: 3 } })).toBeUndefined()
   })
 })

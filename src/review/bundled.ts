@@ -24,6 +24,9 @@ const FIT_RATIO = 0.85
 const MIN_DIFF_SHARE = 0.1
 const BUNDLE_NOTE_RESERVE_CHARS = 1500
 
+// A legacy_pr fallback keeps ctx.inline set but runs the legacy flow, which must stay unchanged.
+export const inlineActive = (ctx: ReviewContext): boolean => ctx.inline?.record?.().active === true
+
 export type BundledOutcome = { ok: true } | { ok: false; reason: string; filtered?: true }
 
 // Whatever the provider billed for the refused request joins the run before the call is recorded as a filter event.
@@ -67,6 +70,7 @@ export async function runBundledReview(ctx: ReviewContext, maxInputTokens: numbe
   const judgeUsage: { input_tokens: number; output_tokens: number; cost_usd?: number } = { input_tokens: 0, output_tokens: 0 }
   const judgeRequests: StageUsage[] = []
   let judged = false
+  const sanity = { retried: false, degenerate_after_retry: false, reasons: [] as string[] }
   const deltaStats = { resolved: 0, still_open: 0, new_findings: 0 }
   let sawDelta = false
 
@@ -161,9 +165,8 @@ export async function runBundledReview(ctx: ReviewContext, maxInputTokens: numbe
     if (config.judge.model && result.review && found.high + found.medium + found.low > 0) {
       // Shown-context anchors need per-pass provenance a bundle does not carry, so only the quality flag is forwarded here.
       const open = ctx.inline?.judgeOpenFor?.(bundle.files)
-      const judgeTail: [number?, JudgeOptions?, { block: string }?] = open
-        ? [undefined, config.judge.quality ? { quality: true } : undefined, open]
-        : config.judge.quality ? [undefined, { quality: true }] : []
+      const quality = config.judge.quality ? { quality: true } : undefined
+      const judgeTail: [number?, JudgeOptions?, { block: string }?, boolean?] = inlineActive(ctx) ? [undefined, quality, open, true] : open ? [undefined, quality, open] : quality ? [undefined, quality] : []
       let judgeRefused = false
       try {
         const verdict = await runJudge(
@@ -179,6 +182,12 @@ export async function runBundledReview(ctx: ReviewContext, maxInputTokens: numbe
         judgeUsage.output_tokens += verdict.usage.output_tokens
         if (verdict.usage.cost_usd !== undefined) judgeUsage.cost_usd = (judgeUsage.cost_usd ?? 0) + verdict.usage.cost_usd
         judgeScores.push(...(verdict.scores ?? []))
+        if (verdict.retryRefusal) noteContentFilter(ctx, 'judge', verdict.retryRefusal, i + 1)
+        if (verdict.sanity) {
+          sanity.retried ||= verdict.sanity.retried
+          sanity.degenerate_after_retry ||= verdict.sanity.degenerate_after_retry
+          sanity.reasons.push(...verdict.sanity.reasons.filter(r => !sanity.reasons.includes(r)))
+        }
         text = verdict.text
         judged = true
         ctx.judgeStatus = 'succeeded'
@@ -219,6 +228,7 @@ export async function runBundledReview(ctx: ReviewContext, maxInputTokens: numbe
   if (judged) {
     ctx.judgeUsage = judgeUsage
     ctx.judgeRequests = judgeRequests
+    if (sanity.retried) ctx.judgeSanity = sanity
     ctx.judgeScores = judgeScores
   }
   console.log(`\nMerged ${reviews.length} bundle review(s): ${merged.object.findings.length} finding(s) after dedupe`)
