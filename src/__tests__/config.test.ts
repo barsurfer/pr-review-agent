@@ -111,18 +111,46 @@ describe('lens settings', () => {
   }
 
   it('defaults to off with an empty list and model', async () => {
-    expect(await load({})).toEqual({ enabled: false, list: '', model: '', recommend: false })
+    expect(await load({})).toEqual({ enabled: false, list: '', model: '', recommend: false, sections: '', everyReview: true })
   })
 
   it('turns on only from the exact string true and keeps LENSES unparsed', async () => {
     expect(await load({ ENABLE_LENSES: 'true', LENSES: 'reliability+security', LENS_MODEL: 'claude-haiku-5-5' }))
-      .toEqual({ enabled: true, list: 'reliability+security', model: 'claude-haiku-5-5', recommend: false })
+      .toEqual({ enabled: true, list: 'reliability+security', model: 'claude-haiku-5-5', recommend: false, sections: '', everyReview: true })
     expect((await load({ ENABLE_LENSES: '1' })).enabled).toBe(false)
   })
 
   it('ENABLE_LENS_RECOMMENDATION turns on only from the exact string true, independent of ENABLE_LENSES', async () => {
-    expect(await load({ ENABLE_LENS_RECOMMENDATION: 'true' })).toEqual({ enabled: false, list: '', model: '', recommend: true })
+    expect(await load({ ENABLE_LENS_RECOMMENDATION: 'true' })).toEqual({ enabled: false, list: '', model: '', recommend: true, sections: '', everyReview: true })
     for (const value of ['false', '1', '']) expect((await load({ ENABLE_LENS_RECOMMENDATION: value })).recommend).toBe(false)
+  })
+})
+
+describe('lens placement and re-review settings', () => {
+  afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks() })
+
+  const load = async (env: Record<string, string>) => {
+    vi.unstubAllEnvs()
+    for (const [name, value] of Object.entries(env)) vi.stubEnv(name, value)
+    vi.resetModules()
+    return (await import('../config.js')).config.lenses
+  }
+
+  it('LENS_SECTIONS keeps the raw trimmed value, empty when unset', async () => {
+    expect((await load({})).sections).toBe('')
+    expect((await load({ LENS_SECTIONS: ' rel, slop ' })).sections).toBe('rel, slop')
+    expect((await load({ LENS_SECTIONS: 'none' })).sections).toBe('none')
+  })
+
+  it('ENABLE_LENS_REREVIEW is on unless exactly false, and warns on a typo', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect((await load({})).everyReview).toBe(true)
+    expect((await load({ ENABLE_LENS_REREVIEW: '' })).everyReview).toBe(true)
+    expect((await load({ ENABLE_LENS_REREVIEW: 'true' })).everyReview).toBe(true)
+    expect((await load({ ENABLE_LENS_REREVIEW: 'false' })).everyReview).toBe(false)
+    expect(warn).not.toHaveBeenCalled()
+    expect((await load({ ENABLE_LENS_REREVIEW: 'flase' })).everyReview).toBe(true)
+    expect(warn).toHaveBeenCalledTimes(1)
   })
 })
 

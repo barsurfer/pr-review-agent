@@ -250,7 +250,7 @@ export function recordPassCall(ctx: ReviewContext, stage: string, maxTokens: num
 }
 
 function passModel(ctx: ReviewContext, stage: string): string {
-  if (stage === 'judge') return config.judge.model
+  if (stage === 'judge' || stage.startsWith('lens_judge:')) return config.judge.model
   if (stage === 'breadth') return ctx.breadthModel || breadthPass().model
   if (stage.startsWith('lens:')) return config.lenses.model || config.anthropic.model
   return config.anthropic.model

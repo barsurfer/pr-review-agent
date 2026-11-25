@@ -12,8 +12,9 @@ import {
 } from './judge-decisions.js'
 import { composeJudgePrompt, QUALITY_DECISION_PROPERTIES, PROPOSAL_DECISION_PROPERTIES, PROPOSAL_CODE_DECISION_PROPERTIES, SHOWN_ANCHOR_DESCRIPTIONS } from './judge-quality.js'
 import { stripOwnSuggestedFixes } from './suggested-fix.js'
+import { stripOwnSections } from './section-render.js'
 import { numberDiffLines, numberFileLines } from './parsers.js'
-import { LENS_REGISTRY, sanitizeLensRecommendations, type LensRecommendation } from './lenses.js'
+import { recommendableLenses, sanitizeLensRecommendations, type LensRecommendation } from './lenses.js'
 import type { PRInfo, ReviewComment, CommentReply } from '../vcs/adapter.js'
 import type { FileContext } from '../context/fetcher.js'
 import type { LoadedPrompt } from '../prompt/loader.js'
@@ -164,14 +165,14 @@ export function reviewOutputSchema(lensRecommendation: boolean): Record<string, 
   if (!lensRecommendation) return REVIEW_OUTPUT_SCHEMA
   if (lensRecommendationSchema) return lensRecommendationSchema
   const schema = structuredClone(REVIEW_OUTPUT_SCHEMA) as unknown as { properties: Record<string, unknown>; required: string[] }
-  const triggers = Object.values(LENS_REGISTRY).map(l => `${l.name} (${l.when})`).join('; ')
+  const triggers = recommendableLenses().map(l => `${l.name} (${l.when})`).join('; ')
   schema.properties.lens_recommendations = {
     type: 'array',
     description: `A focused follow-up review pass exists for each of these concerns: ${triggers}. List a lens only when THIS diff has substantive changed code for that concern in which a dedicated pass could plausibly find a real defect the change introduces. Return an empty array for small, cosmetic, or unrelated changes. This does not affect the review itself and is not shown to the developer.`,
     items: {
       type: 'object',
       properties: {
-        lens: { type: 'string', enum: Object.keys(LENS_REGISTRY) },
+        lens: { type: 'string', enum: recommendableLenses().map(l => l.name) },
         reason: { type: 'string', description: 'One short clause naming the changed code that gives this concern real surface.' },
       },
       required: ['lens', 'reason'],
@@ -371,9 +372,14 @@ export async function runLens(
   label = 'lens',
   schema: Record<string, unknown> = BREADTH_OUTPUT_SCHEMA,
   signal?: AbortSignal,
+  // Re-reviews only: the same history the reviewer saw, so a first-review request stays byte-identical.
+  history?: { previousReviews: ReviewComment[]; developerReplies: CommentReply[]; changesSinceLastReview: string; priorBlock?: string },
 ): Promise<{ findings: ReviewFinding[]; usage: LLMUsage; promptHash: string; firstPassSites?: unknown }> {
   const sites = 'first_pass_sites' in ((schema as { properties?: object }).properties ?? {})
-  const userMessage = `${buildUserMessage(prInfo, diff, fileContexts, [], [], '', lineNumbers)}\n\n${briefing}`
+  const base = history
+    ? buildUserMessage(prInfo, diff, fileContexts, history.previousReviews, history.developerReplies, history.changesSinceLastReview, lineNumbers, history.priorBlock)
+    : buildUserMessage(prInfo, diff, fileContexts, [], [], '', lineNumbers)
+  const userMessage = `${base}\n\n${briefing}`
   console.log(`Sending to ${label} reviewer (${model}, maxRetries: ${maxRetries})...`)
   // Sites are optional extras the sanitizer filters, so a malformed entry must not cost an OpenRouter resend of the whole pass.
   const { object, usage } = await createProvider(apiKey).completeStructured<{ findings: ReviewFinding[]; first_pass_sites?: unknown }>(
@@ -463,7 +469,7 @@ function buildUserMessage(
     parts.push(`## Previous Review by This Agent (latest of ${previousReviews.length} total):`)
     parts.push('This is the most recent review posted on an earlier revision of this PR. Acknowledge what was fixed, do not repeat issues that are now resolved, and call out anything still unaddressed.')
     // The reviewer must not treat the posted suggested fixes as review text; the reply model still sees them.
-    parts.push(`### Review from ${latest.createdOn}:\n${stripOwnSuggestedFixes(latest.body, 'review')}`)
+    parts.push(`### Review from ${latest.createdOn}:\n${stripOwnSections(stripOwnSuggestedFixes(latest.body, 'review'))}`)
   }
 
   if (developerReplies.length > 0) {
@@ -488,12 +494,12 @@ function buildUserMessage(
   return parts.join('\n\n')
 }
 
-function renderDiff(diff: string, lineNumbers: boolean): string {
+export function renderDiff(diff: string, lineNumbers: boolean): string {
   if (!lineNumbers) return `## Diff:\n\`\`\`diff\n${diff}\n\`\`\``
   return `## Diff (each added or unchanged line starts with its line number in the new file — cite those numbers in \`lines\`):\n\`\`\`diff\n${numberDiffLines(diff)}\n\`\`\``
 }
 
-function renderFileContexts(fileContexts: FileContext[], lineNumbers = false): string {
+export function renderFileContexts(fileContexts: FileContext[], lineNumbers = false): string {
   const heading = lineNumbers ? '## Full file context (each line starts with its line number):' : '## Full file context:'
   return [heading, ...fileContexts.map(f => `### ${f.path}\n\`\`\`\n${lineNumbers ? numberFileLines(f.content) : f.content}\n\`\`\``)].join('\n\n')
 }

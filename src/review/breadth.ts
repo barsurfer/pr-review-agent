@@ -12,7 +12,7 @@ const GENERATED_OR_LOCK = [
   /(^|\/)(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|go\.sum)$/, /\.lock$/,
   /-generated\./, /\.min\.(js|css)$/, /\.snap$/, /\.map$/, /\.pb\.go$/, /_pb2(_grpc)?\.py$/,
 ]
-const isGeneratedOrLock = (path: string): boolean => GENERATED_OR_LOCK.some(re => re.test(path))
+export const isGeneratedOrLock = (path: string): boolean => GENERATED_OR_LOCK.some(re => re.test(path))
 
 export type BreadthStatus =
   | 'disabled' | 'skipped_no_judge' | 'skipped_rereview' | 'skipped_bundled'

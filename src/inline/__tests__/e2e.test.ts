@@ -102,6 +102,7 @@ beforeEach(() => {
   Object.assign(cfg.review, { inlineReviews: true, inlineLowThreads: false, inlineAgentAccountId: '', inlineHide: [], promptCache: false, secondLook: false, bundledReview: false, effort: '', todoScan: false })
   Object.assign(cfg.reply, { maxComments: 5, maxFindingReplies: 5 })
   cfg.judge.model = ''
+  Object.assign(cfg.lenses, { enabled: false, list: 'rel', sections: '', everyReview: true })
   vi.mocked(loadPrompt).mockResolvedValue({ content: 'System prompt here', source: 'repo' } as never)
   vi.mocked(fetchContext).mockResolvedValue([])
   reviewerFinds([])
@@ -1017,4 +1018,118 @@ describe('Review History line', () => {
     expect(third!.inline).toMatchObject({ summary_check: 'valid' })
     expect(historyOf()[2]).toBe(`- Review 3 · ${C12} · 2 findings, 0 new threads · 2 open`)
   })
+})
+
+describe('a section lens across three inline runs', () => {
+  const ROW_ONE = '- `src/one.ts:2` · Restating comment · the comment repeats the next line'
+  const ROW_TWO = '- `src/two.ts:5` · Commented-out code · an old call is left behind'
+  const ROW_THREE = '- `src/three.ts:7` · Restating comment · the comment repeats the next line'
+  const CLEANUP = '### Cleanup\nLow-value code added in this PR; not counted in the findings or the verdict.\n\n'
+  const place = (file: string, kind: string, line: string, reason: string) => ({ severity: 'LOW', title: `${kind}: ${reason}`, file, lines: line, body: 'Delete it.' })
+  let slop: object[] = []
+  const slopCalls = () => completeStructured.mock.calls.filter(c => 'findings' in (c[2]?.properties ?? {}) && !('behavioral_diff' in (c[2]?.properties ?? {})))
+  const sectionBlock = (body: string): string => body.slice(body.indexOf('### Cleanup'), body.indexOf('### Review History')).trim()
+
+  beforeEach(() => {
+    cfg.judge.model = 'claude-haiku-5-5'
+    Object.assign(cfg.lenses, { enabled: true, list: 'slop', sections: '', everyReview: true })
+    slop = [place('src/one.ts', 'Restating comment', '2', 'the comment repeats the next line'), place('src/two.ts', 'Commented-out code', '5', 'an old call is left behind')]
+    completeStructured.mockImplementation(async (_system: string, _user: string, schema: any) => {
+      const props = schema?.properties ?? {}
+      if (props.decisions?.items?.properties?.verdict) {
+        const n = (completeStructured.mock.calls.at(-1)?.[1] as string).match(/- \[s\d+\]/g)?.length ?? 0
+        return { object: { decisions: Array.from({ length: n }, (_, i) => ({ candidate_id: `s${i}`, verdict: 'validated', evidence: 'e', score: 8 })) }, usage }
+      }
+      if ('findings' in props) return { object: { findings: slop }, usage }
+      throw new Error('unexpected model call')
+    })
+  })
+
+  it('posts Cleanup rows on review 1, regenerates them on a quiet re-review, and carries them on a zero-line push', async () => {
+    const first = await run()
+    const body1 = summaries()[0].body
+    expect(roots()).toHaveLength(0)
+    expect(sectionBlock(body1).startsWith(`${CLEANUP}${ROW_ONE}\n${ROW_TWO}`)).toBe(true)
+    expect(body1.indexOf('### Unresolved Questions')).toBeLessThan(body1.indexOf('### Cleanup'))
+    expect(body1).toContain('· 2 cleanup')
+    expect(first!.lens_runs![0]).toMatchObject({ name: 'slop', placement: 'section', section: { kept: 2, rows: 2, posted: 2 } })
+    expect(first!.section_findings!.map(r => r.posted)).toEqual([true, true])
+    expect(first!.inline).toMatchObject({ outcome: 'written', summary_check: 'missing' })
+    const summaryId = summaries()[0].id
+    const edits = fake.counts.edit
+
+    push(HEAD_B)
+    slop = [place('src/one.ts', 'Restating comment', '2', 'the comment repeats the next line'), place('src/three.ts', 'Restating comment', '7', 'the comment repeats the next line')]
+    const second = await run()
+    const body2 = summaries()[0].body
+    expect(summaries()).toHaveLength(1)
+    expect(summaries()[0].id).toBe(summaryId)
+    expect(fake.counts.edit).toBe(edits + 1)
+    expect(sectionBlock(body2).startsWith(`${CLEANUP}${ROW_ONE}\n${ROW_THREE}`)).toBe(true)
+    expect(body2).not.toContain('Commented-out code')
+    expect(body2).toContain('A change.')
+    expect(second!.inline).toMatchObject({ outcome: 'written', summary_check: 'valid' })
+    expect(mockRunReview).toHaveBeenCalledTimes(2)
+    expect(second!.lens_runs![0]).toMatchObject({ status: 'succeeded', placement: 'section', section: { posted: 2 } })
+    expect(verify(body2, ME)).toEqual({ n: 2, commits: [HEAD12, B12] })
+    expect(roots()).toHaveLength(0)
+
+    const lensCalls = slopCalls().length
+    mockRunReview.mockClear()
+    push(HEAD_C)
+    fake.hooks.commitDiff = () => ''
+    const third = await run()
+    const body3 = summaries()[0].body
+    expect(mockRunReview).not.toHaveBeenCalled()
+    expect(slopCalls()).toHaveLength(lensCalls)
+    expect(sectionBlock(body3)).toBe(sectionBlock(body2))
+    expect(verify(body3, ME)).toEqual({ n: 3, commits: [HEAD12, B12, C12] })
+    expect(third!.lens_runs).toBeFalsy()
+    neverClosed()
+  })
+
+  it('drops the carried block once the lens is no longer placed in a section', async () => {
+    await run()
+    push(HEAD_B)
+    fake.hooks.commitDiff = () => ''
+    Object.assign(cfg.lenses, { sections: 'none' })
+    await run()
+    expect(summaries()[0].body).not.toContain('### Cleanup')
+  })
+
+  it('reports no row as posted when the head moves before the summary is written', async () => {
+    mockRunReview.mockImplementation(async () => { push(HEAD_B); return answerWith([]) })
+    const record = await run()
+    expect(record!.inline!.outcome).toBe('head_moved_skip')
+    expect(summaries()).toHaveLength(0)
+    expect(record!.lens_runs![0].section).toMatchObject({ rows: 2, posted: 0 })
+    expect(record!.section_findings!.map(r => r.posted)).toEqual([false, false])
+  })
+
+  it('counts in the history line only the rows the trimmed block still shows', async () => {
+    const kinds = ['Restating comment', 'Breadcrumb comment', 'Commented-out code', 'Unreachable guard']
+    slop = PATHS.flatMap((path, f) => kinds.map((kind, k) => place(path, kind, String(2 + f * 4 + k), 'the comment repeats the next line')))
+    const long = (n: number): ReviewObject => ({ ...object([]), summary: 'x'.repeat(n) })
+    const rows = (body: string): number => sectionBlock(body).split('\n').filter(l => l.startsWith('- `')).length
+    const first = async (n: number) => {
+      fake = makeFake()
+      fake.hooks.diff = DIFF
+      fake.hooks.files = FILES
+      mockRunReview.mockImplementation(async () => ({ text: renderReview(long(n)), usage, review: long(n) }))
+      await run()
+      return summaries()[0].body
+    }
+    const roomy = await first(1000)
+    expect(rows(roomy)).toBe(10)
+    expect(roomy).toContain('· 10 cleanup')
+    expect(roomy).toContain('- and 2 more Cleanup items')
+
+    // The trim only fires near the limit, so start just under it and grow until the full block no longer fits.
+    let n = 1000 + 31_850 - roomy.length
+    let tight = await first(n)
+    while (rows(tight) === 10 && n < 33_000) { n += 40; tight = await first(n) }
+    expect(rows(tight)).toBe(5)
+    expect(tight).toContain('· 5 cleanup')
+    expect(tight).not.toContain('· 10 cleanup')
+  }, 60_000)
 })

@@ -14,7 +14,7 @@ const NAMES = ['reliability', 'security', 'testing', 'performance', 'architectur
 
 describe('LENS_REGISTRY', () => {
   it('holds exactly the starter lenses, keyed by name', () => {
-    expect(Object.keys(LENS_REGISTRY).sort()).toEqual([...NAMES].sort())
+    expect(Object.keys(LENS_REGISTRY).sort()).toEqual([...NAMES, 'slop'].sort())
     for (const [key, lens] of Object.entries(LENS_REGISTRY)) expect(lens.name).toBe(key)
   })
 
@@ -90,10 +90,10 @@ describe('parseLensList', () => {
 
 describe('lens aliases stay input-only', () => {
   it('registry keys and the recommendation schema enum are exactly the six canonical names', () => {
-    expect(Object.keys(LENS_REGISTRY)).toEqual(NAMES)
+    expect(Object.keys(LENS_REGISTRY)).toEqual([...NAMES, 'slop'])
     const schema = reviewOutputSchema(true) as unknown as { properties: { lens_recommendations: { items: { properties: { lens: { enum: string[] } } } } } }
     expect(schema.properties.lens_recommendations.items.properties.lens.enum).toEqual(NAMES)
-    expect(sanitizeLensRecommendations([{ lens: 'rel', reason: 'x' }, { lens: 'perf', reason: 'y' }])).toEqual([])
+    expect(sanitizeLensRecommendations([{ lens: 'rel', reason: 'x' }, { lens: 'perf', reason: 'y' }, { lens: 'slop', reason: 'z' }])).toEqual([])
   })
 })
 

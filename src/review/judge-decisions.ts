@@ -69,6 +69,7 @@ export interface AppliedDecision {
   anchor_file: string | null
   anchor_lines: string | null
   // Present only under the matching opt-in flag, so flag-off records are unchanged.
+  routed_to_section?: string
   anchor_basis?: AnchorBasis
   policy_override?: 'test_gap'
   duplicate_of?: string
@@ -96,6 +97,7 @@ export interface JudgeOptions {
   counterparts?: boolean
   alsoAffects?: boolean
   firstPassSites?: ReadonlyMap<number, FirstPassSite[]>
+  route?: (kept: readonly KeptFinding[]) => ReadonlyMap<number, string>
 }
 
 export type RenderJudged = (suffixes: ReadonlyMap<number, string>, order?: readonly number[], fixFree?: ReadonlySet<number>) => string
@@ -181,7 +183,7 @@ export function policyAction(reason: ReasonCategory, severity: Severity, policy:
 
 // Digits only: a symbol that merely contains a digit ("Phase 4", "_F2C_RETURN_TYPES") is not a line and must not anchor.
 const NUMERIC_LINES = /^\s*L?\d+(?:\s*[-–—,]\s*L?\d+)*\s*$/i
-const isNumericLines = (lines: string | undefined): boolean => NUMERIC_LINES.test(String(lines ?? ''))
+export const isNumericLines = (lines: string | undefined): boolean => NUMERIC_LINES.test(String(lines ?? ''))
 
 const TEST_GAP_EXPLICIT = /\b(untested|(not|never) tested|no (unit |regression |automated |integration )?tests?\b|missing tests?|without tests?|lacks? (a )?tests?|ha(s|ve) no (unit |regression )?tests?|no test (covers|exercises|for|asserts)|test coverage)/i
 const TEST_GAP_GENERIC = /\b(never (exercis|test)|no coverage|not covered|cannot fail|can't fail|tautolog|trivially pass|does not (exercise|cover|assert|test)|doesn't (exercise|cover|assert|test)|never asserts?)/gi
@@ -382,6 +384,8 @@ export function applyJudgeDecisions(candidates: readonly ReviewFinding[], output
   const moved: string[] = []
   const rows: KeptRow[] = []
   const sanitizerDropped: number[] = []
+  const candidateOf = new WeakMap<KeptFinding, number>()
+  const keep = (k: KeptFinding, i: number): void => { candidateOf.set(k, i); kept.push(k) }
   candidates.forEach((candidate, i) => {
     const id = candidateId(i)
     const entry = entries[i]
@@ -404,7 +408,7 @@ export function applyJudgeDecisions(candidates: readonly ReviewFinding[], output
 
     if (entry.r.action === 'move_to_unresolved') moved.push(question ?? candidate.title)
     if (isKept) {
-      kept.push({
+      keep({
         severity: entry.r.final_severity!, title: candidate.title, body, file: anchor.file, lines: anchor.lines,
         score: entry.r.score!, type: candidate.type, anchorSource: anchor.source, ...keptProposal, ...(withoutFix ? { bodyWithoutFix: withoutFix } : {}),
         ...(entry.r.quality_action ? { quality_action: entry.r.quality_action } : {}),
@@ -413,16 +417,27 @@ export function applyJudgeDecisions(candidates: readonly ReviewFinding[], output
         ...(options?.alsoAffects && i >= breadthFrom && Array.isArray(candidate.also_affects) && candidate.also_affects.length ? { alsoAffects: candidate.also_affects } : {}),
         // Keyed by candidate index, not kept index, so a dropped earlier candidate cannot shift sites onto another finding.
         ...(options?.firstPassSites?.get(i)?.length ? { sites: options.firstPassSites.get(i) } : {}),
-      })
+      }, i)
       rows.push({ candidate: i, expansion: false, validated: entry.r.reason_category === 'validated', evidenced: !!entry.r.evidence, rescueOf: entry.r.invalid_duplicate ? index.get(normalizeId(String(entry.r.duplicate_of ?? ''))) : undefined })
       for (const x of expansion?.accepted ?? []) {
-        kept.push({ severity: entry.r.final_severity!, title: candidate.title, body: x.body, file: x.file, lines: x.lines, score: entry.r.score!, type: candidate.type, anchorSource: 'diff', ...(options?.quality ? { quality_action: 'expansion' } : {}) })
+        keep({ severity: entry.r.final_severity!, title: candidate.title, body: x.body, file: x.file, lines: x.lines, score: entry.r.score!, type: candidate.type, anchorSource: 'diff', ...(options?.quality ? { quality_action: 'expansion' } : {}) }, i)
         rows.push({ candidate: i, expansion: true, validated: entry.r.reason_category === 'validated', evidenced: !!entry.r.evidence })
       }
     }
   })
 
   if (options?.quality) dedupKept(kept, rows, decisions, idx)
+
+  if (options?.route && kept.length) {
+    const routed = options.route(kept)
+    if (routed.size) {
+      for (const [n, lens] of routed) {
+        const c = candidateOf.get(kept[n])
+        if (c !== undefined) decisions[c].routed_to_section = lens
+      }
+      kept.splice(0, kept.length, ...kept.filter((_, n) => !routed.has(n)))
+    }
+  }
 
   const scores: FindingScore[] = kept.map(k => ({ title: k.title, severity: k.severity, score: k.score!, file: k.file, lines: k.lines }))
   const render: RenderJudged = (suffixes, order, fixFree) => renderJudgedReview(kept, output, moved, canBeSplit, suffixes, order, fixFree)

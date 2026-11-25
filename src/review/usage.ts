@@ -16,10 +16,12 @@ import type { FindingScore, ReviewFinding, IssueType, Scenario, AlsoAffected } f
 import { isAnchored, parseLineRange, normalizeFindingPath, type AlsoAffectsLog, type FirstPassSite, type FirstPassSiteLog } from './findings-output.js'
 import { candidateId, type AppliedDecision, type JudgeAnomalies } from './judge-decisions.js'
 import { MAX_UNTOUCHED_LISTED, type BreadthStatus, type SecondLookStatus, type LensStatus, type CandidateOrigin } from './breadth.js'
-import { activeLenses, type LensRecommendation } from './lenses.js'
+import { activeLenses, resolvePlacements, type LensRecommendation } from './lenses.js'
+import { placeLines } from './lens-sections.js'
 import { isCheckedCommitHash } from './checked-commit.js'
 import type { SuggestedFixStats } from './suggested-fix.js'
-import type { ReviewContext, LensRun, EventKind, PassCall, PromptCacheLog, StageUsage, TokenMetrics, ContentFilterRecord } from './types.js'
+import type { ReviewContext, LensRun, EventKind, PassCall, PromptCacheLog, StageUsage, TokenMetrics, ContentFilterRecord, SectionJudgeLog, RereviewLensJudge } from './types.js'
+import type { DropReason, SectionSummary } from './lens-sections.js'
 import { isAgentReply } from '../vcs/adapter.js'
 import { inlineRecord } from '../inline/record.js'
 import type { InlineRecord } from '../inline/types.js'
@@ -112,7 +114,9 @@ export interface UsageRecord {
   second_look_prompt_hash: string | null
   second_look_tokens: StageTokens | null
   second_look_cost_usd: number | null
-  lens_runs?: Array<{ name: string; status: LensStatus; model: string; prompt_hash: string | null; tokens: StageTokens | null; cost_usd: number | null; findings: number }> | null
+  lens_runs?: Array<{ name: string; status: LensStatus; model: string; prompt_hash: string | null; tokens: StageTokens | null; cost_usd: number | null; findings: number; placement?: 'section'; intake?: { received: number; places: number; dropped: Record<DropReason, number> }; judge?: SectionJudgeLog; section?: SectionSummary; rereview?: { outside_delta: number } }> | null
+  section_findings?: Array<{ lens: string; anchor: string; severity: ReviewFinding['severity']; type: IssueType; description: string; kind?: string; score: number | null; posted: boolean; absorbed?: true }> | null
+  rereview_lens_judge?: RereviewLensJudge
   lens_recommendations?: LensRecommendation[] | null
   suggested_fixes?: SuggestedFixStats | null
   counterpart_rows?: number
@@ -420,17 +424,21 @@ export function buildUsageRecord(
   const lenses = activeLenses(config.lenses)
   // The bundled path never enters LENS_REVIEW, so its runs are inferred here, as breadth/second-look statuses are.
   const lensSource: LensRun[] | undefined = ctx.lensRuns ?? (ctx.bundleCount && lenses.length
-    ? lenses.map(l => ({ name: l.name, status: 'skipped_bundled' as const, model: config.lenses.model || config.anthropic.model, findings: [] }))
+    ? lenses.map(l => ({ name: l.name, status: 'skipped_bundled' as const, model: config.lenses.model || config.anthropic.model, findings: [], ...(resolvePlacements(config.lenses).placements.get(l.name) === 'section' ? { placement: 'section' as const } : {}) }))
     : undefined)
   const lensRuns = lensSource?.map(r => {
     const tokens = r.usage ? tok(r.usage) : null
-    return { name: r.name, status: r.status, model: r.model, prompt_hash: r.promptHash ?? null, tokens, cost_usd: r.usage?.cost_usd ?? (r.usage && tokens ? priced(r.usage, tokens, r.model) : null), findings: r.findings.length }
+    return {
+      name: r.name, status: r.status, model: r.model, prompt_hash: r.promptHash ?? null, tokens, cost_usd: r.usage?.cost_usd ?? (r.usage && tokens ? priced(r.usage, tokens, r.model) : null), findings: r.findings.length,
+      ...(r.placement ? { placement: r.placement } : {}), ...(r.intake ? { intake: r.intake } : {}), ...(r.judgeLog ? { judge: r.judgeLog } : {}), ...(r.section ? { section: r.section } : {}), ...(r.rereview ? { rereview: r.rereview } : {}),
+    }
   }) ?? null
   const lensUsage = (ctx.lensRuns ?? []).reduce((sum, r) => ({
     input: sum.input + (r.usage?.input_tokens ?? 0), output: sum.output + (r.usage?.output_tokens ?? 0), cost: sum.cost + (r.usage?.cost_usd ?? 0),
     cache_read: sum.cache_read + (r.usage?.cache_read_input_tokens ?? 0), cache_write: sum.cache_write + (r.usage?.cache_creation_input_tokens ?? 0),
   }), { input: 0, output: 0, cost: 0, cache_read: 0, cache_write: 0 })
   const lensCost = (lensRuns ?? []).reduce((sum, r) => sum + (r.cost_usd ?? 0), 0)
+  const sectionLensActive = lenses.length > 0 && [...resolvePlacements(config.lenses).placements.values()].includes('section')
   // Inline answers run on the reply model, so they leave the reviewer stage and are priced separately.
   const inlineReply = config.review.inlineReviews ? ctx.inline?.replyUsage : undefined
   const inlineReplyCost = inlineReply ? ctx.inline?.record().reply_usage?.cost_usd ?? 0 : 0
@@ -567,6 +575,8 @@ export function buildUsageRecord(
     // Absent, not null, when lenses are off, so a lens-off record serializes byte-identical to one from before lenses existed.
     ...(lenses.length ? { lens_runs: lensRuns } : {}),
     ...(config.lenses.recommend ? { lens_recommendations: ctx.lensRecommendations ?? null } : {}),
+    ...(sectionLensActive ? { section_findings: sectionFindings(ctx) } : {}),
+    ...(ctx.rereviewLensJudge ? { rereview_lens_judge: ctx.rereviewLensJudge } : {}),
     ...(config.judge.suggestedFixes ? { suggested_fixes: ctx.suggestedFixes ?? null } : {}),
     ...(ctx.counterpartRows !== undefined ? { counterpart_rows: ctx.counterpartRows } : {}),
     ...(ctx.alsoAffectsRows !== undefined ? { also_affects_rows: ctx.alsoAffectsRows } : {}),
@@ -609,6 +619,16 @@ export function buildUsageRecord(
     ...(ctx.trigger ? { trigger: { event: ctx.trigger.event || null, comment_author: ctx.trigger.commentAuthor || null, ...(ctx.trigger.kind ? { event_kind: ctx.trigger.kind } : {}) } } : {}),
     error,
   }
+}
+
+// One row per kept place after routing; a place a posted finding or an open thread covered is logged unposted.
+function sectionFindings(ctx: ReviewContext): UsageRecord['section_findings'] {
+  const rows = (ctx.lensRuns ?? []).flatMap(r => (r.placement === 'section' ? r.places ?? [] : []))
+  if (!rows.length) return null
+  return rows.map(p => ({
+    lens: p.lens, anchor: `${p.file}:${placeLines(p)}`, severity: p.severity, type: p.type, description: firstSentence(p.body || p.reason), ...(p.kind ? { kind: p.kind } : {}),
+    score: p.score ?? null, posted: ctx.sectionsPosted === true && !p.dropped && p.shown === true, ...(p.absorbed ? { absorbed: true as const } : {}),
+  }))
 }
 
 // Findings-dependent gates run after the reviewer wrote the cache, so a planned pass that then skipped (or was never reached) is moved out of shared_stages.

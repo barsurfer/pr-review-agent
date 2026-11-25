@@ -5,6 +5,7 @@ import { PROPOSAL_CAP } from '../review/judge-decisions.js'
 import { COMMENT_BUDGET, MAX_FENCE, fenceFor, fixCodeContent, fixFreeContent, renderFixBlock } from '../review/suggested-fix.js'
 import { SUMMARY_HEADER, LEGACY_HEADER_LINE, LEGACY_HEADER_TAG, buildRootMarker, buildStateLine, stripGeneratedFooters } from './markers.js'
 import { splitState, withState } from './state.js'
+import { renderBlock, sectionLineRanges, type SectionBlock } from '../review/section-render.js'
 import {
   sanitizeTitle, MAX_HISTORY, threadRow, summaryOnlyRow, resolvedRow, overflowLine, historyLine, capHistory, parseThreadRow, parseResolvedRow, parseOverflow, parseHistoryLine, parseSummaryOnlyRow,
   type ThreadRow, type SummaryOnlyRow, type ResolvedRow,
@@ -112,16 +113,21 @@ export function carryNarrative(body: string): string | null {
   // An empty summary text is still a narrative: the old layout carried its heading, so the current one does too.
   const pre = kept.slice(headerLines, at).join('\n').trim() || (headerLines === 1 ? '### Summary' : '')
   if (!pre) return null
+  // A section block is regenerated (or carried by the caller), so the narrative never keeps one.
+  const blocks = sectionLineRanges(split.above)
+  const inBlock = (n: number): boolean => blocks.some(([from, to]) => n >= from && n < to)
   let i = at + 1
   while (i < kept.length && !kept[i].startsWith('### ')) i++
   const post: string[] = []
   let skip = false
   for (; i < kept.length; i++) {
     const t = kept[i].trimEnd()
+    if (inBlock(i)) continue
     if (t.startsWith('### ')) skip = GENERATED_SECTIONS.has(t)
     if (!skip) post.push(kept[i])
   }
-  const tail = post.join('\n').trim()
+  const joined = post.join('\n').trim()
+  const tail = blocks.length ? joined.replace(/\n{3,}/g, '\n\n') : joined
   return `${pre}\n\n### Findings\nNo findings.${tail ? `\n\n${tail}` : ''}`
 }
 
@@ -159,13 +165,18 @@ export interface ComposeInput {
   state: SummaryState
   agentId: string
   hideConfidence?: boolean
+  sections?: readonly SectionBlock[]
 }
 
-export interface ComposedSummary { body: string; removed: number; collapsed: number }
+export interface ComposedSummary { body: string; removed: number; collapsed: number; sectionRowsHidden: number; sectionRowsShown: ReadonlyMap<string, number> }
 
 interface Params {
   history: number; resolved: boolean; titlesOnly: boolean; soKeep: number; openFull: number; overflowCount: boolean; cutAuto: boolean; todoKeep: number
+  secBodies: boolean; secRows: number; secCount: boolean
 }
+
+const MIN_SECTION_ROWS = 5
+const TODO_HEADING = /^### TODOs Introduced[ \t]*$/m
 
 const MIN_TODO_ITEMS = 10
 
@@ -197,8 +208,13 @@ export function composeSummary(input: ComposeInput): ComposedSummary {
   const limit = COMMENT_BUDGET - 2 - stateLen
 
   let collapsed = 0
+  let sectionHidden = 0
+  let sectionShown = new Map<string, number>()
+  const sections = (input.sections ?? []).filter(b => b.rows.length + b.more > 0)
   const build = (p: Params, cut: number): string => {
     collapsed = 0
+    sectionHidden = 0
+    sectionShown = new Map()
     const full = open.slice(0, p.openFull)
     const rest = open.slice(p.openFull).sort((a, b) => kOf(a.id) - kOf(b.id))
     collapsed += rest.length
@@ -235,12 +251,25 @@ export function composeSummary(input: ComposeInput): ComposedSummary {
       }
     }
 
+    let sectionText = sections.map(b => renderBlock(b, { bodies: p.secBodies, maxRows: p.secRows, count: p.secCount })).join('\n\n')
+    for (const b of sections) {
+      sectionHidden += p.secCount ? b.rows.length : Math.max(0, b.rows.length - p.secRows)
+      sectionShown.set(b.lens, p.secCount ? 0 : Math.min(b.rows.length, p.secRows))
+    }
+    // On a carried run the TODO list still sits in the narrative tail, and the blocks belong above it.
+    const carriedTodos = sectionText ? TODO_HEADING.exec(postText) : null
+    if (carriedTodos) {
+      postText = `${postText.slice(0, carriedTodos.index).trimEnd()}\n\n${sectionText}\n\n${postText.slice(carriedTodos.index)}`
+      sectionText = ''
+    }
+
     const parts = [
       SUMMARY_HEADER,
       input.notice ? CONTENT_FILTER_MARKER : '',
       preText,
       findings.length ? `### Findings\n${findings.join('\n\n')}` : '',
       postText,
+      sectionText,
       trimTodos(todoText, p.todoKeep),
       p.resolved && input.resolved.length ? `### Resolved by developers\n${input.resolved.map(r => resolvedRow(r)).join('\n')}` : '',
       `### Review History\n${history.slice(-p.history).join('\n')}`,
@@ -256,14 +285,16 @@ export function composeSummary(input: ComposeInput): ComposedSummary {
     return build(p, first.length - limit + TRUNC_MARGIN)
   }
 
-  const p: Params = { history: MAX_HISTORY, resolved: true, titlesOnly: false, soKeep: Infinity, openFull: MAX_OPEN_ROWS, overflowCount: false, cutAuto: false, todoKeep: Infinity }
+  const p: Params = { history: MAX_HISTORY, resolved: true, titlesOnly: false, soKeep: Infinity, openFull: MAX_OPEN_ROWS, overflowCount: false, cutAuto: false, todoKeep: Infinity, secBodies: true, secRows: Infinity, secCount: false }
   const steps: Array<(x: Params) => void> = [
     x => { x.history = MIN_HISTORY },
     x => { x.resolved = false },
     x => { x.titlesOnly = true },
     x => { x.todoKeep = MIN_TODO_ITEMS },
+    x => { x.secBodies = false; x.secRows = MIN_SECTION_ROWS },
     x => { x.cutAuto = true },
     x => { x.todoKeep = 0 },
+    x => { x.secCount = true },
     x => { x.soKeep = KEEP_SUMMARY_ONLY },
     x => { x.soKeep = 0 },
     x => { x.openFull = Math.min(x.openFull, MIN_OPEN_ROWS) },
@@ -293,6 +324,8 @@ export function composeSummary(input: ComposeInput): ComposedSummary {
     let n = 0
     while (n < important.length && fits(fallback(n + 1))) n++
     body = fallback(n)
+    sectionHidden = sections.reduce((n, b) => n + b.rows.length, 0)
+    sectionShown = new Map(sections.map(b => [b.lens, 0]))
   }
-  return { body: withState(body, input.state, input.agentId), removed, collapsed }
+  return { body: withState(body, input.state, input.agentId), removed, collapsed, sectionRowsHidden: sectionHidden, sectionRowsShown: sectionShown }
 }

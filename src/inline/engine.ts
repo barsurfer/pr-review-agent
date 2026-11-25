@@ -1,6 +1,9 @@
 import { config, type InlineHide } from '../config.js'
 import type { LLMUsage } from '../llm/shared.js'
 import { addUsage } from '../review/bundled.js'
+import { activeLenses, resolvePlacements } from '../review/lenses.js'
+import { finalizeContextSections, markSectionsPosted, type OpenAnchor } from '../review/lens-sections.js'
+import { parseSectionBlocks, type SectionBlock } from '../review/section-render.js'
 import { headMatches } from '../review/checked-commit.js'
 import { countFindings, isNoChange, hasReviewFooter, hasReplyFooter } from '../review/formatter.js'
 import { CONTENT_FILTER_NOTICE_TEXT, CONTENT_FILTER_SKIP_REASON, NOTICE_HISTORY_TEXT, isNoticeSummary, noteContentFilter } from '../review/content-filter.js'
@@ -59,6 +62,12 @@ export function selectInlineEngine(adapter: VCSAdapter, outcomeSink?: OutcomeSin
   return new Engine(adapter)
 }
 
+// A carried block is only as good as the lens that wrote it, so a lens no longer placed in a section drops its old rows.
+const activeSectionLenses = (): string[] => {
+  const placements = resolvePlacements(config.lenses).placements
+  return activeLenses(config.lenses).filter(l => placements.get(l.name) === 'section').map(l => l.name)
+}
+
 const emptyRecord = (): InlineRecord => ({
   active: true, completed: false, identity: 'unavailable', summary_check: 'missing', summary: 'not_written',
   roots: { posted: 0, failed: 0, summary_only: { low: 0, no_line: 0, out_of_hunk: 0, old_side: 0, over_cap: 0, duplicate: 0 } },
@@ -77,7 +86,7 @@ interface Session {
   who: { ids: string[]; names: string[] }
   summaryRootId?: string
   history: string[]
-  carry: { plain?: string; summaryOnly: SummaryOnlyRow[] }
+  carry: { plain?: string; summaryOnly: SummaryOnlyRow[]; sections: SectionBlock[] }
   afterNotice: boolean
   completed: number
   // Undefined when the previous summary gave no resolved rows to compare against.
@@ -91,9 +100,10 @@ interface RunSource {
   findings: PlanFinding[]
   carriedSummaryOnly?: readonly SummaryOnlyRow[]
   todoSection: string
-  historyText: (r: RootsResult) => string
+  historyText: (r: RootsResult, shown?: ReadonlyMap<string, number>) => string
   declined?: boolean
   notice?: boolean
+  sections?: SectionBlock[]
 }
 
 const lineString = (m: Mapped): string | undefined =>
@@ -116,6 +126,8 @@ class Engine implements InlineEngine {
   prior?: { block: string }
   judgeOpen?: { block: string }
   replyUsage?: LLMUsage
+  openAnchors?: OpenAnchor[]
+  private carriedAnchors: OpenAnchor[] = []
   private rec: InlineRecord = emptyRecord()
   private s?: Session
   private priorBase?: PriorItems
@@ -208,9 +220,13 @@ class Engine implements InlineEngine {
       identity, reg, threads, state, head, head12, who: { ids: identity.ids, names: identity.names },
       ...(sel.kind === 'found' ? { summaryRootId: sel.comment.id } : {}),
       history: valid ? parseHistory(valid.comment.body) : [],
-      carry: { ...(valid && !afterNotice ? { plain: carryNarrative(valid.comment.body) ?? undefined } : {}), summaryOnly: rows?.summaryOnly ?? [] },
+      carry: { ...(valid && !afterNotice ? { plain: carryNarrative(valid.comment.body) ?? undefined } : {}), summaryOnly: rows?.summaryOnly ?? [], sections: valid && !afterNotice ? parseSectionBlocks(valid.comment.body) : [] },
       afterNotice, completed, ...(rows && resolvedBaseline(rows) ? { prevResolved: resolvedBaseline(rows) } : {}),
     }
+    // Recorded ranges only, with no line mapping: an old thread whose code moved simply stops suppressing a section place.
+    this.openAnchors = reg.entries.filter(e => !e.resolved && e.file).map(e => ({ file: e.file, ...(e.lines ? { lines: e.lines } : {}) }))
+    // Summary-only rows only guard places on runs that carry them, so a fresh review is not suppressed by rows it drops.
+    this.carriedAnchors = (rows?.summaryOnly ?? []).filter(r => r.file).map(r => ({ file: r.file!, ...(r.lines ? { lines: r.lines } : {}) }))
     console.log(`  Summary ${this.rec.summary_check}, ${reg.entries.length} finding thread(s), review ${state.n} completed`)
 
     if (!forced(ctx) && state.commits.includes(head12)) {
@@ -273,14 +289,15 @@ class Engine implements InlineEngine {
 
   // Nothing new was reviewed, so the last verified narrative and its summary-only rows must outlive the refresh.
   private noChangeSource(): RunSource {
-    const { plain, summaryOnly } = this.s!.carry
-    return { plain: plain ?? NO_CHANGE_PLAIN, findings: [], carriedSummaryOnly: summaryOnly, todoSection: '', historyText: () => 'no change' }
+    const { plain, summaryOnly, sections } = this.s!.carry
+    const active = new Set(sections.length ? activeSectionLenses() : [])
+    return { plain: plain ?? NO_CHANGE_PLAIN, findings: [], carriedSummaryOnly: summaryOnly, todoSection: '', historyText: () => 'no change', sections: sections.filter(b => active.has(b.lens)) }
   }
 
   // The legacy quiet gate runs before extra-pass candidates reach the judge, so one review number 1 call keeps it open for them.
   private async judge(ctx: ReviewContext, deps: InlineDeps): Promise<State> {
     const own = ctx.reviewObject && Array.isArray(ctx.reviewObject.findings) ? countFindings(ctx.reviewObject) : { high: 0, medium: 0, low: 0 }
-    const extra = (ctx.breadthFindings?.length ?? 0) + (ctx.secondLookFindings?.length ?? 0) + (ctx.lensRuns ?? []).reduce((n, r) => n + r.findings.length, 0)
+    const extra = (ctx.breadthFindings?.length ?? 0) + (ctx.secondLookFindings?.length ?? 0)
     if (own.high + own.medium + own.low > 0 || extra === 0) return deps.transition(State.JUDGE_REVIEW, ctx)
     const saved = ctx.reviewNumber
     ctx.reviewNumber = 1
@@ -310,25 +327,30 @@ class Engine implements InlineEngine {
     const found = quiet ? [] : (ctx.judgedFindings ?? ctx.reviewObject?.findings ?? []).map(f => toPlanFinding(f, paths))
     const n = found.length
     const carry = this.s!.carry
-    return this.writeRun(ctx, deps, {
+    const sections = finalizeContextSections(ctx, [...(this.openAnchors ?? []), ...(quiet ? this.carriedAnchors : [])], false)
+    const next = await this.writeRun(ctx, deps, {
       ...(ctx.declinedBundles ? { declined: true } : {}),
       plain: guard?.ok ? guard.cleaned : quiet ? (carry.plain ?? QUIET_PLAIN) : QUIET_PLAIN,
       findings: found,
       ...(quiet ? { carriedSummaryOnly: carry.summaryOnly } : {}),
       todoSection: guard?.ok ? guard.todoSection : '',
-      historyText: r => this.historyText(n === 0 ? 'no findings' : `${n} finding${n === 1 ? '' : 's'}, ${r.posted.length} new thread${r.posted.length === 1 ? '' : 's'}`, ctx, r),
+      historyText: (r, shown) => this.historyText(n === 0 ? 'no findings' : `${n} finding${n === 1 ? '' : 's'}, ${r.posted.length} new thread${r.posted.length === 1 ? '' : 's'}`, ctx, r, sections, shown),
+      sections,
     })
+    if (this.rec.outcome === 'written') markSectionsPosted(ctx)
+    return next
   }
 
   // Parts only append after the original text so old lines keep parsing; a zero part is omitted.
-  private historyText(base: string, ctx: ReviewContext, roots: RootsResult): string {
+  private historyText(base: string, ctx: ReviewContext, roots: RootsResult, sections: readonly SectionBlock[] = [], shown?: ReadonlyMap<string, number>): string {
     const prev = this.s!.prevResolved
     const reported = ctx.reviewObject?.delta_stats?.resolved ?? 0
     // Without a readable previous summary every resolved thread would look new, so the part is left out.
     const byDevelopers = prev ? roots.entries.filter(e => e.resolved && !prev.has(e.id)).length : 0
     const listed = new Set(roots.entries.map(e => e.id))
     const open = roots.entries.filter(e => !e.resolved).length + roots.posted.filter(p => !listed.has(p.root.id)).length
-    return [base, reported > 0 ? `${reported} reported fixed` : '', byDevelopers > 0 ? `${byDevelopers} resolved by developers` : '', open > 0 ? `${open} open` : ''].filter(Boolean).join(' · ')
+    const counts = sections.map(b => [shown?.get(b.lens) ?? b.rows.length, b.heading] as const).filter(([n]) => n > 0).map(([n, h]) => `${n} ${h.replace(/^#+\s*/, '').toLowerCase()}`)
+    return [base, reported > 0 ? `${reported} reported fixed` : '', byDevelopers > 0 ? `${byDevelopers} resolved by developers` : '', open > 0 ? `${open} open` : '', ...counts].filter(Boolean).join(' · ')
   }
 
   private async filterNotice(ctx: ReviewContext, deps: InlineDeps): Promise<State> {
@@ -367,13 +389,17 @@ class Engine implements InlineEngine {
     const carried = (src.carriedSummaryOnly ?? []).filter(c => !mapped.some(m => !m.entry.resolved && matches(m, c, 'open')))
     const buildSummary = (roots: RootsResult, state: SummaryState): string => {
       const { threads, resolved, summaryOnly } = this.rows(roots, plan, geo, carried, notes)
-      const composed = composeSummary({
+      const compose = (shown?: ReadonlyMap<string, number>) => composeSummary({
         review: { plain: src.plain, findings: src.findings as RenderedFinding[] },
-        threads, summaryOnly, resolved, history: s.history, historyText: src.historyText(roots), todoSection: src.todoSection, ...(src.declined ? { declined: true } : {}), ...(src.notice ? { notice: true } : {}),
-        footer, head12: s.head12, state, agentId: s.identity.agentId, hideConfidence: hidden('confidence'),
+        threads, summaryOnly, resolved, history: s.history, historyText: src.historyText(roots, shown), todoSection: src.todoSection, ...(src.declined ? { declined: true } : {}), ...(src.notice ? { notice: true } : {}),
+        footer, head12: s.head12, state, agentId: s.identity.agentId, hideConfidence: hidden('confidence'), ...(src.sections ? { sections: src.sections } : {}),
       })
+      // The history line must count the rows the trimmed block really shows, which is only known after a first render.
+      let composed = compose()
+      if (src.sections?.some(b => composed.sectionRowsShown.get(b.lens) !== b.rows.length)) composed = compose(composed.sectionRowsShown)
       this.rec.footer_lines_removed = composed.removed
       this.rec.rows_collapsed = composed.collapsed
+      if (composed.sectionRowsHidden > 0) this.rec.section_rows_hidden = composed.sectionRowsHidden
       return composed.body
     }
 
